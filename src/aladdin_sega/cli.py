@@ -22,7 +22,7 @@ def emit(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="aladdin-sega")
     sub = parser.add_subparsers(dest="command", required=True)
-    candidates = ["original", "leaf", "pair", "init", "finish", "composed", "mutant-result", "mutant-continuation", "mutant-timing"]
+    candidates = ["original", "leaf", "pair", "init", "finish", "replace", "composed", "mutant-result", "mutant-continuation", "mutant-timing"]
     for name in ("doctor", "boot-check", "play", "replay", "snapshot-check", "resume-check", "compare"):
         p = sub.add_parser(name)
         p.add_argument("--rom", type=Path, default=DEFAULT_ROM)

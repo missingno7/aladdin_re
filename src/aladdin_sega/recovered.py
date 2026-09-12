@@ -17,6 +17,9 @@ INIT_ENTRY = 0x1AE30A
 INIT_LAST_PC = 0x1AE370
 FINISH_ENTRY = 0x1AE954
 FINISH_LAST_PC = 0x1AE976
+COUNTED_REPLACE_ENTRY = 0x1AF4C2
+REPLACE_ENTRY = 0x1AF4C6
+REPLACE_LAST_PC = 0x1AF4D6
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -233,6 +236,33 @@ def finish_object(machine, registers: dict[str, int]) -> AtomicPlan:
                       {"d7": (d7 & 0xFFFF0000) | value, "a5": a1, "a6": 0x1B7953,
                        "a7": a7 + 4, "pc": return_pc & 0xFFFFFF, "sr": _logic_sr(carry_sr, 0, 4)},
                       FINISH_LAST_PC, direct_calls=3 + pair.direct_calls)
+
+
+def replace_object(machine, registers: dict[str, int], *, increment_total=False) -> AtomicPlan:
+    """1AF4C6 cleanup/template tail, optionally including the 1AF4C2 +15 call."""
+    a1, a7, sr = (registers[key] for key in ("a1", "a7", "sr"))
+    return_pc = _read(machine, a7, 4)
+    spans = [("outer return", a7, 4)]
+    writes = []
+    if increment_total:
+        total = _read(machine, 0xFFF14E, 2) + 15
+        # ADDI.W's X survives both the pair clear and initialization.
+        sr = (sr & ~0x10) | (0x10 if total > 0xFFFF else 0)
+        spans.append(("object total", 0xFFF14E, 2))
+        writes.extend(_bytes(a7 - 4, 0x1AF4C6, 4))
+        writes.extend(_bytes(0xFFF14E, total, 2))
+    pair = _clear_pair_effects(machine, {**registers, "sr": sr}, entry_sp=a7 - 4,
+                               return_pc=0x1AF4CA, extra_spans=spans)
+    initialized = _initialize_object_effects(machine, record=a1, template=0x1B7ABC, entry_sp=a7 - 4)
+    writes.extend(_bytes(a7 - 4, 0x1AF4CA, 4))
+    writes.extend(pair.writes)
+    writes.extend(_bytes(a7 - 4, 0x1AF4D6, 4))
+    writes.extend(initialized)
+    return AtomicPlan(544 + pair.cycles + (58 if increment_total else 0),
+                      32 + pair.instructions + (3 if increment_total else 0), tuple(writes),
+                      {"a5": a1, "a6": 0x1B7ACF, "a7": a7 + 4,
+                       "pc": return_pc & 0xFFFFFF, "sr": _logic_sr(sr, 0, 4)},
+                      REPLACE_LAST_PC, direct_calls=2 + pair.direct_calls + int(increment_total))
 
 
 def detach_object(machine, registers: dict[str, int]) -> AtomicPlan:

@@ -145,8 +145,9 @@ closure, remaining donor edges, migration classes and removal triggers.
 
 Edit `src/aladdin_sega/recovered.py` for the buffer clear at `0x1AE372`, object-pair
 clear at `0x1ABE6E`, detach region at `0x1AD0FC`, object initializer at `0x1AE30A`,
-and cleanup/template path at `0x1AE954`. The cleanup path composes pair clearing,
-the repeated leaf call, and initialization directly. Gate policy and mutants live separately
+cleanup/template path at `0x1AE954`, and shared replacement tail at `0x1AF4C6`
+(with its incrementing entry at `0x1AF4C2`). These paths compose pair clearing
+and initialization directly. Gate policy and mutants live separately
 in `recovery.py`. See [recovery-first.md](docs/recovery-first.md) for domains,
 timing, continuation and reproducible short witnesses.
 

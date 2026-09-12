@@ -11,7 +11,8 @@ import sys
 from aladdin_sega import artifacts
 from aladdin_sega.recovered import (CALLER_ENTRY, PAIR_ENTRY, LEAF_ENTRY,
                                     INIT_ENTRY, FINISH_ENTRY, clear_auxiliary_buffer,
-                                    clear_object_pair, detach_object, initialize_object, finish_object)
+                                    COUNTED_REPLACE_ENTRY, clear_object_pair, detach_object,
+                                    initialize_object, finish_object, replace_object)
 from aladdin_sega.machine import Machine
 from aladdin_sega.profile import DEFAULT_ROM, FRAME_TICKS, read_rom
 from aladdin_sega.receipt import execution_receipt
@@ -72,9 +73,10 @@ def follow_original_boundaries(machine, instructions=100):
 
 def run_witness(*, candidate_name, recording, rom_path, output):
     entry_pc = {"leaf": LEAF_ENTRY, "pair": PAIR_ENTRY, "composed": CALLER_ENTRY,
-                "init": INIT_ENTRY, "finish": FINISH_ENTRY}[candidate_name]
+                "init": INIT_ENTRY, "finish": FINISH_ENTRY, "replace": COUNTED_REPLACE_ENTRY}[candidate_name]
     recover = {"leaf": clear_auxiliary_buffer, "pair": clear_object_pair, "composed": detach_object,
-               "init": initialize_object, "finish": finish_object}[candidate_name]
+               "init": initialize_object, "finish": finish_object,
+               "replace": lambda machine, registers: replace_object(machine, registers, increment_total=True)}[candidate_name]
     output.mkdir(parents=True, exist_ok=True)
     rom, replay_bytes = read_rom(rom_path), artifacts.read_bounded(recording)
     replay_digest = digest(replay_bytes)
@@ -161,7 +163,7 @@ def run_witness(*, candidate_name, recording, rom_path, output):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--candidate", choices=("leaf", "pair", "init", "finish", "composed"), default="leaf")
+    parser.add_argument("--candidate", choices=("leaf", "pair", "init", "finish", "replace", "composed"), default="leaf")
     parser.add_argument("--recording", type=Path, default=DEFAULT_RECORDING)
     parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / "recovery-witness")

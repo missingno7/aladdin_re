@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 
 from .recovered import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY, CALLER_ENTRY,
                         INIT_ENTRY, FINISH_ENTRY, ROM_SHA256, clear_auxiliary_buffer,
-                        clear_object_pair, detach_object, initialize_object, finish_object)
+                        COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, clear_object_pair, detach_object,
+                        initialize_object, finish_object, replace_object)
 
 
 @dataclass
@@ -20,11 +21,12 @@ class Candidate:
         "gates": 0, "candidate_hits": 0, "fallbacks": 0,
         "leaf_hits": 0, "pair_hits": 0, "caller_hits": 0, "direct_python_calls": 0,
         "initializer_hits": 0, "finish_hits": 0,
+        "replace_hits": 0, "counted_replace_hits": 0,
         "replaced_m68k_instructions": 0, "charged_m68k_cycles": 0, "fallback_reasons": {},
     })
 
     _names = {
-        "leaf", "pair", "init", "finish", "composed",
+        "leaf", "pair", "init", "finish", "replace", "composed",
         "mutant-result", "mutant-continuation", "mutant-timing",
     }
 
@@ -46,7 +48,9 @@ class Candidate:
         # The composed form reaches the leaf directly inside the caller.  A
         # separate leaf gate stays armed for other callers in the same replay.
         if self.is_composed:
-            return (FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
+            return (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
+        if self.name == "replace":
+            return (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY)
         if self.name == "init":
             return (INIT_ENTRY,)
         if self.name == "finish":
@@ -77,6 +81,8 @@ class Candidate:
             registers = machine.registers()
             if entry == CALLER_ENTRY and self.is_composed:
                 plan = detach_object(machine, registers)
+            elif entry in (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY):
+                plan = replace_object(machine, registers, increment_total=entry == COUNTED_REPLACE_ENTRY)
             elif entry == INIT_ENTRY:
                 plan = initialize_object(machine, registers)
             elif entry == FINISH_ENTRY:
@@ -111,6 +117,9 @@ class Candidate:
                 self.stats["initializer_hits"] += 1
             elif entry == FINISH_ENTRY:
                 self.stats["finish_hits"] += 1
+            elif entry in (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY):
+                self.stats["replace_hits"] += 1
+                self.stats["counted_replace_hits"] += int(entry == COUNTED_REPLACE_ENTRY)
             else:
                 self.stats["caller_hits"] += 1
             self.stats["direct_python_calls"] += plan.direct_calls

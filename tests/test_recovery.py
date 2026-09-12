@@ -5,7 +5,8 @@ import ctypes as C
 
 import pytest
 from aladdin_sega.recovered import (clear_auxiliary_buffer, clear_object_pair, detach_object, PAIR_ENTRY,
-                                    INIT_ENTRY, FINISH_ENTRY, initialize_object, finish_object)
+                                    INIT_ENTRY, FINISH_ENTRY, COUNTED_REPLACE_ENTRY, REPLACE_ENTRY,
+                                    initialize_object, finish_object, replace_object)
 
 from aladdin_sega.machine import Machine
 from aladdin_sega.recovery import (
@@ -180,7 +181,8 @@ def test_pair_gate_counts_nested_calls_and_keeps_deadline_fallback(linked):
     assert machine.atomic_call["target"] == 10001
     assert machine.gate_call == (PAIR_ENTRY, True)
     assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}
-    assert Candidate("composed").gate_pcs == (FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
+    assert Candidate("composed").gate_pcs == (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, FINISH_ENTRY,
+                                              CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
 
 
 @pytest.mark.parametrize("name", ["mutant-result", "mutant-continuation", "mutant-timing"])
@@ -471,5 +473,75 @@ def test_initializer_and_finish_dispatch_count_calls_and_preserve_deadlines(name
     machine.atomic_result = False
     assert not candidate.on_gate(machine, 10001)
     assert machine.atomic_call["target"] == 10001
+    assert machine.gate_call == (entry, True)
+    assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}
+
+
+REPLACE_BYTES = bytes.fromhex("61000c926100c9a62a494df9001b7abc6100ee364e75")
+ADD_FIFTEEN_BYTES = bytes.fromhex("0679000f00fff14e4e75")
+REPLACE_TEMPLATE = bytes.fromhex("84000000000000000000600000122f80010000")
+
+
+def native_replace_rom(entry, sr):
+    rom = bytearray(native_initialization_rom(entry, sr=sr))
+    rom[COUNTED_REPLACE_ENTRY:COUNTED_REPLACE_ENTRY + len(REPLACE_BYTES)] = REPLACE_BYTES
+    rom[0x1b0156:0x1b0156 + len(ADD_FIFTEEN_BYTES)] = ADD_FIFTEEN_BYTES
+    rom[0x1b7abc:0x1b7acf] = REPLACE_TEMPLATE
+    return bytes(rom)
+
+
+@pytest.mark.parametrize("entry", [COUNTED_REPLACE_ENTRY, REPLACE_ENTRY])
+@pytest.mark.parametrize("sr,total", [(0x2000, 0), (0x201f, 0x7ff1), (0x2000, 0xfff0), (0x201f, 0xfff1)])
+@pytest.mark.parametrize("linked,first_count,second_count", [
+    (False, None, None), (False, 0, None), (True, None, None),
+    (True, 4, None), (True, None, 4), (True, 255, 255)])
+def test_native_replace_entries_match_original_and_continue(entry, sr, total, linked, first_count, second_count):
+    def prepare(machine):
+        for record, buffer, count in ((0xff1000, 0xff2001, first_count), (0xff5000, 0xff6001, second_count)):
+            native_write(machine, record, b"\xa5" * 66)
+            native_write(machine, record + 41, bytes([count or 0]))
+            native_write(machine, record + 42, (buffer if count is not None else 0).to_bytes(4, "big"))
+            native_write(machine, buffer, b"\x5a" * 256)
+        native_write(machine, 0xff103e, (0xff5000 if linked else 0).to_bytes(4, "big"))
+        native_write(machine, 0xfff14e, total.to_bytes(2, "big"))
+    def recover(machine, registers):
+        return replace_object(machine, registers, increment_total=entry == COUNTED_REPLACE_ENTRY)
+    check_native_initialization(native_replace_rom(entry, sr), entry, recover, prepare)
+
+
+@pytest.mark.parametrize("increment_total", [False, True])
+@pytest.mark.parametrize("alias", ["record", "stack", "counter"])
+def test_replace_guards_aliases_before_effects(increment_total, alias):
+    machine = leaf_machine()
+    entry = COUNTED_REPLACE_ENTRY if increment_total else REPLACE_ENTRY
+    machine.info["pc"] = entry
+    put(machine, 0xff102a, {"record": 0xff1000, "stack": 0xff7ff2, "counter": 0xfff14e}[alias], 4)
+    before = bytes(machine.ram), machine.registers()
+    candidate = Candidate("replace")
+    accepted = candidate.on_gate(machine, 10000)
+    # The tail itself does not read the counter; only the prefix adds this guard.
+    assert accepted == (alias == "counter" and not increment_total)
+    assert (bytes(machine.ram), machine.registers()) == before
+    if not accepted:
+        assert machine.atomic_call is None
+        assert machine.gate_call == (entry, True)
+        assert any("aliases" in reason for reason in candidate.stats["fallback_reasons"])
+
+
+@pytest.mark.parametrize("entry", [COUNTED_REPLACE_ENTRY, REPLACE_ENTRY])
+def test_replace_dispatch_counts_prefix_subset_and_respects_deadline(entry):
+    machine = leaf_machine()
+    machine.info["pc"] = entry
+    candidate = Candidate("replace")
+    candidate.arm(machine)
+    assert machine.armed == (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY)
+    assert candidate.on_gate(machine, 10000)
+    assert candidate.stats["replace_hits"] == 1
+    assert candidate.stats["counted_replace_hits"] == int(entry == COUNTED_REPLACE_ENTRY)
+    assert candidate.stats["direct_python_calls"] == 3 + int(entry == COUNTED_REPLACE_ENTRY)
+    machine.atomic_result = False
+    assert not candidate.on_gate(machine, 10001)
+    assert machine.atomic_call["target"] == 10001
+    assert candidate.gate_pcs == (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY)
     assert machine.gate_call == (entry, True)
     assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}

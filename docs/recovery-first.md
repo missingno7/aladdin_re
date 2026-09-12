@@ -55,6 +55,7 @@ fallback and the original resumes at its stopped opcode.
 The implementation lives in `src/aladdin_sega/recovered.py` as
 `clear_auxiliary_buffer()`, `clear_object_pair()`, `detach_object()`,
 `initialize_object()` and `finish_object()`.
+`replace_object()` adds the shared replacement tail and its incrementing entry.
 Unsupported operands, aliases and scheduler refusal still fall back from the
 unchanged entry. The previous `LegacyExit` marker is removed because its only
 dependency is now recovered. No suspended Python stack or second machine is
@@ -156,6 +157,51 @@ and fresh-process short replay. The original recording visits the initializer
 single object and no counter carry. RAM templates, linked cleanup and arithmetic
 edge cases are synthetic differential coverage, not recorded gameplay coverage.
 
+## Shared replacement tail and incrementing entry (0.5.0)
+
+The 18-byte tail at `0x1AF4C6` through `0x1AF4D6` calls the pair clear, sets
+A5=A1 and A6=`0x1B7ABC`, calls the initializer, then returns through the actual
+outer stack slot. It reinitializes the current record and clears its link;
+the optional linked object is only processed by the pair clear. A5 ends at
+A1, A6 at `0x1B7ACF`, A7 advances four bytes, and all data registers remain
+unchanged. Final Z=1 and N/V/C=0, while X is preserved. The two nested BSR
+return addresses, `0x1AF4CA` and `0x1AF4D6`, and the pair's saved-register
+bytes are included in the ordered effects. Cost is `544 + pair_cycles` and
+`32 + pair_instructions`, including the 476-cycle/27-instruction initializer.
+
+The entry four bytes earlier, `0x1AF4C2`, first calls the two-instruction
+helper at `0x1B0156`, which adds 15 to the word at `0xFFF14E` and returns.
+`replace_object(..., increment_total=True)` composes that call before the
+same tail, adding 58 cycles and three instructions. The final X flag is the
+carry from this addition. The counter must be disjoint from records, buffers
+and stack for this entry. The plain tail does not read the counter and does
+not impose this extra guard. Both entries share the existing canonical RAM,
+alignment, alias and native scheduler admission rules.
+
+These are **two entries into a bounded shared tail**, not a recovered outer
+gameplay routine. Earlier branches include sound calls and other unrecovered
+effects. Original execution reaches either entry before replacement is offered;
+a refusal retires one original opcode from the untouched stopped state. There
+is no suspended Python call awaiting the earlier sound work. The standalone
+`replace` candidate gates both entries, and `composed` includes them alongside
+the five previous gates. `counted_replace_hits` is a subset of `replace_hits`.
+
+Original execution reaches the tail 88 times: 86 single-object and two linked
+paths, all with a non-null primary buffer. Ten visits include the incrementing
+prefix. The other 78 pass through `0x1AF478`, with sound enabled at the sampled
+entry. The 48 new native differential cases cover both entries, null and
+maximum-size buffers, links, X preservation and carry/signed-overflow boundaries.
+They compare full native state and PCM immediately and after 100 instructions.
+The recorded prefix witness also compares rendered frames and resumes from its
+portable replacement snapshot. Reports are under `artifacts/object-replace/`.
+
+Integrated replay admits 81 replacements, of which nine include the prefix.
+Total gate stops fall from 2,098 to 2,025; direct nested calls increase from
+700 to 871. Replaced instructions increase by 432 to 56,796. There are 34
+scheduler fallbacks and no domain fallbacks. All 225 state/frame/PCM observations
+and terminal results match. This is primarily composition of previously
+recovered bodies; it does not demonstrate a frame-rate improvement.
+
 ## User-recording witness
 
 The 225.0231-second cold-start recording
@@ -177,7 +223,8 @@ and 20 ordered byte writes. This is a bounded activation witness, not a
 whole-replay equivalence result.
 
 `scripts/recovery_witness.py` makes this qualification reproducible for
-`--candidate leaf`, `--candidate pair`, `--candidate init`, `--candidate finish`
+`--candidate leaf`, `--candidate pair`, `--candidate init`, `--candidate finish`,
+`--candidate replace` (the incrementing entry)
 or `--candidate composed` (the detach witness). It writes the parked gate
 snapshot, a zero-input replay from that safe boundary through the region and
 100-instruction tail, a post-replacement snapshot, and a receipt. For each

@@ -5,6 +5,50 @@ Aladdin source, dispatch, artifacts and verification; a small machine API hides
 retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay.
 
+## Shared replacement composition (0.5.0)
+
+Recovered the shared tail at `0x1AF4C6` and the incrementing entry at
+`0x1AF4C2`. `replace_object()` composes pair clearing and initialization from
+template `0x1B7ABC`; the earlier entry also composes the helper that adds 15
+to `0xFFF14E`. This retains counter carry, nested stack writes, registers,
+timing and the actual outer return. These are bounded entries after earlier
+gameplay/sound work, not recovery of the entire enclosing routine. Original
+execution still owns those earlier branches. Native code and artifact/state
+contracts are unchanged.
+
+**230 Python tests pass**, including 48 new original-ROM differential cases
+for both entries, linked objects, null/maximum buffers, counter boundaries,
+X preservation and continued execution. Alias and dispatch tests cover refusal
+before effects, deadline forwarding and the counted-hit subset. The architecture
+boundary check passes. The first recorded incrementing entry passes full
+state/frame/PCM equality, snapshot restore, a 100-instruction continuation and
+fresh-process short replay. A wrong-template edit in a disposable Python copy
+changes PASS to DIVERGENCE in 0.61 seconds with no build/install and the same
+source-tree native DLL.
+
+Original tracing finds 88 tail visits: 86 single-object and two linked-object
+paths, all with non-null primary buffers. Ten visits include the +15 helper.
+The remaining 78 pass through `0x1AF478`; sound was enabled at those sampled
+entries. Source-tree and installed 0.5.0 replays match all **225 ordered observations**, terminal
+state/frame and whole-run PCM. It admits 81 replacement activations, including
+nine incrementing entries. Other admitted counts are 581 detach, 15 pair,
+959 initializer, five cleanup and 350 leaf activations. There are 34 scheduler
+fallbacks and no domain fallbacks.
+
+Relative to 0.4.0, gate stops fall from 2,098 to 2,025, and direct nested Python
+calls rise from 700 to 871. Replaced instructions increase by 432, from 56,364
+to 56,796. This milestone primarily composes existing recovered behavior; it
+does not establish an overall performance improvement.
+
+Reports are under `artifacts/object-replace/`: `coverage.json` and its trace
+script, `full-composed/comparison.json`, `witness-v050/report.json` with portable
+snapshots and a short replay, `installed-full/comparison.json`,
+`installed-short/comparison.json`, and `edit-loop/result.json`. The installed
+standalone replacement comparison passes, and the player resumes the replacement
+snapshot for 60 frames with dummy SDL devices and zero audio underruns. This
+is an integration check, not subjective listening. Exact domains and
+costs are in [recovery-first.md](recovery-first.md).
+
 ## Object initialization and cleanup composition (0.4.0)
 
 Recovered the initializer at `0x1AE30A` and composed the cleanup/template path
@@ -260,10 +304,11 @@ review priority; a new engine, emitter or generic continuation registry is not j
 
 ## Next bounded milestone
 
-Inspect the pair caller returning at `0x1AF4CA`, which accounts for 88 of the
-104 recorded pair calls. Establish its actual entry, dependencies and bounded
-domain before extending composition. The first pair caller returning at
-`0x1AE964` is now recovered, along with its shared initializer. Preserve the
+Inspect the dependency at `0x1B0336`, called from `0x1AF478` on 78 recorded
+paths leading to the newly recovered replacement tail. Establish its effects
+and bounded domain before moving recovery further into the preceding gameplay
+and sound branches. The common tail returning from the pair at `0x1AF4CA`
+and its +15 prefix are now recovered. Preserve the
 distinction between recorded paths and synthetic branch tests. Use focused
 witnesses during editing and the full replay as the integration gate. Absorb
 additional board/scheduler/sound glue only when recovery exposes concrete
