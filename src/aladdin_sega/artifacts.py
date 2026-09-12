@@ -3,10 +3,10 @@ import hashlib
 import io
 import json
 from pathlib import Path
-import struct
 import zipfile
 
 from .profile import FRAME_TICKS, PROFILE_SHA256
+from .compatibility import check_source
 
 LIMIT = 16 * 1024 * 1024
 
@@ -91,13 +91,14 @@ def snapshot_bytes(machine):
     return pack({"manifest.json": json_bytes(manifest), "machine.bin": state})
 
 
-def load_snapshot(data, *, rom_sha256, source_id):
+def load_snapshot(data, *, rom_sha256, source_id, compatibility=None):
     parts = unpack(data, {"manifest.json", "machine.bin"}, {"manifest.json", "machine.bin"})
     meta = decode_json(parts["manifest.json"])
     if meta.get("format") != "alsnap" or type(meta.get("version")) is not int or meta["version"] != 1:
         raise ValueError("Unsupported snapshot format")
-    if (meta.get("rom_sha256"), meta.get("profile_sha256"), meta.get("source_id")) != (rom_sha256, PROFILE_SHA256, source_id):
+    if (meta.get("rom_sha256"), meta.get("profile_sha256")) != (rom_sha256, PROFILE_SHA256):
         raise ValueError("Snapshot ROM/profile/source identity mismatch")
+    check_source(meta.get("source_id"), source_id, policy=compatibility)
     if meta.get("boundary") != "completed-native-operation":
         raise ValueError("Unsupported snapshot boundary")
     uint(meta["tick"])
@@ -108,15 +109,9 @@ def load_snapshot(data, *, rom_sha256, source_id):
 
 
 def restore_snapshot(machine, data):
-    meta, state = load_snapshot(data, rom_sha256=machine.rom_sha256, source_id=machine.source_id)
-    # Timestamp is checked in native serialized fields before applying state.
-    # Pinned pf-genesis-snapshot-v2 tail: master, CPU cycles, instructions,
-    # VINT frame, VINT count (u64), standing PC (u32), then two ASCII hashes.
-    tail = struct.Struct("<QQQQQI")
-    if len(state) < 17 + tail.size + 128:
-        raise ValueError("Truncated native snapshot")
-    native_tick = tail.unpack_from(state, len(state) - 128 - tail.size)[0]
-    if native_tick != meta["tick"]:
+    meta, state = load_snapshot(data, rom_sha256=machine.rom_sha256, source_id=machine.source_id,
+                                compatibility=getattr(machine, "compatibility", None))
+    if machine.snapshot_tick(state) != meta["tick"]:
         raise ValueError("Snapshot timestamp disagrees with native state")
     machine.restore(state)
 
@@ -138,31 +133,47 @@ class Recorder:
         machine.pad(buttons)
         self.events.append({"tick": before["tick"], "seq": len(self.events), "kind": "pad_state", "port": 0, "buttons": buttons})
 
-    def finish(self, machine):
-        terminal = machine.info["tick"]
+    def finish(self, machine, *, terminal_status="completed", failure=None, terminal_tick=None):
+        terminal = machine.info["tick"] if terminal_tick is None else uint(terminal_tick)
         if terminal < self.start:
             raise ValueError("Recording time moved backwards")
+        if terminal_status not in {"completed", "failed"}:
+            raise ValueError("Invalid terminal status")
+        if terminal_status == "failed" and not isinstance(failure, dict):
+            raise ValueError("Failed capture must describe its failure")
+        if any(event["tick"] > terminal for event in self.events):
+            raise ValueError("Events extend past the valid recording prefix")
         events = b"".join(json_bytes(e) + b"\n" for e in self.events)
         meta = {"format": "alreplay", "version": 1, "rom_sha256": self.rom_sha256,
                 "profile_sha256": PROFILE_SHA256, "source_id": self.source_id,
                 "mode": "original", "origin": self.origin, "reset_provenance": self.reset_provenance,
-                "initial_sha256": digest(self.initial), "events_sha256": digest(events), "terminal_tick": terminal}
+                "initial_sha256": digest(self.initial), "events_sha256": digest(events), "terminal_tick": terminal,
+                "terminal_status": terminal_status}
+        if failure is not None:
+            meta["failure"] = failure
         return pack({"manifest.json": json_bytes(meta), "initial.alsnap": self.initial,
                      "events.jsonl": events, "bookmarks.json": json_bytes(self.bookmarks)})
 
 
-def load_replay(data, *, rom_sha256, source_id):
+def load_replay(data, *, rom_sha256, source_id, compatibility=None):
     parts = unpack(data, {"manifest.json", "initial.alsnap", "events.jsonl", "bookmarks.json"}, {"manifest.json", "initial.alsnap", "events.jsonl"})
     meta = decode_json(parts["manifest.json"])
     if meta.get("format") != "alreplay" or type(meta.get("version")) is not int or meta["version"] != 1:
         raise ValueError("Unsupported replay format")
-    if (meta.get("rom_sha256"), meta.get("profile_sha256"), meta.get("source_id")) != (rom_sha256, PROFILE_SHA256, source_id):
+    if (meta.get("rom_sha256"), meta.get("profile_sha256")) != (rom_sha256, PROFILE_SHA256):
         raise ValueError("Replay ROM/profile/source identity mismatch")
+    check_source(meta.get("source_id"), source_id, policy=compatibility)
     if meta.get("mode") != "original" or meta.get("origin") not in {"user", "synthetic"}:
         raise ValueError("Unsupported replay mode/origin")
     if digest(parts["initial.alsnap"]) != meta.get("initial_sha256") or digest(parts["events.jsonl"]) != meta.get("events_sha256"):
         raise ValueError("Replay section integrity mismatch")
-    initial_meta, _ = load_snapshot(parts["initial.alsnap"], rom_sha256=rom_sha256, source_id=source_id)
+    initial_meta, _ = load_snapshot(parts["initial.alsnap"], rom_sha256=rom_sha256, source_id=source_id, compatibility=compatibility)
+    if initial_meta["source_id"] != meta["source_id"]:
+        raise ValueError("Replay and initial snapshot capture identities disagree")
+    if meta.get("terminal_status", "completed") not in {"completed", "failed"}:
+        raise ValueError("Invalid capture terminal status")
+    if meta.get("terminal_status") == "failed" and not isinstance(meta.get("failure"), dict):
+        raise ValueError("Failed capture must describe its failure")
     start, terminal = initial_meta["tick"], uint(meta["terminal_tick"])
     if terminal < start:
         raise ValueError("Replay terminal precedes initial state")
@@ -181,14 +192,39 @@ def load_replay(data, *, rom_sha256, source_id):
     return meta, parts["initial.alsnap"], events
 
 
-def play_events(machine, events, terminal, *, audio_sink=None):
+def play_events(machine, events, terminal, *, audio_sink=None, on_gate=None, on_checkpoint=None):
+    checkpoint_period = FRAME_TICKS * 60
+    next_checkpoint = (machine.info["tick"] // checkpoint_period + 1) * checkpoint_period
     def advance(target):
+        nonlocal next_checkpoint
+        parked = 0
         while machine.info["tick"] < target:
             current = machine.info["tick"]
-            machine.run(target=min(target, (current // FRAME_TICKS + 1) * FRAME_TICKS))
+            deadline = min(target, (current // FRAME_TICKS + 1) * FRAME_TICKS)
+            reason = machine.run(target=deadline)
+            info = machine.info
+            diagnostic = {"pc": info.get("pc"), "tick": info["tick"], "target": deadline,
+                          "stop_reason": reason, "candidate": getattr(machine, "candidate_identity", "original")}
+            if reason == "gate":
+                if on_gate is None:
+                    raise RuntimeError("Unexpected replay gate: " + json.dumps(diagnostic))
+                before = (info["tick"], info.get("pc"))
+                on_gate(machine, deadline)
+                after = machine.info
+                parked = parked + 1 if after["tick"] <= current else 0
+                if (after["tick"], after.get("pc")) == before or parked > 8:
+                    raise RuntimeError("Candidate made no progress: " + json.dumps(diagnostic))
+            elif reason != "limit" or info["tick"] <= current:
+                raise RuntimeError("Replay made no progress: " + json.dumps(diagnostic))
+            else:
+                parked = 0
             pcm = machine.audio()
             if audio_sink:
                 audio_sink(pcm)
+            if machine.info["tick"] >= next_checkpoint:
+                if on_checkpoint:
+                    on_checkpoint(machine, next_checkpoint // checkpoint_period, next_checkpoint)
+                next_checkpoint += checkpoint_period
 
     for event in events:
         tick = event["tick"]
