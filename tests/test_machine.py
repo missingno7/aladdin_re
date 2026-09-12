@@ -115,8 +115,11 @@ def test_irq_admission_precedes_handler_gate_and_trap_resumes():
 @pytest.mark.skipif(not DEFAULT_ROM.exists(), reason="Local user ROM unavailable")
 def test_real_rom_boot_restore_with_audio():
     with Machine(read_rom()) as m:
-        m.run(target=FRAME_TICKS * 300)
-        m.audio()
+        # Native PCM capture is deliberately bounded.  Drain during the long
+        # boot prefix; host output is not part of a native snapshot.
+        for frame in range(1, 301):
+            m.run(target=FRAME_TICKS * frame)
+            m.audio()
         anchor = m.snapshot()
         m.run(target=FRAME_TICKS * 360)
         expected, audio, frame = m.snapshot(), m.audio(), m.frame()
