@@ -9,7 +9,7 @@ from .machine import Machine
 from .profile import FRAME_TICKS, MASTER_HZ
 
 
-def play(rom, *, frames=0, mute=False, origin="user", record_from_start=False, snapshot=None, audio_report=None, compatibility=None):
+def play(rom, *, frames=0, mute=False, origin="user", record_from_start=False, snapshot=None, audio_report=None):
     import pygame
     primary_error = None
     cleanup_errors = []
@@ -50,7 +50,7 @@ def play(rom, *, frames=0, mute=False, origin="user", record_from_start=False, s
         message = "Original mode | Ready"
         pacer = FramePacer(time.perf_counter(), FRAME_TICKS / MASTER_HZ)
 
-        with Machine(rom, compatibility=compatibility) as machine:
+        with Machine(rom) as machine:
             try:
                 if snapshot is not None:
                     artifacts.restore_snapshot(machine, artifacts.read_bounded(snapshot))

@@ -115,6 +115,9 @@ std::uint64_t snapshot_tick(Handle& h, const std::uint8_t* data, std::uint64_t s
 }
 }
 
+// Project state contract, independent of source/build provenance. Bump when
+// persisted state or continuation semantics change; early artifacts regenerate.
+AL_API std::uint32_t al_state_version() noexcept { return 1; }
 AL_API std::uint32_t al_abi() noexcept { return 1; }
 AL_API const char* al_source_id() noexcept { return AL_SOURCE_ID; }
 AL_API const char* al_build_info() noexcept { return AL_BUILD_INFO; }

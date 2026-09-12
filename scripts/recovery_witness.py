@@ -9,14 +9,14 @@ import subprocess
 import sys
 
 from aladdin_sega import artifacts
+from aladdin_sega.recovered import CALLER_ENTRY, LEAF_ENTRY, clear_auxiliary_buffer, detach_object
 from aladdin_sega.machine import Machine
 from aladdin_sega.profile import DEFAULT_ROM, FRAME_TICKS, read_rom
 from aladdin_sega.receipt import execution_receipt
-from aladdin_sega.recovery import CALLER_ENTRY, LEAF_ENTRY, Candidate
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RECORDING = ROOT / "recordings" / "20260912T210640.729016Z.alreplay"
+DEFAULT_RECORDING = ROOT / "recordings" / "current" / "20260912T210640.729016Z.alreplay"
 
 
 def reach_gate(machine, events):
@@ -39,10 +39,8 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def fresh_short_replay(short_path, rom_path, compatibility, expected):
+def fresh_short_replay(short_path, rom_path, expected):
     command = [sys.executable, "-m", "aladdin_sega", "replay", str(short_path), "--rom", str(rom_path)]
-    if compatibility:
-        command.extend(("--compatibility", compatibility))
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode:
         raise RuntimeError("fresh witness replay failed: " + completed.stderr.strip())
@@ -70,15 +68,15 @@ def follow_original_boundaries(machine, instructions=100):
     return machine.snapshot(), machine.frame()[2], b"".join(pcm)
 
 
-def run_witness(*, candidate_name, recording, rom_path, output, compatibility):
-    candidate, entry_pc = Candidate(candidate_name), LEAF_ENTRY if candidate_name == "leaf" else CALLER_ENTRY
+def run_witness(*, candidate_name, recording, rom_path, output):
+    entry_pc = {"leaf": LEAF_ENTRY, "composed": CALLER_ENTRY}[candidate_name]
     output.mkdir(parents=True, exist_ok=True)
     rom, replay_bytes = read_rom(rom_path), artifacts.read_bounded(recording)
     replay_digest = digest(replay_bytes)
 
-    with Machine(rom, compatibility=compatibility) as original:
+    with Machine(rom) as original:
         meta, initial, events = artifacts.load_replay(replay_bytes, rom_sha256=original.rom_sha256,
-                                                      source_id=original.source_id, compatibility=compatibility)
+                                                      state_version=original.state_version)
         artifacts.restore_snapshot(original, initial)
         original.gates([entry_pc])
         reach_gate(original, events)
@@ -89,7 +87,7 @@ def run_witness(*, candidate_name, recording, rom_path, output, compatibility):
         gate_archive = artifacts.snapshot_bytes(original)
         (output / "gate.alsnap").write_bytes(gate_archive)
         short = artifacts.Recorder(original, origin="synthetic", reset_provenance="recovery-gate-witness")
-        plan = (candidate._leaf_plan if candidate_name == "leaf" else candidate._caller_plan)(original, entry_registers)
+        plan = (clear_auxiliary_buffer if candidate_name == "leaf" else detach_object)(original, entry_registers)
         original.gates([entry_pc, plan.registers["pc"]])
         original.gate(entry_pc, bypass_once=True)
         if original.run(instructions=1000) != "gate":
@@ -105,14 +103,14 @@ def run_witness(*, candidate_name, recording, rom_path, output, compatibility):
 
     short_path = output / "witness.alreplay"
     short_path.write_bytes(witness_bytes)
-    short_equal, short_receipt = fresh_short_replay(short_path, rom_path, compatibility, short_expected)
+    short_equal, short_receipt = fresh_short_replay(short_path, rom_path, short_expected)
 
-    with Machine(rom, compatibility=compatibility) as replacement:
+    with Machine(rom) as replacement:
         replacement.restore(stopped_state)
         replacement.gates([entry_pc])
         if replacement.run(instructions=1) != "gate":
             raise RuntimeError("restored stopped state did not re-arm its candidate gate")
-        replacement_plan = (candidate._leaf_plan if candidate_name == "leaf" else candidate._caller_plan)(
+        replacement_plan = (clear_auxiliary_buffer if candidate_name == "leaf" else detach_object)(
             replacement, replacement.registers())
         if replacement_plan != plan:
             raise RuntimeError("restored stopped state produced a different recovery plan")
@@ -127,18 +125,18 @@ def run_witness(*, candidate_name, recording, rom_path, output, compatibility):
 
     # Resume the staged state from its portable artifact in a fresh machine,
     # rather than merely continuing the in-memory replacement instance.
-    with Machine(rom, compatibility=compatibility) as resumed:
+    with Machine(rom) as resumed:
         artifacts.restore_snapshot(resumed, continuation_archive)
         follow = follow_original_boundaries(resumed)
 
     immediate_equal = immediate == (original_state, original_frame, original_pcm)
     continuation_equal = follow == (original_follow_state, original_follow_frame, original_follow_pcm)
     receipt = execution_receipt(artifact_sha256=replay_digest, capture_source=meta["source_id"],
-                                candidate=candidate_name, compatibility=compatibility)
+                                candidate=candidate_name)
     report = {
         "status": "PASS" if immediate_equal and continuation_equal and short_equal else "DIVERGENCE",
         "scope": "one user-recording activation; original region, staged replacement, and 100-instruction continuation",
-        "candidate": candidate_name, "compatibility": compatibility, "recording": str(recording),
+        "candidate": candidate_name, "recording": str(recording),
         "entry": {**entry_info, "registers": entry_registers},
         "plan": {"cycles": plan.cycles, "instructions": plan.instructions, "writes": len(plan.writes),
                  "last_pc": plan.last_pc, "continuation_pc": plan.registers["pc"],
@@ -162,11 +160,10 @@ def main(argv=None):
     parser.add_argument("--candidate", choices=("leaf", "composed"), default="leaf")
     parser.add_argument("--recording", type=Path, default=DEFAULT_RECORDING)
     parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
-    parser.add_argument("--compatibility", default="review-baseline-v1")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / "recovery-witness")
     args = parser.parse_args(argv)
     report = run_witness(candidate_name=args.candidate, recording=args.recording.resolve(), rom_path=args.rom.resolve(),
-                         output=args.output.resolve(), compatibility=args.compatibility)
+                         output=args.output.resolve())
     print(json.dumps(report, sort_keys=True))
     return 0 if report["status"] == "PASS" else 1
 

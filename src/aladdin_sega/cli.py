@@ -26,7 +26,6 @@ def main(argv=None):
     for name in ("doctor", "boot-check", "play", "replay", "snapshot-check", "resume-check", "compare"):
         p = sub.add_parser(name)
         p.add_argument("--rom", type=Path, default=DEFAULT_ROM)
-        p.add_argument("--compatibility", help="Explicit named capture-to-runtime qualification (default: exact source identity)")
         if name in {"replay", "snapshot-check", "resume-check", "compare"}:
             p.add_argument("artifact", type=Path)
         if name in {"snapshot-check", "compare"}:
@@ -59,21 +58,21 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         rom = read_rom(args.rom)
-        start_receipt = execution_receipt(compatibility=args.compatibility) if args.command in {"replay", "resume-check"} else None
+        start_receipt = execution_receipt() if args.command in {"replay", "resume-check"} else None
         if args.command == "doctor":
             lib = load_library()
             emit({"status": "PASS", "scope": "ROM and native ABI availability", "python": platform.python_version(),
                   "host": platform.platform(), "native_library": str(library_path()),
                   "source_id": lib.al_source_id().decode(), "profile_sha256": PROFILE_SHA256,
-                  "receipt": execution_receipt(compatibility=args.compatibility)})
+                  "receipt": execution_receipt()})
         elif args.command == "play":
             from .frontend import play
             play(rom, frames=args.frames, mute=args.mute, record_from_start=args.record_from_start,
-                 snapshot=args.snapshot, audio_report=args.audio_report, compatibility=args.compatibility)
+                 snapshot=args.snapshot, audio_report=args.audio_report)
         elif args.command == "compare":
             from .verification import compare_replay
             result = compare_replay(args.rom.resolve(), args.artifact.resolve(), candidate=args.candidate,
-                                    compatibility=args.compatibility, timeout_seconds=args.timeout_seconds, output=args.output)
+                                    timeout_seconds=args.timeout_seconds, output=args.output)
             emit(result)
             return 0 if result["status"] == "PASS" else 1
         elif args.command == "boot-check":
@@ -113,12 +112,12 @@ def main(argv=None):
             from .verification import snapshot_check, check_saved_snapshots
             if args.snapshot:
                 emit(check_saved_snapshots(rom, args.rom.resolve(), args.artifact, args.snapshot,
-                                          compatibility=args.compatibility, timeout_seconds=args.timeout_seconds))
+                                          timeout_seconds=args.timeout_seconds))
             else:
                 emit(snapshot_check(rom, args.rom.resolve(), args.artifact,
-                                    compatibility=args.compatibility, timeout_seconds=args.timeout_seconds))
+                                    timeout_seconds=args.timeout_seconds))
         else:
-            with Machine(rom, compatibility=args.compatibility) as machine:
+            with Machine(rom) as machine:
                 data = artifacts.read_bounded(args.artifact)
                 pcm = hashlib.sha256()
                 candidate = observer = None
@@ -130,8 +129,8 @@ def main(argv=None):
                     if observer:
                         observer.pcm(sound)
                 if args.command == "replay":
-                    meta, initial, events = artifacts.load_replay(data, rom_sha256=machine.rom_sha256, source_id=machine.source_id,
-                                                               compatibility=args.compatibility)
+                    meta, initial, events = artifacts.load_replay(data, rom_sha256=machine.rom_sha256, state_version=machine.state_version,
+                                                               )
                     artifacts.restore_snapshot(machine, initial)
                     if args.candidate != "original":
                         from .recovery import Candidate
@@ -158,7 +157,7 @@ def main(argv=None):
                     artifacts.play_events(machine, [], args.target, audio_sink=audio_sink)
                 receipt = execution_receipt(artifact_sha256=artifacts.digest(data),
                            capture_source=meta["source_id"] if args.command == "replay" else None,
-                           candidate=args.candidate if args.command == "replay" else "original", compatibility=args.compatibility)
+                           candidate=args.candidate if args.command == "replay" else "original")
                 if any(start_receipt[key] != receipt[key] for key in ("python_modules_sha256", "native_binary_sha256")):
                     raise RuntimeError("Implementation files changed during execution; rerun in a fresh process for a valid receipt")
                 emit({"status": "COMPLETED", "compared": False, "scope": "successful execution; no equivalence verdict", **machine.info,

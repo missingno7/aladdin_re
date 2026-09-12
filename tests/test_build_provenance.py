@@ -54,8 +54,12 @@ def source_id_from_fresh_process(dll: Path) -> str:
 
 
 def copy_disposable_project(destination: Path) -> Path:
-    """Copy only build inputs plus the 52-file closure, never the real checkout."""
-    for relative in ("CMakeLists.txt", "native/machine.cpp", "scripts/check_sources.py", "third_party/sources.json"):
+    """Copy runtime inputs only; test framework headers must not be required."""
+    upstream = json.loads((ROOT / "third_party/upstream.json").read_text())
+    inputs = ["CMakeLists.txt", "native/machine.cpp", "scripts/check_sources.py",
+              "third_party/sources.json", "third_party/upstream.json"]
+    inputs += [name for component in upstream.values() for name in component["files"]]
+    for relative in inputs:
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / relative, target)

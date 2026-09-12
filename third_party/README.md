@@ -1,32 +1,40 @@
-# Selected source dependencies
+# Source dependencies and notices
 
-The Windows native binding uses a small, explicit closure from the user's local
-PortForge checkout. `sources.json` locks 52 individual files by SHA-256. This is
-not a vendored PortForge framework and the project does not alter that checkout.
-The lock includes the Genesis board, M68000/Z80 interpreters, renderer, snapshot
-codec, scheduler, selected test sources, and the required Nuked audio sources.
+The project compiles Nuked OPN2 and Nuked PSG directly from the adjacent vendored
+source directories. These are byte-exact copies of the pinned independent
+upstream sources already present in the inspected donor checkout. No local
+patches are applied. [upstream.json](upstream.json) records revisions, licenses
+and SHA-256 for sources, headers, README and LICENSE. Git preserves their bytes.
 
-| Component | Pinned source | Notice and use |
+| Component | Upstream and revision | Notice |
 |---|---|---|
-| PortForge M68000/Z80, Genesis board, VDP, renderer, scheduler, snapshot codec | `https://github.com/missingno7/port_forge` at `6c971b08c0698cd5fe56ab0ed855df4cbfc0b511` | Compiled through this project's small C ABI. No top-level license was found in the inspected checkout; no public redistribution permission is asserted. |
-| Nuked OPN2 | `https://github.com/nukeykt/Nuked-OPN2` at `335747d78cb0abbc3b55b004e62dad9763140115` | The selected PortForge files retain the LGPL-2.1-or-later notice. |
-| Nuked PSG / YM7101 | `https://github.com/nukeykt/Nuked-PSG` at `d15a168c676f4669e23660be9225b34ad7c1764e` | The selected PortForge files retain the GPLv2-or-later notice. |
+| Nuked OPN2 | https://github.com/nukeykt/Nuked-OPN2 · `335747d78cb0abbc3b55b004e62dad9763140115` | LGPL-2.1-or-later; original LICENSE and source notices retained |
+| Nuked PSG | https://github.com/nukeykt/Nuked-PSG · `d15a168c676f4669e23660be9225b34ad7c1764e` | GPL-2.0-or-later; original LICENSE and source notices retained |
+| Retained Genesis components | https://github.com/missingno7/port_forge · `6c971b08c0698cd5fe56ab0ed855df4cbfc0b511` | No top-level license found in the inspected donor; no public redistribution permission asserted |
 
-The inspected local root is:
+`sources.json` separately locks 27 runtime donor headers and 19 additional
+native-test files. The board's two borrowed sound wrappers still include donor
+copies of the core declaration headers. The build verifies that these declarations
+are byte-identical to the direct upstream headers. There is only one compiled
+copy of each sound core. Absorbing the wrappers is a future integration task,
+not a completed claim of direct ownership of every sound-related file.
 
-```text
-D:/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge
-```
+The inspected read-only donor root is
+`D:/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge`.
+[dependencies.json](dependencies.json) is generated from actual compiler records,
+with active build objects and relative paths; the
+[component ledger](../docs/component-migration.md) explains every dependency group.
+System compiler headers are excluded from that focused graph.
 
-Matching the commit label is insufficient. CMake runs `scripts/check_sources.py`
-at configuration and before incremental native compilation. Any byte mismatch in
-the locked files stops the build. The resulting native receipt records the lock,
-adapter hash, toolchain options, and generated source identity.
+CMake checks selected donor files and all direct upstream bytes at configure
+time and before every incremental build. `BUILD_TESTING=OFF` requires only the
+runtime closure. Receipts record adapter and dependency hashes, exact upstream
+revisions, compiler options and source identity. A changed locked file stops the
+build before native compilation.
 
-## Authorized local source handoff
+## Focused local source handoff
 
-For an authorized fresh Windows worker, export the focused closure rather than
-asking them to reconstruct it or cloning an entire framework:
+An authorized local worker can export the runtime donor closure:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\export_sources.py `
@@ -34,27 +42,25 @@ asking them to reconstruct it or cloning an entire framework:
   --output D:\work\aladdin-portforge-sources
 ```
 
-The exporter reads and verifies every selected source file before it creates the
-new output directory. It retains each original relative path below `source/` and
-writes the exact lock, provenance metadata, and this notice material below
-`metadata/`. It refuses to overwrite an existing output directory. It does not
-copy the ROM, unrelated PortForge files, a build directory, or a framework-wide
-source tree.
+Add `--tests` to include the 19 additional native-test files. The exporter
+validates selected hashes before creating a new directory, preserves original
+relative paths under `source/`, and writes lock/provenance/notices under
+`metadata/`. Existing output paths are refused. Point `PORTFORGE_ROOT` at the
+resulting `source/`; disable native tests for a runtime-only export. Direct sound
+cores are already included in this repository and are not copied from the donor
+by this exporter. ROMs and unrelated framework files are never included.
 
-This local handoff does not grant a right to publish the bundle, binaries, or
-the game. Public distribution and combined-work licensing remain unresolved.
-Do not describe this integration as permissively licensed. The ROM is never a
-third-party dependency for export and must be supplied separately by its user.
+This local handoff does not establish permission to publish the donor bundle,
+binaries, or game. Combined-work distribution remains unresolved. Do not describe
+the integration as permissively licensed. Each user supplies the ROM separately.
 
 ## Native ownership
 
-`native/machine.cpp` is project code. It keeps one native machine allocation,
-uses the inspected scheduler's admission order, and exposes a narrow ABI to
-Python. The binding's source identity incorporates the adapter and dependency
-lock; build identity/receipt data additionally captures relevant toolchain
-options. Snapshot admission separately checks the ROM, profile, codec boundary,
-and explicit compatibility policy.
+`native/machine.cpp` is project code. It owns the machine allocation and uses
+the retained scheduler for bounded admission, with a small project ABI for
+Python. Snapshot identity uses a behavioral profile and explicit state contract;
+build hashes remain provenance. Native state layouts never leak into Python.
 
-Native PCM capture is bounded and checked. Overflow invalidates the run rather
-than silently losing samples. Explicit discard is allowed only for presentation;
-it never stops chip or Z80 time and cannot produce an all-PCM verification claim.
+Native PCM capture is bounded and checked. Overflow invalidates the run.
+Explicit presentation discard advances chips and Z80 normally but cannot support
+an all-PCM verification claim.

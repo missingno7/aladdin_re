@@ -4,6 +4,7 @@ from __future__ import annotations
 import ctypes as C
 
 import pytest
+from aladdin_sega.recovered import clear_auxiliary_buffer, detach_object, LegacyExit
 
 from aladdin_sega.machine import Machine
 from aladdin_sega.recovery import (
@@ -60,7 +61,7 @@ def leaf_machine(*, count=0, pointer=0xff2000, d0=0, sr=0x2000, a1=0xff1000, a7=
 
 def test_leaf_null_path_preserves_register_width_and_sets_move_word_ccr():
     machine = leaf_machine(pointer=0, d0=0xfeed8000, sr=0x201f)
-    plan = Candidate()._leaf_plan(machine, machine.registers())
+    plan = clear_auxiliary_buffer(machine, machine.registers())
     assert (plan.cycles, plan.instructions) == (96, 8)
     assert plan.registers == {"d0": 0xfeed8000, "pc": 0x123456, "a7": 0xff8004, "sr": 0x2018}
     assert plan.writes == ((0xff7ffc, 0x00), (0xff7ffd, 0x1a), (0xff7ffe, 0xd0), (0xff7fff, 0xfc),
@@ -69,7 +70,7 @@ def test_leaf_null_path_preserves_register_width_and_sets_move_word_ccr():
 
 def test_leaf_nonnull_count_maximum_has_exact_loop_cost_and_byte_writes():
     machine = leaf_machine(count=255, d0=0x00001234)
-    plan = Candidate()._leaf_plan(machine, machine.registers())
+    plan = clear_auxiliary_buffer(machine, machine.registers())
     assert (plan.cycles, plan.instructions) == (5810, 525)
     assert len(plan.writes) == 271  # two saved values, three record clears, and 256 DBF bytes
     assert plan.writes[-256:] == tuple((0xff2000 + offset, 0) for offset in range(256))
@@ -79,7 +80,7 @@ def test_leaf_nonnull_count_maximum_has_exact_loop_cost_and_byte_writes():
 def test_leaf_alias_is_refused_before_staging_writes():
     machine = leaf_machine(pointer=0xff1010)
     with pytest.raises(UnsupportedCandidate, match="aliases"):
-        Candidate()._leaf_plan(machine, machine.registers())
+        clear_auxiliary_buffer(machine, machine.registers())
 
 
 def test_caller_direct_route_models_overwritten_return_and_link_clear():
@@ -92,7 +93,7 @@ def test_caller_direct_route_models_overwritten_return_and_link_clear():
     put(machine, 0xff503c, 0x07, 1)
     put(machine, 0xff503e, 0xdeadbeef, 4)
     put(machine, 0xff7d9e, 0x00456789, 4)
-    plan = Candidate("composed")._caller_plan(machine, machine.registers())
+    plan = detach_object(machine, machine.registers())
     assert (plan.cycles, plan.instructions) == (432, 31)
     assert plan.registers == {"d0": 0xabcd1200, "a2": 0xff3002, "a7": 0xff8004,
                               "pc": 0x456789, "sr": 0x2010}
@@ -108,14 +109,32 @@ def test_caller_accepts_immutable_rom_script_source_without_a_ram_alias():
     put(machine, 0xff103c, 0, 1)
     put(machine, 0xff103e, 0, 4)
     put(machine, 0xff7d9e, 0x123456, 4)
-    plan = Candidate("composed")._caller_plan(machine, machine.registers())
+    plan = detach_object(machine, machine.registers())
     assert plan.registers["a2"] == 0x102
+
+
+@pytest.mark.parametrize("source,flag", [(1, 0), (0, 4)])
+def test_open_caller_legacy_seam_leaves_entry_unchanged(source, flag):
+    machine = leaf_machine()
+    machine.info["pc"] = CALLER_ENTRY
+    machine._registers.update(pc=CALLER_ENTRY, a2=0x100)
+    machine.rom[0x101] = source
+    put(machine, 0xff103c, flag, 1)
+    before = bytes(machine.ram), machine.registers()
+    with pytest.raises(LegacyExit) as error:
+        detach_object(machine, machine.registers())
+    assert error.value.target == 0x1ABE6E
+    assert (bytes(machine.ram), machine.registers()) == before
+    assert not Candidate("composed").on_gate(machine, 10000)
+    assert machine.atomic_call is None
+    assert machine.gate_call == (CALLER_ENTRY, True)
+    assert machine.run_call == 1
 
 
 @pytest.mark.parametrize("name", ["mutant-result", "mutant-continuation", "mutant-timing"])
 def test_named_mutants_stage_a_distinct_leaf_result(name):
     machine = leaf_machine(count=0)
-    original = Candidate()._leaf_plan(machine, machine.registers())
+    original = clear_auxiliary_buffer(machine, machine.registers())
     mutant = Candidate(name)._mutate(original)
     assert mutant != original
 
@@ -195,7 +214,7 @@ def test_native_atomic_leaf_matches_exact_rom_leaf_full_state(count, pointer):
         replacement.restore(stopped)
         replacement.gates([LEAF_ENTRY])
         assert replacement.run(instructions=1) == "gate"
-        plan = Candidate()._leaf_plan(replacement, replacement.registers())
+        plan = clear_auxiliary_buffer(replacement, replacement.registers())
         assert replacement.atomic(target=replacement.info["tick"] + 1_000_000,
                                   cycles=plan.cycles, instructions=plan.instructions,
                                   writes=list(plan.writes), registers=plan.registers,

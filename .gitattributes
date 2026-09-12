@@ -1,4 +1,6 @@
 * text=auto eol=lf
 *.cmd text eol=crlf
+third_party/nuked_opn2/** -text -whitespace
+third_party/nuked_psg/** -text -whitespace
 # Markdown uses two trailing spaces for intentional hard line breaks.
 *.md whitespace=-blank-at-eol

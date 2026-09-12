@@ -1,0 +1,819 @@
+{
+  "method": "Ninja compiler dependency records; quoted include edges resolved only among observed files",
+  "objects": {
+    "CMakeFiles/m68k_units.dir/D_/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge/tests/m68k_units.cpp.obj": [
+      "donor/tests/m68k_units.cpp",
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/core/observe.hpp",
+      "donor/src/arch/m68k/alu.hpp",
+      "donor/src/arch/m68k/machine.hpp",
+      "donor/src/arch/m68k/timing_68000.hpp"
+    ],
+    "CMakeFiles/z80_units.dir/D_/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge/tests/z80_units.cpp.obj": [
+      "donor/tests/z80_units.cpp",
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/alu.hpp",
+      "donor/src/arch/z80/cpu.hpp",
+      "donor/src/arch/z80/timing_z80.hpp"
+    ],
+    "CMakeFiles/genesis_render_units.dir/D_/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge/tests/genesis_render_units.cpp.obj": [
+      "donor/tests/genesis_render_units.cpp",
+      "donor/src/platform/genesis/render.hpp",
+      "donor/src/core/sha256.hpp",
+      "donor/src/platform/genesis/vdp.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp",
+      "donor/src/platform/genesis/refusal.hpp"
+    ],
+    "CMakeFiles/genesis_device_units.dir/D_/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge/tests/genesis_device_units.cpp.obj": [
+      "donor/tests/genesis_device_units.cpp",
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/core/observe.hpp",
+      "donor/src/arch/m68k/alu.hpp",
+      "donor/src/arch/m68k/machine.hpp",
+      "donor/src/arch/m68k/timing_68000.hpp",
+      "donor/src/platform/genesis/io.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp",
+      "donor/src/platform/genesis/refusal.hpp",
+      "donor/src/platform/genesis/nuked_psg.hpp",
+      "donor/src/core/sha256.hpp",
+      "donor/third_party/nuked_psg/ympsg.h",
+      "donor/src/platform/genesis/vdp.hpp",
+      "donor/src/platform/genesis/nuked_ym2612.hpp",
+      "donor/third_party/nuked_opn2/ym3438.h",
+      "donor/src/platform/genesis/ym3438_state_fields.inc",
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/alu.hpp",
+      "donor/src/arch/z80/cpu.hpp",
+      "donor/src/arch/z80/timing_z80.hpp"
+    ],
+    "CMakeFiles/genesis_nuked_machine_units.dir/D_/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge/tests/genesis_nuked_machine_units.cpp.obj": [
+      "donor/tests/genesis_nuked_machine_units.cpp",
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/core/observe.hpp",
+      "donor/src/arch/m68k/alu.hpp",
+      "donor/src/arch/m68k/machine.hpp",
+      "donor/src/arch/m68k/timing_68000.hpp",
+      "donor/src/platform/genesis/io.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp",
+      "donor/src/platform/genesis/refusal.hpp",
+      "donor/src/platform/genesis/nuked_psg.hpp",
+      "donor/src/core/sha256.hpp",
+      "donor/third_party/nuked_psg/ympsg.h",
+      "donor/src/platform/genesis/vdp.hpp",
+      "donor/src/platform/genesis/nuked_ym2612.hpp",
+      "donor/third_party/nuked_opn2/ym3438.h",
+      "donor/src/platform/genesis/ym3438_state_fields.inc",
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/alu.hpp",
+      "donor/src/arch/z80/cpu.hpp",
+      "donor/src/arch/z80/timing_z80.hpp",
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/core/run_end.hpp",
+      "donor/src/replay/run_ending.hpp",
+      "donor/src/host/admission_observer.hpp"
+    ],
+    "CMakeFiles/aladdin_native.dir/native/machine.cpp.obj": [
+      "project/native/machine.cpp",
+      "project/build/generated/build_identity.hpp",
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/core/observe.hpp",
+      "donor/src/arch/m68k/alu.hpp",
+      "donor/src/arch/m68k/machine.hpp",
+      "donor/src/arch/m68k/timing_68000.hpp",
+      "donor/src/core/run_end.hpp",
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/io.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp",
+      "donor/src/platform/genesis/refusal.hpp",
+      "donor/src/platform/genesis/nuked_psg.hpp",
+      "donor/src/core/sha256.hpp",
+      "donor/third_party/nuked_psg/ympsg.h",
+      "donor/src/platform/genesis/vdp.hpp",
+      "donor/src/platform/genesis/nuked_ym2612.hpp",
+      "donor/third_party/nuked_opn2/ym3438.h",
+      "donor/src/platform/genesis/ym3438_state_fields.inc",
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/alu.hpp",
+      "donor/src/arch/z80/cpu.hpp",
+      "donor/src/arch/z80/timing_z80.hpp",
+      "donor/src/replay/run_ending.hpp",
+      "donor/src/host/admission_observer.hpp",
+      "donor/src/platform/genesis/snapshot.hpp",
+      "donor/src/platform/genesis/render.hpp"
+    ],
+    "CMakeFiles/genesis_snapshot_codec_units.dir/D_/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge/tests/genesis_snapshot_codec_units.cpp.obj": [
+      "donor/tests/genesis_snapshot_codec_units.cpp",
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/core/sha256.hpp",
+      "donor/src/arch/m68k/timing_68000.hpp",
+      "donor/src/platform/genesis/code_census.hpp",
+      "donor/src/arch/m68k/static_decoder.hpp",
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/core/observe.hpp",
+      "donor/src/arch/m68k/alu.hpp",
+      "donor/src/arch/m68k/machine.hpp",
+      "donor/src/platform/genesis/io.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp",
+      "donor/src/platform/genesis/refusal.hpp",
+      "donor/src/platform/genesis/nuked_psg.hpp",
+      "donor/third_party/nuked_psg/ympsg.h",
+      "donor/src/platform/genesis/vdp.hpp",
+      "donor/src/platform/genesis/nuked_ym2612.hpp",
+      "donor/third_party/nuked_opn2/ym3438.h",
+      "donor/src/platform/genesis/ym3438_state_fields.inc",
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/alu.hpp",
+      "donor/src/arch/z80/cpu.hpp",
+      "donor/src/arch/z80/timing_z80.hpp",
+      "donor/src/replay/input_delivery.hpp",
+      "donor/src/replay/input_script.hpp",
+      "donor/src/core/io.hpp",
+      "donor/src/core/json.hpp",
+      "donor/src/replay/session_recording.hpp",
+      "donor/src/core/authority_codec.hpp",
+      "donor/src/replay/boundary.hpp",
+      "donor/src/replay/identity.hpp",
+      "donor/src/replay/run_ending.hpp",
+      "donor/src/core/run_end.hpp",
+      "donor/src/replay/verdict_record.hpp",
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/host/admission_observer.hpp",
+      "donor/src/platform/genesis/snapshot.hpp"
+    ],
+    "CMakeFiles/genesis_scheduler_continuation_units.dir/D_/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge/tests/genesis_scheduler_continuation_units.cpp.obj": [
+      "donor/tests/genesis_scheduler_continuation_units.cpp",
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/core/observe.hpp",
+      "donor/src/arch/m68k/alu.hpp",
+      "donor/src/arch/m68k/machine.hpp",
+      "donor/src/arch/m68k/timing_68000.hpp",
+      "donor/src/core/run_end.hpp",
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/io.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp",
+      "donor/src/platform/genesis/refusal.hpp",
+      "donor/src/platform/genesis/nuked_psg.hpp",
+      "donor/src/core/sha256.hpp",
+      "donor/third_party/nuked_psg/ympsg.h",
+      "donor/src/platform/genesis/vdp.hpp",
+      "donor/src/platform/genesis/nuked_ym2612.hpp",
+      "donor/third_party/nuked_opn2/ym3438.h",
+      "donor/src/platform/genesis/ym3438_state_fields.inc",
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/alu.hpp",
+      "donor/src/arch/z80/cpu.hpp",
+      "donor/src/arch/z80/timing_z80.hpp",
+      "donor/src/replay/run_ending.hpp",
+      "donor/src/host/admission_observer.hpp",
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/platform/genesis/code_census.hpp",
+      "donor/src/arch/m68k/static_decoder.hpp",
+      "donor/src/replay/input_delivery.hpp",
+      "donor/src/replay/input_script.hpp",
+      "donor/src/core/io.hpp",
+      "donor/src/core/json.hpp",
+      "donor/src/replay/session_recording.hpp",
+      "donor/src/core/authority_codec.hpp",
+      "donor/src/replay/boundary.hpp",
+      "donor/src/replay/identity.hpp",
+      "donor/src/replay/verdict_record.hpp"
+    ],
+    "CMakeFiles/aladdin_native.dir/third_party/nuked_psg/ympsg.c.obj": [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ],
+    "CMakeFiles/m68k_units.dir/third_party/nuked_opn2/ym3438.c.obj": [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    "CMakeFiles/aladdin_native.dir/third_party/nuked_opn2/ym3438.c.obj": [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    "CMakeFiles/m68k_units.dir/third_party/nuked_psg/ympsg.c.obj": [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ],
+    "CMakeFiles/z80_units.dir/third_party/nuked_psg/ympsg.c.obj": [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ],
+    "CMakeFiles/z80_units.dir/third_party/nuked_opn2/ym3438.c.obj": [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    "CMakeFiles/genesis_device_units.dir/third_party/nuked_psg/ympsg.c.obj": [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ],
+    "CMakeFiles/genesis_device_units.dir/third_party/nuked_opn2/ym3438.c.obj": [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    "CMakeFiles/genesis_render_units.dir/third_party/nuked_opn2/ym3438.c.obj": [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    "CMakeFiles/genesis_render_units.dir/third_party/nuked_psg/ympsg.c.obj": [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ],
+    "CMakeFiles/genesis_nuked_machine_units.dir/third_party/nuked_opn2/ym3438.c.obj": [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    "CMakeFiles/genesis_nuked_machine_units.dir/third_party/nuked_psg/ympsg.c.obj": [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ],
+    "CMakeFiles/genesis_snapshot_codec_units.dir/third_party/nuked_opn2/ym3438.c.obj": [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    "CMakeFiles/genesis_snapshot_codec_units.dir/third_party/nuked_psg/ympsg.c.obj": [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ],
+    "CMakeFiles/genesis_scheduler_continuation_units.dir/third_party/nuked_opn2/ym3438.c.obj": [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    "CMakeFiles/genesis_scheduler_continuation_units.dir/third_party/nuked_psg/ympsg.c.obj": [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ]
+  },
+  "files": {
+    "donor/src/arch/m68k/alu.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/arch/m68k/interp.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/arch/m68k/machine.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/arch/m68k/static_decoder.hpp": [
+      "test"
+    ],
+    "donor/src/arch/m68k/timing_68000.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/arch/z80/alu.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/arch/z80/cpu.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/arch/z80/interp.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/arch/z80/timing_z80.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/core/authority_codec.hpp": [
+      "test"
+    ],
+    "donor/src/core/io.hpp": [
+      "test"
+    ],
+    "donor/src/core/json.hpp": [
+      "test"
+    ],
+    "donor/src/core/observe.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/core/run_end.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/core/sha256.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/host/admission_observer.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/host/genesis_engine.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/host/genesis_session.hpp": [
+      "test"
+    ],
+    "donor/src/platform/genesis/code_census.hpp": [
+      "test"
+    ],
+    "donor/src/platform/genesis/io.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/machine.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/machine_profile.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/nuked_psg.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/nuked_ym2612.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/refusal.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/render.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/snapshot.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/vdp.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/ym3438_state_fields.inc": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/platform/genesis/z80_box.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/replay/boundary.hpp": [
+      "test"
+    ],
+    "donor/src/replay/identity.hpp": [
+      "test"
+    ],
+    "donor/src/replay/input_delivery.hpp": [
+      "test"
+    ],
+    "donor/src/replay/input_script.hpp": [
+      "test"
+    ],
+    "donor/src/replay/run_ending.hpp": [
+      "runtime",
+      "test"
+    ],
+    "donor/src/replay/session_recording.hpp": [
+      "test"
+    ],
+    "donor/src/replay/verdict_record.hpp": [
+      "test"
+    ],
+    "donor/tests/genesis_device_units.cpp": [
+      "test"
+    ],
+    "donor/tests/genesis_nuked_machine_units.cpp": [
+      "test"
+    ],
+    "donor/tests/genesis_render_units.cpp": [
+      "test"
+    ],
+    "donor/tests/genesis_scheduler_continuation_units.cpp": [
+      "test"
+    ],
+    "donor/tests/genesis_snapshot_codec_units.cpp": [
+      "test"
+    ],
+    "donor/tests/m68k_units.cpp": [
+      "test"
+    ],
+    "donor/tests/z80_units.cpp": [
+      "test"
+    ],
+    "donor/third_party/nuked_opn2/ym3438.h": [
+      "runtime",
+      "test"
+    ],
+    "donor/third_party/nuked_psg/ympsg.h": [
+      "runtime",
+      "test"
+    ],
+    "project/build/generated/build_identity.hpp": [
+      "runtime"
+    ],
+    "project/native/machine.cpp": [
+      "runtime"
+    ],
+    "project/third_party/nuked_opn2/ym3438.c": [
+      "runtime",
+      "test"
+    ],
+    "project/third_party/nuked_opn2/ym3438.h": [
+      "runtime",
+      "test"
+    ],
+    "project/third_party/nuked_psg/ympsg.c": [
+      "runtime",
+      "test"
+    ],
+    "project/third_party/nuked_psg/ympsg.h": [
+      "runtime",
+      "test"
+    ]
+  },
+  "include_edges": [
+    [
+      "donor/src/arch/m68k/alu.hpp",
+      "donor/src/arch/m68k/machine.hpp"
+    ],
+    [
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/core/observe.hpp"
+    ],
+    [
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/arch/m68k/alu.hpp"
+    ],
+    [
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/arch/m68k/machine.hpp"
+    ],
+    [
+      "donor/src/arch/m68k/interp.hpp",
+      "donor/src/arch/m68k/timing_68000.hpp"
+    ],
+    [
+      "donor/src/arch/z80/alu.hpp",
+      "donor/src/arch/z80/cpu.hpp"
+    ],
+    [
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/alu.hpp"
+    ],
+    [
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/cpu.hpp"
+    ],
+    [
+      "donor/src/arch/z80/interp.hpp",
+      "donor/src/arch/z80/timing_z80.hpp"
+    ],
+    [
+      "donor/src/core/authority_codec.hpp",
+      "donor/src/core/json.hpp"
+    ],
+    [
+      "donor/src/core/authority_codec.hpp",
+      "donor/src/core/sha256.hpp"
+    ],
+    [
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/arch/m68k/interp.hpp"
+    ],
+    [
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/core/run_end.hpp"
+    ],
+    [
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/platform/genesis/machine.hpp"
+    ],
+    [
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/replay/run_ending.hpp"
+    ],
+    [
+      "donor/src/host/genesis_engine.hpp",
+      "donor/src/host/admission_observer.hpp"
+    ],
+    [
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/core/sha256.hpp"
+    ],
+    [
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/arch/m68k/timing_68000.hpp"
+    ],
+    [
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/platform/genesis/code_census.hpp"
+    ],
+    [
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/platform/genesis/machine.hpp"
+    ],
+    [
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/replay/input_delivery.hpp"
+    ],
+    [
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/replay/input_script.hpp"
+    ],
+    [
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/replay/session_recording.hpp"
+    ],
+    [
+      "donor/src/host/genesis_session.hpp",
+      "donor/src/host/genesis_engine.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/code_census.hpp",
+      "donor/src/arch/m68k/static_decoder.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/code_census.hpp",
+      "donor/src/platform/genesis/machine.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/io.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/io.hpp",
+      "donor/src/platform/genesis/refusal.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/arch/m68k/interp.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/arch/m68k/machine.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/io.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/nuked_psg.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/refusal.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/vdp.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/nuked_ym2612.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/machine.hpp",
+      "donor/src/platform/genesis/z80_box.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/nuked_psg.hpp",
+      "donor/src/core/sha256.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/nuked_psg.hpp",
+      "donor/third_party/nuked_psg/ympsg.h"
+    ],
+    [
+      "donor/src/platform/genesis/nuked_ym2612.hpp",
+      "donor/src/core/sha256.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/nuked_ym2612.hpp",
+      "donor/third_party/nuked_opn2/ym3438.h"
+    ],
+    [
+      "donor/src/platform/genesis/nuked_ym2612.hpp",
+      "donor/src/platform/genesis/ym3438_state_fields.inc"
+    ],
+    [
+      "donor/src/platform/genesis/render.hpp",
+      "donor/src/core/sha256.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/render.hpp",
+      "donor/src/platform/genesis/vdp.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/snapshot.hpp",
+      "donor/src/platform/genesis/machine.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/snapshot.hpp",
+      "donor/src/core/sha256.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/snapshot.hpp",
+      "donor/src/platform/genesis/ym3438_state_fields.inc"
+    ],
+    [
+      "donor/src/platform/genesis/snapshot.hpp",
+      "donor/src/platform/genesis/ym3438_state_fields.inc"
+    ],
+    [
+      "donor/src/platform/genesis/vdp.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/vdp.hpp",
+      "donor/src/platform/genesis/refusal.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/arch/z80/interp.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/platform/genesis/machine_profile.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/platform/genesis/nuked_psg.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/platform/genesis/refusal.hpp"
+    ],
+    [
+      "donor/src/platform/genesis/z80_box.hpp",
+      "donor/src/platform/genesis/nuked_ym2612.hpp"
+    ],
+    [
+      "donor/src/replay/boundary.hpp",
+      "donor/src/core/authority_codec.hpp"
+    ],
+    [
+      "donor/src/replay/boundary.hpp",
+      "donor/src/core/io.hpp"
+    ],
+    [
+      "donor/src/replay/boundary.hpp",
+      "donor/src/core/json.hpp"
+    ],
+    [
+      "donor/src/replay/boundary.hpp",
+      "donor/src/replay/identity.hpp"
+    ],
+    [
+      "donor/src/replay/identity.hpp",
+      "donor/src/core/json.hpp"
+    ],
+    [
+      "donor/src/replay/identity.hpp",
+      "donor/src/core/sha256.hpp"
+    ],
+    [
+      "donor/src/replay/input_delivery.hpp",
+      "donor/src/replay/input_script.hpp"
+    ],
+    [
+      "donor/src/replay/input_script.hpp",
+      "donor/src/core/io.hpp"
+    ],
+    [
+      "donor/src/replay/input_script.hpp",
+      "donor/src/core/json.hpp"
+    ],
+    [
+      "donor/src/replay/run_ending.hpp",
+      "donor/src/core/run_end.hpp"
+    ],
+    [
+      "donor/src/replay/session_recording.hpp",
+      "donor/src/core/authority_codec.hpp"
+    ],
+    [
+      "donor/src/replay/session_recording.hpp",
+      "donor/src/core/io.hpp"
+    ],
+    [
+      "donor/src/replay/session_recording.hpp",
+      "donor/src/core/json.hpp"
+    ],
+    [
+      "donor/src/replay/session_recording.hpp",
+      "donor/src/replay/boundary.hpp"
+    ],
+    [
+      "donor/src/replay/session_recording.hpp",
+      "donor/src/replay/run_ending.hpp"
+    ],
+    [
+      "donor/src/replay/session_recording.hpp",
+      "donor/src/replay/verdict_record.hpp"
+    ],
+    [
+      "donor/src/replay/verdict_record.hpp",
+      "donor/src/core/io.hpp"
+    ],
+    [
+      "donor/src/replay/verdict_record.hpp",
+      "donor/src/core/json.hpp"
+    ],
+    [
+      "donor/src/replay/verdict_record.hpp",
+      "donor/src/replay/run_ending.hpp"
+    ],
+    [
+      "donor/tests/genesis_device_units.cpp",
+      "donor/src/platform/genesis/machine.hpp"
+    ],
+    [
+      "donor/tests/genesis_nuked_machine_units.cpp",
+      "donor/src/platform/genesis/machine.hpp"
+    ],
+    [
+      "donor/tests/genesis_nuked_machine_units.cpp",
+      "donor/src/host/genesis_engine.hpp"
+    ],
+    [
+      "donor/tests/genesis_nuked_machine_units.cpp",
+      "donor/src/platform/genesis/nuked_ym2612.hpp"
+    ],
+    [
+      "donor/tests/genesis_nuked_machine_units.cpp",
+      "donor/third_party/nuked_opn2/ym3438.h"
+    ],
+    [
+      "donor/tests/genesis_render_units.cpp",
+      "donor/src/platform/genesis/render.hpp"
+    ],
+    [
+      "donor/tests/genesis_scheduler_continuation_units.cpp",
+      "donor/src/host/genesis_engine.hpp"
+    ],
+    [
+      "donor/tests/genesis_scheduler_continuation_units.cpp",
+      "donor/src/host/genesis_session.hpp"
+    ],
+    [
+      "donor/tests/genesis_snapshot_codec_units.cpp",
+      "donor/src/host/genesis_session.hpp"
+    ],
+    [
+      "donor/tests/genesis_snapshot_codec_units.cpp",
+      "donor/src/platform/genesis/snapshot.hpp"
+    ],
+    [
+      "donor/tests/m68k_units.cpp",
+      "donor/src/arch/m68k/interp.hpp"
+    ],
+    [
+      "donor/tests/z80_units.cpp",
+      "donor/src/arch/z80/interp.hpp"
+    ],
+    [
+      "project/native/machine.cpp",
+      "project/build/generated/build_identity.hpp"
+    ],
+    [
+      "project/native/machine.cpp",
+      "donor/src/host/genesis_engine.hpp"
+    ],
+    [
+      "project/native/machine.cpp",
+      "donor/src/platform/genesis/snapshot.hpp"
+    ],
+    [
+      "project/native/machine.cpp",
+      "donor/src/platform/genesis/render.hpp"
+    ],
+    [
+      "project/third_party/nuked_opn2/ym3438.c",
+      "project/third_party/nuked_opn2/ym3438.h"
+    ],
+    [
+      "project/third_party/nuked_psg/ympsg.c",
+      "project/third_party/nuked_psg/ympsg.h"
+    ]
+  ],
+  "counts": {
+    "runtime": 33,
+    "test": 50
+  }
+}

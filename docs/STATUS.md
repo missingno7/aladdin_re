@@ -1,142 +1,140 @@
 # Status — 13 September 2026
 
-The review continuation preserves original play and the user's captures, fixes
-confirmed reliability defects, and qualifies a Python helper and its adjacent
-caller. Recovery is opt-in for replay; `play.cmd` still runs the original game.
-Windows x64 remains the supported target per the user's decision.
+The architecture continuation is implemented on Windows x64. Python owns editable
+Aladdin source, dispatch, artifacts and verification; a small machine API hides
+retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
+Original play remains the default; recovery is opt-in for replay.
 
-## Review findings
+## Architecture changes
 
-Intake HEAD was `b3c78ace104a68d7dc3ba64670a8778483da8654`. Only README, STATUS
-and the specification had uncommitted Windows-scope amendments. The baseline
-Python package and DLL were preserved under `artifacts/baseline-b3c78ac`, with
-hashes, before native changes. Original captures were never rewritten.
+- Audited active compiler dependencies, not just the old lock. Runtime requires
+  27 donor headers; 19 additional donor files are native-test-only. Session,
+  census, input-script and verdict helpers do not compile into the native DLL.
+- Compiled both independent sound cores directly from pinned project copies,
+  with original licenses and byte hashes. Borrowed Genesis sound wrappers still
+  use donor declaration headers; build checks enforce exact declaration equality.
+  That remaining bridge is explicit, not a claim of full sound-adapter migration.
+- Kept the working GenesisEngine, M68000/Z80, VDP and native state codec behind
+  the project ABI. Four runtime framework headers remain transitively included.
+  Their next removal triggers are recorded in the component ledger.
+- Deleted `compatibility.py`, `qualify_baseline.py` and their obsolete transition
+  tests. Removed compatibility CLI flags and source-transition plumbing.
+- Version 2 archives use explicit machine-state contract 1. The behavioral
+  profile no longer contains donor commit or private codec names. Source/build
+  hashes remain exact execution provenance; Python treats native state as opaque.
+- Separated game behavior into `recovered.py` and dispatch/mutant policy into
+  `recovery.py`. Added explicit `LegacyExit(0x1ABE6E, reason)` for the open region.
+- Added a lightweight architecture guard, intentional-leak test and tests that
+  reject old formats/changed state contracts while allowing different build
+  provenance under the same supported contract.
 
-| Finding | Disposition | Change and executed evidence |
+[component-migration.md](component-migration.md) contains the architecture map,
+complete component inventory, ranked leakage findings and removal triggers.
+[third_party/dependencies.json](../third_party/dependencies.json) is the generated
+active compiler graph. Runtime-only disposable builds succeed without donor
+session, census, input or verdict headers; changing locked bytes stops a rebuild.
+
+## Current recordings and continuation
+
+The original user archives remain untouched. Version 2 files were regenerated
+from validated user input events, starting the current machine from cold boot,
+and saving again at the original timestamps/input cursors. No native state
+layout was decoded or patched in Python. These are derived copies of the same
+coverage, not newly recorded gameplay.
+
+Use the matching names under `recordings/current/`:
+
+| Artifact | Tick / duration | SHA-256 |
 |---|---|---|
-| A: configure-only validation / stale source ID | Confirmed, fixed | Disposable incremental build rejects a changed locked header without changing the DLL. Restoring it and editing the adapter refreshes the compiled ID. Toolchain/options are in build receipts. |
-| A: exact source check blocks wrapper migration | Confirmed, qualified | Exact remains default. One named directional transition is tested; unknown, reverse and wrong-profile pairs fail. Preserved baseline/current full-corpus observations match. |
-| B: ignored gates / non-progress | Confirmed, fixed | Explicit dispatch, diagnostics and bounded zero-time handling. Tests cover unexpected/recognized gates, bypass-once, same-tick events and unreachable input. |
-| C: silent native PCM loss | Confirmed, fixed | A real undrained 121-frame run fails and invalidates execution. Chunked capture succeeds beyond that capacity. Explicit discard preserves chips; restore cuts old output and preserves future PCM. |
-| D: single execution mislabeled PASS | Confirmed, fixed | Replay reports COMPLETED / compared:false. Fresh-worker comparison checks ordered state/frame/PCM observations and rejects zero-hit candidates. Three same-ROM mutants fail. |
-| Fixed watchdog / unstructured timeout | Confirmed, fixed | Configurable guard and separate TIMEOUT, DEPENDENCY_FAILURE, CANDIDATE_ERROR and DIVERGENCE. Failure reports preserve completed checkpoints. |
-| Python's fixed native trailer offset | Confirmed, fixed | Native versioned inspection owns timestamp validation. Bad imports and forged manifest timestamps leave state unchanged. |
-| Save failure skips cleanup | Confirmed, fixed | Failed sessions retain a labeled valid input prefix and original exception. Save/audio/pygame cleanup is independent; injected tests need no ROM. |
-| Reinstall required for Python edits | Confirmed, fixed | Source runner uses the existing DLL in fresh processes. Editing the real Python clearing loop changes PASS to DIVERGENCE with no native build/install. |
-| Host music stutter | Already fixed before review | Continuous FIFO retained unchanged. Native overflow above is a separate defect; prior delivery measurements are retained below. |
-| Independent console/video accuracy | Not established | Renderer still samples current VDP state. No full hardware or raster-fidelity claim. |
+| `20260912T210640.729016Z.alreplay` | 225.0231 seconds; 1,008 inputs | `f51c9192d35a1ed2d8839e5b04a747d61962860f6036ae90cde708ddb3965891` |
+| `20260912T210626.701921Z.alsnap` | 11,342,074,505; cursor 964 | `c04e354361ae7cd3aff4d3315dbe32ac9b134197f9b092669262038db57134f1` |
+| `20260912T210633.203951Z.alsnap` | 11,685,257,649; cursor 982 | `4892d8489c65e21807af9c2219353fd1d1fb580fd1b77e1053b08543988fd031` |
 
-## Corpus and compatibility
+`recordings/current/provenance.json` records parent hashes and derivation. Both
+saved states exactly match replay at their ticks. Their 44- and 26-input suffixes
+match uninterrupted terminal state, final frame and all suffix PCM in fresh
+processes. The installed 0.2.0 package supports these files; early version 1
+archives are intentionally rejected with a regeneration message.
 
-`20260912T210640.729016Z.alreplay` is the existing 225.0231-second cold-boot
-recording with 1,008 input changes, terminal tick 12,082,203,375. Level 1 → bonus
-→ level 2 is user-described coverage; the later save's desert scene was visually
-inspected during earlier intake. No new human coverage is claimed.
+```powershell
+.\play.cmd --snapshot recordings\current\20260912T210633.203951Z.alsnap
+.\play.cmd --record-from-start
+```
+
+Level 1 → bonus → level 2 remains user-described coverage. Independent hardware
+accuracy and broader scenario coverage are not established by replay agreement.
+
+## Migration and recovery evidence
+
+The pre-change package/DLL from `3b9cc76` is preserved locally under
+`artifacts/architecture-20260913/previous/`. Running its original executor and
+the current one from cold boot with identical validated inputs and the same new
+behavioral profile yields **225 identical ordered state/frame/PCM observations**.
+This is offline migration evidence, not a second production backend. Full state
+hashes changed from old archives because snapshots include the profile digest;
+we did not strip or patch serialized metadata to compare them.
 
 ```text
-recording cd63a64fd08a25887e99fbc9150f3b42c6ccc6a837a6b7dbd110ba980d6e21a3
-state     8f15dafc6d6a4429e1e88c52421f6a13e27b74255d9d3bdda4ffc3aa2c521b18
+profile   371f1ac29f39f24d3f4d0afd5bf89abf445ea6eeb17748e31cbf980f2a0b1456
+state     34af78131fd69200ed1b9bf6817ebaca53e76e368e5ffe5cfff9cfb3f6acd6e8
 frame     d51bd1fb5a77cb7a6f41cef752a820c9e7e1a5484e1984c87083f2204ac047fa
 PCM       878623149f19c75892fa5ef52833419e53df5096f4248ab12e27688de9200f16
 PCM bytes 47,945,248
 ```
 
-Preserved baseline and current original execution match all **225 ordered
-observations**. The observation files share SHA-256
-`a5c0219682a7c689b9ead02ca837ae0a7700345cdc2ea2cd74447bcdfebcf369`.
-Contract `full-machine-frame-pcm-60frames-v1` compares full snapshots, sampled
-frames and PCM chunk hashes/counts every 60 frames plus terminal, and whole-run
-PCM. It does not assert equality at every unobserved instruction or independent
-hardware fidelity.
+Frame and whole-run PCM hashes also match the historical run unchanged.
+Comparison contract `full-machine-frame-pcm-60frames-v1` observes full state,
+frame and PCM chunks every 60 frames plus terminal and complete PCM. It does
+not claim equality at every unobserved instruction or independent hardware fidelity.
 
-Both unchanged user saves again match replay at their exact timestamps. Their
-fresh-process suffixes match uninterrupted final state, frame and PCM. These
-checks also pass in the newly installed package, without source/DLL overrides.
-
-| Snapshot | Tick | Next input / remaining | SHA-256 |
-|---|---:|---:|---|
-| `20260912T210626.701921Z.alsnap` | 11,342,074,505 | 964 / 44 | `5bc444e0ac82d9009c3673f8cb74a8c1e1e3d13eb4e92c4099cb787dcb1639bd` |
-| `20260912T210633.203951Z.alsnap` | 11,685,257,649 | 982 / 26 | `b4b8241def59cdc244ee07d87b0c7c358a44b57f45363c25f3a2d5a66e4eb3a7` |
-
-Capture provenance, loader compatibility and verification identity are separate.
-Legacy captures identify native source/profile but did not record Python code.
-Execution receipts now identify the artifact, native binary/source, build,
-Python module hashes/path, interpreter and candidate; comparison names its
-contract. Workers reject implementation-file changes during execution.
-`review-baseline-v1` qualifies only the baseline source
-`baf0418522d9332bcab75b407e0a66c0e41ed10a562ec819a7cd2104e315f40c` →
-`51a3dab483142fc918862ab4a7dc768e0706ef750bd490acac5a76d08a441d5c`
-under the current profile. Further native changes need explicit qualification.
-
-## Replacement and composition
-
-[recovery-first.md](recovery-first.md) records original bytes, aliases, flags,
-stack effects, timing and conservative domains. Python replaces the auxiliary
-buffer clear at `0x1AE372` and the adjacent detach caller at `0x1AD0FC`. It reads
-live RAM and immutable ROM; original execution never calculates its answer.
-
-| Full user replay | Leaf hits | Caller hits | Fallbacks | Original M68K instructions replaced | Direct Python calls |
+| Full regenerated user replay | Leaf hits | Caller hits | Fallbacks | Original M68000 instructions replaced | Direct Python calls |
 |---|---:|---:|---:|---:|---:|
-| Leaf | 1,040 | 0 | 7 | 21,023 | 0 |
-| Composed | 459 | 581 | 9 | 27,579 | 581 |
+| Leaf: PASS | 1,040 | 0 | 7 | 21,023 | 0 |
+| Composed: PASS | 459 | 581 | 9 | 27,579 | 581 |
 
-Both pass all ordered and terminal comparisons; composed mode also passes in
-the installed package. Original census is 1,047 leaf and 583 caller entries.
-Watching both would require 1,630 gates; composition uses 1,049, eliminating
-581 internal guest call round trips while preserving written guest return slots.
-Actual interpreted M68K work decreases from 140,704,253 to 140,676,674 operations
-in composed mode. Compatibility timing/counts are unchanged; the Z80 still
-interprets 82,982,725 instructions. This is not a CPU-free port.
+The real buffer clear at `0x1AE372` and the open detach region at `0x1AD0FC`
+use live RAM and immutable ROM, with no original execution to calculate their
+answers. The caller directly composes the clear calculation and preserves its
+rewritten guest return. Unknown script paths decline before effects through an
+explicit legacy seam. Those branches have refusal tests but are not exercised
+by this user scenario; no wider domain is claimed.
 
-Plans enter the existing scheduler only at parked gates. Trace, IRQ, DMA,
-deadlines and observers can refuse before effects. Running Z80 RAM banks are
-refused; a bank change reaching RAM during execution is caught before access
-and invalidates the machine. Both cases have runtime tests. There is no fallback
-after partial effects. Unsupported caller branches explicitly return to original
-execution at the untouched entry, including the `0x1ABE6E` dependency. Snapshots
-are supported at completed boundaries, not arbitrary Python expressions.
+Both focused witnesses pass original-region equality, snapshot continuation
+and fresh-process short replay. Wrong-output, wrong-continuation and wrong-timing
+mutants are rejected by the production comparator. A disposable edit to the actual
+Python clearing loop changes PASS to DIVERGENCE in about 0.6 seconds, with zero
+native builds or installs. Atomic guard, gate, Z80/PCM overflow and restore tests
+remain in place. [recovery-first.md](recovery-first.md) gives the exact domains.
 
-Local comparisons cover the first real helper/caller activation, null and
-maximum-length helper paths, flags/widths and alias refusal. Both real witnesses
-pass region comparison, restored-snapshot continuation and fresh-process short
-replay. Wrong-result, wrong-return and wrong-timing candidates are rejected by
-the production full-corpus command, with last matching checkpoints and failure
-intervals. A separate Python loop edit produced PASS in 0.72 s before editing and
-DIVERGENCE in 0.67 s afterward; the DLL stayed unchanged, zero builds/installs.
+## Validation and local reports
 
-## Validation and evidence
+The current suite passes **71 Python tests** and **seven native CTest groups**.
+Windows toolchain: Python 3.12.14, MinGW 12.2, CMake 4.4.3, Ninja 1.13.2.
+Cold boot and snapshot round trip pass for 300 frames. The installed package's
+snapshot-resumed player passes 60 frames with dummy SDL devices, and both
+installed fresh-process save continuations pass. Dummy presentation is an
+integration check, not subjective listening or interactive visual validation.
 
-This review run: **70 Python tests passed, zero failed/skipped; seven native
-CTest executables passed**. This includes the disposable build regression and
-actual-ROM tests. Python 3.12.14, GCC 12.2, CMake/Ninja built and installed the
-package. Installed doctor loads `.venv/Lib/site-packages/aladdin_sega`. Snapshot-
-resumed `play.cmd --frames 60 --mute` passed with SDL dummy presentation devices.
+Derived reports are under `artifacts/architecture-20260913/`:
 
-Derived evidence remains local:
+- `migration-comparison.json` and `before.observations.json`: pre/post native migration.
+- `{leaf,composed}/comparison.json`: complete regenerated user corpus.
+- `{leaf-witness,composed-witness}/report.json`: parked gates and safe continuations.
+- `snapshots.json`, `installed-snapshots.json`: save equality and fresh suffixes.
+- `mutants.json`, `mutant-*/comparison.json`, `edit-loop/result.json`: negative controls.
+- `regeneration.json`, `installed-doctor.json`, `boot.stdout.json`: artifact/build provenance and startup.
 
-- `artifacts/review/baseline-final/qualification.json`: baseline transition.
-- `artifacts/review/{leaf,composed,installed-composed}/comparison.json`: full corpus.
-- `artifacts/review/mutant-*/comparison.json`: rejected mutants and diagnostics.
-- `artifacts/review/edit-loop/result.json`: actual source edit-to-verdict check.
-- `artifacts/review-installed-snapshots.json`: installed fresh save continuations.
-- `artifacts/recovery-recon/reusable-{leaf,composed}/`: local witnesses/safe saves.
+Earlier audio diagnostics under `artifacts/intake-20260912` found the old pygame
+queue discarded 12/180 chunks and inserted about 9.1% silence. The continuous
+FIFO fixed that test; a 600-frame resumed session had zero underruns. The native
+queue also now invalidates execution on overflow. This continuation preserves
+that behavior; subjective listening and broader device coverage remain open.
 
-[README.md](../README.md) gives executable commands. Authorized local workers
-can export the exact 52-file dependency closure with notices; a disposable copy
-builds with the documented Windows toolchain. Public source/binary distribution
-remains unresolved: no top-level PortForge license was found. The locked source
-is submodule `6c971b08c0698cd5fe56ab0ed855df4cbfc0b511` under
-`D:/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge`; old references were
-read-only. ROM SHA-256 is
-`a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3`.
+## Next bounded milestone
 
-Prior audio results remain under `artifacts/intake-20260912`: the old pygame
-queue discarded 12/180 chunks and inserted about 9.1% silence in a three-second
-diagnostic. The continuous FIFO delivered all samples in the same test; a
-600-frame resumed session had zero underruns. Subjective listening and broader
-audio-device coverage remain open.
-
-Next: expand neighboring detach paths around the explicit legacy exit using
-the short witnesses and full-corpus gate. Obtain focused independent device
-reference evidence when a new region needs it. Linux, arbitrary-expression
-snapshots and full-console hardware accuracy are outside current acceptance.
+Recover the adjacent script dependency at the explicit `0x1ABE6E` seam, qualify
+its actual return behavior, and compose it into the open region. Use focused
+witnesses during editing and the full replay as the integration gate. Absorb
+additional board/scheduler/sound glue only when that recovery exposes concrete
+friction. No Linux build or speculative CPU rewrite is required. Public combined
+source/binary distribution remains unresolved; ROMs and user artifacts stay local.

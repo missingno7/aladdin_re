@@ -1,0 +1,26 @@
+{
+  "nuked_opn2": {
+    "repository": "https://github.com/nukeykt/Nuked-OPN2",
+    "revision": "335747d78cb0abbc3b55b004e62dad9763140115",
+    "license": "LGPL-2.1-or-later",
+    "files": {
+      "third_party/nuked_opn2/LICENSE": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331",
+      "third_party/nuked_opn2/README.md": "1be8f5ca308b36cbaf12c4fe1943fb05137ac458a4c971bd514a00b9d0d99a7c",
+      "third_party/nuked_opn2/ym3438.c": "8fa385546f0f2d1c975d097002af00cd729ae2ae097c068e9c883ce08ddf3a76",
+      "third_party/nuked_opn2/ym3438.h": "8e60e35f77049d0e600ad1a47bfc3dfc8b832483e614104473a83c1f33cd7189"
+    },
+    "patches": []
+  },
+  "nuked_psg": {
+    "repository": "https://github.com/nukeykt/Nuked-PSG",
+    "revision": "d15a168c676f4669e23660be9225b34ad7c1764e",
+    "license": "GPL-2.0-or-later",
+    "files": {
+      "third_party/nuked_psg/LICENSE": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "third_party/nuked_psg/README.md": "48f9c8137b64ec473bb0fa68e76286bea2c603256ed04d1b1fbc376248cd94c5",
+      "third_party/nuked_psg/ympsg.c": "3a28b826ebf76a11ba9d97bba91f85f5bd7e6ec5e0f149f053dfc5974cb630b2",
+      "third_party/nuked_psg/ympsg.h": "3179e98bfdc02f0bb16f6ee678d6b796412525ac9a25f9114f63b4c3c0445082"
+    },
+    "patches": []
+  }
+}

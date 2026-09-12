@@ -1,9 +1,9 @@
-# Aladdin RE — implementation specification
+# Aladdin RE â€” implementation specification
 
-**Version:** 2 · **Research reviewed:** 12 September 2026  
+**Version:** 2 Â· **Research reviewed:** 12 September 2026  
 **Audience:** the coding agent and its supervising agent  
-**Project:** `aladdin_re` · **Python package:** `aladdin_sega`  
-**Target:** one user-supplied Disney’s Aladdin Mega Drive / Genesis ROM revision and one console profile
+**Project:** `aladdin_re` Â· **Python package:** `aladdin_sega`  
+**Target:** one user-supplied Disneyâ€™s Aladdin Mega Drive / Genesis ROM revision and one console profile
 
 **Platform scope amendment (user decision, 12 September 2026):** Capture,
 development and verification run on the user's Windows x64 machine. Linux builds
@@ -14,6 +14,32 @@ remain required.
 > Build a playable, recordable Aladdin first. The user will supply gameplay recordings and snapshots. The AI then owns the recovery, verification, diagnosis, and incremental conversion into source. Reuse controllable chip libraries instead of implementing their internals again.
 
 This is an implementation assignment, not a request for another architecture report. Start with the existing workspace, make the bounded decisions described below, and deliver the first runnable vertical slice. This document supersedes the earlier proposal wherever they disagree.
+
+## Current implementation decisions
+
+The bounded architecture audit is implemented; see
+[component-migration.md](component-migration.md) for compiler-derived dependencies
+and [STATUS.md](STATUS.md) for executed evidence. The
+[ownership policy](External%20Components%20and%20Machine%20Ownership%20Policy.md)
+is authoritative for component ownership. These decisions supersede early
+proposals below where a proposed layout or example differs from current code.
+
+- PortForge is a donor. Retain the working M68000/Z80, VDP and GenesisEngine
+  behind the project ABI; do not rewrite them for nominal ownership.
+- Independent Nuked cores are direct pinned dependencies. Borrowed sound timing
+  and state adapters remain until an actual integration change warrants absorption.
+- Runtime and native-test donor closures are separate. Session/census/input-script
+  and verdict code are test-only; they are not project replay dependencies.
+- Project Python owns recovery, artifacts, comparison and presentation. Keep
+  snapshot payloads opaque outside the native codec; enforce this boundary with
+  the lightweight architecture guard.
+- Current archives use version 2 and explicit machine-state contract 1. Reject
+  early formats clearly and regenerate at new paths. Do not retain compatibility
+  tables or source-transition chains. Source hashes identify builds; the profile
+  contains behavioral configuration, not donor commits or private codec names.
+- `recovered.py` contains editable game behavior; `recovery.py` contains small
+  gate/qualification policy. The buffer clear and open detach region are already
+  implemented. Expand connected recovery next, without a prolonged cleanup phase.
 
 ## 1. Product, workflow, and non-goals
 
@@ -36,7 +62,7 @@ Use Python 3.12 as the initial development baseline. Support interactive and hea
 
 Initially exclude other games, PAL/NTSC variants beyond the selected profile, Sega CD, 32X, a general plugin system, universal IR, a new language, cloud orchestration, a web dashboard, automatic C++ export, and a wholesale native-object migration.
 
-A final port may still use emulated graphics/sound chips and original ROM data. Removing M68000 execution, removing Z80 sound-driver execution, removing historical memory layout, and removing the ROM as an asset container are **independent properties**. Do not claim “CPU-free” merely because M68000 gameplay is recovered while the Z80 still executes its original driver.
+A final port may still use emulated graphics/sound chips and original ROM data. Removing M68000 execution, removing Z80 sound-driver execution, removing historical memory layout, and removing the ROM as an asset container are **independent properties**. Do not claim â€śCPU-freeâ€ť merely because M68000 gameplay is recovered while the Z80 still executes its original driver.
 
 ## 2. Architecture decisions to implement
 
@@ -45,7 +71,7 @@ A final port may still use emulated graphics/sound chips and original ROM data. 
 | Main language | Python for editable carrier, recovered game code, tools, and high-level orchestration. No pure-Python-chip ideology. |
 | Chip implementation | Reuse suitable isolated cores, including CPU cores. Wrap C/C++ rather than porting proven chip internals into Python. |
 | Existing Sega work | Prefer the already working PortForge Sega model and validated integrations. Audit actual local source before importing it. |
-| Fresh-core defaults | Musashi for M68000, `floooh/chips` for Z80, Nuked OPN2 for FM, Nuked-PSG for PSG, subject to the explicit control/state tests below. Keep a suitable existing core instead of replacing it merely to match this list. |
+| Selected cores | Retained donor M68000/Z80 and direct upstream Nuked OPN2/PSG. Musashi or floooh/chips are possible future references/replacements only when evidence warrants a change. |
 | VDP / board integration | Reuse the existing Sega implementation/model. Write only the missing integration or evidence-backed behavior; do not copy a whole console engine behind an opaque `run_frame()`. |
 | Native interface | One small, versioned C ABI with opaque handles, explicit errors and state export. Default Python binding: `ctypes`; reuse an existing sound wrapper if it already meets the contract. |
 | Packaging | Standard CMake plus a supported Python build backend such as scikit-build-core. No compiler invocation or dependency download on first gameplay frame. |
@@ -57,7 +83,7 @@ A final port may still use emulated graphics/sound chips and original ROM data. 
 | Recovery | Open carrier regions are allowed. Unknown executable behavior remains an explicit legacy route, never a fabricated result. |
 | First milestone | Original-code Aladdin with reliable capture, replay, snapshot restore, and basic diagnostics. User recording follows. |
 
-These are defaults, not permission to build several competing implementations. When the existing workspace provides a simpler proven equivalent, use it and record the reason. A default may be rejected for a demonstrated control, correctness, performance, or licensing problem—not speculative preference.
+These are defaults, not permission to build several competing implementations. When the existing workspace provides a simpler proven equivalent, use it and record the reason. A default may be rejected for a demonstrated control, correctness, performance, or licensing problemâ€”not speculative preference.
 
 ## 3. Mandatory reuse policy
 
@@ -77,10 +103,10 @@ Do not copy a console-wide renderer/audio scheduler into a chip wrapper merely b
 
 ### Concrete candidates and constraints
 
-- **M68000 — Musashi:** a standalone C processor core with configurable memory and interrupt integration. It is the fresh-integration default, not a requirement to discard a suitable existing core. Its instruction callback requires special care for interception; see §7. [R4]
-- **Z80 — `floooh/chips/z80.h`:** a standalone cycle-stepped core with explicit pins. The wrapper must provide Sega reset/bus-ownership behavior and batch ticking in C. Do not write a second Python Z80. [R5]
-- **FM — Nuked OPN2:** use the appropriate pinned YM2612/YM3438 mode for the selected console profile and retain exact control over clocking and register access. [R6]
-- **PSG — Nuked-PSG:** an actual YM7101 PSG implementation exists; do not start by implementing a generic SN76489 approximation and discovering variant differences later. [R7]
+- **M68000 â€” Musashi:** a standalone C processor core with configurable memory and interrupt integration. It is the fresh-integration default, not a requirement to discard a suitable existing core. Its instruction callback requires special care for interception; see Â§7. [R4]
+- **Z80 â€” `floooh/chips/z80.h`:** a standalone cycle-stepped core with explicit pins. The wrapper must provide Sega reset/bus-ownership behavior and batch ticking in C. Do not write a second Python Z80. [R5]
+- **FM â€” Nuked OPN2:** use the appropriate pinned YM2612/YM3438 mode for the selected console profile and retain exact control over clocking and register access. [R6]
+- **PSG â€” Nuked-PSG:** an actual YM7101 PSG implementation exists; do not start by implementing a generic SN76489 approximation and discovering variant differences later. [R7]
 - **VDP:** first inspect the PortForge VDP and any existing isolated dependency. Use the least disruptive controllable implementation. A missing reusable standalone core permits targeted implementation work; it does not authorize a new gate-level console simulator.
 
 Licenses differ: the inspected OPN2 header carries LGPL-2.1-or-later, whereas Nuked-PSG source carries GPLv2-or-later. Record exact licenses and local modifications; do not label the combined distribution permissive by assumption. Keep third-party source and notices available. This specification does not settle project-wide licensing for the implementer. [R6, R7]
@@ -110,44 +136,38 @@ Keep the old projects unchanged. Copy or depend on a minimal coherent component 
 
 ## 5. Minimal project structure and dependency rules
 
-The following is a responsibility map, not a demand to create empty modules:
+The current structure reflects working ownership; create subpackages only when
+there is enough code to justify them:
 
 ```text
-aladdin_re/
-  pyproject.toml
-  CMakeLists.txt
-  README.md
-  src/aladdin_sega/
-    cli.py
-    machine/          # board, bus, virtual clock, devices, core adapters
-    execution/        # original/carrier dispatch and explicit continuations
-    game/             # Aladdin profile, bindings, live views
-      carrier/        # editable machine-aware source regions
-      recovered/      # qualified game calculations/mechanisms
-    artifacts/        # snapshot and replay codecs; no oracle dependency
-    verify/           # reference generation, comparison, witnesses
-    frontend/         # pygame presentation and host input
-  native/             # wrappers and small measured batching helpers
-  third_party/        # pinned source/notices, or reproducible pinned dependencies
-  recovery/           # narrow offline analysis/emission tools
-  tests/
-  docs/STATUS.md
-  assets/             # ignored local ROM/data
-  recordings/         # ignored user originals; never rewrite in place
-  artifacts/          # ignored reproducible derived results and incidents
+src/aladdin_sega/
+  recovered.py        # editable leaf and open composed game region
+  recovery.py         # project gate selection, admission dispatch and mutants
+  machine.py          # small typed native ABI; no Aladdin routine addresses
+  profile.py          # selected ROM and behavioral configuration
+  artifacts.py        # containers, inputs; machine payload stays opaque
+  verification.py     # fresh-process observations and comparison
+  receipt.py          # exact execution provenance
+  frontend.py         # input, window and host audio presentation
+native/machine.cpp    # retained Genesis integration behind project C ABI
+third_party/          # direct sound cores; separate donor locks and actual graph
+scripts/             # short witnesses, build checks, focused source export
+recordings/          # ignored immutable user originals and separately derived v2 files
+artifacts/           # ignored derived evidence and preserved reference builds
 ```
 
-`machine/` must not know Aladdin routine addresses. `game/carrier/` may know the machine model. `game/recovered/` must not import the CPU, dispatcher, or verifier; pass explicit values, live views, and narrow services where needed. Address bindings and evidence remain outside the recovered function body.
-
-Snapshot and replay infrastructure is usable by the player without importing the oracle. Verification depends on the running game, never vice versa. Frontend pacing and audio callbacks do not own simulation progress.
-
-Use a plain mapping and small dataclasses for initial region metadata. No universal manifest engine, plugin discovery, or abstract backend hierarchy before there is a concrete second implementation that justifies it.
+Recovered behavior must not import the CPU binding, dispatcher, verifier or donor
+framework. Pass narrow live storage services and explicit input registers.
+Snapshot/replay infrastructure works without importing an oracle; verification
+depends on running code, never vice versa. Frontend callbacks do not own time.
+No universal manifest engine, island registry, plugin discovery or abstract
+backend hierarchy is required for this implementation.
 
 ## 6. State, bus, and virtual time
 
 ### One authority, including across Python/native code
 
-Keep one owned instance of each RAM bank and chip state. Python views and native fast paths must access that same storage. No per-tick “read RAM into Player; update Player; copy all fields back” while other code can write RAM independently. Pre2's object-runtime documentation explicitly records the danger of competing mutable authorities. [R1]
+Keep one owned instance of each RAM bank and chip state. Python views and native fast paths must access that same storage. No per-tick â€śread RAM into Player; update Player; copy all fields backâ€ť while other code can write RAM independently. Pre2's object-runtime documentation explicitly records the danger of competing mutable authorities. [R1]
 
 Choose a fixed allocation and document ownership. Pin Python buffers exported to C for the machine lifetime, or expose C-owned storage through safe live views. Do not resize pinned buffers. On restore, either preserve storage identities or invalidate/rebind every view and native pointer; test this rather than relying on incidental addresses.
 
@@ -220,7 +240,7 @@ Required tests before relying on this facility:
 - Bypass-once executes the original opcode exactly once and makes progress.
 - Candidate execution does not also execute the replaced first opcode.
 - A pending IRQ and a trap at the same boundary have the declared ordering.
-- Exceptions, STOP, nonzero cycle debt, and trace configuration cannot turn a “yield” into a false successful instruction.
+- Exceptions, STOP, nonzero cycle debt, and trace configuration cannot turn a â€śyieldâ€ť into a false successful instruction.
 - Capturing at a supported gate, restoring, and resuming gives the same continuation.
 
 Do not patch a fake RTS into the ROM, intercept by mutating opcodes, or let a callback recursively re-enter the core. Existing tested PortForge facilities can satisfy these requirements without adopting Musashi.
@@ -237,7 +257,7 @@ For OPN2 bind to the pinned header, not a copied README prototype: the inspected
 
 For Nuked-PSG prefer the low-level `YMPSG_Clock` and `YMPSG_Write` under our timeline. Its inspected `YMPSG_WriteBuffered` / `YMPSG_Generate` already impose buffering, delay, and clock advancement. Wrapping them in a second timestamp queue without mapping those semantics can double-delay writes or advance time unexpectedly. [R7]
 
-Clock conversion must use each core's actual unit, not assume “one core clock” equals one console master tick. Batch internal clocks in C, stopping at relevant writes, reads, deadlines, or IRQ/status observations.
+Clock conversion must use each core's actual unit, not assume â€śone core clockâ€ť equals one console master tick. Batch internal clocks in C, stopping at relevant writes, reads, deadlines, or IRQ/status observations.
 
 Sound-disabled/headless mode must still evolve sound-chip and Z80 state. It may discard host PCM output, not freeze the sound system. The host audio callback consumes already-produced samples and never drives the simulation. On restore, flush the host playback queue; preserve simulated mixer/resampler/filter phase so future samples match. Treat raw chip-output equality and final host playback behavior as separate checks.
 
@@ -247,7 +267,7 @@ If PCM generation uses floating-point arithmetic, specify its rounding/conversio
 
 Implement `.alsnap` using a standard container, such as ZIP with a JSON manifest and binary sections. Use stdlib codecs initially. Explicit little-endian fixed-width section encoding is fine even though guest word accesses are big-endian; those are separate conventions.
 
-The manifest contains format/schema versions, ROM SHA-256, machine-profile digest, core/build identities, snapshot boundary kind, virtual tick, and checksums/lengths for sections. An implementation-specific snapshot additionally identifies the carrier build and continuation schema it requires.
+The current manifest contains artifact version 2, machine-state contract 1, ROM SHA-256, behavioral profile digest, source/project provenance, snapshot boundary kind, virtual tick, and checksums/lengths for sections. Python handles the container and treats machine.bin as opaque; the native codec owns field serialization and validation. An implementation-specific snapshot additionally identifies the carrier build and continuation schema it requires.
 
 Serialize at least:
 
@@ -270,7 +290,7 @@ Do not persist `pickle`, native pointers, callbacks, Python objects, a live gene
 
 A process-local fast checkpoint may have a different representation, but it is a cache, not a portable user artifact or a canonical digest. Do not build two snapshot systems before performance makes the cache necessary.
 
-Validate versions, ROM/profile identity, sizes, section bounds, hashes, and continuation compatibility before applying state. Reject truncation, unsupported versions, path traversal, excessive decompression, and attempts to load code through metadata. Failed restore must not leave the active machine half-mutated. Restoring a native-backed machine may require closing/recreating its worker rather than constructing two active global cores together.
+Validate the one supported artifact version, ROM/profile identity, machine-state contract, sizes, section bounds, hashes, and continuation contract before applying state. Regenerate early captures when this contract changes; do not accumulate migration registries. Reject truncation, unsupported versions, path traversal, excessive decompression, and attempts to load code through metadata. Failed restore must not leave the active machine half-mutated. Restoring a native-backed machine may require closing/recreating its worker rather than constructing two active global cores together.
 
 Fresh-process restore on Windows is mandatory. Capture and AI analysis use the user's Windows machine, so Windows-to-Linux transfer is outside current acceptance gates. Do not claim cross-platform portability without testing it or silently decode platform-specific blobs as portable.
 
@@ -318,7 +338,7 @@ A completed capture reports its path, duration in virtual time, profile/ROM iden
 
 The user supplies the ROM and human gameplay scenarios. The AI may create synthetic inputs, tiny test ROMs, deterministic fuzz, derived snapshots, and replay slices for engineering tests. Mark these as synthetic/derived; never claim the user played them. Do not force the user to record internal edge cases before writing chip, codec, or recorder tests.
 
-When genuinely missing a gameplay witness, report the uncovered behavior and a gameplay-level request such as “record entering this room.” Do not ask the user to produce registers, traces, byte ranges, or manually identify hook addresses. Continue independent work while that coverage is absent.
+When genuinely missing a gameplay witness, report the uncovered behavior and a gameplay-level request such as â€śrecord entering this room.â€ť Do not ask the user to produce registers, traces, byte ranges, or manually identify hook addresses. Continue independent work while that coverage is absent.
 
 ### Immutable replay format
 
@@ -395,21 +415,21 @@ For full-console corroboration prefer a reproducible external reference run or e
 
 ### Comparisons
 
-Start strict for machine/carrier changes: relevant CPU state, RAM banks, device state, virtual time/phase, continuation, and produced output at corresponding supported boundaries. Exclude host pointers, logging, UI state, cache allocation order, and other non-simulated data by construction—not through a growing ad hoc ignore list.
+Start strict for machine/carrier changes: relevant CPU state, RAM banks, device state, virtual time/phase, continuation, and produced output at corresponding supported boundaries. Exclude host pointers, logging, UI state, cache allocation order, and other non-simulated data by constructionâ€”not through a growing ad hoc ignore list.
 
 Compare full small memories initially. Add dirty-page optimization only after profiling and prove it detects the same differences, including native writes and DMA. Canonical digests accelerate equality checks; on mismatch produce byte/field differences.
 
 Final RAM equality alone does not establish identical effects. Where relevant, compare ordered MMIO/bus events, consumed input observations, audio output and subsequent device behavior. Preserve overlap/read-after-write order inside live views. Cosmetic appearance alone is insufficient.
 
-A qualified semantic comparison can project state into a narrower contract, but must name excluded domains and why they cannot affect that claim. Do not exclude “stack”, “audio”, “timers” or “rendering” wholesale merely to turn a test green. Never inject oracle RNG/timer/continuation values into the candidate and then call it whole-machine replay equivalence. Pre2's game-tick demo deliberately used narrower domains and timing inputs; learn from the distinction, not just its green verdict. [R2]
+A qualified semantic comparison can project state into a narrower contract, but must name excluded domains and why they cannot affect that claim. Do not exclude â€śstackâ€ť, â€śaudioâ€ť, â€śtimersâ€ť or â€śrenderingâ€ť wholesale merely to turn a test green. Never inject oracle RNG/timer/continuation values into the candidate and then call it whole-machine replay equivalence. Pre2's game-tick demo deliberately used narrower domains and timing inputs; learn from the distinction, not just its green verdict. [R2]
 
-Finite replay coverage is not universal correctness. Use statuses such as `tested`, `entry-witness-checked`, `replay-equivalent`, and `qualified-for-domain`. A 32,768-case test is not “exhaustive” unless the entire declared domain truly has that size and was enumerated.
+Finite replay coverage is not universal correctness. Use statuses such as `tested`, `entry-witness-checked`, `replay-equivalent`, and `qualified-for-domain`. A 32,768-case test is not â€śexhaustiveâ€ť unless the entire declared domain truly has that size and was enumerated.
 
 ### First-divergence diagnostics
 
 Run coarse checks at stable video/semantic boundaries, then rerun the first divergent interval with finer instrumentation. Use bounded trace buffers and snapshots rather than logging every instruction forever.
 
-Do not blindly binary-search endpoint equality: programs can diverge and later reconverge, so “equal at a later endpoint” does not prove the prefix was equal. Use compared prefix/checkpoint records, then locate the first mismatch within the bracket.
+Do not blindly binary-search endpoint equality: programs can diverge and later reconverge, so â€śequal at a later endpointâ€ť does not prove the prefix was equal. Use compared prefix/checkpoint records, then locate the first mismatch within the bracket.
 
 An incident bundle contains:
 
@@ -476,7 +496,7 @@ Assign one owner for each stack push/pop, PC update, cycle charge, interrupt bou
 
 Known synchronous calls should become direct source calls when safe. They may still preserve guest return slots. Removing a slot is a separate local transformation requiring evidence that its value/write is unobservable under the declared contract.
 
-If an original callee modifies its return address, `GuestReturn()` must take that actual destination rather than force the Python caller's anticipated resume label. Associate suspended continuations with their dynamic call/stack context, not only a matching PC; recursion, shared returns and interrupts can revisit the same address. An incompatible return must remain a supported explicit transfer or a precise unsupported-continuation error—never a guessed resume.
+If an original callee modifies its return address, `GuestReturn()` must take that actual destination rather than force the Python caller's anticipated resume label. Associate suspended continuations with their dynamic call/stack context, not only a matching PC; recursion, shared returns and interrupts can revisit the same address. An incompatible return must remain a supported explicit transfer or a precise unsupported-continuation errorâ€”never a guessed resume.
 
 Do not keep an opaque Python host stack alive while recursively interpreting arbitrary guest code and then claim snapshots can restore it. Either materialize a valid machine continuation or return control to the scheduler with an explicit continuation record.
 
@@ -497,7 +517,7 @@ merge target / adjacent region
 
 A declared guard may route unsupported inputs to original execution before effects begin; count and report it. This is transparent hybrid execution, not a failed qualified native implementation pretending to be complete. Unknown opcode behavior, fake device values, and skipped work are never acceptable fallback.
 
-Track source maturity, storage ownership, guest-stack dependence, unresolved exits, timing contract and verification scope independently. Avoid a single “M3 therefore done” flag.
+Track source maturity, storage ownership, guest-stack dependence, unresolved exits, timing contract and verification scope independently. Avoid a single â€śM3 therefore doneâ€ť flag.
 
 ### First experiment and composition
 
@@ -564,7 +584,7 @@ Public CI runs artifact-independent tests. Local/private jobs run the user's cop
 
 ## 14. Implementation sequence and acceptance gates
 
-### A0 — inventory and a bounded native-control spike
+### A0 â€” inventory and a bounded native-control spike
 
 Inspect existing sources and pin one selected ROM/profile and core set. Do not spend the phase comparing every possible emulator. Preserve a working integration unless a concrete requirement rules it out.
 
@@ -572,39 +592,39 @@ Test M68000 interception/resumption, selected core state round trips, and one ba
 
 **Exit:** a chosen controllable substrate, reproducible build, explicit remaining board gaps, and no need for a new Python implementation of an already suitable chip.
 
-### A1 — capture-ready Aladdin
+### A1 â€” capture-ready Aladdin
 
 Bring up the actual original ROM: reset, intro/menu, initial level, controls, image and sound. Implement recording and snapshots at supported boundaries, headless replay, and fresh-process restore. Keep all game replacements disabled by default for the first capture workflow.
 
 Validate determinism and control with synthetic tests and any existing correctly attributed local materials. Do not announce user-corpus equivalence before the user provides that corpus. Inspect the real packaged/launch path on the user's target platform, not only an imported helper.
 
-**Exit:** the user can launch, play, press record, save a snapshot and hand over the resulting files. Provide exact launch/controls and an honest test/performance report. This is a legitimate handoff awaiting the first human recording—not a failed porting milestone.
+**Exit:** the user can launch, play, press record, save a snapshot and hand over the resulting files. Provide exact launch/controls and an honest test/performance report. This is a legitimate handoff awaiting the first human recordingâ€”not a failed porting milestone.
 
-### A2 — first user artifact intake
+### A2 â€” first user artifact intake
 
 Validate, register and reproduce the user recording in original mode. Preserve the original archive. Build derived reference data, verify an intermediate snapshot suffix, and report the scenes/time actually covered. Fix recorder/platform nondeterminism before trusting recovery comparisons.
 
 **Exit:** a reproducible reference scenario with a pinned profile and trustworthy provenance, not merely a file that can be opened.
 
-### B1 — one real live Python replacement
+### B1 â€” one real live Python replacement
 
 Choose an exercised mechanism with a useful boundary. Recover its live inputs/outputs and supported continuation/time behavior. Implement it once, wire it into the actual hybrid player, and use the same function for local witnesses and whole-replay verification.
 
 **Exit:** nonzero live hits, original/candidate comparisons, a mutation caught, no reference-state injection, and no new general framework.
 
-### B2 — a meaningful open carrier region
+### B2 â€” a meaningful open carrier region
 
 Expand into a neighboring region. Implement the minimum source-emission/continuation support needed for local control flow, a known call and explicit unresolved transfer. Demonstrate correct scheduling and safe snapshot continuation at its supported boundary.
 
 **Exit:** more continuous editable source, not just another isolated math helper; strict replay still valid under its stated comparison contract.
 
-### B3 — prove convergence by composition
+### B3 â€” prove convergence by composition
 
 Connect the neighboring source pieces and remove an unnecessary guest dispatch bounce or manual runtime adapter. Compare the real default hybrid run before/after. Keep original execution available in the oracle worker.
 
 **Exit:** measurable deletion/localization of compatibility work, unchanged supported behavior, and a simpler next recovery step.
 
-### C — continue broad expansion and deep replacement together
+### C â€” continue broad expansion and deep replacement together
 
 Run adjacent carrier expansion and qualification of a worthwhile mechanism in parallel. Prefer one coherent area with leverage over ten unrelated tiny wins. Keep the reference replay stable and broaden the user corpus when new gameplay is supplied.
 
@@ -665,34 +685,34 @@ Deliver the working project and launcher, reproducible native build, original-mo
 
 ---
 
-## Appendix A — researched sources and decision provenance
+## Appendix A â€” researched sources and decision provenance
 
 The observations below come from source/document inspection on 12 September 2026. They are not results of compiling these cores together, benchmarking the proposed project, or executing the user's Aladdin ROM. The architecture and acceptance gates above are design decisions informed by that inspection.
 
 For mutable upstream branches, the implementer must pin an actual source commit. Where listed below, a blob SHA identifies the particular inspected file, not a buildable repository revision.
 
-### R1 — Pre2: authority and memory migration
+### R1 â€” Pre2: authority and memory migration
 
 - [Pre2 object runtime at pinned commit](https://github.com/missingno7/pre2_port/blob/b5000dcbeb5fb25896fcc15ac185d99c4b7c02ec/pre2/native/object_runtime.py)
 - [Historical first NativeGameState implementation](https://github.com/missingno7/pre2_port/commit/b593c3a09babc756c286d1012e986b640baddf15)
 
 Lesson used: execution can be detached before the historical memory layout disappears. Concurrent mutable copies and full-sync write-back are a different problem from adding semantic names.
 
-### R2 — Pre2: replay clock and equivalence scope
+### R2 â€” Pre2: replay clock and equivalence scope
 
 - [Game-tick replay implementation at pinned commit](https://github.com/missingno7/pre2_port/blob/b5000dcbeb5fb25896fcc15ac185d99c4b7c02ec/pre2/native/game_tick_demo.py)
 - Inspected file blob: `7a199e093cc63f231a2e0a8cb72b4a6df4ce6d49`.
 
 Lesson used: instruction-budget presentation clocks changed meaning after replacements. The later game-tick artifact deliberately used selected state domains and sampled timing inputs; it is not a template for claiming whole-machine equality from narrow digests.
 
-### R3 — Current dos_re is not the historical Pre2 workbench
+### R3 â€” Current dos_re is not the historical Pre2 workbench
 
 - [Current public dos_re README](https://github.com/missingno7/dos_re/blob/main/README.md)
 - Inspected file blob: `a6bc315196fe8c96ce2ed59504a9765691527b7e`.
 
 Lesson used: record the actual source version; keep implementation properties and evidence scope independent. Do not transplant its general IR/Atlas/planner architecture into a new single-game project by default.
 
-### R4 — Musashi: execution and interception
+### R4 â€” Musashi: execution and interception
 
 - [Musashi repository and integration documentation](https://github.com/kstenerud/Musashi)
 - [Execution loop, timeslice and IRQ implementation](https://github.com/kstenerud/Musashi/blob/master/m68kcpu.c)
@@ -700,7 +720,7 @@ Lesson used: record the actual source version; keep implementation properties an
 
 Source finding: the instruction hook precedes opcode execution, but loop termination is checked afterward. The stop-before-instruction requirement therefore needs a real exit facility, not only the timeslice API.
 
-### R5 — Z80: externally controlled cycle stepping
+### R5 â€” Z80: externally controlled cycle stepping
 
 - [Standalone chip library](https://github.com/floooh/chips)
 - [Z80 header and pin-level integration documentation](https://github.com/floooh/chips/blob/master/chips/z80.h)
@@ -708,7 +728,7 @@ Source finding: the instruction hook precedes opcode execution, but loop termina
 
 Source finding: explicit ticking and pins support a controllable adapter. The documented reset API caveat and board-specific arbitration remain integration responsibilities.
 
-### R6 — Nuked OPN2: state, actual ABI and mode
+### R6 â€” Nuked OPN2: state, actual ABI and mode
 
 - [Nuked OPN2 repository](https://github.com/nukeykt/Nuked-OPN2)
 - [Header](https://github.com/nukeykt/Nuked-OPN2/blob/master/ym3438.h)
@@ -717,7 +737,7 @@ Source finding: explicit ticking and pins support a controllable adapter. The do
 
 Source findings used: explicit clock/read/write entry points, extensive hidden chip state, a header/README output-buffer type discrepancy, process-global chip-mode configuration, and its own license notice.
 
-### R7 — Nuked-PSG: Sega-specific core and buffering
+### R7 â€” Nuked-PSG: Sega-specific core and buffering
 
 - [Nuked-PSG / Yamaha YM7101](https://github.com/nukeykt/Nuked-PSG)
 - [Header](https://github.com/nukeykt/Nuked-PSG/blob/master/ympsg.h)
@@ -727,28 +747,28 @@ Source findings used: explicit clock/read/write entry points, extensive hidden c
 
 Source findings used: the low-level API is suitable for project-owned timing; higher-level buffered helpers add their own timing behavior. The source license differs from OPN2.
 
-### R8 — Python binding and standard packaging
+### R8 â€” Python binding and standard packaging
 
 - [Python 3.12 ctypes documentation](https://docs.python.org/3.12/library/ctypes.html)
 - [scikit-build-core getting started](https://scikit-build-core.readthedocs.io/en/stable/guide/getting_started.html)
 
 Decision: use established FFI/build facilities, explicit types and owned callback lifetimes. Packaging choice does not justify a new build framework. Do not depend on ctypes APIs introduced after the selected Python baseline.
 
-### R9 — Independent processor test inputs
+### R9 â€” Independent processor test inputs
 
 - [SingleStepTests / 680x0](https://github.com/SingleStepTests/680x0)
 - [SingleStepTests / Z80](https://github.com/SingleStepTests/z80)
 
 Decision: use applicable, attributed initial/final-state tests in addition to same-model replay checks. Inspect corpus provenance and format; do not label generated reference data as hardware recordings or universal proof.
 
-### R10 — Whole-console circuit emulation is a different tradeoff
+### R10 â€” Whole-console circuit emulation is a different tradeoff
 
 - [Nuked-MD](https://github.com/nukeykt/Nuked-MD)
 - [Author's original discussion, including the May 2023 performance report](https://gendev.spritesmind.net/forum/viewtopic.php?t=3356)
 
-Decision: do not infer that every “Nuked” project has the same integration/performance role. Small reusable chip cores are the default; a complete circuit-level console is a potential reference, not the required runtime.
+Decision: do not infer that every â€śNukedâ€ť project has the same integration/performance role. Small reusable chip cores are the default; a complete circuit-level console is a potential reference, not the required runtime.
 
-## Appendix B — facts the implementing agent must establish locally
+## Appendix B â€” facts the implementing agent must establish locally
 
 Resolve these from code and tests rather than guessing:
 

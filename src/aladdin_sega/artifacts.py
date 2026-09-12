@@ -6,7 +6,7 @@ from pathlib import Path
 import zipfile
 
 from .profile import FRAME_TICKS, PROFILE_SHA256
-from .compatibility import check_source
+from . import __version__ as PROJECT_VERSION
 
 LIMIT = 16 * 1024 * 1024
 
@@ -83,22 +83,26 @@ def read_bounded(path):
 def snapshot_bytes(machine):
     state = machine.snapshot()
     manifest = {
-        "format": "alsnap", "version": 1, "rom_sha256": machine.rom_sha256,
+        "format": "alsnap", "version": 2, "rom_sha256": machine.rom_sha256,
         "profile_sha256": PROFILE_SHA256, "source_id": machine.source_id,
+        "machine_state_version": machine.state_version, "project_version": PROJECT_VERSION,
         "boundary": "completed-native-operation", "tick": machine.info["tick"],
         "sections": {"machine.bin": {"size": len(state), "sha256": digest(state)}},
     }
     return pack({"manifest.json": json_bytes(manifest), "machine.bin": state})
 
 
-def load_snapshot(data, *, rom_sha256, source_id, compatibility=None):
+def load_snapshot(data, *, rom_sha256, state_version):
     parts = unpack(data, {"manifest.json", "machine.bin"}, {"manifest.json", "machine.bin"})
     meta = decode_json(parts["manifest.json"])
-    if meta.get("format") != "alsnap" or type(meta.get("version")) is not int or meta["version"] != 1:
-        raise ValueError("Unsupported snapshot format")
+    if meta.get("format") != "alsnap" or type(meta.get("version")) is not int or meta["version"] != 2:
+        raise ValueError("Unsupported snapshot format; current version is 2, regenerate the snapshot")
     if (meta.get("rom_sha256"), meta.get("profile_sha256")) != (rom_sha256, PROFILE_SHA256):
-        raise ValueError("Snapshot ROM/profile/source identity mismatch")
-    check_source(meta.get("source_id"), source_id, policy=compatibility)
+        raise ValueError("Snapshot ROM/profile identity mismatch")
+    if meta.get("machine_state_version") != state_version or type(meta.get("machine_state_version")) is not int:
+        raise ValueError("Unsupported machine state contract; regenerate artifacts")
+    if not isinstance(meta.get("source_id"), str) or len(meta["source_id"]) != 64:
+        raise ValueError("Invalid source provenance")
     if meta.get("boundary") != "completed-native-operation":
         raise ValueError("Unsupported snapshot boundary")
     uint(meta["tick"])
@@ -109,8 +113,7 @@ def load_snapshot(data, *, rom_sha256, source_id, compatibility=None):
 
 
 def restore_snapshot(machine, data):
-    meta, state = load_snapshot(data, rom_sha256=machine.rom_sha256, source_id=machine.source_id,
-                                compatibility=getattr(machine, "compatibility", None))
+    meta, state = load_snapshot(data, rom_sha256=machine.rom_sha256, state_version=machine.state_version)
     if machine.snapshot_tick(state) != meta["tick"]:
         raise ValueError("Snapshot timestamp disagrees with native state")
     machine.restore(state)
@@ -123,6 +126,7 @@ class Recorder:
         self.initial = snapshot_bytes(machine)
         self.start = machine.info["tick"]
         self.source_id, self.rom_sha256 = machine.source_id, machine.rom_sha256
+        self.state_version = machine.state_version
         self.origin, self.reset_provenance = origin, reset_provenance
         self.events, self.bookmarks = [], []
 
@@ -144,8 +148,9 @@ class Recorder:
         if any(event["tick"] > terminal for event in self.events):
             raise ValueError("Events extend past the valid recording prefix")
         events = b"".join(json_bytes(e) + b"\n" for e in self.events)
-        meta = {"format": "alreplay", "version": 1, "rom_sha256": self.rom_sha256,
+        meta = {"format": "alreplay", "version": 2, "rom_sha256": self.rom_sha256,
                 "profile_sha256": PROFILE_SHA256, "source_id": self.source_id,
+                "machine_state_version": self.state_version, "project_version": PROJECT_VERSION,
                 "mode": "original", "origin": self.origin, "reset_provenance": self.reset_provenance,
                 "initial_sha256": digest(self.initial), "events_sha256": digest(events), "terminal_tick": terminal,
                 "terminal_status": terminal_status}
@@ -155,19 +160,22 @@ class Recorder:
                      "events.jsonl": events, "bookmarks.json": json_bytes(self.bookmarks)})
 
 
-def load_replay(data, *, rom_sha256, source_id, compatibility=None):
+def load_replay(data, *, rom_sha256, state_version):
     parts = unpack(data, {"manifest.json", "initial.alsnap", "events.jsonl", "bookmarks.json"}, {"manifest.json", "initial.alsnap", "events.jsonl"})
     meta = decode_json(parts["manifest.json"])
-    if meta.get("format") != "alreplay" or type(meta.get("version")) is not int or meta["version"] != 1:
-        raise ValueError("Unsupported replay format")
+    if meta.get("format") != "alreplay" or type(meta.get("version")) is not int or meta["version"] != 2:
+        raise ValueError("Unsupported replay format; current version is 2, record or regenerate the replay")
     if (meta.get("rom_sha256"), meta.get("profile_sha256")) != (rom_sha256, PROFILE_SHA256):
-        raise ValueError("Replay ROM/profile/source identity mismatch")
-    check_source(meta.get("source_id"), source_id, policy=compatibility)
+        raise ValueError("Replay ROM/profile identity mismatch")
+    if meta.get("machine_state_version") != state_version or type(meta.get("machine_state_version")) is not int:
+        raise ValueError("Unsupported machine state contract; regenerate artifacts")
+    if not isinstance(meta.get("source_id"), str) or len(meta["source_id"]) != 64:
+        raise ValueError("Invalid source provenance")
     if meta.get("mode") != "original" or meta.get("origin") not in {"user", "synthetic"}:
         raise ValueError("Unsupported replay mode/origin")
     if digest(parts["initial.alsnap"]) != meta.get("initial_sha256") or digest(parts["events.jsonl"]) != meta.get("events_sha256"):
         raise ValueError("Replay section integrity mismatch")
-    initial_meta, _ = load_snapshot(parts["initial.alsnap"], rom_sha256=rom_sha256, source_id=source_id, compatibility=compatibility)
+    initial_meta, _ = load_snapshot(parts["initial.alsnap"], rom_sha256=rom_sha256, state_version=state_version)
     if initial_meta["source_id"] != meta["source_id"]:
         raise ValueError("Replay and initial snapshot capture identities disagree")
     if meta.get("terminal_status", "completed") not in {"completed", "failed"}:

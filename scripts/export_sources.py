@@ -17,10 +17,12 @@ SAFE_TOP_LEVELS = {"src", "tests", "third_party"}
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def read_lock(lock_path: Path) -> dict[str, Any]:
+def read_lock(lock_path: Path, *, tests=False) -> dict[str, Any]:
     """Read and validate the small, explicit dependency manifest."""
     try:
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        if tests:
+            lock["files"] = {**lock["files"], **lock.get("test_files", {})}
         files = lock["files"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
         raise ValueError(f"Invalid source lock {lock_path}: {error}") from error
@@ -59,11 +61,11 @@ def verified_files(source: Path, lock: dict[str, Any]) -> list[tuple[PurePosixPa
     return checked
 
 
-def export_bundle(source: Path, output: Path, *, lock_path: Path = DEFAULT_LOCK) -> Path:
+def export_bundle(source: Path, output: Path, *, lock_path: Path = DEFAULT_LOCK, tests=False) -> Path:
     """Create a new bundle; existing paths are deliberately never reused."""
     lock_path = lock_path.resolve()
     lock_bytes = lock_path.read_bytes()
-    lock = read_lock(lock_path)
+    lock = read_lock(lock_path, tests=tests)
     files = verified_files(source, lock)
 
     output = output.expanduser().resolve()
@@ -95,6 +97,7 @@ def export_bundle(source: Path, output: Path, *, lock_path: Path = DEFAULT_LOCK)
         "format": "aladdin-re-source-bundle/v1",
         "upstream": {"repository": lock["repository"], "commit": lock["commit"]},
         "file_count": len(files),
+        "scope": "runtime-and-tests" if tests else "runtime",
         "lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
         "layout": {
             "sources": "source/<original-relative-path>",
@@ -114,13 +117,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", type=Path, required=True, help="Pinned local PortForge checkout")
     parser.add_argument("--output", type=Path, required=True, help="New local directory for the source bundle")
     parser.add_argument("--lock", type=Path, default=DEFAULT_LOCK, help="Dependency lock (mainly for controlled tests)")
+    parser.add_argument("--tests", action="store_true", help="Also export the separately locked native test dependencies")
     args = parser.parse_args(argv)
     try:
-        output = export_bundle(args.source, args.output, lock_path=args.lock)
+        output = export_bundle(args.source, args.output, lock_path=args.lock, tests=args.tests)
     except (FileNotFoundError, FileExistsError, ValueError, OSError) as error:
         print(f"export_sources.py: {error}", file=sys.stderr)
         return 2
-    print(f"Exported {len(read_lock(args.lock)['files'])} pinned files to {output}")
+    print(f"Exported {len(read_lock(args.lock, tests=args.tests)['files'])} pinned files to {output}")
     return 0
 
 

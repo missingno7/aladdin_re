@@ -52,10 +52,17 @@ direct Python leaf calculations made by caller composition, replaced M68000
 instructions, and charged M68000 cycles.  A refused plan is counted as a
 fallback and the original resumes at its stopped opcode.
 
+The implementation now lives in `src/aladdin_sega/recovered.py` as
+`clear_auxiliary_buffer()` and `detach_object()`. The shared clear calculation
+is a direct Python call. `LegacyExit(0x1ABE6E, reason)` makes the unresolved
+script branch explicit; dispatch resumes original execution from the unchanged
+entry. This seam is domain-tested, but the recorded scenario takes the direct
+branch. No suspended Python stack or second replay engine is introduced.
+
 ## User-recording witness
 
 The 225.0231-second cold-start recording
-`recordings/20260912T210640.729016Z.alreplay` reaches the leaf 1,047 times and
+`recordings/current/20260912T210640.729016Z.alreplay` reaches the leaf 1,047 times and
 the caller 583 times.  The `0x1AD114 -> 0x1AE372` call site also reaches 583
 times, so every caller entry observed in this recording takes the direct route.
 The first call stands at `0x1AD114` on master tick 165,050,180 and reaches the

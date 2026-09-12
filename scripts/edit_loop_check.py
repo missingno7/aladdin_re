@@ -37,14 +37,14 @@ def main():
             return {"returncode": result.returncode, "wall_seconds": time.perf_counter() - started,
                     "status": payload["status"], "report": str((args.output / label / "comparison.json").resolve())}
         before = compare("before")
-        function = source / "recovery.py"
+        function = source / "recovered.py"
         code = function.read_text()
         expression = "writes.extend((pointer + offset, 0) for offset in range(length))"
         if code.count(expression) != 1:
             raise RuntimeError("Recovery edit witness no longer identifies exactly one clear loop")
         function.write_text(code.replace(expression, "writes.extend((pointer + offset, 1) for offset in range(length))"))
         # No stale timestamp/size bytecode cache may hide a same-length edit.
-        for cached in (source / "__pycache__").glob("recovery.*.pyc"):
+        for cached in (source / "__pycache__").glob("recovered.*.pyc"):
             cached.unlink()
         after = compare("after")
     same_native = hashlib.sha256(native.read_bytes()).hexdigest() == native_hash

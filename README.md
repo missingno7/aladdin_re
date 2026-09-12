@@ -15,7 +15,7 @@ command prompt and does not depend on PowerShell execution policy.
 ```powershell
 .\play.cmd
 .\play.cmd --record-from-start
-.\play.cmd --snapshot "recordings\20260912T210633.203951Z.alsnap" --compatibility review-baseline-v1
+.\play.cmd --snapshot "recordings\current\20260912T210633.203951Z.alsnap"
 ```
 
 The ROM defaults to `assets/Aladdin (USA).md`; despite the extension, it is a
@@ -126,25 +126,26 @@ machine snapshots, frame hashes, PCM chunks, and terminal state/frame/full-PCM
 hashes are compared on the available scenario. This is integrated same-model
 evidence. It does not establish independent console or hardware accuracy.
 
-The default loader requires exact capture identity. The supplied older user
-recording and snapshots were made by baseline `b3c78ac`; use the named,
-directional qualification only where it is supported:
+Archives now use version 2 and machine-state contract 1. ROM and behavioral
+profile must match; source/build hashes remain provenance. Unsupported earlier
+formats fail clearly instead of entering a compatibility migration chain.
+The supplied user replay and two saves were regenerated from their input stream
+under `recordings/current/`, with parent hashes in `provenance.json`. The original
+files remain untouched. New recordings already use the current format.
 
-```powershell
-.\.venv\Scripts\python.exe scripts\dev.py replay recordings\your.alreplay `
-  --compatibility review-baseline-v1 --headless
-.\.venv\Scripts\python.exe scripts\dev.py snapshot-check recordings\your.alreplay `
-  --compatibility review-baseline-v1 --timeout-seconds 120
-.\.venv\Scripts\python.exe scripts\qualify_baseline.py `
-  --recording recordings\your.alreplay --rom "assets\Aladdin (USA).md" `
-  --output artifacts\baseline-qualification --timeout-seconds 120
-```
+## Architecture and recovery
 
-`artifacts/baseline-b3c78ac` preserves the qualified baseline package, DLL, and
-hash receipt. `qualify_baseline.py` verifies that receipt, keeps the baseline
-worker isolated from current source code, and writes a derived comparison. It
-never rewrites a user capture. An unsupported source or machine-model transition
-is rejected rather than silently accepted.
+Python owns game source, recovery dispatch, replay, verification and presentation.
+The small machine API isolates retained Genesis CPU/VDP/scheduler components.
+Nuked OPN2 and PSG compile directly from the pinned sources in `third_party/`.
+The [component ledger](docs/component-migration.md) records the actual compiler
+closure, remaining donor edges, migration classes and removal triggers.
+
+Edit `src/aladdin_sega/recovered.py` for the buffer clear at `0x1AE372` and its
+open detach region at `0x1AD0FC`. The latter composes the recovered clear directly
+and names its unresolved legacy branch. Gate policy and mutants live separately
+in `recovery.py`. See [recovery-first.md](docs/recovery-first.md) for domains,
+timing, continuation and reproducible short witnesses.
 
 ## Source bundle for an authorized fresh Windows worker
 
@@ -157,8 +158,10 @@ the inspected checkout:
   --output D:\work\aladdin-portforge-sources
 ```
 
-The script validates all 52 locked source hashes before writing a new output
-directory. It copies only those original relative paths, plus the lock,
+The script validates the 27 runtime donor files before writing a new output
+directory. Add `--tests` for the 19 additional test-only files; configure with
+`BUILD_TESTING=OFF` when using a runtime-only bundle. The directly vendored sound
+cores already travel with this repository. It copies only those original relative paths, plus the lock,
 provenance metadata, and selected notices. It refuses existing output paths and
 does not copy a ROM or the whole PortForge framework. This is an authorized
 local engineering handoff, not a public publication path; see the license and
@@ -169,6 +172,7 @@ distribution limits in [third_party/README.md](third_party/README.md).
 ```powershell
 $env:ALADDIN_NATIVE_LIBRARY = "$PWD/build/libaladdin_native.dll"
 .\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts\check_architecture.py
 ```
 
 Windows x64 is the supported platform for this project. Linux builds and

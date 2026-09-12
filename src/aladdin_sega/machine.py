@@ -30,7 +30,7 @@ def library_path():
 def load_library():
     lib = C.CDLL(str(library_path()))
     signatures = {
-        "abi": (U32, []), "error": (C.c_char_p, []), "source_id": (C.c_char_p, []),
+        "abi": (U32, []), "state_version": (U32, []), "error": (C.c_char_p, []), "source_id": (C.c_char_p, []),
         "build_info": (C.c_char_p, []),
         "create": (C.c_int, [P8, U64, C.c_char_p, C.POINTER(C.c_void_p)]),
         "destroy": (C.c_int, [C.c_void_p]),
@@ -53,7 +53,7 @@ def load_library():
         try:
             f = getattr(lib, "al_" + name)
         except AttributeError as error:
-            raise NativeError("Native library predates the required review API; rebuild/install the current adapter or use the preserved baseline Python package.") from error
+            raise NativeError("Native library predates the required review API; rebuild/install the current adapter then regenerate artifacts if their contract changed.") from error
         f.restype, f.argtypes = result, args
     if lib.al_abi() != 1:
         raise NativeError("Unsupported native ABI")
@@ -61,9 +61,8 @@ def load_library():
 
 
 class Machine:
-    def __init__(self, rom: bytes, *, compatibility=None):
+    def __init__(self, rom: bytes):
         self._rom = bytes(rom)  # Immutable cartridge diagnostics; no mutable shadow state.
-        self.compatibility = compatibility
         self.candidate_identity = "original"
         self.lib = load_library()
         self.handle = C.c_void_p()
@@ -98,6 +97,10 @@ class Machine:
     @property
     def source_id(self):
         return self.lib.al_source_id().decode()
+
+    @property
+    def state_version(self):
+        return self.lib.al_state_version()
 
     @property
     def info(self):

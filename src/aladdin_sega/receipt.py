@@ -5,11 +5,12 @@ from pathlib import Path
 import platform
 import sys
 
+from . import __version__
 from .machine import library_path, load_library
 from .profile import PROFILE_SHA256
 
 
-def execution_receipt(*, artifact_sha256=None, capture_source=None, candidate="original", compatibility=None):
+def execution_receipt(*, artifact_sha256=None, capture_source=None, candidate="original"):
     lib = load_library()
     root = Path(__file__).parent
     modules = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.glob("*.py"))}
@@ -20,5 +21,4 @@ def execution_receipt(*, artifact_sha256=None, capture_source=None, candidate="o
             "python_module_path": str(root.resolve()), "python_modules_sha256": modules,
             "platform": platform.platform(), "profile_sha256": PROFILE_SHA256,
             "artifact_sha256": artifact_sha256, "capture_source_id": capture_source,
-            "capture_identity_scope": "legacy captures identify native source and profile; Python provenance was not recorded",
-            "candidate": candidate, "compatibility": compatibility or "exact"}
+            "candidate": candidate, "project_version": __version__}

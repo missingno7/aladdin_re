@@ -101,11 +101,6 @@ class Observer:
         self.machine = machine
         self._pcm, self._pcm_bytes, self.observations = hashlib.sha256(), 0, []
 
-    @property
-    def records(self):
-        """Compatibility name used by the replay worker's JSON writer."""
-        return self.observations
-
     def pcm(self, data):
         self._pcm.update(data)
         self._pcm_bytes += len(data)
@@ -181,10 +176,9 @@ def compare_observations(reference, candidate):
     return {"equal": True, "last_matching_checkpoint": _anchor(last), "first_failing_interval": None}
 
 
-def _worker_command(recording, rom_path, candidate, compatibility, observations):
+def _worker_command(recording, rom_path, candidate, observations):
     command = [sys.executable, "-m", "aladdin_sega", "replay", str(recording), "--rom", str(rom_path),
                "--candidate", candidate, "--observations", str(observations)]
-    if compatibility is not None: command.extend(("--compatibility", compatibility))
     return command
 
 
@@ -208,21 +202,21 @@ def _comparison_paths(output, temporary):
     return output / "comparison.json", output / "reference.observations.json", output / "candidate.observations.json"
 
 
-def compare_replay(rom_path, recording, *, candidate, compatibility=None, timeout_seconds=120, output=None, reference_env=None):
+def compare_replay(rom_path, recording, *, candidate, timeout_seconds=120, output=None):
     """Run original and candidate independently, then compare only their outputs."""
     rom_path, recording = Path(rom_path).resolve(), Path(recording).resolve()
-    report = {"candidate": candidate, "compatibility": compatibility,
+    report = {"candidate": candidate,
               "replay_sha256": artifacts.digest(artifacts.read_bounded(recording)), "timeout_seconds": timeout_seconds,
               "contract": "full-machine-frame-pcm-60frames-v1", "evidence_level": "integrated-same-model",
               "compared": False}
     with tempfile.TemporaryDirectory(prefix="aladdin-compare-") as temporary:
         temporary = Path(temporary)
         report_path, reference_file, candidate_file = _comparison_paths(output, temporary)
-        reference_command = _worker_command(recording, rom_path, "original", compatibility, reference_file)
-        candidate_command = _worker_command(recording, rom_path, candidate, compatibility, candidate_file)
+        reference_command = _worker_command(recording, rom_path, "original", reference_file)
+        candidate_command = _worker_command(recording, rom_path, candidate, candidate_file)
         report["reproducer"] = {"reference": reference_command, "candidate": candidate_command}
         try:
-            reference = run_worker("reference", reference_command, timeout_seconds=timeout_seconds, env=reference_env)
+            reference = run_worker("reference", reference_command, timeout_seconds=timeout_seconds)
             candidate_result = run_worker("candidate", candidate_command, timeout_seconds=timeout_seconds)
         except WorkerError as error:
             status = "CANDIDATE_ERROR" if type(error) is WorkerFailure and error.role == "candidate" else error.kind
@@ -268,21 +262,18 @@ def compare_replay(rom_path, recording, *, candidate, compatibility=None, timeou
         return report
 
 
-def _load_replay(data, machine, compatibility):
-    kwargs = {"rom_sha256": machine.rom_sha256, "source_id": machine.source_id}
-    if compatibility is not None: kwargs["compatibility"] = compatibility
+def _load_replay(data, machine):
+    kwargs = {"rom_sha256": machine.rom_sha256, "state_version": machine.state_version}
     return artifacts.load_replay(data, **kwargs)
 
 
-def _load_snapshot(data, machine, compatibility):
-    kwargs = {"rom_sha256": machine.rom_sha256, "source_id": machine.source_id}
-    if compatibility is not None: kwargs["compatibility"] = compatibility
+def _load_snapshot(data, machine):
+    kwargs = {"rom_sha256": machine.rom_sha256, "state_version": machine.state_version}
     return artifacts.load_snapshot(data, **kwargs)
 
 
-def _fresh_replay(path, rom_path, *, timeout_seconds, compatibility):
+def _fresh_replay(path, rom_path, *, timeout_seconds):
     command = [sys.executable, "-m", "aladdin_sega", "replay", str(path), "--rom", str(rom_path)]
-    if compatibility is not None: command.extend(("--compatibility", compatibility))
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds, check=False)
     except subprocess.TimeoutExpired as error:
@@ -293,10 +284,10 @@ def _fresh_replay(path, rom_path, *, timeout_seconds, compatibility):
     return _last_json(result.stdout)
 
 
-def snapshot_check(rom, rom_path, recording, *, timeout_seconds=60, compatibility=None):
+def snapshot_check(rom, rom_path, recording, *, timeout_seconds=60):
     data = artifacts.read_bounded(recording)
-    with Machine(rom, compatibility=compatibility) as machine:
-        meta, initial, events = _load_replay(data, machine, compatibility)
+    with Machine(rom) as machine:
+        meta, initial, events = _load_replay(data, machine)
         artifacts.restore_snapshot(machine, initial)
         cursor = len(events) // 2
         checkpoint_tick = events[cursor - 1]["tick"] if cursor else machine.info["tick"]
@@ -311,7 +302,7 @@ def snapshot_check(rom, rom_path, recording, *, timeout_seconds=60, compatibilit
         suffix_archive = derived.finish(machine)
     with tempfile.TemporaryDirectory(prefix="aladdin-snapshot-") as tmp:
         path = Path(tmp) / "suffix.alreplay"; path.write_bytes(suffix_archive)
-        actual = _fresh_replay(path, rom_path, timeout_seconds=timeout_seconds, compatibility=compatibility)
+        actual = _fresh_replay(path, rom_path, timeout_seconds=timeout_seconds)
         if actual.get("state_sha256") != expected: raise RuntimeError("Fresh-process snapshot suffix diverged")
         if actual.get("frame_sha256") != expected_frame or actual.get("pcm_sha256") != expected_pcm:
             raise RuntimeError("Fresh-process snapshot suffix output diverged")
@@ -321,14 +312,14 @@ def snapshot_check(rom, rom_path, recording, *, timeout_seconds=60, compatibilit
             "pcm_sha256": expected_pcm, "frame_sha256": expected_frame, "cross_platform": "UNVERIFIED"}
 
 
-def check_saved_snapshots(rom, rom_path, recording, snapshots, *, timeout_seconds=60, compatibility=None):
+def check_saved_snapshots(rom, rom_path, recording, snapshots, *, timeout_seconds=60):
     """Match separately saved live states against replay, then resume their suffixes."""
     data, matches = artifacts.read_bounded(recording), []
-    with Machine(rom, compatibility=compatibility) as machine:
-        meta, initial, events = _load_replay(data, machine, compatibility)
+    with Machine(rom) as machine:
+        meta, initial, events = _load_replay(data, machine)
         checkpoints = []
         for path in snapshots:
-            raw = artifacts.read_bounded(path); info, state = _load_snapshot(raw, machine, compatibility)
+            raw = artifacts.read_bounded(path); info, state = _load_snapshot(raw, machine)
             checkpoints.append((info["tick"], str(path), raw, state))
         artifacts.restore_snapshot(machine, initial); cursor = 0
         def observe_pcm(pcm):
@@ -347,7 +338,7 @@ def check_saved_snapshots(rom, rom_path, recording, snapshots, *, timeout_second
     with tempfile.TemporaryDirectory(prefix="aladdin-live-snapshots-") as tmp:
         for index, match in enumerate(matches):
             remaining, expected_pcm = events[match["next_event_index"]:], match.pop("pcm").hexdigest()
-            with Machine(rom, compatibility=compatibility) as machine:
+            with Machine(rom) as machine:
                 artifacts.restore_snapshot(machine, match["initial"])
                 recorder = artifacts.Recorder(machine, origin="synthetic", reset_provenance="derived-from-user-snapshot")
                 recorder.events = [{**e, "seq": i} for i, e in enumerate(remaining)]
@@ -356,7 +347,7 @@ def check_saved_snapshots(rom, rom_path, recording, snapshots, *, timeout_second
                 suffix = recorder.finish(machine)
                 if pcm.hexdigest() != expected_pcm: raise RuntimeError(f"Saved snapshot PCM differs from uninterrupted replay: {match['path']}")
             path = Path(tmp) / f"suffix-{index}.alreplay"; path.write_bytes(suffix)
-            actual = _fresh_replay(path, rom_path, timeout_seconds=timeout_seconds, compatibility=compatibility)
+            actual = _fresh_replay(path, rom_path, timeout_seconds=timeout_seconds)
             if (actual.get("state_sha256"), actual.get("frame_sha256"), actual.get("pcm_sha256")) != (expected_state, expected_frame, expected_pcm): raise RuntimeError(f"Fresh-process saved snapshot diverged: {match['path']}")
             del match["initial"]; match.update(status="PASS", suffix_events=len(remaining), pcm_sha256=expected_pcm)
     return {"status": "PASS", "scope": "live snapshots match replay; their fresh-process suffixes match full state, final frame and PCM",

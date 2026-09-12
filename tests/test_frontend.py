@@ -30,7 +30,7 @@ def test_capture_hotkeys_and_focus_release(tmp_path, monkeypatch):
     assert len(files) == 1
     assert len(list((tmp_path / "recordings").glob("*.alsnap"))) == 1
     with Machine(rom) as m:
-        meta, initial, events = a.load_replay(files[0].read_bytes(), rom_sha256=m.rom_sha256, source_id=m.source_id)
+        meta, initial, events = a.load_replay(files[0].read_bytes(), rom_sha256=m.rom_sha256, state_version=m.state_version)
         assert meta["origin"] == "synthetic"
         assert [e["buttons"] for e in events] == [8, 0]
         a.restore_snapshot(m, initial)
@@ -61,7 +61,7 @@ def test_resume_snapshot_records_anchor_and_releases_stale_buttons(tmp_path, mon
     assert path.read_bytes() == saved
     capture = next((tmp_path / "recordings").glob("*.alreplay"))
     with Machine(rom) as m:
-        meta, initial, events = a.load_replay(capture.read_bytes(), rom_sha256=m.rom_sha256, source_id=m.source_id)
+        meta, initial, events = a.load_replay(capture.read_bytes(), rom_sha256=m.rom_sha256, state_version=m.state_version)
         a.restore_snapshot(m, initial)
         assert m.snapshot() == expected_anchor
         assert meta["reset_provenance"] == "snapshot-resume"
@@ -95,7 +95,7 @@ def test_record_from_reset_before_first_input(tmp_path, monkeypatch, stop_key):
     assert len(files) == 1
     with Machine(rom) as m:
         reset = m.snapshot()
-        meta, initial, events = a.load_replay(files[0].read_bytes(), rom_sha256=m.rom_sha256, source_id=m.source_id)
+        meta, initial, events = a.load_replay(files[0].read_bytes(), rom_sha256=m.rom_sha256, state_version=m.state_version)
         assert meta["reset_provenance"] == "cold-boot"
         assert events[0]["tick"] == 0
         assert [e["buttons"] for e in events] == [8, 0]

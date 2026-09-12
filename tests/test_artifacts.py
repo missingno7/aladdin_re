@@ -21,7 +21,7 @@ def test_mid_session_input_capture_and_terminal():
         m.run(instructions=4)  # terminal time extends beyond last input
         data = recorder.finish(m)
         expected = m.snapshot()
-        meta, initial, events = a.load_replay(data, rom_sha256=m.rom_sha256, source_id=m.source_id)
+        meta, initial, events = a.load_replay(data, rom_sha256=m.rom_sha256, state_version=m.state_version)
         a.restore_snapshot(m, initial)
         assert m.info["buttons"] == 16
         a.play_events(m, events, meta["terminal_tick"])
@@ -48,7 +48,7 @@ def test_wrong_identity_corrupt_and_manifest_time():
         snap = a.snapshot_bytes(m)
         before = m.snapshot()
         with pytest.raises(ValueError, match="identity"):
-            a.load_snapshot(snap, rom_sha256="0" * 64, source_id=m.source_id)
+            a.load_snapshot(snap, rom_sha256="0" * 64, state_version=m.state_version)
         parts = a.unpack(snap, {"manifest.json", "machine.bin"}, {"manifest.json", "machine.bin"})
         meta = json.loads(parts["manifest.json"])
         meta["tick"] += 1
@@ -58,6 +58,33 @@ def test_wrong_identity_corrupt_and_manifest_time():
         assert m.snapshot() == before
         with pytest.raises(ValueError):
             a.restore_snapshot(m, snap[:-30])
+
+
+@pytest.mark.parametrize("kind", ["snapshot", "replay"])
+def test_current_contract_replaces_source_transition_table(kind):
+    with Machine(synthetic_rom()) as m:
+        data = a.snapshot_bytes(m) if kind == "snapshot" else a.Recorder(m, origin="synthetic").finish(m)
+        loader = a.load_snapshot if kind == "snapshot" else a.load_replay
+        members = {"manifest.json", "machine.bin", "initial.alsnap", "events.jsonl", "bookmarks.json"}
+        parts = a.unpack(data, members, {"manifest.json"})
+        meta = json.loads(parts["manifest.json"])
+        meta["version"] = 1
+        parts["manifest.json"] = a.json_bytes(meta)
+        with pytest.raises(ValueError, match="regenerate"):
+            loader(a.pack(parts), rom_sha256=m.rom_sha256, state_version=m.state_version)
+        with pytest.raises(ValueError, match="state contract"):
+            loader(data, rom_sha256=m.rom_sha256, state_version=m.state_version + 1)
+        # Source hashes identify executions; they are not a migration registry.
+        meta["version"], meta["source_id"] = 2, "a" * 64
+        if kind == "replay":
+            initial = a.unpack(parts["initial.alsnap"], members, {"manifest.json"})
+            initial_meta = json.loads(initial["manifest.json"])
+            initial_meta["source_id"] = meta["source_id"]
+            initial["manifest.json"] = a.json_bytes(initial_meta)
+            parts["initial.alsnap"] = a.pack(initial)
+            meta["initial_sha256"] = a.digest(parts["initial.alsnap"])
+        parts["manifest.json"] = a.json_bytes(meta)
+        assert loader(a.pack(parts), rom_sha256=m.rom_sha256, state_version=m.state_version)[0]["source_id"] == "a" * 64
 
 
 @pytest.mark.parametrize("change", ["terminal", "order", "mask", "port", "profile"])
@@ -79,4 +106,4 @@ def test_replay_rejects_invalid_events(change):
         meta["events_sha256"] = a.digest(parts["events.jsonl"])
         parts["manifest.json"] = a.json_bytes(meta)
         with pytest.raises(ValueError):
-            a.load_replay(a.pack(parts), rom_sha256=m.rom_sha256, source_id=m.source_id)
+            a.load_replay(a.pack(parts), rom_sha256=m.rom_sha256, state_version=m.state_version)
