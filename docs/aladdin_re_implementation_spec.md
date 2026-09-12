@@ -5,6 +5,12 @@
 **Project:** `aladdin_re` · **Python package:** `aladdin_sega`  
 **Target:** one user-supplied Disney’s Aladdin Mega Drive / Genesis ROM revision and one console profile
 
+**Platform scope amendment (user decision, 12 September 2026):** Capture,
+development and verification run on the user's Windows x64 machine. Linux builds
+and Windows/Linux artifact interchange are outside the current scope and do not
+block any milestone. Explicit serialization and fresh-process Windows restore
+remain required.
+
 > Build a playable, recordable Aladdin first. The user will supply gameplay recordings and snapshots. The AI then owns the recovery, verification, diagnosis, and incremental conversion into source. Reuse controllable chip libraries instead of implementing their internals again.
 
 This is an implementation assignment, not a request for another architecture report. Start with the existing workspace, make the bounded decisions described below, and deliver the first runnable vertical slice. This document supersedes the earlier proposal wherever they disagree.
@@ -26,7 +32,7 @@ The AI handles everything downstream: artifact validation, reference replay, wit
 
 ### Scope
 
-Use Python 3.12 as the initial development baseline. Support interactive Windows x64 and headless Linux x64. Other Python versions/platforms are optional until tested. Use `pygame` for window/input/audio output only; headless commands must work without initializing a display or sound device.
+Use Python 3.12 as the initial development baseline. Support interactive and headless Windows x64 on the user's machine. Other Python versions/platforms, including Linux, are outside the current scope unless subsequently requested. Use `pygame` for window/input/audio output only; headless commands must work without initializing a display or sound device.
 
 Initially exclude other games, PAL/NTSC variants beyond the selected profile, Sega CD, 32X, a general plugin system, universal IR, a new language, cloud orchestration, a web dashboard, automatic C++ export, and a wholesale native-object migration.
 
@@ -200,7 +206,7 @@ For a fresh wrapper, use `ctypes` with explicit `argtypes`/`restype`, strong own
 
 C must return normally across the FFI boundary. No `longjmp` through Python, C++ exception through a C ABI, or ignored Python callback exception that supplies a guessed bus value. Where a callback cannot abort immediately, record an error, stop safely, and invalidate that run rather than comparing a corrupted continuation.
 
-**Instance policy:** one active machine per process in v1. Run reference/candidate in separate workers launched portably on Windows and Linux. Do not assume the GIL makes a global-state CPU core safe, or rely on Unix-only fork inheritance. Freeze process-global chip configuration at worker initialization. This avoids building a reentrant-core refactor merely for verification.
+**Instance policy:** one active machine per process in v1. Run reference/candidate in separate workers launched on Windows. Do not assume the GIL makes a global-state CPU core safe, or rely on Unix-only fork inheritance. Freeze process-global chip configuration at worker initialization. This avoids building a reentrant-core refactor merely for verification.
 
 ### Musashi: intercept before execution, not after
 
@@ -235,7 +241,7 @@ Clock conversion must use each core's actual unit, not assume “one core clock�
 
 Sound-disabled/headless mode must still evolve sound-chip and Z80 state. It may discard host PCM output, not freeze the sound system. The host audio callback consumes already-produced samples and never drives the simulation. On restore, flush the host playback queue; preserve simulated mixer/resampler/filter phase so future samples match. Treat raw chip-output equality and final host playback behavior as separate checks.
 
-If PCM generation uses floating-point arithmetic, specify its rounding/conversion and test Windows/Linux reproducibility. Do not weaken digital chip-state comparison to hide a host floating-point difference.
+If PCM generation uses floating-point arithmetic, specify its rounding/conversion and test reproducibility across fresh Windows processes. Do not weaken digital chip-state comparison to hide a host floating-point difference.
 
 ## 8. Snapshot format and continuation guarantees
 
@@ -266,7 +272,7 @@ A process-local fast checkpoint may have a different representation, but it is a
 
 Validate versions, ROM/profile identity, sizes, section bounds, hashes, and continuation compatibility before applying state. Reject truncation, unsupported versions, path traversal, excessive decompression, and attempts to load code through metadata. Failed restore must not leave the active machine half-mutated. Restoring a native-backed machine may require closing/recreating its worker rather than constructing two active global cores together.
 
-Cross-process restore is mandatory. Windows-to-Linux transfer is a required acceptance test for the supported profile, because user capture and AI analysis may run on different systems. Until tested, label portability unverified; do not silently decode platform-specific blobs as portable.
+Fresh-process restore on Windows is mandatory. Capture and AI analysis use the user's Windows machine, so Windows-to-Linux transfer is outside current acceptance gates. Do not claim cross-platform portability without testing it or silently decode platform-specific blobs as portable.
 
 ### Snapshot boundaries
 
@@ -546,7 +552,7 @@ Minimum initial test set:
 | Recorder codec | Truncation, wrong ROM/profile, bad event order, duplicate event at checkpoint, missing terminal time. |
 | Recorder round trip | Held/released inputs differ between live synthetic capture and playback. |
 | Pacing independence | Headless/turbo/audio-muted changes simulated state or event application. |
-| Artifact portability | Windows-produced supported snapshot/replay cannot resume equivalently on Linux, or vice versa. |
+| Fresh-process artifact restore | A Windows-produced snapshot/replay cannot resume equivalently in a new Windows process. |
 | Default player path | Packaged/default runtime does not select the tested implementation. |
 | Verifier mutations | Deliberately wrong value, write, continuation or timed operation receives a false PASS. |
 
@@ -749,7 +755,7 @@ Resolve these from code and tests rather than guessing:
 - The exact available ROM hash, region, controller setup, and original power-on profile.
 - Which PortForge Sega components and wrappers already work and can be reused without the general framework.
 - The selected core configuration, interception semantics, timing granularity and full serializable state.
-- The actual Windows/Linux snapshot portability and original-game performance with sound.
+- The actual fresh-process Windows snapshot equivalence and original-game performance with sound.
 - Which real Aladdin region the user's first replay exercises, and which existing placement/sprite-builder evidence matches its revision.
 - The coverage and remaining uncertainty of independent machine validation versus same-model carrier verification.
 
