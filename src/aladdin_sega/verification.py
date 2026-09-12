@@ -176,9 +176,11 @@ def compare_observations(reference, candidate):
     return {"equal": True, "last_matching_checkpoint": _anchor(last), "first_failing_interval": None}
 
 
-def _worker_command(recording, rom_path, candidate, observations):
+def _worker_command(recording, rom_path, candidate, observations, diagnostics=None):
     command = [sys.executable, "-m", "aladdin_sega", "replay", str(recording), "--rom", str(rom_path),
                "--candidate", candidate, "--observations", str(observations)]
+    if diagnostics is not None:
+        command.extend(("--diagnostics", str(diagnostics)))
     return command
 
 
@@ -202,18 +204,35 @@ def _comparison_paths(output, temporary):
     return output / "comparison.json", output / "reference.observations.json", output / "candidate.observations.json"
 
 
-def compare_replay(rom_path, recording, *, candidate, timeout_seconds=120, output=None):
+def compare_replay(rom_path, recording, *, candidate, timeout_seconds=120, output=None, diagnostics=False):
     """Run original and candidate independently, then compare only their outputs."""
     rom_path, recording = Path(rom_path).resolve(), Path(recording).resolve()
+    if diagnostics and output is None:
+        raise ValueError("Diagnostic captures require an output path")
+    recording_data = artifacts.read_bounded(recording)
     report = {"candidate": candidate,
-              "replay_sha256": artifacts.digest(artifacts.read_bounded(recording)), "timeout_seconds": timeout_seconds,
+              "replay_sha256": artifacts.digest(recording_data), "timeout_seconds": timeout_seconds,
               "contract": "full-machine-frame-pcm-60frames-v1", "evidence_level": "integrated-same-model",
               "compared": False}
     with tempfile.TemporaryDirectory(prefix="aladdin-compare-") as temporary:
         temporary = Path(temporary)
         report_path, reference_file, candidate_file = _comparison_paths(output, temporary)
-        reference_command = _worker_command(recording, rom_path, "original", reference_file)
-        candidate_command = _worker_command(recording, rom_path, candidate, candidate_file)
+        diagnostic_dir = None
+        worker_recording = recording
+        if diagnostics:
+            diagnostic_dir = Path(tempfile.mkdtemp(prefix="diagnostics-", dir=report_path.parent)).resolve()
+            worker_recording = diagnostic_dir / "reproducer.alreplay"
+            worker_recording.write_bytes(recording_data)
+        def save_report():
+            if diagnostic_dir is not None:
+                from .diagnostics import compare
+                report["diagnostics"] = compare(diagnostic_dir)
+                report["diagnostics"]["replay_sha256"] = report["replay_sha256"]
+            _write_report(report_path, report)
+        reference_command = _worker_command(worker_recording, rom_path, "original", reference_file,
+                                             diagnostic_dir / "reference" if diagnostics else None)
+        candidate_command = _worker_command(worker_recording, rom_path, candidate, candidate_file,
+                                             diagnostic_dir / "candidate" if diagnostics else None)
         report["reproducer"] = {"reference": reference_command, "candidate": candidate_command}
         try:
             reference = run_worker("reference", reference_command, timeout_seconds=timeout_seconds)
@@ -229,14 +248,14 @@ def compare_replay(rom_path, recording, *, candidate, timeout_seconds=120, outpu
                     partial = compare_observations(left, right)
                     partial["execution_failure"] = error.report()
                     report["comparison"] = partial
-            _write_report(report_path, report)
+            save_report()
             return report
         try:
             reference_observations = json.loads(reference_file.read_text(encoding="utf-8"))
             candidate_observations = json.loads(candidate_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             report.update(status="ERROR", detail=f"invalid worker observation file: {error}")
-            _write_report(report_path, report)
+            save_report()
             return report
         comparison = compare_observations(reference_observations, candidate_observations)
         payload_fields = ("state_sha256", "frame_sha256", "pcm_sha256", "pcm_bytes")
@@ -254,11 +273,11 @@ def compare_replay(rom_path, recording, *, candidate, timeout_seconds=120, outpu
         if candidate != "original" and candidate_result.payload.get("candidate_stats", {}).get("candidate_hits", 0) <= 0:
             report.update(reference=reference.payload, candidate_receipt=candidate_result.payload, comparison=comparison,
                           status="NOT_EXERCISED")
-            _write_report(report_path, report)
+            save_report()
             return report
         report.update(reference=reference.payload, candidate_receipt=candidate_result.payload, comparison=comparison,
                       status="PASS" if comparison["equal"] else "DIVERGENCE")
-        _write_report(report_path, report)
+        save_report()
         return report
 
 

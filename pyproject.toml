@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "aladdin-sega"
-version = "0.2.0"
+version = "0.2.1"
 description = "Inspectable, deterministic Aladdin Genesis development environment"
 requires-python = ">=3.12"
 

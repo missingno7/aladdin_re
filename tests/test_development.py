@@ -39,10 +39,10 @@ def test_dev_uses_fresh_source_tree_process_and_preserves_cli_arguments(tmp_path
         calls.append((args, kwargs))
         return Result()
 
-    assert dev.run(["replay", "capture.alreplay", "--headless", "--native", str(native)], runner=runner) == 17
+    assert dev.run(["replay", "capture.alreplay", "--observations", "result.json", "--native", str(native)], runner=runner) == 17
     assert len(calls) == 1
     (command,), options = calls[0]
-    assert command == [sys.executable, "-m", "aladdin_sega", "replay", "capture.alreplay", "--headless"]
+    assert command == [sys.executable, "-m", "aladdin_sega", "replay", "capture.alreplay", "--observations", "result.json"]
     assert options["cwd"] == ROOT
     assert options["check"] is False
     assert options["env"]["ALADDIN_NATIVE_LIBRARY"] == str(native.resolve())

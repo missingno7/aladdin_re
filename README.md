@@ -41,7 +41,7 @@ reinstall anything.
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\dev.py doctor
-.\.venv\Scripts\python.exe scripts\dev.py replay recordings\your.alreplay --headless
+.\.venv\Scripts\python.exe scripts\dev.py replay recordings\your.alreplay
 .\.venv\Scripts\python.exe scripts\dev.py --native D:\work\libaladdin_native.dll doctor
 ```
 
@@ -97,7 +97,7 @@ A single `replay` run means only that one worker executed. It emits
 equivalence verdict.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\dev.py replay recordings\your.alreplay --headless
+.\.venv\Scripts\python.exe scripts\dev.py replay recordings\your.alreplay
 .\.venv\Scripts\python.exe scripts\dev.py snapshot-check recordings\your.alreplay --timeout-seconds 120
 .\.venv\Scripts\python.exe scripts\dev.py compare recordings\your.alreplay `
   --candidate leaf --timeout-seconds 120 --output artifacts\comparison
@@ -138,7 +138,9 @@ files remain untouched. New recordings already use the current format.
 Python owns game source, recovery dispatch, replay, verification and presentation.
 The small machine API isolates retained Genesis CPU/VDP/scheduler components.
 Nuked OPN2 and PSG compile directly from the pinned sources in `third_party/`.
-The [component ledger](docs/component-migration.md) records the actual compiler
+The [necessity review](docs/architecture-review.md) assesses current scope, control
+capabilities, iteration cost and deletion opportunities. The
+[component ledger](docs/component-migration.md) records the actual compiler
 closure, remaining donor edges, migration classes and removal triggers.
 
 Edit `src/aladdin_sega/recovered.py` for the buffer clear at `0x1AE372` and its
@@ -146,6 +148,32 @@ open detach region at `0x1AD0FC`. The latter composes the recovered clear direct
 and names its unresolved legacy branch. Gate policy and mutants live separately
 in `recovery.py`. See [recovery-first.md](docs/recovery-first.md) for domains,
 timing, continuation and reproducible short witnesses.
+
+## Inspect a failing short witness
+
+Add `--diagnostics` to a comparison when hashes alone are insufficient:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\dev.py compare artifacts\leaf-witness\witness.alreplay `
+  --candidate leaf --diagnostics --output artifacts\leaf-diff
+```
+
+The report includes PC/SR and register differences, the first 32 changed work-RAM
+bytes (plus the total count), and whether the workers stopped at the same tick.
+Each comparison creates a fresh diagnostic directory with the exact input replay,
+per-worker inspection metadata/RAM, and a `.alsnap` when that state can be saved.
+The reported reproduction commands use the copied input. The ROM stays external.
+
+These are **terminal or failure-state** differences, not a claim about the first
+bad instruction. A failed native execution may allow register/RAM inspection but
+refuse a restorable snapshot; the original failure and capture error are retained.
+No native snapshot fields are decoded in Python. Default comparisons retain their
+existing checkpoint/hash behavior and do not write these extra captures.
+
+`candidate_stats.fallback_reasons` distinguishes scheduler admission refusal,
+unsupported data domains and explicit legacy exits. Replay is always headless,
+snapshot checks always use fresh processes, and play always runs the original
+mode; the old no-op `--headless`, `--fresh-process` and `--mode` flags are removed.
 
 ## Source bundle for an authorized fresh Windows worker
 

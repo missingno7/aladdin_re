@@ -6,6 +6,12 @@ M68000 execution. Windows x64 is the supported development and verification host
 
 ## Ownership and reuse
 
+Use only what this specific Aladdin recovery needs. The project must own its
+recovery control and policy; it need not own the implementation of every machine
+component. A concrete current limitation, rather than a hypothetical second game
+or backend, must justify new abstraction or component replacement. See the
+[current necessity review](architecture-review.md) for measured evidence.
+
 PortForge is a bootstrap donor of useful implementations. It is neither the
 permanent owner of this project nor an indivisible engine dependency. Reuse its
 working CPU, board, VDP and scheduler components while they meet our needs.

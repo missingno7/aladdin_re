@@ -6,7 +6,7 @@ if not exist ".venv\Scripts\python.exe" (
     popd
     exit /b 2
 )
-".venv\Scripts\python.exe" -m aladdin_sega play --mode original %*
+".venv\Scripts\python.exe" -m aladdin_sega play %*
 set "playerExitCode=%ERRORLEVEL%"
 popd
 exit /b %playerExitCode%

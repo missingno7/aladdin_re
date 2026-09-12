@@ -129,6 +129,9 @@ def test_open_caller_legacy_seam_leaves_entry_unchanged(source, flag):
     assert machine.atomic_call is None
     assert machine.gate_call == (CALLER_ENTRY, True)
     assert machine.run_call == 1
+    candidate = Candidate("composed")
+    candidate.on_gate(machine, 10000)
+    assert any("legacy 0x1ABE6E" in reason for reason in candidate.stats["fallback_reasons"])
 
 
 @pytest.mark.parametrize("name", ["mutant-result", "mutant-continuation", "mutant-timing"])
@@ -153,6 +156,7 @@ def test_atomic_uses_the_scheduler_deadline_and_refusal_falls_back_one_opcode():
     assert not candidate.on_gate(refused, 10000)
     assert refused.gate_call == (LEAF_ENTRY, True)
     assert refused.run_call == 1
+    assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}
 
 
 def test_arm_refuses_any_rom_other_than_the_verified_rom():

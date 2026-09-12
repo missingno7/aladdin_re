@@ -26,7 +26,7 @@ def violations(source, *, filename):
             if isinstance(node, ast.ImportFrom):
                 values.append(node.module or "")
             if filename == "recovered.py" and any(
-                    value.split(".")[0] in {"ctypes", "machine", "recovery", "verification", "artifacts", "frontend"}
+                    value.split(".")[0] in {"ctypes", "machine", "recovery", "verification", "diagnostics", "artifacts", "frontend"}
                     for value in values):
                 findings.append(f"{filename}:{node.lineno}: recovered behavior imports policy/backend machinery")
         elif isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):

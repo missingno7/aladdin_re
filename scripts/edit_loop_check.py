@@ -30,7 +30,7 @@ def main():
         env = dict(os.environ, PYTHONPATH=temporary, ALADDIN_NATIVE_LIBRARY=str(native))
         def compare(label):
             command = [sys.executable, "-m", "aladdin_sega", "compare", str(args.witness.resolve()),
-                       "--rom", str(args.rom.resolve()), "--candidate", "leaf", "--output", str((args.output / label).resolve())]
+                       "--rom", str(args.rom.resolve()), "--candidate", "leaf", "--diagnostics", "--output", str((args.output / label).resolve())]
             started = time.perf_counter()
             result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
             payload = json.loads(result.stdout)

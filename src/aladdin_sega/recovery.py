@@ -2,8 +2,8 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
-from .recovered import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, CALLER_ENTRY,
-                        LEAF_LAST_PC, ROM_SHA256, clear_auxiliary_buffer, detach_object)
+from .recovered import (AtomicPlan, UnsupportedCandidate, LegacyExit, LEAF_ENTRY, CALLER_ENTRY,
+                        ROM_SHA256, clear_auxiliary_buffer, detach_object)
 
 
 @dataclass
@@ -15,16 +15,14 @@ class Candidate:
     """
 
     name: str = "leaf"
-    stats: dict[str, int] = field(default_factory=lambda: {
+    stats: dict[str, int | dict[str, int]] = field(default_factory=lambda: {
         "gates": 0, "candidate_hits": 0, "fallbacks": 0,
         "leaf_hits": 0, "caller_hits": 0, "direct_python_calls": 0,
-        "replaced_m68k_instructions": 0, "charged_m68k_cycles": 0,
+        "replaced_m68k_instructions": 0, "charged_m68k_cycles": 0, "fallback_reasons": {},
     })
 
     _names = {
         "leaf", "composed",
-        "leaf-wrong-store", "leaf-wrong-continuation", "leaf-wrong-timing",
-        "composed-wrong-store", "composed-wrong-continuation", "composed-wrong-timing",
         "mutant-result", "mutant-continuation", "mutant-timing",
     }
 
@@ -34,16 +32,12 @@ class Candidate:
 
     @property
     def is_composed(self) -> bool:
-        return self.name.startswith("composed")
+        return self.name == "composed"
 
     @property
     def mutation(self) -> str | None:
-        if self.name.startswith("mutant-"):
-            return {"mutant-result": "store", "mutant-continuation": "continuation",
-                    "mutant-timing": "timing"}[self.name]
-        if "-wrong-" not in self.name:
-            return None
-        return self.name.rsplit("-wrong-", 1)[1]
+        return {"mutant-result": "store", "mutant-continuation": "continuation",
+                "mutant-timing": "timing"}.get(self.name)
 
     @property
     def gate_pcs(self) -> tuple[int, ...]:
@@ -70,6 +64,7 @@ class Candidate:
         if entry not in self.gate_pcs:
             raise ValueError("Recovery dispatch does not match the stopped PC")
         self.stats["gates"] += 1
+        fallback_reason = "scheduler admission"
         try:
             registers = machine.registers()
             if entry == CALLER_ENTRY and self.is_composed:
@@ -87,7 +82,9 @@ class Candidate:
                 last_pc=plan.last_pc,
                 target=target,
             )
-        except UnsupportedCandidate:
+        except UnsupportedCandidate as error:
+            fallback_reason = (f"legacy 0x{error.target:06X}: {error}" if isinstance(error, LegacyExit)
+                               else f"unsupported domain: {error}")
             accepted = False
         if accepted:
             self.stats["candidate_hits"] += 1
@@ -105,6 +102,8 @@ class Candidate:
         # Bypass exactly the stopped opcode; the remaining original body is
         # then responsible for its own timing, stack, and return behavior.
         self.stats["fallbacks"] += 1
+        reasons = self.stats["fallback_reasons"]
+        reasons[fallback_reason] = reasons.get(fallback_reason, 0) + 1
         machine.gate(entry, bypass_once=True)
         machine.run(instructions=1)
         return False
@@ -115,10 +114,7 @@ class Candidate:
             return plan
         if mutation == "store":
             writes = list(plan.writes)
-            if self.is_composed:
-                # The selected caller's CLR.B (A1) is permanent output.
-                writes[0] = (writes[0][0], 1)
-            elif len(writes) > 6:
+            if len(writes) > 6:
                 # Save slots occupy 0..5.  This is the high byte of the
                 # cleared A1+0x2A pointer, a permanent leaf result.
                 writes[6] = (writes[6][0], 1)

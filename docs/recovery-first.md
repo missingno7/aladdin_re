@@ -57,7 +57,11 @@ The implementation now lives in `src/aladdin_sega/recovered.py` as
 is a direct Python call. `LegacyExit(0x1ABE6E, reason)` makes the unresolved
 script branch explicit; dispatch resumes original execution from the unchanged
 entry. This seam is domain-tested, but the recorded scenario takes the direct
-branch. No suspended Python stack or second replay engine is introduced.
+branch. `LegacyExit.target` is a diagnostic label: dispatch does not call that
+address and return to Python. It bypasses one opcode at the original caller
+entry and leaves the rest to original execution. This is an open domain with
+whole-entry fallback, not yet a resumable open carrier. No suspended Python
+stack or second replay engine is introduced.
 
 ## User-recording witness
 

@@ -5,6 +5,36 @@ Aladdin source, dispatch, artifacts and verification; a small machine API hides
 retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay.
 
+## Diagnostic follow-up (0.2.1)
+
+`compare --diagnostics` now captures terminal/failure PC, SR, all M68000 registers
+and work RAM through the existing machine API. Reports include exact changed RAM
+addresses, a bounded 32-byte listing and total count, register differences, and a
+same-tick indicator. Fresh output directories retain the exact replay used by both
+workers and their snapshots when capture is valid. Failed native execution retains
+its original error and can expose inspection data without claiming a usable save.
+This does not localize the first bad instruction or decode private device state.
+
+Fallback counts now distinguish scheduler admission, unsupported data domains and
+explicit legacy exits. Removed unused candidate aliases and no-op CLI options;
+`play.cmd` and `play.ps1` use the simplified launch command. Artifact/state contracts
+and native source are unchanged, so current recordings need no regeneration.
+
+New diagnostic tests cover bounded address reporting, different stop ticks, failed
+snapshot capture, noninterference with state/PCM, and fresh capture directories.
+**75 Python tests pass.** The negative controls now show the wrong-store byte at
+`0xFF8392`, register/PC differences for the invalid continuation, and different stop
+ticks for wrong timing. The actual Python clearing-loop edit still changes PASS
+to DIVERGENCE in about 0.6 seconds with the same native DLL and no rebuild/install.
+The full composed replay again matches all 225 observations and terminal state,
+frame and PCM, with the same 581 caller / 459 leaf hits and nine scheduler
+fallbacks. Its diagnostic register/RAM diff is empty. Installed 0.2.1 passes the
+composed short comparison with diagnostics and a 60-frame snapshot-resumed player
+smoke using dummy SDL devices. The source-tree native DLL hash is unchanged.
+Reports are under `artifacts/diagnostics-continuation/`, including
+`full-composed/comparison.json`, `negative-controls.json`, `edit-loop/result.json`
+and `installed-short/comparison.json`.
+
 ## Architecture changes
 
 - Audited active compiler dependencies, not just the old lock. Runtime requires
@@ -53,7 +83,7 @@ Use the matching names under `recordings/current/`:
 `recordings/current/provenance.json` records parent hashes and derivation. Both
 saved states exactly match replay at their ticks. Their 44- and 26-input suffixes
 match uninterrupted terminal state, final frame and all suffix PCM in fresh
-processes. The installed 0.2.0 package supports these files; early version 1
+processes. The installed 0.2.1 package supports these files; early version 1
 archives are intentionally rejected with a regeneration message.
 
 ```powershell
@@ -129,6 +159,16 @@ queue discarded 12/180 chunks and inserted about 9.1% silence. The continuous
 FIFO fixed that test; a 600-frame resumed session had zero underruns. The native
 queue also now invalidates execution on overflow. This continuation preserves
 that behavior; subjective listening and broader device coverage remain open.
+
+## Necessity review of the current code
+
+The [current architecture review](architecture-review.md) rechecked the actual
+compiler graph and measured restore, short verification and full replay without
+changing runtime code. The boundaries are proportionate to this game, but the
+leaf/composed experiment is too small to demonstrate sustained scaffolding
+convergence. `LegacyExit` is whole-entry fallback, not a Python/legacy/Python
+continuation. The failing-witness register/RAM diagnostic follow-up above implements that
+review priority; a new engine, emitter or generic continuation registry is not justified.
 
 ## Next bounded milestone
 

@@ -34,10 +34,10 @@ def main(argv=None):
             p.add_argument("--candidate", choices=candidates, default="original" if name == "replay" else "leaf")
         if name == "compare":
             p.add_argument("--output", type=Path, default=Path("artifacts/comparison"))
+            p.add_argument("--diagnostics", action="store_true", help="Capture terminal/failure registers, RAM, saves and replay; best used with short witnesses")
         if name in {"boot-check", "play"}:
             p.add_argument("--frames", type=int, default=300 if name == "boot-check" else 0)
         if name == "play":
-            p.add_argument("--mode", choices=["original"], default="original")
             p.add_argument("--mute", action="store_true")
             p.add_argument("--record-from-start", action="store_true",
                            help="Record immediately from reset or --snapshot; F5 stops and saves")
@@ -48,11 +48,9 @@ def main(argv=None):
         if name == "resume-check":
             p.add_argument("--target", type=int, required=True)
         if name == "replay":
-            p.add_argument("--headless", action="store_true", default=True)
-            p.add_argument("--mode", choices=["original"], default="original")
+            p.add_argument("--diagnostics", type=Path, help="New directory for terminal/failure inspection (used by compare)")
             p.add_argument("--observations", type=Path, help="Write ordered derived state/frame/PCM checkpoints")
         if name == "snapshot-check":
-            p.add_argument("--fresh-process", action="store_true", default=True)
             p.add_argument("--snapshot", type=Path, action="append", default=[],
                            help="Also match a separately saved live snapshot against this recording (repeatable)")
     args = parser.parse_args(argv)
@@ -72,7 +70,7 @@ def main(argv=None):
         elif args.command == "compare":
             from .verification import compare_replay
             result = compare_replay(args.rom.resolve(), args.artifact.resolve(), candidate=args.candidate,
-                                    timeout_seconds=args.timeout_seconds, output=args.output)
+                                    timeout_seconds=args.timeout_seconds, output=args.output, diagnostics=args.diagnostics)
             emit(result)
             return 0 if result["status"] == "PASS" else 1
         elif args.command == "boot-check":
@@ -129,8 +127,7 @@ def main(argv=None):
                     if observer:
                         observer.pcm(sound)
                 if args.command == "replay":
-                    meta, initial, events = artifacts.load_replay(data, rom_sha256=machine.rom_sha256, state_version=machine.state_version,
-                                                               )
+                    meta, initial, events = artifacts.load_replay(data, rom_sha256=machine.rom_sha256, state_version=machine.state_version)
                     artifacts.restore_snapshot(machine, initial)
                     if args.candidate != "original":
                         from .recovery import Candidate
@@ -139,15 +136,28 @@ def main(argv=None):
                     if args.observations:
                         from .verification import Observer
                         observer = Observer()
+                    def capture_diagnostics(error=None):
+                        if args.diagnostics:
+                            from .diagnostics import capture
+                            try:
+                                capture(machine, args.diagnostics, execution_error=error,
+                                        receipt={**start_receipt, "candidate": args.candidate,
+                                                 "artifact_sha256": artifacts.digest(data),
+                                                 "capture_source_id": meta["source_id"]})
+                            except Exception as capture_error:
+                                # Diagnostics must never replace the execution exception.
+                                print(f"Diagnostic capture unavailable: {capture_error}", file=sys.stderr)
                     try:
                         artifacts.play_events(machine, events, meta["terminal_tick"], audio_sink=audio_sink,
                                               on_gate=candidate.on_gate if candidate else None,
                                               on_checkpoint=observer.checkpoint if observer else None)
-                    except BaseException:
+                    except BaseException as error:
+                        capture_diagnostics(str(error))
                         if observer:
                             args.observations.parent.mkdir(parents=True, exist_ok=True)
                             observer.write(args.observations)  # completed checkpoints only
                         raise
+                    capture_diagnostics()
                     if observer:
                         observer.finish(machine, meta["terminal_tick"])
                         args.observations.parent.mkdir(parents=True, exist_ok=True)
