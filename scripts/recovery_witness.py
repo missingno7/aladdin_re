@@ -10,7 +10,8 @@ import sys
 
 from aladdin_sega import artifacts
 from aladdin_sega.recovered import (CALLER_ENTRY, PAIR_ENTRY, LEAF_ENTRY,
-                                    clear_auxiliary_buffer, clear_object_pair, detach_object)
+                                    INIT_ENTRY, FINISH_ENTRY, clear_auxiliary_buffer,
+                                    clear_object_pair, detach_object, initialize_object, finish_object)
 from aladdin_sega.machine import Machine
 from aladdin_sega.profile import DEFAULT_ROM, FRAME_TICKS, read_rom
 from aladdin_sega.receipt import execution_receipt
@@ -70,8 +71,10 @@ def follow_original_boundaries(machine, instructions=100):
 
 
 def run_witness(*, candidate_name, recording, rom_path, output):
-    entry_pc = {"leaf": LEAF_ENTRY, "pair": PAIR_ENTRY, "composed": CALLER_ENTRY}[candidate_name]
-    recover = {"leaf": clear_auxiliary_buffer, "pair": clear_object_pair, "composed": detach_object}[candidate_name]
+    entry_pc = {"leaf": LEAF_ENTRY, "pair": PAIR_ENTRY, "composed": CALLER_ENTRY,
+                "init": INIT_ENTRY, "finish": FINISH_ENTRY}[candidate_name]
+    recover = {"leaf": clear_auxiliary_buffer, "pair": clear_object_pair, "composed": detach_object,
+               "init": initialize_object, "finish": finish_object}[candidate_name]
     output.mkdir(parents=True, exist_ok=True)
     rom, replay_bytes = read_rom(rom_path), artifacts.read_bounded(recording)
     replay_digest = digest(replay_bytes)
@@ -92,7 +95,7 @@ def run_witness(*, candidate_name, recording, rom_path, output):
         plan = recover(original, entry_registers)
         original.gates([entry_pc, plan.registers["pc"]])
         original.gate(entry_pc, bypass_once=True)
-        if original.run(instructions=1000) != "gate":
+        if original.run(instructions=10000) != "gate":
             raise RuntimeError("original region did not stop at its verified continuation")
         original_state, original_frame, original_pcm = original.snapshot(), original.frame()[2], original.audio()
         continuation_tick = original.info["tick"]
@@ -158,7 +161,7 @@ def run_witness(*, candidate_name, recording, rom_path, output):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--candidate", choices=("leaf", "pair", "composed"), default="leaf")
+    parser.add_argument("--candidate", choices=("leaf", "pair", "init", "finish", "composed"), default="leaf")
     parser.add_argument("--recording", type=Path, default=DEFAULT_RECORDING)
     parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / "recovery-witness")

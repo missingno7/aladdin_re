@@ -1,4 +1,4 @@
-# Recovered object cleanup: buffer, object pair and detach caller
+# Recovered object cleanup and initialization
 
 The first semantic candidate is the shared clear routine at `0x1AE372` through
 `0x1AE39E` in the USA ROM with SHA-256
@@ -53,7 +53,8 @@ instructions, and charged M68000 cycles.  A refused plan is counted as a
 fallback and the original resumes at its stopped opcode.
 
 The implementation lives in `src/aladdin_sega/recovered.py` as
-`clear_auxiliary_buffer()`, `clear_object_pair()` and `detach_object()`.
+`clear_auxiliary_buffer()`, `clear_object_pair()`, `detach_object()`,
+`initialize_object()` and `finish_object()`.
 Unsupported operands, aliases and scheduler refusal still fall back from the
 unchanged entry. The previous `LegacyExit` marker is removed because its only
 dependency is now recovered. No suspended Python stack or second machine is
@@ -100,6 +101,61 @@ state and PCM immediately and after a 100-instruction continuation. Separate
 tests require alias/alignment refusal before atomic submission. These fixtures
 do not initialize video; rendering is checked by the real-recording witnesses.
 
+## Object initializer and cleanup/template path (0.4.0)
+
+The 104-byte initializer at `0x1AE30A` through `0x1AE370` expands the 19-byte
+template at A6 into selected fields of the 66-byte record at A5:
+
+| Template bytes | Destination offset | Width |
+| --- | --- | --- |
+| 0, 1, 2, 3, 4, 5 | 0, 1, 6, 7, 8, 9 | Six bytes |
+| 6–9 | 10 | Long |
+| 10–11 | 30 | Word |
+| 12–15 | 32 | Long |
+| 16, 17, 18 | 41, 53, 60 | Three bytes |
+
+It clears byte 19, bytes 20–29, bytes 42–52, bytes 54–55, and bytes 61–65.
+All other record bytes remain untouched. It consumes exactly 19 source bytes,
+advances A6 accordingly, and returns through the guest stack. A5 and all data
+registers are preserved. Final flags are Z=1 and N/V/C=0 with X preserved.
+Every activation costs 476 cycles and 27 instructions and stages 48 byte writes.
+Templates may be in immutable ROM or canonical work RAM. The record, template
+when in RAM, and return slot must be disjoint; record, source and stack must
+be even-aligned. Unsupported ranges and aliases fall back before admission.
+
+Tracing the first pair caller revealed the 36-byte path at `0x1AE954` through
+`0x1AE976`. `finish_object()` clears D7.W, loads the byte at A1+8 into D7.B,
+adds that value to the word at `0xFFF14E`, calls the pair clear, clears the
+current object's first byte again, calls the buffer clear again, then sets
+A5=A1 and initializes it with the fixed ROM template at `0x1B7940`. The gameplay
+meaning of the accumulated word is not yet identified; the implementation
+preserves its observed arithmetic without assigning a score/reward meaning.
+
+The repeated buffer call must see the pointer already cleared by the pair.
+Its known null path is composed explicitly, including the BSR and saved A6/D0
+stack bytes. It never rereads the stale original pointer from live storage
+while effects are still staged. No shadow machine or generic write overlay is
+needed. The initializer then overwrites selected fields of the cleared current
+record from immutable ROM. The nested stack and accumulated word must be
+disjoint from both records and their buffers.
+
+The whole path costs `706 + pair_cycles` and `45 + pair_instructions`, including
+the repeated null leaf and initializer. It returns using the actual outer
+stack slot. Final A5=A1, A6=`0x1B7953`, D7's high word is retained and its low
+word holds the consumed byte. Final X is the carry from the 16-bit addition;
+Z=1 and N/V/C=0 come from the initializer's last clear. The native tests cover
+zero, signed overflow without carry, and unsigned wraparound, including both
+objects with 256-byte buffers and the nested stack's final contents.
+
+Use `--candidate init` or `--candidate finish` for isolated replay checks.
+`composed` now gates all five recovered entries and composes their internal
+calls. The first recorded initializer and cleanup path each pass original vs
+replacement state/frame/PCM equality, restored 100-instruction continuation,
+and fresh-process short replay. The original recording visits the initializer
+1,059 times, always from ROM, and the cleanup path five times, always with a
+single object and no counter carry. RAM templates, linked cleanup and arithmetic
+edge cases are synthetic differential coverage, not recorded gameplay coverage.
+
 ## User-recording witness
 
 The 225.0231-second cold-start recording
@@ -121,7 +177,8 @@ and 20 ordered byte writes. This is a bounded activation witness, not a
 whole-replay equivalence result.
 
 `scripts/recovery_witness.py` makes this qualification reproducible for
-`--candidate leaf`, `--candidate pair` or `--candidate composed`. It writes the parked gate
+`--candidate leaf`, `--candidate pair`, `--candidate init`, `--candidate finish`
+or `--candidate composed` (the detach witness). It writes the parked gate
 snapshot, a zero-input replay from that safe boundary through the region and
 100-instruction tail, a post-replacement snapshot, and a receipt. For each
 form it compares the selected original region with the admitted replacement,
@@ -156,7 +213,7 @@ domain needs its own measured observer policy.
 ## Integrated qualification
 
 Before pair recovery, composed mode passed with 581 caller activations, 459
-other leaf activations and nine scheduler fallbacks. With pair recovery it
+other leaf activations and nine scheduler fallbacks. With pair recovery in 0.3.0 it
 passes with 581 caller, 101 pair and 355 leaf activations, plus 12 scheduler
 fallbacks. All 225 observations, terminal state/frame and whole-run PCM match.
 It replaces 28,099 of 140,704,253 M68000 instructions (about 0.0200%), up 520.
@@ -174,3 +231,12 @@ Reports and its portable snapshots/replay live under
 and branch counts. Wrong-result, wrong-continuation and wrong-timing controls
 are rejected under the same ROM/profile. See
 [STATUS.md](STATUS.md) for reports and the distinction from hardware validation.
+
+With initialization and cleanup composition in 0.4.0, the full replay admits
+1,040 initializer, five cleanup, 581 detach, 96 pair and 350 leaf activations.
+There are 26 scheduler fallbacks and no domain fallbacks. All 225 observations,
+terminal state/frame and whole-run PCM still match. Replaced instructions rise
+from 28,099 to 56,364 (about 0.0401% of 140,704,253); direct nested calls rise
+from 685 to 700. Total gates rise from 1,049 to 2,098 because the initializer
+now has its own entry gate. No overall speedup is claimed. Reports, exact source
+identities and short witnesses live under `artifacts/object-init/`.

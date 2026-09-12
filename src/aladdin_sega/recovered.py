@@ -13,6 +13,10 @@ PAIR_ENTRY = 0x1ABE6E
 PAIR_LAST_PC = 0x1ABE88
 CALLER_ENTRY = 0x1AD0FC
 CALLER_LAST_PC = 0x1AD136
+INIT_ENTRY = 0x1AE30A
+INIT_LAST_PC = 0x1AE370
+FINISH_ENTRY = 0x1AE954
+FINISH_LAST_PC = 0x1AE976
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -162,6 +166,73 @@ def clear_object_pair(machine, registers: dict[str, int]) -> AtomicPlan:
     """1ABE6E: deactivate one or two objects and release their auxiliary buffers."""
     a7 = registers["a7"]
     return _clear_pair_effects(machine, registers, entry_sp=a7, return_pc=_read(machine, a7, 4))
+
+
+def _initialize_object_effects(machine, *, record, template, entry_sp):
+    """Expand the 19-byte object template into selected fields of a 66-byte record."""
+    if (record | template | entry_sp) & 1:
+        raise UnsupportedCandidate("unaligned object template, record or stack")
+    spans = [("initialized record", record, 66), ("initializer return", entry_sp, 4)]
+    if 0 <= template <= 0x3FFFFF:
+        try:
+            data = machine.peek_rom(template, 19)
+        except ValueError as error:
+            raise UnsupportedCandidate("object template lies beyond the cartridge") from error
+    elif 0xFF0000 <= template <= 0xFFFFFF:
+        spans.append(("object template", template, 19))
+        _address(template, 19)
+        data = machine.peek_ram(template & 0xFFFF, 19)
+    else:
+        raise UnsupportedCandidate("object template is neither immutable ROM nor work RAM")
+    _spans_disjoint(spans)
+    writes = [(record + offset, data[index]) for index, offset in enumerate((0, 1, 6, 7, 8, 9))]
+    writes.extend((record + 10 + index, value) for index, value in enumerate(data[6:10]))
+    for offset, size in ((19, 1), (20, 4), (24, 2), (26, 2), (28, 1), (29, 1)):
+        writes.extend(_bytes(record + offset, 0, size))
+    writes.extend((record + 30 + index, value) for index, value in enumerate(data[10:16]))
+    writes.append((record + 41, data[16]))
+    for offset, size in ((42, 4), (46, 4), (50, 2), (52, 1)):
+        writes.extend(_bytes(record + offset, 0, size))
+    writes.extend(((record + 53, data[17]), (record + 54, 0), (record + 55, 0),
+                   (record + 60, data[18]), (record + 61, 0)))
+    writes.extend(_bytes(record + 62, 0, 4))
+    return tuple(writes)
+
+
+def initialize_object(machine, registers: dict[str, int]) -> AtomicPlan:
+    """1AE30A: initialize selected A5 record fields from the template at A6."""
+    a5, a6, a7, sr = (registers[key] for key in ("a5", "a6", "a7", "sr"))
+    return_pc = _read(machine, a7, 4)
+    writes = _initialize_object_effects(machine, record=a5, template=a6, entry_sp=a7)
+    return AtomicPlan(476, 27, writes,
+                      {"a6": a6 + 19, "a7": a7 + 4, "pc": return_pc & 0xFFFFFF,
+                       "sr": _logic_sr(sr, 0, 4)}, INIT_LAST_PC)
+
+
+def finish_object(machine, registers: dict[str, int]) -> AtomicPlan:
+    """1AE954: accumulate the object's byte value, clear it, and install template 1B7940."""
+    a1, a6, a7, d0, d7, sr = (registers[key] for key in ("a1", "a6", "a7", "d0", "d7", "sr"))
+    return_pc = _read(machine, a7, 4)
+    value = _read(machine, a1 + 8, 1)
+    total = _read(machine, 0xFFF14E, 2) + value
+    # ADD.W sets X as well as NZVC. Subsequent logic instructions retain X.
+    carry_sr = (sr & ~0x10) | (0x10 if total > 0xFFFF else 0)
+    pair = _clear_pair_effects(machine, {**registers, "sr": carry_sr},
+                               entry_sp=a7 - 4, return_pc=0x1AE964,
+                               extra_spans=(("outer return", a7, 4), ("object total", 0xFFF14E, 2)))
+    initialized = _initialize_object_effects(machine, record=a1, template=0x1B7940, entry_sp=a7 - 4)
+    writes = [*_bytes(0xFFF14E, total, 2), *_bytes(a7 - 4, 0x1AE964, 4), *pair.writes]
+    # The pair has cleared the current buffer pointer. The repeated leaf is
+    # therefore its null path: retain its BSR and saved A6/D0 stack writes,
+    # without reading the old pointer from the still-unmodified live machine.
+    writes.extend(((a1, 0), *_bytes(a7 - 4, 0x1AE96A, 4),
+                   *_bytes(a7 - 8, a6, 4), *_bytes(a7 - 10, d0, 2)))
+    writes.extend(_bytes(a7 - 4, 0x1AE976, 4))
+    writes.extend(initialized)
+    return AtomicPlan(706 + pair.cycles, 45 + pair.instructions, tuple(writes),
+                      {"d7": (d7 & 0xFFFF0000) | value, "a5": a1, "a6": 0x1B7953,
+                       "a7": a7 + 4, "pc": return_pc & 0xFFFFFF, "sr": _logic_sr(carry_sr, 0, 4)},
+                      FINISH_LAST_PC, direct_calls=3 + pair.direct_calls)
 
 
 def detach_object(machine, registers: dict[str, int]) -> AtomicPlan:

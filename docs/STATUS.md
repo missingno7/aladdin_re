@@ -5,6 +5,51 @@ Aladdin source, dispatch, artifacts and verification; a small machine API hides
 retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay.
 
+## Object initialization and cleanup composition (0.4.0)
+
+Recovered the initializer at `0x1AE30A` and composed the cleanup/template path
+at `0x1AE954`. The initializer expands a 19-byte template into selected object
+fields, preserving all untouched bytes. The cleanup path accumulates the byte
+at A1+8 into `0xFFF14E`, calls the recovered pair clear, repeats the now-null
+buffer clear, then initializes the current object from template `0x1B7940`.
+The repeated call uses its known post-clear state rather than rereading stale
+live RAM while effects are staged. Counter wraparound, X preservation, exact
+guest stack writes, timing and continuations are included. No native source,
+machine API, state contract or artifact format changed.
+
+**174 Python tests pass**, including 28 new original-ROM differential cases
+for ROM/RAM templates and cleanup arithmetic, links and buffer lengths. The
+architecture boundary check passes. The first recorded initializer and cleanup
+activations both pass full-state/frame/PCM equality, snapshot restoration,
+100-instruction continuation and fresh-process short replay. Changing one
+initialized count byte in a disposable source copy changes PASS to DIVERGENCE
+in 0.63 seconds with zero builds/installs and the same source-tree native DLL.
+
+Original execution visits the initializer 1,059 times, always with ROM input.
+The cleanup path runs five times, always with a single object and no counter
+carry. RAM templates, linked cleanup and arithmetic edge cases are synthetic
+test coverage. Pair return-site tracing also finds `0x1AF4CA` 88 times,
+`0x1AF508` four times, `0x1AED10` six times and `0x1AF3F2` once, in addition to
+the five returns at `0x1AE964`. The meaning of the accumulated word is still
+unidentified; the implementation does not assume that it is a score or reward.
+
+Source-tree and installed 0.4.0 composed replays pass all **225 observations**,
+terminal state/frame and whole-run PCM. Admitted counts: 1,040 initializer,
+five cleanup, 581 detach, 96 pair and 350 leaf activations. There are 26
+scheduler fallbacks and no unsupported-domain fallbacks. Replaced instructions
+increase from 28,099 to 56,364 (about 0.0401% of modeled instructions); direct
+nested Python calls increase from 685 to 700. Gates increase from 1,049 to
+2,098 because initialization now has its own entry gate. No speedup is claimed.
+
+Reports are under `artifacts/object-init/`: `coverage.json` and its measurement
+script; `full-composed/comparison.json`; `installed-full/comparison.json`;
+`{init,finish}-witness-v040/report.json` with portable snapshots and short
+replays; and `edit-loop/result.json`. Installed isolated comparisons pass for
+both new candidates. The player also resumes the cleanup replacement snapshot
+for 60 frames using dummy SDL devices, with zero audio underruns. This checks
+integration, not subjective audio quality. Exact field mappings and cycle
+formulas are in [recovery-first.md](recovery-first.md).
+
 ## Object-pair recovery (0.3.0)
 
 Recovered `0x1ABE6E` as `clear_object_pair()` and composed it into both remaining
@@ -215,10 +260,10 @@ review priority; a new engine, emitter or generic continuation registry is not j
 
 ## Next bounded milestone
 
-Trace the callers of the newly recovered pair and select the next bounded,
-frequently exercised object-lifecycle routine. The first real pair witness
-returns to `0x1AE964`, providing a concrete starting point for that trace; the
-containing routine and its wider domain still need inspection. Preserve the
+Inspect the pair caller returning at `0x1AF4CA`, which accounts for 88 of the
+104 recorded pair calls. Establish its actual entry, dependencies and bounded
+domain before extending composition. The first pair caller returning at
+`0x1AE964` is now recovered, along with its shared initializer. Preserve the
 distinction between recorded paths and synthetic branch tests. Use focused
 witnesses during editing and the full replay as the integration gate. Absorb
 additional board/scheduler/sound glue only when recovery exposes concrete

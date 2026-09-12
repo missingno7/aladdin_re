@@ -4,7 +4,8 @@ from __future__ import annotations
 import ctypes as C
 
 import pytest
-from aladdin_sega.recovered import clear_auxiliary_buffer, clear_object_pair, detach_object, PAIR_ENTRY
+from aladdin_sega.recovered import (clear_auxiliary_buffer, clear_object_pair, detach_object, PAIR_ENTRY,
+                                    INIT_ENTRY, FINISH_ENTRY, initialize_object, finish_object)
 
 from aladdin_sega.machine import Machine
 from aladdin_sega.recovery import (
@@ -179,7 +180,7 @@ def test_pair_gate_counts_nested_calls_and_keeps_deadline_fallback(linked):
     assert machine.atomic_call["target"] == 10001
     assert machine.gate_call == (PAIR_ENTRY, True)
     assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}
-    assert Candidate("composed").gate_pcs == (CALLER_ENTRY, PAIR_ENTRY, LEAF_ENTRY)
+    assert Candidate("composed").gate_pcs == (FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
 
 
 @pytest.mark.parametrize("name", ["mutant-result", "mutant-continuation", "mutant-timing"])
@@ -341,3 +342,134 @@ def test_native_object_regions_match_original_full_state_and_continuation(entry,
         replacement.gates([])
         replacement.run(instructions=100)
         assert (replacement.snapshot(), replacement.audio()) == expected_tail
+
+
+INIT_BYTES = bytes.fromhex(
+    "1a9e1b5e00011b5e00061b5e00071b5e00081b5e00092b5e000a422d001342ad0014"
+    "426d0018426d001a422d001c422d001d3b5e001e2b5e00201b5e002942ad002a42ad002e"
+    "426d0032422d00341b5e0035422d0036422d00371b5e003c422d003d42ad003e4e75")
+FINISH_BYTES = bytes.fromhex("42471e290008df7900fff14e6100d50c42116100fa0a4df9001b79402a496100f9964e75")
+FINISH_TEMPLATE = bytes.fromhex("84000000000000000000600000122fa2060000")
+
+
+def native_initialization_rom(entry, template=0x1000, sr=0x201f):
+    rom = bytearray(native_object_rom(entry))
+    startup = (bytes.fromhex("46fc") + sr.to_bytes(2, "big") + bytes.fromhex(
+        "203cdeadbeef2e3ccabefeed227c00ff10002a7c00ff10002c7c") + template.to_bytes(4, "big") +
+        bytes.fromhex("2e7c00ff80004ef9") + entry.to_bytes(4, "big"))
+    rom[0x200:0x200 + len(startup)] = startup
+    rom[INIT_ENTRY:INIT_ENTRY + len(INIT_BYTES)] = INIT_BYTES
+    rom[FINISH_ENTRY:FINISH_ENTRY + len(FINISH_BYTES)] = FINISH_BYTES
+    rom[0x1b7940:0x1b7940 + 19] = FINISH_TEMPLATE
+    rom[0x1000:0x1013] = bytes(range(1, 20))
+    return bytes(rom)
+
+
+def check_native_initialization(rom, entry, recover, prepare):
+    """Full-state oracle with original instructions and a continued replacement."""
+    with Machine(rom) as original:
+        native_write(original, 0xff1000, b"\xa5" * 66)
+        native_write(original, 0xff7fe0, b"\x5a" * 36)
+        native_write(original, 0xff8000, (0xcd000300).to_bytes(4, "big"))
+        prepare(original)
+        original.gates([entry])
+        assert original.run(instructions=64) == "gate"
+        original.audio()
+        stopped = original.snapshot()
+        original.gates([entry, 0x300])
+        original.gate(entry, bypass_once=True)
+        assert original.run(instructions=10000) == "gate"
+        expected = original.snapshot(), original.audio()
+        original.gates([])
+        original.run(instructions=100)
+        expected_tail = original.snapshot(), original.audio()
+    with Machine(rom) as replacement:
+        replacement.restore(stopped)
+        replacement.gates([entry])
+        assert replacement.run(instructions=1) == "gate"
+        plan = recover(replacement, replacement.registers())
+        assert replacement.atomic(target=replacement.info["tick"] + 1_000_000,
+                                  cycles=plan.cycles, instructions=plan.instructions,
+                                  writes=list(plan.writes), registers=plan.registers, last_pc=plan.last_pc)
+        assert (replacement.snapshot(), replacement.audio()) == expected
+        replacement.gates([])
+        replacement.run(instructions=100)
+        assert (replacement.snapshot(), replacement.audio()) == expected_tail
+
+
+@pytest.mark.parametrize("template", [0x1000, 0xff3000])
+@pytest.mark.parametrize("sr", [0x2000, 0x201f])
+def test_native_initializer_rom_and_ram_templates_preserve_untouched_fields(template, sr):
+    def prepare(machine):
+        native_write(machine, 0xff3000, bytes(range(1, 20)))
+    check_native_initialization(native_initialization_rom(INIT_ENTRY, template, sr), INIT_ENTRY,
+                                initialize_object, prepare)
+
+
+@pytest.mark.parametrize("linked,first_count,second_count", [
+    (False, None, None), (False, 0, None), (True, None, None),
+    (True, 4, None), (True, None, 4), (True, 255, 255)])
+@pytest.mark.parametrize("total,value", [(0, 0), (0x7fff, 1), (0xffff, 1), (0xffff, 255)])
+def test_native_finish_path_sees_cleared_buffer_and_propagates_add_carry(linked, first_count, second_count, total, value):
+    def prepare(machine):
+        for record, buffer, count in ((0xff1000, 0xff2001, first_count), (0xff5000, 0xff6001, second_count)):
+            native_write(machine, record, b"\xa5" * 66)
+            native_write(machine, record + 41, bytes([count or 0]))
+            native_write(machine, record + 42, (buffer if count is not None else 0).to_bytes(4, "big"))
+            native_write(machine, buffer, b"\x5a" * 256)
+        native_write(machine, 0xff103e, (0xff5000 if linked else 0).to_bytes(4, "big"))
+        native_write(machine, 0xff1008, bytes([value]))
+        native_write(machine, 0xfff14e, total.to_bytes(2, "big"))
+    check_native_initialization(native_initialization_rom(FINISH_ENTRY), FINISH_ENTRY, finish_object, prepare)
+
+
+@pytest.mark.parametrize("template,reason", [(0xff1000, "aliases"), (0xff7ff0, "aliases"),
+                                             (0x1001, "unaligned"), (0x3ffff0, "beyond"),
+                                             (0xfffff0, "noncanonical"), (0xc00000, "neither")])
+def test_initializer_refuses_unsupported_sources_before_atomic_submission(template, reason):
+    machine = leaf_machine()
+    machine.info["pc"] = INIT_ENTRY
+    machine._registers.update(a5=0xff1000, a6=template)
+    before = bytes(machine.ram), machine.registers()
+    candidate = Candidate("init")
+    assert not candidate.on_gate(machine, 10000)
+    assert machine.atomic_call is None
+    assert machine.gate_call == (INIT_ENTRY, True)
+    assert any(reason in value for value in candidate.stats["fallback_reasons"])
+    assert (bytes(machine.ram), machine.registers()) == before
+
+
+@pytest.mark.parametrize("which", ["primary", "linked"])
+def test_finish_counter_alias_falls_back_before_writing(which):
+    machine = leaf_machine()
+    machine.info["pc"] = FINISH_ENTRY
+    if which == "primary":
+        put(machine, 0xff102a, 0xfff14e, 4)
+    else:
+        put(machine, 0xff103e, 0xff5000, 4)
+        put(machine, 0xff502a, 0xfff14e, 4)
+    before = bytes(machine.ram)
+    candidate = Candidate("finish")
+    assert not candidate.on_gate(machine, 10000)
+    assert machine.atomic_call is None
+    assert bytes(machine.ram) == before
+    assert any("aliases" in value for value in candidate.stats["fallback_reasons"])
+
+
+@pytest.mark.parametrize("name,entry,stat,direct", [("init", INIT_ENTRY, "initializer_hits", 0),
+                                                   ("finish", FINISH_ENTRY, "finish_hits", 4)])
+def test_initializer_and_finish_dispatch_count_calls_and_preserve_deadlines(name, entry, stat, direct):
+    machine = leaf_machine()
+    machine.info["pc"] = entry
+    machine._registers.update(a5=0xff1000, a6=0x1000)
+    candidate = Candidate(name)
+    candidate.arm(machine)
+    assert machine.armed == (entry,)
+    assert candidate.on_gate(machine, 10000)
+    assert candidate.stats[stat] == 1
+    assert candidate.stats["direct_python_calls"] == direct
+    machine.atomic_result = False
+    assert not candidate.on_gate(machine, 10001)
+    assert machine.atomic_call["target"] == 10001
+    assert machine.gate_call == (entry, True)
+    assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}
