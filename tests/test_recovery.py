@@ -4,7 +4,7 @@ from __future__ import annotations
 import ctypes as C
 
 import pytest
-from aladdin_sega.recovered import clear_auxiliary_buffer, detach_object, LegacyExit
+from aladdin_sega.recovered import clear_auxiliary_buffer, clear_object_pair, detach_object, PAIR_ENTRY
 
 from aladdin_sega.machine import Machine
 from aladdin_sega.recovery import (
@@ -114,24 +114,72 @@ def test_caller_accepts_immutable_rom_script_source_without_a_ram_alias():
 
 
 @pytest.mark.parametrize("source,flag", [(1, 0), (0, 4)])
-def test_open_caller_legacy_seam_leaves_entry_unchanged(source, flag):
+def test_caller_pair_routes_are_staged_without_changing_live_state(source, flag):
     machine = leaf_machine()
     machine.info["pc"] = CALLER_ENTRY
     machine._registers.update(pc=CALLER_ENTRY, a2=0x100)
     machine.rom[0x101] = source
     put(machine, 0xff103c, flag, 1)
     before = bytes(machine.ram), machine.registers()
-    with pytest.raises(LegacyExit) as error:
-        detach_object(machine, machine.registers())
-    assert error.value.target == 0x1ABE6E
+    plan = detach_object(machine, machine.registers())
+    assert plan.direct_calls == 2  # caller -> pair -> leaf
+    assert plan.registers["d0"] == source
     assert (bytes(machine.ram), machine.registers()) == before
-    assert not Candidate("composed").on_gate(machine, 10000)
+    candidate = Candidate("composed")
+    assert candidate.on_gate(machine, 10000)
+    assert candidate.stats["caller_hits"] == 1
+    assert candidate.stats["direct_python_calls"] == 2
+
+
+@pytest.mark.parametrize("alias", ["record", "buffers", "stack", "override", "script"])
+def test_pair_composition_aliases_fall_back_before_any_atomic_write(alias):
+    machine = leaf_machine()
+    machine.info["pc"] = CALLER_ENTRY
+    machine._registers.update(pc=CALLER_ENTRY, a2=0xff3000)
+    put(machine, 0xff3001, 1, 1)
+    put(machine, 0xff103e, 0xff5000, 4)
+    put(machine, 0xff502a, 0xff6000, 4)
+    if alias == "record":
+        put(machine, 0xff103e, 0xff1000, 4)
+    else:
+        put(machine, 0xff502a, {"buffers": 0xff2000, "stack": 0xff7fee,
+                               "override": 0xff7d9e, "script": 0xff3001}[alias], 4)
+    before = bytes(machine.ram), machine.registers()
+    candidate = Candidate("composed")
+    assert not candidate.on_gate(machine, 10000)
     assert machine.atomic_call is None
     assert machine.gate_call == (CALLER_ENTRY, True)
     assert machine.run_call == 1
-    candidate = Candidate("composed")
-    candidate.on_gate(machine, 10000)
-    assert any("legacy 0x1ABE6E" in reason for reason in candidate.stats["fallback_reasons"])
+    assert (bytes(machine.ram), machine.registers()) == before
+    assert any("aliases" in reason for reason in candidate.stats["fallback_reasons"])
+
+
+@pytest.mark.parametrize("recover", [clear_auxiliary_buffer, clear_object_pair, detach_object])
+@pytest.mark.parametrize("operand", ["a1", "a7"])
+def test_unaligned_word_operands_remain_original_execution(recover, operand):
+    machine = leaf_machine()
+    machine._registers[operand] += 1
+    with pytest.raises(UnsupportedCandidate, match="unaligned"):
+        recover(machine, machine.registers())
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_pair_gate_counts_nested_calls_and_keeps_deadline_fallback(linked):
+    machine = leaf_machine()
+    machine.info["pc"] = PAIR_ENTRY
+    put(machine, 0xff103e, 0xff5000 if linked else 0, 4)
+    candidate = Candidate("pair")
+    candidate.arm(machine)
+    assert machine.armed == (PAIR_ENTRY,)
+    assert candidate.on_gate(machine, 10000)
+    assert candidate.stats["pair_hits"] == 1
+    assert candidate.stats["direct_python_calls"] == 1 + linked
+    machine.atomic_result = False
+    assert not candidate.on_gate(machine, 10001)
+    assert machine.atomic_call["target"] == 10001
+    assert machine.gate_call == (PAIR_ENTRY, True)
+    assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}
+    assert Candidate("composed").gate_pcs == (CALLER_ENTRY, PAIR_ENTRY, LEAF_ENTRY)
 
 
 @pytest.mark.parametrize("name", ["mutant-result", "mutant-continuation", "mutant-timing"])
@@ -169,6 +217,10 @@ def test_arm_refuses_any_rom_other_than_the_verified_rom():
 LEAF_BYTES = bytes.fromhex(
     "2f0e3f002c69002abdfc00000000671842a9002a42a9002e42401029002942290029421e51c8fffc301f2c5f4e75"
 )
+PAIR_BYTES = bytes.fromhex("4211610025004aa9003e670e2f092269003e4211610024ee225f4e75")
+CALLER_BYTES = bytes.fromhex(
+    "528a101a670000086100ed68602608290002003c66f242116100125c4aa9003e6712"
+    "2f082069003e42a8003e08a80002003c205f2eb900ff7d9e4e75")
 
 
 def native_leaf_rom():
@@ -227,3 +279,65 @@ def test_native_atomic_leaf_matches_exact_rom_leaf_full_state(count, pointer):
         assert replacement.snapshot() == expected
     finally:
         replacement.close()
+
+
+def native_object_rom(entry, d0=0xdeadbeef, sr=0x201f):
+    """Synthetic setup; recovered bodies are verbatim bytes at the USA ROM PCs."""
+    rom = bytearray(native_leaf_rom())
+    startup = (bytes.fromhex("46fc") + sr.to_bytes(2, "big") + bytes.fromhex("203c") +
+               d0.to_bytes(4, "big") + bytes.fromhex(
+                   "207c00ff4000227c00ff1000247c00ff30002c7c001ad0fc2e7c00ff80004ef9") +
+               entry.to_bytes(4, "big"))
+    rom[0x200:0x200 + len(startup)] = startup
+    rom[PAIR_ENTRY:PAIR_ENTRY + len(PAIR_BYTES)] = PAIR_BYTES
+    rom[CALLER_ENTRY:CALLER_ENTRY + len(CALLER_BYTES)] = CALLER_BYTES
+    return bytes(rom)
+
+
+@pytest.mark.parametrize("entry,source,flag", [(PAIR_ENTRY, 0, 7), (CALLER_ENTRY, 0, 0),
+                                               (CALLER_ENTRY, 0, 4), (CALLER_ENTRY, 0x80, 0)])
+@pytest.mark.parametrize("d0,sr", [(0, 0x2000), (0xdeadbeef, 0x201f)])
+@pytest.mark.parametrize("linked,first_count,second_count", [
+    (False, None, None), (False, 0, None), (True, None, None),
+    (True, 4, None), (True, None, 4), (True, 255, 255)])
+def test_native_object_regions_match_original_full_state_and_continuation(entry, source, flag,
+                                                                          d0, sr, linked, first_count, second_count):
+    rom = native_object_rom(entry, d0, sr)
+    with Machine(rom) as original:
+        for record, buffer, count in [(0xff1000, 0xff2001, first_count), (0xff5000, 0xff6001, second_count)]:
+            native_write(original, record, b"\xa5" * 66)
+            native_write(original, record + 41, bytes([count or 0]))
+            native_write(original, record + 42, (buffer if count is not None else 0).to_bytes(4, "big"))
+            native_write(original, buffer, b"\x5a" * 256)
+        native_write(original, 0xff103c, bytes([flag]))
+        native_write(original, 0xff103e, (0xff5000 if linked else 0).to_bytes(4, "big"))
+        native_write(original, 0xff3001, bytes([source]))
+        # RTS masks the high byte; MOVE.L flags still see the full override.
+        native_write(original, 0xff8000, (0xab000300).to_bytes(4, "big"))
+        native_write(original, 0xff7d9e, (0xcd000300).to_bytes(4, "big"))
+        original.gates([entry])
+        assert original.run(instructions=64) == "gate"
+        stopped = original.snapshot()
+        original.audio()
+        original.gates([entry, 0x300])
+        original.gate(entry, bypass_once=True)
+        assert original.run(instructions=10000) == "gate"
+        # This minimal cartridge has not initialized the VDP for rendering.
+        expected = original.snapshot(), original.audio()
+        original.gates([])
+        original.run(instructions=100)
+        expected_tail = original.snapshot(), original.audio()
+    with Machine(rom) as replacement:
+        replacement.restore(stopped)
+        replacement.audio()
+        replacement.gates([entry])
+        assert replacement.run(instructions=1) == "gate"
+        recover = clear_object_pair if entry == PAIR_ENTRY else detach_object
+        plan = recover(replacement, replacement.registers())
+        assert replacement.atomic(target=replacement.info["tick"] + 1_000_000,
+                                  cycles=plan.cycles, instructions=plan.instructions,
+                                  writes=list(plan.writes), registers=plan.registers, last_pc=plan.last_pc)
+        assert (replacement.snapshot(), replacement.audio()) == expected
+        replacement.gates([])
+        replacement.run(instructions=100)
+        assert (replacement.snapshot(), replacement.audio()) == expected_tail

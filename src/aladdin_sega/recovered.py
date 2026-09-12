@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 LEAF_ENTRY = 0x1AE372
 LEAF_LAST_PC = 0x1AE39E
+PAIR_ENTRY = 0x1ABE6E
+PAIR_LAST_PC = 0x1ABE88
 CALLER_ENTRY = 0x1AD0FC
 CALLER_LAST_PC = 0x1AD136
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
@@ -25,6 +27,7 @@ class AtomicPlan:
     writes: tuple[tuple[int, int], ...]
     registers: dict[str, int]
     last_pc: int
+    direct_calls: int = 0
 
 
 def _logic_sr(sr: int, value: int, width: int) -> int:
@@ -37,13 +40,6 @@ def _logic_sr(sr: int, value: int, width: int) -> int:
     if value & (1 << (width * 8 - 1)):
         out |= 0x08
     return out
-
-
-class LegacyExit(UnsupportedCandidate):
-    """Unrecovered dependency: dispatch original from the unchanged entry."""
-    def __init__(self, target, reason):
-        self.target = target
-        super().__init__(f"{reason}: legacy call {target:06X}")
 
 
 def _address(value: int, size: int) -> int:
@@ -66,6 +62,8 @@ def _bytes(address: int, value: int, size: int) -> tuple[tuple[int, int], ...]:
 
 def _read(machine, address: int, size: int) -> int:
     address = _address(address, size)
+    if size > 1 and address & 1:
+        raise UnsupportedCandidate("unaligned word/long operand")
     return int.from_bytes(machine.peek_ram(address & 0xFFFF, size), "big")
 
 def _read_source_byte(machine, address: int) -> tuple[int, bool]:
@@ -82,13 +80,15 @@ def _read_source_byte(machine, address: int) -> tuple[int, bool]:
     raise UnsupportedCandidate("script source is neither immutable ROM nor work RAM")
 
 def _clear_buffer_effects(machine, registers: dict[str, int], *, entry_sp: int) -> tuple[int, int, tuple[tuple[int, int], ...], int]:
-    """Return cycle/instruction/write/return-PC facts for 1AE372.
+    """Return cycle/instruction/write/buffer-pointer facts for 1AE372.
 
     ``entry_sp`` is the A7 value visible to the leaf.  It may be the
     caller's freshly pushed BSR frame rather than the outer activation's
     original A7.
     """
     a1, a6, d0 = registers["a1"], registers["a6"], registers["d0"]
+    if entry_sp & 1:
+        raise UnsupportedCandidate("unaligned guest stack")
     count_address, pointer_address = _address(a1 + 41, 1), _address(a1 + 42, 4)
     count = _read(machine, count_address, 1)
     pointer = _read(machine, pointer_address, 4)
@@ -120,23 +120,75 @@ def clear_auxiliary_buffer(machine, registers: dict[str, int]) -> AtomicPlan:
         cycles=cycles,
         instructions=instructions,
         writes=writes,
-        registers={"d0": d0, "pc": return_pc, "a7": a7 + 4, "sr": _logic_sr(sr, d0, 2)},
+        registers={"d0": d0, "pc": return_pc & 0xFFFFFF, "a7": a7 + 4, "sr": _logic_sr(sr, d0, 2)},
         last_pc=LEAF_LAST_PC,
     )
 
+def _clear_pair_effects(machine, registers, *, entry_sp, return_pc, extra_spans=()) -> AtomicPlan:
+    """Clear the current and optional linked object, including both BSR frames."""
+    a1, d0, sr = (registers[key] for key in ("a1", "d0", "sr"))
+    link = _read(machine, a1 + 62, 4)
+    spans = [("current record", a1, 66),
+             ("pair stack", entry_sp - (14 if link else 10), 18 if link else 14), *extra_spans]
+    first_cycles, first_instructions, first_writes, buffer = _clear_buffer_effects(
+        machine, registers, entry_sp=entry_sp - 4)
+    if buffer:
+        spans.append(("current buffer", buffer, _read(machine, a1 + 41, 1) + 1))
+    writes = [(a1, 0), *_bytes(entry_sp - 4, 0x1ABE74, 4), *first_writes]
+    if link:
+        linked_registers = {**registers, "a1": link}
+        second_cycles, second_instructions, second_writes, linked_buffer = _clear_buffer_effects(
+            machine, linked_registers, entry_sp=entry_sp - 8)
+        spans.append(("linked record", link, 50))
+        if linked_buffer:
+            spans.append(("linked buffer", linked_buffer, _read(machine, link + 41, 1) + 1))
+        writes.extend(_bytes(entry_sp - 4, a1, 4))
+        writes.append((link, 0))
+        writes.extend(_bytes(entry_sp - 8, 0x1ABE86, 4))
+        writes.extend(second_writes)
+        cycles, instructions = 140 + first_cycles + second_cycles, 10 + first_instructions + second_instructions
+        final_sr = _logic_sr(sr, d0, 2)
+    else:
+        cycles, instructions = 72 + first_cycles, 5 + first_instructions
+        final_sr = _logic_sr(sr, 0, 4)  # TST.L of the null link survives RTS.
+    _spans_disjoint(spans)
+    return AtomicPlan(cycles, instructions, tuple(writes),
+                      {"a1": a1, "d0": d0, "a7": entry_sp + 4,
+                       "pc": return_pc & 0xFFFFFF, "sr": final_sr},
+                      PAIR_LAST_PC, direct_calls=1 + bool(link))
+
+
+def clear_object_pair(machine, registers: dict[str, int]) -> AtomicPlan:
+    """1ABE6E: deactivate one or two objects and release their auxiliary buffers."""
+    a7 = registers["a7"]
+    return _clear_pair_effects(machine, registers, entry_sp=a7, return_pc=_read(machine, a7, 4))
+
+
 def detach_object(machine, registers: dict[str, int]) -> AtomicPlan:
-    """The observed direct 1AD0FC -> 1AE372 path, with a direct Python call."""
+    """1AD0FC: consume a script byte, detach objects, and replace the outer return."""
     a0, a1, a2, a7, d0, sr = (registers[key] for key in ("a0", "a1", "a2", "a7", "d0", "sr"))
     source_address = a2 + 1
     source_byte, source_is_ram = _read_source_byte(machine, source_address)
-    if source_byte:
-        raise LegacyExit(0x1ABE6E, "nonzero script path")
-    if _read(machine, _address(a1 + 60, 1), 1) & 0x04:
-        raise LegacyExit(0x1ABE6E, "bit-two script path")
-    outer_return = _read(machine, _address(a7, 4), 4)
+    use_pair = source_byte or (_read(machine, a1 + 60, 1) & 0x04)
+    _read(machine, a7, 4)  # Validate the outer return operand, which is overwritten.
     return_override = _read(machine, 0xFF7D9E, 4)
     leaf_registers = dict(registers)
     leaf_registers["d0"] = (d0 & 0xFFFFFF00) | source_byte
+    if use_pair:
+        extra_spans = [("outer return", a7, 4), ("return override", 0xFF7D9E, 4)]
+        if source_is_ram:
+            extra_spans.append(("script byte", source_address, 1))
+        pair = _clear_pair_effects(machine, leaf_registers, entry_sp=a7 - 4,
+                                   return_pc=0x1AD108, extra_spans=extra_spans)
+        # Nonzero: ADDQ, MOVE.B, BEQ.W (not taken), BSR.
+        # Zero/set bit adds BTST and the taken BNE.S, with BEQ.W taken.
+        before_cycles, before_instructions = (46, 4) if source_byte else (70, 6)
+        return AtomicPlan(
+            before_cycles + pair.cycles + 54, before_instructions + pair.instructions + 3,
+            (*_bytes(a7 - 4, 0x1AD108, 4), *pair.writes, *_bytes(a7, return_override, 4)),
+            {"d0": leaf_registers["d0"], "a2": a2 + 2, "a7": a7 + 4,
+             "pc": return_override & 0xFFFFFF, "sr": _logic_sr(sr, return_override, 4)},
+            CALLER_LAST_PC, direct_calls=1 + pair.direct_calls)
     leaf_cycles, leaf_instructions, leaf_writes, buffer = _clear_buffer_effects(
         machine, leaf_registers, entry_sp=a7 - 4)
     count = _read(machine, _address(a1 + 41, 1), 1)
@@ -164,17 +216,15 @@ def detach_object(machine, registers: dict[str, int]) -> AtomicPlan:
     else:
         post_cycles, post_instructions = 70, 4
     writes.extend(_bytes(a7, return_override, 4))
-    # Keep the read visible in the plan: an odd/unmapped stack pointer is
-    # rejected above, but the source return is intentionally overwritten.
-    del outer_return
     return AtomicPlan(
         cycles=80 + leaf_cycles + post_cycles,
         instructions=7 + leaf_instructions + post_instructions,
         writes=tuple(writes),
         registers={
             "d0": leaf_registers["d0"], "a2": a2 + 2,
-            "a7": a7 + 4, "pc": return_override,
+            "a7": a7 + 4, "pc": return_override & 0xFFFFFF,
             "sr": _logic_sr(sr, return_override, 4),
         },
         last_pc=CALLER_LAST_PC,
+        direct_calls=1,
     )

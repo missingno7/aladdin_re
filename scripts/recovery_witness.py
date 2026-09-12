@@ -9,7 +9,8 @@ import subprocess
 import sys
 
 from aladdin_sega import artifacts
-from aladdin_sega.recovered import CALLER_ENTRY, LEAF_ENTRY, clear_auxiliary_buffer, detach_object
+from aladdin_sega.recovered import (CALLER_ENTRY, PAIR_ENTRY, LEAF_ENTRY,
+                                    clear_auxiliary_buffer, clear_object_pair, detach_object)
 from aladdin_sega.machine import Machine
 from aladdin_sega.profile import DEFAULT_ROM, FRAME_TICKS, read_rom
 from aladdin_sega.receipt import execution_receipt
@@ -69,7 +70,8 @@ def follow_original_boundaries(machine, instructions=100):
 
 
 def run_witness(*, candidate_name, recording, rom_path, output):
-    entry_pc = {"leaf": LEAF_ENTRY, "composed": CALLER_ENTRY}[candidate_name]
+    entry_pc = {"leaf": LEAF_ENTRY, "pair": PAIR_ENTRY, "composed": CALLER_ENTRY}[candidate_name]
+    recover = {"leaf": clear_auxiliary_buffer, "pair": clear_object_pair, "composed": detach_object}[candidate_name]
     output.mkdir(parents=True, exist_ok=True)
     rom, replay_bytes = read_rom(rom_path), artifacts.read_bounded(recording)
     replay_digest = digest(replay_bytes)
@@ -87,7 +89,7 @@ def run_witness(*, candidate_name, recording, rom_path, output):
         gate_archive = artifacts.snapshot_bytes(original)
         (output / "gate.alsnap").write_bytes(gate_archive)
         short = artifacts.Recorder(original, origin="synthetic", reset_provenance="recovery-gate-witness")
-        plan = (clear_auxiliary_buffer if candidate_name == "leaf" else detach_object)(original, entry_registers)
+        plan = recover(original, entry_registers)
         original.gates([entry_pc, plan.registers["pc"]])
         original.gate(entry_pc, bypass_once=True)
         if original.run(instructions=1000) != "gate":
@@ -110,8 +112,7 @@ def run_witness(*, candidate_name, recording, rom_path, output):
         replacement.gates([entry_pc])
         if replacement.run(instructions=1) != "gate":
             raise RuntimeError("restored stopped state did not re-arm its candidate gate")
-        replacement_plan = (clear_auxiliary_buffer if candidate_name == "leaf" else detach_object)(
-            replacement, replacement.registers())
+        replacement_plan = recover(replacement, replacement.registers())
         if replacement_plan != plan:
             raise RuntimeError("restored stopped state produced a different recovery plan")
         if not replacement.atomic(target=replacement.info["tick"] + 1_000_000,
@@ -157,7 +158,7 @@ def run_witness(*, candidate_name, recording, rom_path, output):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--candidate", choices=("leaf", "composed"), default="leaf")
+    parser.add_argument("--candidate", choices=("leaf", "pair", "composed"), default="leaf")
     parser.add_argument("--recording", type=Path, default=DEFAULT_RECORDING)
     parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / "recovery-witness")

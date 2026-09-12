@@ -2,8 +2,8 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
-from .recovered import (AtomicPlan, UnsupportedCandidate, LegacyExit, LEAF_ENTRY, CALLER_ENTRY,
-                        ROM_SHA256, clear_auxiliary_buffer, detach_object)
+from .recovered import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY, CALLER_ENTRY,
+                        ROM_SHA256, clear_auxiliary_buffer, clear_object_pair, detach_object)
 
 
 @dataclass
@@ -17,12 +17,12 @@ class Candidate:
     name: str = "leaf"
     stats: dict[str, int | dict[str, int]] = field(default_factory=lambda: {
         "gates": 0, "candidate_hits": 0, "fallbacks": 0,
-        "leaf_hits": 0, "caller_hits": 0, "direct_python_calls": 0,
+        "leaf_hits": 0, "pair_hits": 0, "caller_hits": 0, "direct_python_calls": 0,
         "replaced_m68k_instructions": 0, "charged_m68k_cycles": 0, "fallback_reasons": {},
     })
 
     _names = {
-        "leaf", "composed",
+        "leaf", "pair", "composed",
         "mutant-result", "mutant-continuation", "mutant-timing",
     }
 
@@ -43,7 +43,9 @@ class Candidate:
     def gate_pcs(self) -> tuple[int, ...]:
         # The composed form reaches the leaf directly inside the caller.  A
         # separate leaf gate stays armed for other callers in the same replay.
-        return (CALLER_ENTRY, LEAF_ENTRY) if self.is_composed else (LEAF_ENTRY,)
+        if self.is_composed:
+            return (CALLER_ENTRY, PAIR_ENTRY, LEAF_ENTRY)
+        return (PAIR_ENTRY,) if self.name == "pair" else (LEAF_ENTRY,)
 
     def arm(self, machine) -> None:
         if machine.rom_sha256 != ROM_SHA256:
@@ -69,6 +71,8 @@ class Candidate:
             registers = machine.registers()
             if entry == CALLER_ENTRY and self.is_composed:
                 plan = detach_object(machine, registers)
+            elif entry == PAIR_ENTRY:
+                plan = clear_object_pair(machine, registers)
             elif entry == LEAF_ENTRY:
                 plan = clear_auxiliary_buffer(machine, registers)
             else:
@@ -83,8 +87,7 @@ class Candidate:
                 target=target,
             )
         except UnsupportedCandidate as error:
-            fallback_reason = (f"legacy 0x{error.target:06X}: {error}" if isinstance(error, LegacyExit)
-                               else f"unsupported domain: {error}")
+            fallback_reason = f"unsupported domain: {error}"
             accepted = False
         if accepted:
             self.stats["candidate_hits"] += 1
@@ -92,11 +95,11 @@ class Candidate:
             self.stats["charged_m68k_cycles"] += plan.cycles
             if entry == LEAF_ENTRY:
                 self.stats["leaf_hits"] += 1
+            elif entry == PAIR_ENTRY:
+                self.stats["pair_hits"] += 1
             else:
                 self.stats["caller_hits"] += 1
-                # The caller plan evaluates the selected leaf directly rather
-                # than making a second native gate round-trip.
-                self.stats["direct_python_calls"] += 1
+            self.stats["direct_python_calls"] += plan.direct_calls
             return True
         # Atomic admission is specified to leave state unchanged on refusal.
         # Bypass exactly the stopped opcode; the remaining original body is

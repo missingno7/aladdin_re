@@ -5,6 +5,49 @@ Aladdin source, dispatch, artifacts and verification; a small machine API hides
 retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay.
 
+## Object-pair recovery (0.3.0)
+
+Recovered `0x1ABE6E` as `clear_object_pair()` and composed it into both remaining
+branches of `detach_object()`. All three detach branches now have Python bodies
+within the guarded RAM domain. The pair directly calls the existing buffer clear
+once or twice, retaining exact stack writes, register/CCR results, instruction
+counts, timing and return behavior. The unused `LegacyExit` marker is removed.
+Odd word/long operands now fall back before admission; odd byte buffers remain
+supported. RTS masks return PCs to 24 bits, including the overwritten detach
+return. Native sources, machine-state and artifact contracts are unchanged.
+
+**136 Python tests pass**, including 48 differential cases executing the verbatim
+ROM bodies with synthetic initial state. They cover every detach branch, null
+and linked objects, null and maximum-length buffers, flags, return masking and
+100-instruction continuation. Alias guards and scheduler fallback are also tested.
+The architecture boundary check passes. Existing wrong-result, continuation and
+timing controls still fail as intended. Editing the Python buffer clear changes
+PASS to DIVERGENCE in 0.59 seconds with no build/install and the unchanged source
+DLL hash `e801a550885dc598c2a5b84941b6c92c803267c4e49ef4b57660163c251b430a`.
+
+The original user replay reaches the pair 104 times: 101 single-object and three
+linked-object paths, all with non-null buffers. All 583 detach entries still take
+the zero/bit-clear route. The newly completed detach branches are therefore
+synthetic-test coverage, not recorded gameplay coverage. The first pair entry
+passes full state/frame/PCM comparison, snapshot restoration, a 100-instruction
+continuation and fresh-process replay of its derived short witness.
+
+Source-tree and installed 0.3.0 composed replay comparisons pass all **225 ordered
+observations**, terminal state/frame and whole-run PCM. Counts are 581 caller,
+101 pair and 355 leaf replacements, with 12 scheduler fallbacks and no domain
+fallbacks. This replaces 28,099 M68000 instructions, 520 more than before, and
+performs 685 nested Python calls, up 104. Total gates remain 1,049. This remains
+about 0.0200% of the modeled instructions; no performance gain is claimed.
+The installed pair-only short comparison also passes, and the player resumes
+the post-replacement snapshot for 60 frames with dummy SDL devices and zero
+audio underruns. This is an integration smoke check, not subjective listening.
+
+Reports are under `artifacts/pair-recovery/`: `coverage.json` and its measurement
+script; `full-composed/comparison.json`; `installed-full/comparison.json`;
+`pair-witness-v030/report.json` with portable gate/continuation snapshots and
+short replay; `negative-controls.json`; and `edit-loop/result.json`.
+See [recovery-first.md](recovery-first.md) for exact domains and cycle formulas.
+
 ## Diagnostic follow-up (0.2.1)
 
 `compare --diagnostics` now captures terminal/failure PC, SR, all M68000 registers
@@ -166,15 +209,18 @@ The [current architecture review](architecture-review.md) rechecked the actual
 compiler graph and measured restore, short verification and full replay without
 changing runtime code. The boundaries are proportionate to this game, but the
 leaf/composed experiment is too small to demonstrate sustained scaffolding
-convergence. `LegacyExit` is whole-entry fallback, not a Python/legacy/Python
-continuation. The failing-witness register/RAM diagnostic follow-up above implements that
+convergence. Its former `LegacyExit` was whole-entry fallback, not a Python/legacy/Python
+continuation; 0.3.0 removes it after recovering that dependency. The failing-witness register/RAM diagnostic follow-up above implements that
 review priority; a new engine, emitter or generic continuation registry is not justified.
 
 ## Next bounded milestone
 
-Recover the adjacent script dependency at the explicit `0x1ABE6E` seam, qualify
-its actual return behavior, and compose it into the open region. Use focused
+Trace the callers of the newly recovered pair and select the next bounded,
+frequently exercised object-lifecycle routine. The first real pair witness
+returns to `0x1AE964`, providing a concrete starting point for that trace; the
+containing routine and its wider domain still need inspection. Preserve the
+distinction between recorded paths and synthetic branch tests. Use focused
 witnesses during editing and the full replay as the integration gate. Absorb
-additional board/scheduler/sound glue only when that recovery exposes concrete
+additional board/scheduler/sound glue only when recovery exposes concrete
 friction. No Linux build or speculative CPU rewrite is required. Public combined
 source/binary distribution remains unresolved; ROMs and user artifacts stay local.

@@ -143,9 +143,9 @@ capabilities, iteration cost and deletion opportunities. The
 [component ledger](docs/component-migration.md) records the actual compiler
 closure, remaining donor edges, migration classes and removal triggers.
 
-Edit `src/aladdin_sega/recovered.py` for the buffer clear at `0x1AE372` and its
-open detach region at `0x1AD0FC`. The latter composes the recovered clear directly
-and names its unresolved legacy branch. Gate policy and mutants live separately
+Edit `src/aladdin_sega/recovered.py` for the buffer clear at `0x1AE372`, object-pair
+clear at `0x1ABE6E`, and detach region at `0x1AD0FC`. Detach now composes both
+clear paths directly. Gate policy and mutants live separately
 in `recovery.py`. See [recovery-first.md](docs/recovery-first.md) for domains,
 timing, continuation and reproducible short witnesses.
 
@@ -171,7 +171,7 @@ No native snapshot fields are decoded in Python. Default comparisons retain thei
 existing checkpoint/hash behavior and do not write these extra captures.
 
 `candidate_stats.fallback_reasons` distinguishes scheduler admission refusal,
-unsupported data domains and explicit legacy exits. Replay is always headless,
+unsupported data domains. Replay is always headless,
 snapshot checks always use fresh processes, and play always runs the original
 mode; the old no-op `--headless`, `--fresh-process` and `--mode` flags are removed.
 

@@ -1,4 +1,4 @@
-# First recovery candidate: shared clear and detach caller
+# Recovered object cleanup: buffer, object pair and detach caller
 
 The first semantic candidate is the shared clear routine at `0x1AE372` through
 `0x1AE39E` in the USA ROM with SHA-256
@@ -15,7 +15,8 @@ Its loop entry is `0x1AE394`; its restore/return epilogue starts at
 `0x1AE39A`.  The bounded domain requires all dynamic operands to be canonical,
 non-wrapping work RAM spans and requires the record, buffer and guest stack to
 be disjoint.  Those are admission guards, not claims that the original never
-permits aliases.
+permits aliases. Word/long operands and the guest stack must be even-aligned;
+byte buffers may start on odd addresses. RTS masks the popped return to 24 bits.
 
 At entry it saves `A6` as a long and `D0.W` as a word on the guest stack.  It
 loads the byte count from `A1+0x29` and the buffer pointer from `A1+0x2A`.
@@ -40,28 +41,64 @@ record at `*(A1+0x3E)`, then overwrites its **outer** return slot with the long
 at `0xFF7D9E` before RTS.  That overwritten return is the caller's actual
 continuation; a host-language return is not equivalent.
 
-The composed candidate owns only that observed zero/bit-clear caller route.
-It falls back before any write for a nonzero script byte, a set bit, a
-noncanonical/overlapping RAM span, or atomic scheduler refusal.  It calls the
-Python leaf calculation directly inside its staged atomic plan.  With a null
+The composed candidate owns all three caller branches within its guarded RAM
+domain. On the zero/bit-clear route it calls the Python leaf calculation
+directly inside its staged atomic plan. With a null
 linked record, its total is `80 + leaf_cycles + 70`; with a non-null linked
 record, `80 + leaf_cycles + 152`.  Its instruction total is respectively
 `7 + leaf_instructions + 4` or `7 + leaf_instructions + 9`.
-Its execution receipt separately reports admitted leaf and caller hits,
-direct Python leaf calculations made by caller composition, replaced M68000
+Its execution receipt separately reports admitted leaf, pair and caller hits,
+direct Python calls within each admitted composition, replaced M68000
 instructions, and charged M68000 cycles.  A refused plan is counted as a
 fallback and the original resumes at its stopped opcode.
 
-The implementation now lives in `src/aladdin_sega/recovered.py` as
-`clear_auxiliary_buffer()` and `detach_object()`. The shared clear calculation
-is a direct Python call. `LegacyExit(0x1ABE6E, reason)` makes the unresolved
-script branch explicit; dispatch resumes original execution from the unchanged
-entry. This seam is domain-tested, but the recorded scenario takes the direct
-branch. `LegacyExit.target` is a diagnostic label: dispatch does not call that
-address and return to Python. It bypasses one opcode at the original caller
-entry and leaves the rest to original execution. This is an open domain with
-whole-entry fallback, not yet a resumable open carrier. No suspended Python
-stack or second replay engine is introduced.
+The implementation lives in `src/aladdin_sega/recovered.py` as
+`clear_auxiliary_buffer()`, `clear_object_pair()` and `detach_object()`.
+Unsupported operands, aliases and scheduler refusal still fall back from the
+unchanged entry. The previous `LegacyExit` marker is removed because its only
+dependency is now recovered. No suspended Python stack or second machine is
+introduced; each admitted activation completes before returning to dispatch.
+
+## Object-pair clear and completed detach branches (0.3.0)
+
+`0x1ABE6E` through `0x1ABE88` is this 28-byte region in the same verified ROM:
+
+```text
+42 11 61 00 25 00 4A A9 00 3E 67 0E 2F 09
+22 69 00 3E 42 11 61 00 24 EE 22 5F 4E 75
+```
+
+It clears `*(A1)` and directly calls the buffer clear. If the long at `A1+62`
+is nonzero, it saves A1, clears the linked object's first byte and buffer,
+then restores A1. It preserves the link fields and flags in both records.
+The primary record, linked record, buffers and entire nested stack must be
+disjoint. Both BSR return addresses and the saved A1/A6/D0 bytes remain in
+RAM after their frames are popped and are included in the staged writes.
+
+For a null link the pair costs `72 + first_leaf_cycles` and
+`5 + first_leaf_instructions`; the final flags come from `TST.L` of zero.
+For a linked object it costs `140 + first_leaf_cycles + second_leaf_cycles`
+and `10 + first_leaf_instructions + second_leaf_instructions`; final flags
+come from the second leaf's restored D0.W. A1 and D0 are preserved, A7
+advances four bytes, and RTS uses the actual guest return slot.
+
+Detach calls this pair routine when its script byte is nonzero or bit 2 at
+`A1+60` is set. A nonzero byte costs `46 + pair_cycles + 54` and
+`4 + pair_instructions + 3`; the zero/set-bit route costs
+`70 + pair_cycles + 54` and `6 + pair_instructions + 3`. Both still overwrite
+the outer return with `0xFF7D9E`. The final MOVE.L flags see the full 32-bit
+override; RTS masks only the resulting PC. Composition also guards the script
+byte, return override and outer return against all nested writes.
+
+The `pair` replay candidate gates just the pair entry. `composed` gates all
+three entries, so internal calls become direct Python calculations. The 48
+native differential cases in `tests/test_recovery.py` execute the verbatim
+ROM bodies with synthetic initial state, covering all detach branches,
+null/non-null links and buffers, maximum 256-byte loops, odd byte buffers,
+D0 width, X/N/Z flags, and high-byte return masking. They compare full native
+state and PCM immediately and after a 100-instruction continuation. Separate
+tests require alias/alignment refusal before atomic submission. These fixtures
+do not initialize video; rendering is checked by the real-recording witnesses.
 
 ## User-recording witness
 
@@ -84,7 +121,7 @@ and 20 ordered byte writes. This is a bounded activation witness, not a
 whole-replay equivalence result.
 
 `scripts/recovery_witness.py` makes this qualification reproducible for
-`--candidate leaf` or `--candidate composed`. It writes the parked gate
+`--candidate leaf`, `--candidate pair` or `--candidate composed`. It writes the parked gate
 snapshot, a zero-input replay from that safe boundary through the region and
 100-instruction tail, a post-replacement snapshot, and a receipt. For each
 form it compares the selected original region with the admitted replacement,
@@ -118,10 +155,22 @@ domain needs its own measured observer policy.
 
 ## Integrated qualification
 
-The full user replay passes with 1,040 admitted leaf calls and seven timing
-fallbacks. Composed mode passes with 581 caller activations, 459 other leaf
-activations and nine fallbacks, eliminating 581 internal guest call transitions.
-Both compare all 225 ordered observations and whole-run PCM; composed mode also
-passes using the installed package. Wrong-result, wrong-continuation and
-wrong-timing candidates are rejected under the same ROM/profile. See
+Before pair recovery, composed mode passed with 581 caller activations, 459
+other leaf activations and nine scheduler fallbacks. With pair recovery it
+passes with 581 caller, 101 pair and 355 leaf activations, plus 12 scheduler
+fallbacks. All 225 observations, terminal state/frame and whole-run PCM match.
+It replaces 28,099 of 140,704,253 M68000 instructions (about 0.0200%), up 520.
+There are 685 direct nested Python calls, up 104; total observed gates remain
+1,049 because the new pair gates replace internal leaf gates. This is a small
+increase in recovered game behavior, not a demonstrated frame-rate improvement.
+
+The original recording enters the pair 104 times: 101 single-object and three
+linked-object paths. Every visited buffer is non-null. It never exercises the
+nonzero or set-bit detach routes, which remain covered by synthetic ROM tests.
+The first pair activation at tick 1,066,357,857 passes immediate full-state,
+frame and PCM equality, restored continuation, and fresh-process short replay.
+Reports and its portable snapshots/replay live under
+`artifacts/pair-recovery/`; `coverage.json` separately records original entry
+and branch counts. Wrong-result, wrong-continuation and wrong-timing controls
+are rejected under the same ROM/profile. See
 [STATUS.md](STATUS.md) for reports and the distinction from hardware validation.
