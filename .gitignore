@@ -1,0 +1,13 @@
+/assets/*.bin
+/assets/*.md
+/assets/*.gen
+/assets/*.smd
+/.venv/
+/build/
+/dist/
+/artifacts/
+/recordings/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
