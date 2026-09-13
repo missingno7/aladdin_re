@@ -51,6 +51,8 @@ SPAWN_DISPATCH_CALL_ENTRY = 0x1AE46C
 SPAWN_DISPATCH_CALL_LAST_PC = 0x1AE46E
 SPAWN_DISPATCH_WALKER_ENTRY = 0x1AE44A
 SPAWN_DISPATCH_WALKER_LAST_PC = 0x1AE47C
+SPAWN_ROW_DISPATCH_WALKER_ENTRY = 0x1AE4C6
+SPAWN_ROW_DISPATCH_WALKER_LAST_PC = 0x1AE4F6
 SPAWN_UPPER_VARIANT_CALLER_ENTRY = 0x1B7262
 SPAWN_UPPER_VARIANT_CALLER_LAST_PC = 0x1B728C
 SPAWN_UPPER_SCRIPTED_CALLER_ENTRY = 0x1B72D4
@@ -1035,13 +1037,15 @@ def spawn_upper_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPla
 
 
 
-def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
+def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> AtomicPlan:
     """Compose one admitted ``1AE46C`` callback and its MOVEM restore.
 
     Lookup and loop ownership remain native.  This narrow parent span starts
     after the dispatcher has saved D0-D7/A0-A6 and declines before JSR unless
     the observed A4 callback is one of the qualified spawn callers.
     """
+    call_entry, call_last_pc, resume_pc = ((0x1AE4E8, 0x1AE4EA, 0x1AE4EE) if row else
+                                           (SPAWN_DISPATCH_CALL_ENTRY, SPAWN_DISPATCH_CALL_LAST_PC, 0x1AE472))
     sp, target = registers['a7'], registers['a4'] & 0xFFFFFF
     if sp & 1:
         raise UnsupportedCandidate('unaligned spawn dispatcher call stack')
@@ -1075,9 +1079,9 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
                       (registers['a2'] + _signed_word(registers['d2'])) & 0xFFFFFF, 1),
                      ('spawn dispatcher pool', 0xFF7E82, 24 * 66),
                      *SPAWN_REGION_GLOBALS, *extra])
-    prefix = AtomicPlan(16, 1, _bytes(sp - 4, SPAWN_DISPATCH_CALL_LAST_PC, 4),
+    prefix = AtomicPlan(16, 1, _bytes(sp - 4, call_last_pc, 4),
                         {**registers, 'a7': sp - 4, 'pc': target},
-                        SPAWN_DISPATCH_CALL_ENTRY, direct_calls=1)
+                        call_entry, direct_calls=1)
     planner = dispatch_plan_view(machine, prefix)
     if target in SPAWN_PLAIN_CALLER_FACTS:
         callback = spawn_plain_caller(planner, prefix.registers, target)
@@ -1090,11 +1094,11 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
     restored = {name: _read(machine, sp + 4 * index, 4)
                 for index, name in enumerate(('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7',
                                                'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6'))}
-    final = {**restored, 'a7': sp + 60, 'pc': 0x1AE472, 'sr': callback.registers['sr']}
+    final = {**restored, 'a7': sp + 60, 'pc': resume_pc, 'sr': callback.registers['sr']}
     return AtomicPlan(prefix.cycles + callback.cycles + 132,
                       prefix.instructions + callback.instructions + 1,
                       tuple(dict((*prefix.writes, *callback.writes)).items()), final,
-                      SPAWN_DISPATCH_CALL_LAST_PC,
+                      call_last_pc,
                       prefix.direct_calls + callback.direct_calls)
 
 def spawn_upper_variant_caller(machine, registers: dict[str, int]) -> AtomicPlan:
@@ -1164,7 +1168,7 @@ def spawn_upper_scripted_caller(machine, registers: dict[str, int]) -> AtomicPla
                       prefix.direct_calls + selected.direct_calls)
 
 
-def spawn_dispatch_iteration(machine, registers: dict[str, int]) -> AtomicPlan:
+def spawn_dispatch_iteration(machine, registers: dict[str, int], *, row=False) -> AtomicPlan:
     """Recover one admitted ``1AE468`` callback iteration.
 
     The table lookup that selects ``A4`` and all later iterations remain
@@ -1178,26 +1182,30 @@ def spawn_dispatch_iteration(machine, registers: dict[str, int]) -> AtomicPlan:
              'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6')
     saved = tuple(byte for index, name in enumerate(names)
                   for byte in _bytes(sp - 60 + 4 * index, registers[name], 4))
+    iteration_entry, iteration_last_pc = ((0x1AE4E4, 0x1AE4F2) if row else
+                                           (SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_DISPATCH_ITERATION_LAST_PC))
     prefix = AtomicPlan(128, 1, saved,
-                        {**registers, 'a7': sp - 60, 'pc': SPAWN_DISPATCH_CALL_ENTRY},
-                        SPAWN_DISPATCH_ITERATION_ENTRY)
-    callback = spawn_dispatch_call(dispatch_plan_view(machine, prefix), prefix.registers)
+                        {**registers, 'a7': sp - 60,
+                         'pc': 0x1AE4E8 if row else SPAWN_DISPATCH_CALL_ENTRY}, iteration_entry)
+    callback = spawn_dispatch_call(dispatch_plan_view(machine, prefix), prefix.registers, row=row)
     final = dict(callback.registers)
     d4, d5, d6 = (final[name] for name in ('d4', 'd5', 'd6'))
-    final['a0'] = (final['a0'] + _signed_word(d5)) & 0xFFFFFFFF
+    if not row:
+        final['a0'] = (final['a0'] + _signed_word(d5)) & 0xFFFFFFFF
     final['d6'] = (d6 & 0xFFFF0000) | ((d6 + 0x10) & 0xFFFF)
     final['d4'] = (d4 & 0xFFFF0000) | ((d4 - 1) & 0xFFFF)
     final['sr'] = _add_sr(final['sr'], d6 & 0xFFFF, 0x10, 2)
-    tail_cycles = 30 if (d4 & 0xFFFF) == 0 else 26
-    final['pc'] = 0x1AE47C if (d4 & 0xFFFF) == 0 else 0x1AE44A
+    tail_cycles = (22 if (d4 & 0xFFFF) == 0 else 18) if row else (30 if (d4 & 0xFFFF) == 0 else 26)
+    final['pc'] = ((SPAWN_ROW_DISPATCH_WALKER_LAST_PC if (d4 & 0xFFFF) == 0 else SPAWN_ROW_DISPATCH_WALKER_ENTRY)
+                   if row else (0x1AE47C if (d4 & 0xFFFF) == 0 else 0x1AE44A))
     return AtomicPlan(prefix.cycles + callback.cycles + tail_cycles,
-                      prefix.instructions + callback.instructions + 3,
+                      prefix.instructions + callback.instructions + (2 if row else 3),
                       tuple(dict((*prefix.writes, *callback.writes)).items()), final,
-                      SPAWN_DISPATCH_ITERATION_LAST_PC,
+                      iteration_last_pc,
                       prefix.direct_calls + callback.direct_calls)
 
 
-def spawn_dispatch_walker(machine, registers: dict[str, int]) -> AtomicPlan:
+def spawn_dispatch_walker(machine, registers: dict[str, int], *, row=False) -> AtomicPlan:
     """Recover the bounded ``1AE44A..1AE47C`` spawn-table walker.
 
     Setup through ``1AE446`` remains native. Starting at the loop head, this
@@ -1207,10 +1215,12 @@ def spawn_dispatch_walker(machine, registers: dict[str, int]) -> AtomicPlan:
     native instruction stream to retain that slot.
     """
     sp, a1, a2, d4, d5 = (registers[name] for name in ('a7', 'a1', 'a2', 'd4', 'd5'))
+    walker_entry, walker_last_pc = ((SPAWN_ROW_DISPATCH_WALKER_ENTRY, SPAWN_ROW_DISPATCH_WALKER_LAST_PC)
+                                    if row else (SPAWN_DISPATCH_WALKER_ENTRY, SPAWN_DISPATCH_WALKER_LAST_PC))
     count = (d4 & 0xFFFF) + 1
     if sp & 1:
         raise UnsupportedCandidate('unaligned spawn dispatcher walker stack')
-    if count > 16:
+    if count > (23 if row else 16):
         raise UnsupportedCandidate('spawn dispatcher walker count is outside one pass')
     if a1 != 0x004154 or a2 != 0xFFAE87:
         raise UnsupportedCandidate('spawn dispatcher walker table identity')
@@ -1218,13 +1228,12 @@ def spawn_dispatch_walker(machine, registers: dict[str, int]) -> AtomicPlan:
     # Validate every potential slot before planning. D5 is a signed original
     # cursor stride; the running plan supplies all later alias-visible reads.
     cursor = registers['a0'] & 0xFFFFFFFF
-    stride = _signed_word(d5)
+    stride = 2 if row else _signed_word(d5)
     for _ in range(count):
         _address(cursor, 2)
         cursor = (cursor + stride) & 0xFFFFFFFF
 
-    current = AtomicPlan(0, 0, (), dict(registers),
-                         SPAWN_DISPATCH_WALKER_ENTRY)
+    current = AtomicPlan(0, 0, (), dict(registers), walker_entry)
     for _ in range(count):
         view = dispatch_plan_view(machine, current)
         state = dict(current.registers)
@@ -1245,21 +1254,21 @@ def spawn_dispatch_walker(machine, registers: dict[str, int]) -> AtomicPlan:
                      'd6': (d6 & 0xFFFF0000) | ((d6 + 0x10) & 0xFFFF),
                      'd4': (state['d4'] & 0xFFFF0000) | ((remaining - 1) & 0xFFFF),
                      'sr': _add_sr(state['sr'], d6 & 0xFFFF, 0x10, 2),
-                     'pc': SPAWN_DISPATCH_WALKER_LAST_PC if final_iteration else
-                           SPAWN_DISPATCH_WALKER_ENTRY}
-            step = AtomicPlan(70 if final_iteration else 66, 7, (), final,
-                              SPAWN_DISPATCH_ITERATION_LAST_PC, direct_calls=1)
+                     'pc': walker_last_pc if final_iteration else walker_entry}
+            step = AtomicPlan((62 if final_iteration else 58) if row else (70 if final_iteration else 66),
+                              6 if row else 7, (), final,
+                              0x1AE4F2 if row else SPAWN_DISPATCH_ITERATION_LAST_PC, direct_calls=1)
         else:
             target = int.from_bytes(view.peek_rom(a1 + flag * 4, 4), 'big') & 0xFFFFFF
             d1 = (state['d1'] & 0xFFFF0000) | ((flag * 4) & 0xFFFF)
-            selected = AtomicPlan(92, 10, _bytes(0xFF7DB2, state['d6'], 2),
-                                  {**state, 'd1': d1, 'd2': d2,
+            selected = AtomicPlan(92, 10, _bytes(0xFF7DB0 if row else 0xFF7DB2, state['d6'], 2),
+                                  {**state, **({'a0': (cursor + 2) & 0xFFFFFFFF} if row else {}), 'd1': d1, 'd2': d2,
                                    'd3': (state['d3'] & 0xFFFFFF00) | flag,
-                                   'a4': target, 'pc': SPAWN_DISPATCH_ITERATION_ENTRY,
+                                   'a4': target, 'pc': 0x1AE4E4 if row else SPAWN_DISPATCH_ITERATION_ENTRY,
                                    'sr': _logic_sr(state['sr'] & ~0x10, state['d6'], 2)},
-                                  0x1AE462, direct_calls=1)
+                                  0x1AE4DE if row else 0x1AE462, direct_calls=1)
             callback = spawn_dispatch_iteration(dispatch_plan_view(view, selected),
-                                                selected.registers)
+                                                selected.registers, row=row)
             step = AtomicPlan(selected.cycles + callback.cycles,
                               selected.instructions + callback.instructions,
                               tuple(dict((*selected.writes, *callback.writes)).items()),
@@ -1272,13 +1281,18 @@ def spawn_dispatch_walker(machine, registers: dict[str, int]) -> AtomicPlan:
                              step.registers, step.last_pc,
                              current.direct_calls + step.direct_calls)
 
-    if current.registers['pc'] != SPAWN_DISPATCH_WALKER_LAST_PC:
+    if current.registers['pc'] != walker_last_pc:
         raise UnsupportedCandidate('spawn dispatcher walker did not reach its return')
     # The bounded product boundary is the original RTS instruction. It stays
     # native so the future-continuation witness also verifies its outer return.
     return AtomicPlan(current.cycles, current.instructions, current.writes,
-                      current.registers, SPAWN_DISPATCH_ITERATION_LAST_PC,
+                      current.registers, 0x1AE4F2 if row else SPAWN_DISPATCH_ITERATION_LAST_PC,
                       current.direct_calls)
+
+
+def spawn_row_dispatch_walker(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover the bounded 23-slot row dispatcher through the shared carrier."""
+    return spawn_dispatch_walker(machine, registers, row=True)
 
 def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,
                         return_site, last_pc, extra_writes=(), extra_spans=(),

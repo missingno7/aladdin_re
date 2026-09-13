@@ -6,7 +6,34 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
-## Remaining observed spawn callbacks
+## Shared column and row spawn walkers
+
+Production now owns the row loop `1AE4C6` through the boundary before RTS
+`1AE4F6`, for one to 23 remaining slots. It reuses the column call, iteration
+and walker bodies with explicit row facts: postincrement A0 before callback,
+X-offset write, guest PCs and loop timing. One entry gate is added; admission
+and fallback share the column handler. No new native or snapshot mechanism.
+
+Eight recorded row states pass strict outer, 150-instruction future and fresh
+restore checks. **1,199 tests pass** in 78.80 seconds. Portable tests cover counts, empty/multiple/unknown callbacks,
+32-bit cursor crossing, planned MOVEM aliases, mutants and deadline refusal.
+The oracle retains all production gates after fallback, including retries at
+later row heads. It does not suppress these retries to make a witness pass.
+
+Full **26,378-frame** cold history passes with zero restores. There are 619
+admitted row plans (not necessarily 619 complete 23-slot passes). Standalone
+spawn-caller activations fall 101 to 23 and allocator activations 17 to 2.
+Total candidate activations rise 5378 to 5904, and fallbacks 1010 to 1628;
+the entire added fallback count is scheduler refusal. Direct calls rise
+35762 to 49543, including slot selection. Internal callback boundaries shrink,
+but global execution crossings do not. Receipt: `artifacts/spawn-row/full/comparison.json`.
+
+The next setup frontier has four observed entries: `1AE3FC`, `1AE406`,
+`1AE47E`, `1AE488`. Their 586/1330/330/291 visits account for every recorded
+column/row pass. Eight prefix prototypes match exact original states and
+fresh continuation; setup is still native in production.
+
+## Remaining observed spawn callbacks (`186d56e`)
 
 The dispatcher now composes **37 targets**. Added successful type/script/mode
 suffixes for `1B723E`, `1B728E`, `1B72AE`, `1B70D4`, the `FFF12A`-guarded lower

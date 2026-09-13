@@ -17,8 +17,8 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         begin_contact_sibling_dispatch, begin_contact_sibling_wrapper_sound_seam,
                         finish_contact_sibling_wrapper_sound, begin_contact_sibling_dispatch_sound_seam,
                         begin_contact_sibling_sound_seam, finish_contact_sibling_sound,
-                        SPAWN_REGION_ENTRIES, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY, SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY, SPAWN_UPPER_SECONDARY_CALLER_ENTRY, SPAWN_UPPER_TERTIARY_CALLER_ENTRY, SPAWN_UPPER_TYPED_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_GUARD_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY, SPAWN_PRIMARY_GUARD_ENTRY, SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY, SPAWN_PRIMARY_INVERSE_GUARD_ENTRY, SPAWN_PRIMARY_MIXED_GUARD_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY, SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_GUARD_ENTRY, SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_DISPATCH_WALKER_ENTRY,
-                        spawn_region, spawn_reverse_caller, spawn_reverse_plain_caller, spawn_upper_plain_caller, spawn_upper_standard_caller, spawn_upper_secondary_caller, spawn_upper_tertiary_caller, spawn_upper_typed_caller, spawn_upper_caller, spawn_upper_guard_caller, spawn_primary_dispatch_caller, spawn_primary_guard_caller, spawn_lower_dispatch_caller, spawn_primary_double_guard_caller, spawn_primary_inverse_guard_caller, spawn_primary_mixed_guard_caller, spawn_upper_variant_caller, spawn_upper_scripted_caller, spawn_upper_dispatch_caller, spawn_upper_dispatch_guard_caller, spawn_dispatch_iteration, spawn_dispatch_walker)
+                        SPAWN_REGION_ENTRIES, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY, SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY, SPAWN_UPPER_SECONDARY_CALLER_ENTRY, SPAWN_UPPER_TERTIARY_CALLER_ENTRY, SPAWN_UPPER_TYPED_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_GUARD_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY, SPAWN_PRIMARY_GUARD_ENTRY, SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY, SPAWN_PRIMARY_INVERSE_GUARD_ENTRY, SPAWN_PRIMARY_MIXED_GUARD_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY, SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_GUARD_ENTRY, SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_DISPATCH_WALKER_ENTRY, SPAWN_ROW_DISPATCH_WALKER_ENTRY,
+                        spawn_region, spawn_reverse_caller, spawn_reverse_plain_caller, spawn_upper_plain_caller, spawn_upper_standard_caller, spawn_upper_secondary_caller, spawn_upper_tertiary_caller, spawn_upper_typed_caller, spawn_upper_caller, spawn_upper_guard_caller, spawn_primary_dispatch_caller, spawn_primary_guard_caller, spawn_lower_dispatch_caller, spawn_primary_double_guard_caller, spawn_primary_inverse_guard_caller, spawn_primary_mixed_guard_caller, spawn_upper_variant_caller, spawn_upper_scripted_caller, spawn_upper_dispatch_caller, spawn_upper_dispatch_guard_caller, spawn_dispatch_iteration, spawn_dispatch_walker, spawn_row_dispatch_walker)
 from .boundary import (SPAWN_UPPER_TYPED_SECONDARY_ENTRY, spawn_upper_typed_secondary_caller,
                        SPAWN_LOWER_RESET_ENTRY, SPAWN_LOWER_SCRIPTED_ENTRY,
                        spawn_lower_reset_caller, spawn_lower_scripted_caller)
@@ -41,7 +41,7 @@ class Candidate:
         "collection_dispatch_hits": 0,
         "contact_hits": 0,
         "contact_sibling_hits": 0,
-        "spawn_region_hits": 0, "spawn_caller_hits": 0, "spawn_walker_hits": 0,
+        "spawn_region_hits": 0, "spawn_caller_hits": 0, "spawn_walker_hits": 0, "spawn_row_walker_hits": 0,
         "replace_hits": 0, "counted_replace_hits": 0,
         "carrier_entries": 0, "carrier_completed": 0, "legacy_entries": 0, "legacy_returns": 0,
         "local_fallbacks": 0, "foreign_returns": 0, "legacy_deadline_fallbacks": 0,
@@ -89,7 +89,7 @@ class Candidate:
                                         COLLECTION_DISPATCH_ENTRY, CONTACT_ENTRY,
                                         CONTACT_SIBLING_ENTRY, CONTACT_SIBLING_WRAPPER,
                                         CONTACT_SIBLING_DIRECT, *COLLECTION_ROUTES,
-                                        0x1AF516, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY, SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY, SPAWN_UPPER_SECONDARY_CALLER_ENTRY, SPAWN_UPPER_TERTIARY_CALLER_ENTRY, SPAWN_UPPER_TYPED_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_GUARD_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY, SPAWN_PRIMARY_GUARD_ENTRY, SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY, SPAWN_PRIMARY_INVERSE_GUARD_ENTRY, SPAWN_PRIMARY_MIXED_GUARD_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY, SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_GUARD_ENTRY, SPAWN_DISPATCH_WALKER_ENTRY, SPAWN_DISPATCH_ITERATION_ENTRY,
+                                        0x1AF516, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY, SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY, SPAWN_UPPER_SECONDARY_CALLER_ENTRY, SPAWN_UPPER_TERTIARY_CALLER_ENTRY, SPAWN_UPPER_TYPED_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_GUARD_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY, SPAWN_PRIMARY_GUARD_ENTRY, SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY, SPAWN_PRIMARY_INVERSE_GUARD_ENTRY, SPAWN_PRIMARY_MIXED_GUARD_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY, SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_GUARD_ENTRY, SPAWN_DISPATCH_WALKER_ENTRY, SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_ROW_DISPATCH_WALKER_ENTRY,
                                         *SPAWN_REGION_ENTRIES, *base))) if self.is_lifecycle else base
         if self.is_composed:
             return (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
@@ -364,15 +364,19 @@ class Candidate:
             return True
         if self.is_lifecycle and entry in COLLECTION_ROUTES:
             return self._transition(machine, target, entry)
-        if self.is_lifecycle and entry == SPAWN_DISPATCH_WALKER_ENTRY:
+        if self.is_lifecycle and entry in (SPAWN_DISPATCH_WALKER_ENTRY, SPAWN_ROW_DISPATCH_WALKER_ENTRY):
             self.stats['gates'] += 1
+            row = entry == SPAWN_ROW_DISPATCH_WALKER_ENTRY
             try:
-                plan = self._mutate(spawn_dispatch_walker(machine, machine.registers()))
+                walker = spawn_row_dispatch_walker if row else spawn_dispatch_walker
+                plan = self._mutate(walker(machine, machine.registers()))
                 if not self._apply(machine, plan, target):
                     return self._fallback(machine, entry, 'scheduler admission')
             except UnsupportedCandidate as error:
                 return self._fallback(machine, entry, f'unsupported domain: {error}')
             self.stats['spawn_walker_hits'] += 1
+            if row:
+                self.stats['spawn_row_walker_hits'] += 1
             return True
         if self.is_lifecycle and entry == SPAWN_DISPATCH_ITERATION_ENTRY:
             self.stats['gates'] += 1

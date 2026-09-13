@@ -71,6 +71,34 @@ unresolved). This nine-target batch would close 14 of the 19 structurally;
 remaining observed callbacks are `1B70D4`, `1B71A0`, `1B72AE`. It is not yet a
 recovered row walker. Evidence: `artifacts/spawn-row-frontier/summary.json`.
 
+## Shared row walker
+
+The second real loop reuses the existing call/iteration/walker bodies with an
+explicit row option. Boundary +44/-30, recovery +10/-6; no new game semantics,
+native API, snapshot state or execution protocol. Row-specific manual facts are
+postincrement-before-call, X-offset store, PCs and the shorter loop tail.
+The dispatcher handler is shared rather than duplicated. This is connected
+ownership growth using existing game source, not a new collection of leaves.
+
+1,199 tests pass in 78.80s; eight recorded states pass strict outer/150-future/fresh checks. Review removed
+an oracle-only row-gate suppression after fallback; tests now prove the actual
+two-refusal/known-suffix retry route. Deadline refusal preserves only one
+original instruction's effects. The witness mechanics are reused; new manual
+test mistakes and their correction remain part of recovery cost.
+
+Full 26,378-frame comparison passes with zero restores. 619 row plans admitted;
+standalone caller hits 101 to 23, allocator hits 17 to 2. Total candidate hits
+5378 to 5904, fallbacks 1010 to 1628 (all +618 scheduler admission), direct calls
+35762 to 49543, replaced instructions 341397 to 424317. These results demonstrate
+internal composition, not falling global crossings or 619 full-pass admissions.
+Receipt: `artifacts/spawn-row/full/comparison.json`.
+
+Setup capture now includes the initially missed `1AE3FC`: counts 586/1330/330/291
+for `1AE3FC/1AE406/1AE47E/1AE488`, matching all 2537 recorded walker passes.
+Eight setup-only prototype states pass exact outer/fresh-future checks, with
+178/168/162/152 original cycles and 13/12/12/11 instructions respectively.
+Evidence under `artifacts/spawn-setup-frontier`; no production setup ownership yet.
+
 ## Original frontier evidence
 
 The subsequent six-callback batch closes the remaining observed column/row

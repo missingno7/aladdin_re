@@ -19,6 +19,8 @@ from aladdin_sega.profile import DEFAULT_ROM, FRAME_TICKS, read_rom
 from aladdin_sega.recovery import Candidate
 from aladdin_sega.receipt import execution_receipt
 from aladdin_sega.boundary import (SPAWN_REGION_ENTRIES, SPAWN_DISPATCH_ITERATION_ENTRY,
+                                   SPAWN_ROW_DISPATCH_WALKER_ENTRY,
+                                   SPAWN_ROW_DISPATCH_WALKER_LAST_PC,
                                    SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
                                    SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY,
                                    SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY,
@@ -168,7 +170,8 @@ def dispatcher_fixture(target: int, *, free: int | None = 0, incoming_x: bool = 
 
 
 def walker_fixture(fixture: str | Path | bytes, *, registers: dict[str, int] | None = None,
-                   writes: tuple[tuple[int, int], ...] = ()):
+                   writes: tuple[tuple[int, int], ...] = (),
+                   entry: int = WALKER_ENTRY):
     """Restore a captured walker entry, with optional test-only overrides."""
     machine = Machine(read_rom(DEFAULT_ROM))
     if isinstance(fixture, (bytes, bytearray)):
@@ -178,11 +181,11 @@ def walker_fixture(fixture: str | Path | bytes, *, registers: dict[str, int] | N
         if path.suffix != ".state":
             path = path.with_suffix(".state")
         machine.restore(path.read_bytes())
-    if machine.info["pc"] != WALKER_ENTRY:
+    if machine.info["pc"] != entry:
         machine.close()
-        raise ValueError(f"walker fixture is not parked at {WALKER_ENTRY:06X}")
+        raise ValueError(f"walker fixture is not parked at {entry:06X}")
     if registers or writes:
-        machine.gates([WALKER_ENTRY])
+        machine.gates([entry])
         if machine.run(instructions=1) != "gate":
             machine.close()
             raise RuntimeError("could not park walker fixture for override")
@@ -190,7 +193,7 @@ def walker_fixture(fixture: str | Path | bytes, *, registers: dict[str, int] | N
         if registers:
             updated.update(registers)
         if not machine.atomic(target=machine.info["tick"] + 1_000_000,
-                              cycles=1, instructions=1, last_pc=WALKER_ENTRY,
+                              cycles=1, instructions=1, last_pc=entry,
                               writes=list(writes), registers=updated):
             machine.close()
             raise RuntimeError("walker fixture override was not accepted")
@@ -211,7 +214,7 @@ def constructed_walker_state(*, count: int = 16,
                              stride: int = 0x258, incoming_x: bool = False,
                              exhausted: bool = False, cursor: int = 0xFF6000,
                              slot_indices: tuple[int, ...] | None = None,
-                             initial_d0: int = 0) -> bytes:
+                             initial_d0: int = 0, row: bool = False) -> bytes:
     """Build a small walker state from the normal cold oracle setup.
 
     The table identity remains the real ROM table (A1=4154, A2=FFAE87). Every
@@ -220,8 +223,9 @@ def constructed_walker_state(*, count: int = 16,
     independent of recorded artifact files while retaining the normal cold
     setup path used by the other oracles.
     """
-    if not 1 <= count <= 16:
-        raise ValueError("walker count must be in one..sixteen")
+    maximum = 23 if row else 16
+    if not 1 <= count <= maximum:
+        raise ValueError(f"walker count must be in one..{maximum}")
     if callbacks is None:
         callbacks = (None,) * count
     if len(callbacks) < count:
@@ -230,9 +234,10 @@ def constructed_walker_state(*, count: int = 16,
         slot_indices = tuple(0x100 + index for index in range(count))
     if len(slot_indices) < count:
         raise ValueError("slot index sequence is shorter than walker count")
-    machine = cold_fixture(0x1B5266, free=0, pc_entry=WALKER_ENTRY)
+    entry = SPAWN_ROW_DISPATCH_WALKER_ENTRY if row else WALKER_ENTRY
+    machine = cold_fixture(0x1B5266, free=0, pc_entry=entry)
     try:
-        machine.gates([WALKER_ENTRY])
+        machine.gates([entry])
         if machine.run(instructions=1) != "gate":
             raise RuntimeError("could not park constructed walker")
         registers = machine.registers()
@@ -243,7 +248,7 @@ def constructed_walker_state(*, count: int = 16,
                           (0x10 if incoming_x else 0)})
         writes_list = []
         for index in range(count):
-            slot_address = (cursor + stride * index) & 0xFFFFFFFF
+            slot_address = (cursor + (2 if row else stride) * index) & 0xFFFFFFFF
             slot_index = slot_indices[index]
             writes_list.extend(write_word(slot_address, slot_index << 1))
             callback = callbacks[index]
@@ -258,12 +263,26 @@ def constructed_walker_state(*, count: int = 16,
                                     1 if exhausted else 0))
         writes = tuple(writes_list)
         if not machine.atomic(target=machine.info["tick"] + 1_000_000,
-                              cycles=1, instructions=1, last_pc=WALKER_ENTRY,
+                              cycles=1, instructions=1, last_pc=entry,
                               writes=list(writes), registers=registers):
             raise RuntimeError("constructed walker setup was not accepted")
         return machine.snapshot()
     finally:
         machine.close()
+
+
+def constructed_row_walker_state(*, count: int = 23,
+                                 callbacks: tuple[int | None, ...] | None = None,
+                                 incoming_x: bool = False, exhausted: bool = False,
+                                 cursor: int = 0xFF6000,
+                                 slot_indices: tuple[int, ...] | None = None,
+                                 initial_d0: int = 0) -> bytes:
+    """Build a portable 23-slot row-walker fixture from explicit RAM inputs."""
+    return constructed_walker_state(count=count, callbacks=callbacks,
+                                    stride=2, incoming_x=incoming_x,
+                                    exhausted=exhausted, cursor=cursor,
+                                    slot_indices=slot_indices,
+                                    initial_d0=initial_d0, row=True)
 
 
 def observable(machine):
@@ -405,9 +424,12 @@ def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
                    register_overrides: dict[str, int] | None = None,
                    writes: tuple[tuple[int, int], ...] = (),
                    future_instructions: int = 150, include_raw: bool = False,
-                   stop_after_first: bool = False):
+                   stop_after_first: bool = False, row: bool = False):
     """Run a complete captured walker through its outer exit boundary."""
-    machine = walker_fixture(fixture, registers=register_overrides, writes=writes)
+    entry = SPAWN_ROW_DISPATCH_WALKER_ENTRY if row else WALKER_ENTRY
+    exit_pc = SPAWN_ROW_DISPATCH_WALKER_LAST_PC if row else WALKER_EXIT
+    machine = walker_fixture(fixture, registers=register_overrides, writes=writes,
+                             entry=entry)
     try:
         if isinstance(fixture, (bytes, bytearray)):
             metadata = {}
@@ -416,21 +438,23 @@ def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
             if metadata_path.suffix != ".json":
                 metadata_path = metadata_path.with_suffix(".json")
             metadata = json.loads(metadata_path.read_text())
-            if metadata.get("entry") != WALKER_ENTRY or metadata.get("exit") != WALKER_EXIT:
+            if metadata.get("entry") != entry or metadata.get("exit") != exit_pc:
                 raise ValueError("walker fixture metadata has an unexpected boundary")
-        machine.gates([WALKER_ENTRY, WALKER_EXIT])
+        machine.gates([entry, exit_pc])
         recovery = Candidate(candidate) if candidate else None
         if recovery:
             recovery.arm(machine)
-            machine.gates(list(dict.fromkeys((*recovery.gate_pcs, WALKER_ENTRY, WALKER_EXIT))))
+            machine.gates(list(dict.fromkeys((*recovery.gate_pcs, entry, exit_pc))))
         iterations = 0
-        while iterations < 32:
+        # The native row performs one entry per slot and reaches the outer RTS
+        # only on the following stop; allow that final exit observation.
+        while iterations < (24 if row else 32):
             if machine.run(instructions=100_000) != "gate":
                 break
             pc = machine.info["pc"]
-            if pc == WALKER_EXIT:
+            if pc == exit_pc:
                 break
-            if pc != WALKER_ENTRY:
+            if pc != entry:
                 if recovery:
                     recovery.on_gate(machine, machine.info["tick"] + 1_000_000)
                 else:
@@ -450,15 +474,14 @@ def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
                         return at_outer, outer_state, None, None, stats, iterations
                     return at_outer, None, stats, iterations
                 if not handled:
-                    # A declined aggregate must hand the remaining native
-                    # loop back to the established per-iteration seam.
+                    # Keep the actual production gates: after one native
+                    # fallback instruction, later loop heads may retry.
                     machine.gates(list(dict.fromkeys(
-                        (*recovery.gate_pcs, SPAWN_DISPATCH_ITERATION_ENTRY,
-                         WALKER_ENTRY, WALKER_EXIT))))
+                        (*recovery.gate_pcs, entry, exit_pc))))
             else:
-                machine.gate(WALKER_ENTRY, bypass_once=True)
+                machine.gate(entry, bypass_once=True)
                 machine.run(instructions=1)
-        reached_exit = machine.info["pc"] == WALKER_EXIT
+        reached_exit = machine.info["pc"] == exit_pc
         if not reached_exit:
             raise RuntimeError("walker did not reach its qualified outer exit")
         at_outer = observable(machine) if reached_exit else None
@@ -480,7 +503,7 @@ def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
         machine.close()
 
 
-def recorded_walker_rows(directory: str | Path) -> list[dict]:
+def recorded_walker_rows(directory: str | Path, *, row: bool = False) -> list[dict]:
     """Qualify explicitly supplied captured walkers for an evidence report."""
     directory = Path(directory)
     paths = tuple(sorted(directory.glob("walker-*.state")))
@@ -489,8 +512,8 @@ def recorded_walker_rows(directory: str | Path) -> list[dict]:
     rows = []
     for path in paths:
         metadata = json.loads(path.with_suffix(".json").read_text())
-        expected = execute_walker(path, candidate=None)
-        actual = execute_walker(path, candidate="lifecycle", include_raw=True)
+        expected = execute_walker(path, candidate=None, row=row)
+        actual = execute_walker(path, candidate="lifecycle", include_raw=True, row=row)
         outer, outer_state, future, _, stats, iterations = actual
         rows.append({"fixture": path.name, "provenance": "recorded walker state",
                      "state_sha256": artifacts.digest(path.read_bytes()),
@@ -519,6 +542,8 @@ def main(argv=None):
     parser.add_argument("--incoming-x", action="store_true")
     parser.add_argument("--walker-directory", type=Path,
                         help="explicit directory of captured walker .state/.json evidence")
+    parser.add_argument("--row", action="store_true",
+                        help="use the recorded 23-slot row walker boundary")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     if args.fresh_child:
@@ -554,7 +579,7 @@ def main(argv=None):
                      "equal_future": actual_future == expected_future, "fresh_process_150": fresh,
                      "stats": stats})
     if args.walker_directory is not None:
-        rows.extend(recorded_walker_rows(args.walker_directory))
+        rows.extend(recorded_walker_rows(args.walker_directory, row=args.row))
     result = {"status": "PASS" if all(row["equal_outer"] and row["equal_future"]
                                         and row.get("fresh_process_150") is not False for row in rows) else "FAIL",
               "native_library": str(library_path()), "frame_ticks": FRAME_TICKS,

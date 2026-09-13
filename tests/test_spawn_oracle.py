@@ -367,6 +367,123 @@ def test_whole_walker_negative_controls(mutant):
     assert actual[0] != expected[0]
 
 
+ROW_KNOWN_A = 0x1B72D4
+ROW_KNOWN_B = 0x1B6802
+ROW_UNKNOWN = 0x1B6F34
+ROW_CASES = (
+    ("empty", (None,) * 23),
+    ("single", (ROW_KNOWN_A,) + (None,) * 22),
+    ("multiple", (ROW_KNOWN_A, ROW_KNOWN_B) + (None,) * 21),
+    ("unknown", (ROW_KNOWN_A, ROW_UNKNOWN) + (None,) * 21),
+)
+
+
+@pytest.mark.parametrize("name,callbacks", ROW_CASES,
+                         ids=[case[0] for case in ROW_CASES])
+def test_constructed_row_walker_matches_outer_and_future(name, callbacks):
+    state = oracle.constructed_row_walker_state(callbacks=callbacks)
+    expected = oracle.execute_walker(state, candidate=None, row=True)
+    actual = oracle.execute_walker(state, candidate="lifecycle", row=True)
+    assert expected[3] == 23
+    assert actual[:2] == expected[:2]
+    assert actual[2]["fallbacks"] == (2 if name == "unknown" else 0)
+    assert actual[2]["spawn_row_walker_hits"] == 1
+    # The first two plans encounter the unknown second slot; after original
+    # execution passes it, the remaining empty suffix is admitted in Python.
+    assert actual[3] == (3 if name == "unknown" else 1)
+
+
+@pytest.mark.parametrize("count", (1, 2, 23))
+def test_constructed_row_walker_counts_match_original(count):
+    state = oracle.constructed_row_walker_state(count=count)
+    expected = oracle.execute_walker(state, candidate=None, row=True)
+    actual = oracle.execute_walker(state, candidate="lifecycle", row=True)
+    assert expected[3] == count
+    assert actual[:2] == expected[:2]
+    assert actual[2]["spawn_row_walker_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+def test_row_walker_postincrement_crossing_24bit_ram_preserves_32bit_a0():
+    state = oracle.constructed_row_walker_state(count=1, cursor=0x00FF_FFFE,
+                                                slot_indices=(0x100,))
+    expected = oracle.execute_walker(state, candidate=None, row=True)
+    actual = oracle.execute_walker(state, candidate="lifecycle", row=True)
+    assert actual[:2] == expected[:2]
+    assert actual[0]["registers"]["a0"] == 0x0100_0000
+    assert actual[2]["spawn_row_walker_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+def test_row_walker_a0_advance_alias_is_visible_to_planned_movem():
+    state = oracle.constructed_row_walker_state(
+        count=2, callbacks=(ROW_KNOWN_A, ROW_KNOWN_B), cursor=oracle.STACK - 60,
+        slot_indices=(0x100, 0), initial_d0=4)
+    # The first row advances A0 before its callback frame is materialized. The
+    # second indexed flag is therefore supplied through the planned alias.
+    writes = ((0xFFAE89, oracle._callback_flag(ROW_KNOWN_B)),)
+    expected = oracle.execute_walker(state, candidate=None, row=True, writes=writes)
+    actual = oracle.execute_walker(state, candidate="lifecycle", row=True, writes=writes)
+    assert actual[:2] == expected[:2]
+    assert actual[0]["registers"]["d2"] & 0xFFFF == 2
+    assert actual[0]["registers"]["a0"] == oracle.STACK - 56
+    assert actual[0]["registers"]["a4"] == ROW_KNOWN_B
+    assert actual[2]["spawn_row_walker_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+def test_row_deadline_refusal_preserves_only_the_original_first_instruction():
+    state = oracle.constructed_row_walker_state(
+        callbacks=(ROW_KNOWN_A,) + (None,) * 22)
+    entry = oracle.SPAWN_ROW_DISPATCH_WALKER_ENTRY
+    with oracle.Machine(oracle.read_rom()) as original:
+        original.restore(state)
+        original.gates([entry])
+        assert original.run(instructions=1) == "gate"
+        original.gate(entry, bypass_once=True)
+        assert original.run(instructions=1) == "limit"
+        expected = oracle.observable(original)
+    with oracle.Machine(oracle.read_rom()) as actual:
+        actual.restore(state)
+        candidate = oracle.Candidate("lifecycle")
+        candidate.arm(actual)
+        assert actual.run(instructions=1) == "gate"
+        assert candidate.on_gate(actual, actual.info["tick"] + 1) is False
+        assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}
+        assert candidate.stats["candidate_hits"] == 0
+        assert oracle.observable(actual) == expected
+
+
+@pytest.mark.parametrize("name,callbacks", ROW_CASES[:3],
+                         ids=[case[0] for case in ROW_CASES[:3]])
+def test_constructed_row_walker_survives_fresh_process(name, callbacks):
+    state = oracle.constructed_row_walker_state(callbacks=callbacks)
+    _, outer_state, future, _, stats, iterations = oracle.execute_walker(
+        state, candidate="lifecycle", row=True, include_raw=True)
+    assert stats["spawn_row_walker_hits"] == 1
+    assert iterations == 1
+    assert oracle.fresh_process_future(outer_state) == future
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_row_walker_negative_controls_reject_outer_boundary(mutant):
+    state = oracle.constructed_row_walker_state(count=1, callbacks=(ROW_KNOWN_A,))
+    expected = oracle.execute_walker(state, candidate=None, row=True)
+    actual = oracle.execute_walker(state, candidate="lifecycle-mutant-" + mutant,
+                                   row=True, stop_after_first=True)
+    assert actual[0] != expected[0]
+    assert actual[2]["spawn_row_walker_hits"] == 1
+
+
+def test_row_walker_unknown_callback_falls_back_to_native_row_execution():
+    state = oracle.constructed_row_walker_state(count=1, callbacks=(ROW_UNKNOWN,))
+    expected = oracle.execute_walker(state, candidate=None, row=True)
+    actual = oracle.execute_walker(state, candidate="lifecycle", row=True)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["spawn_row_walker_hits"] == 0
+    assert actual[2]["fallbacks"] == 1
+
+
 @pytest.mark.parametrize("entry", tuple(oracle.PLAIN_WRAPPERS))
 @pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
 @pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
