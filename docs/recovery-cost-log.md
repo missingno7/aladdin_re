@@ -37,6 +37,40 @@ but these nine targets are not yet production recovery. They account for 43
 of the 50 remaining observed callback visits and justify narrow shared recipes,
 without a new framework or machine API.
 
+## Recorded callback families: reuse becomes concrete
+
+The nine proposed targets above are now implemented as parent-only children.
+One ROM-checked LEA/BSR/RTS recipe serves twelve plain callers, including six
+previous adapters whose duplicate bodies were removed. A second recipe serves
+three allocation-success X/Y adjustments; their reusable semantic helper stays
+in `game/objects/lifecycle.py`. Boundary code changes by +129/-105 lines, with
+ten semantic lines added. These sizes are descriptive, not the success metric:
+six new callers now require facts rather than six new handwritten protocols.
+
+New execution/snapshot/state-authority concepts: **zero**. Reused allocator,
+staged RAM, atomic admission and strict oracle. Manual reasoning: fixed ROM
+instruction shapes, allocation success flags and final Y-add CCR. The evidence
+supports two concrete recipes, not a generic instruction interpreter.
+
+An attempted nine-gate expansion exceeded native capacity. Production instead
+uses the already-recovered parent; independent wrapper plans are oracle-only
+entry points. No new gate manager or native change. The unchanged gate set is
+an actual distinction between qualification boundaries and production ones.
+
+1,033 tests pass in 57.14 seconds, plus 31 callback and eight captured walker
+CLI rows with strict state/future and fresh-process checks. Full 26,378-frame
+history passes with zero restores and exact current source receipts under
+`artifacts/spawn-nine/full`. Fallbacks 1493 to 1069, allocator activations 63
+to 21, spawn-caller activations 105 to 102, total candidate activations 5420
+to 5382, direct calls 35209 to 35695, replaced instructions 337688 to 340935.
+This step reduces actual production boundaries while reusing the same rules.
+
+Next original-only census: row loop `1AE4C6..1AE4F6` traverses 23 slots/pass,
+621 recorded passes (533 empty, 69 owned with the 22-target baseline, 19
+unresolved). This nine-target batch would close 14 of the 19 structurally;
+remaining observed callbacks are `1B70D4`, `1B71A0`, `1B72AE`. It is not yet a
+recovered row walker. Evidence: `artifacts/spawn-row-frontier/summary.json`.
+
 ## Original frontier evidence
 
 Cold original census of history `4b1537634fdda81e023983a12acdafca3607cc7fd7db7a7f98372340554e5b60`

@@ -6,7 +6,38 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
-## Current bounded spawn walker
+## Recorded spawn callback families
+
+The spawn dispatcher now composes **31 callback targets**, adding six plain
+template/allocator callers and three allocation-success position adjustments.
+Twelve plain callers (six existing, six new) share one ROM-validated LEA/BSR/RTS
+recipe. The three positional callers share `offset_spawn_position` in semantic
+source and a second exact outer recipe. Six duplicated adapter bodies now
+delegate to the shared recipe; their original callers remain supported.
+
+New recorded targets: `1B700C`, `1B6D84`, `1B6726`, `1B68CA`, `1B6C4E`, `1B65D4`,
+`1B66F2`, `1B670C`, `1B6870`. The last three apply respective X/Y offsets
+`(+8,+12)`, `(-8,+4)`, `(+9,+7)` after successful lower-pool allocation.
+Templates and allocator arms remain explicit, checked against original ROM.
+
+These nine are **direct dispatcher/walker children**, not new standalone
+production gates. Adding every child gate exceeded the native gate limit;
+the existing parent entry already provides the required production boundary.
+Direct atomic oracle fixtures retain independent strict qualification without
+expanding the gate set or native API.
+
+**1,033 tests pass** (57.14 seconds). Qualification covers first/late/exhausted
+allocation, incoming X, coordinate wrap, strict outer and 150-instruction
+future state, and fresh processes. The CLI witness passes all 31 callbacks
+and eight captured walkers (`artifacts/spawn-nine/witness.json`).
+Full **26,378-frame** cold history comparison passes with zero restores and
+matching source receipts (`artifacts/spawn-nine/full/comparison.json`). Against
+the walker baseline, fallbacks drop **1,493 to 1,069**, allocator activations
+63 to 21, and total candidate activations 5,420 to 5,382. Direct calls rise
+35,209 to 35,695. Known callback composition removes more original boundaries;
+unsupported surrounding behavior still falls back.
+
+## Bounded spawn walker baseline (`cf064b5`)
 
 The column spawn loop `1AE44A` now owns selection, empty slots and direct
 composition of the 22 supported callbacks across up to 16 remaining slots.

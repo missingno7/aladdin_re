@@ -175,6 +175,16 @@ def select_spawn_dispatch_slot(read, cursor, flag_base):
     return index, read(flag_base + index, 1)
 
 
+def offset_spawn_position(read, record, x_delta, y_delta):
+    """Apply one allocator caller's observed signed position offsets."""
+    x = (read(record + 2, 2) + x_delta) & 0xFFFF
+    y = (read(record + 4, 2) + y_delta) & 0xFFFF
+    return [*((record + 2 + index, (x >> (8 * (1 - index))) & 0xFF)
+              for index in range(2)),
+            *((record + 4 + index, (y >> (8 * (1 - index))) & 0xFF)
+              for index in range(2))]
+
+
 def finish_upper_dispatch_spawn(record):
     """Apply 1B745E's type, script, and enabled-flag residue."""
     return [(record, 0x44), *((record + 0x20 + offset, byte)

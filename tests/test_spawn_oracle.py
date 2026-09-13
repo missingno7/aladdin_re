@@ -147,16 +147,25 @@ def test_dispatch_unknown_callback_is_rejected_before_saved_frame_write():
         machine.close()
 
 
-@pytest.mark.parametrize("target", tuple(oracle.CALLER_POOLS))
-@pytest.mark.parametrize("free", (0, 19, None))
-@pytest.mark.parametrize("incoming_x", (False, True))
-@pytest.mark.parametrize("parent", (False, True))
-def test_spawn_neighbors_outer_and_future(target, free, incoming_x, parent):
-    execute = oracle.execute_dispatch if parent else oracle.execute
+def _assert_spawn_neighbor(execute, target, free, incoming_x):
     expected = execute(target, free=free, candidate=None, incoming_x=incoming_x)
     actual = execute(target, free=free, candidate="lifecycle", incoming_x=incoming_x)
     assert actual[:2] == expected[:2]
     assert actual[2]["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("target", tuple(oracle.DIRECT_CALLER_POOLS))
+@pytest.mark.parametrize("free", (0, 19, None))
+@pytest.mark.parametrize("incoming_x", (False, True))
+def test_existing_spawn_neighbors_direct_outer_and_future(target, free, incoming_x):
+    _assert_spawn_neighbor(oracle.execute, target, free, incoming_x)
+
+
+@pytest.mark.parametrize("target", tuple(oracle.CALLER_POOLS))
+@pytest.mark.parametrize("free", (0, 19, None))
+@pytest.mark.parametrize("incoming_x", (False, True))
+def test_spawn_neighbors_dispatch_outer_and_future(target, free, incoming_x):
+    _assert_spawn_neighbor(oracle.execute_dispatch, target, free, incoming_x)
 
 
 @pytest.mark.parametrize("target", tuple(oracle.CALLER_POOLS))
@@ -226,7 +235,7 @@ def test_lower_reset_cannot_alias_parent_saved_registers():
 
 KNOWN_WALKER_A = 0x1B72D4
 KNOWN_WALKER_B = 0x1B6802
-UNKNOWN_WALKER = 0x1B670C
+UNKNOWN_WALKER = 0x1B6F34
 WALKER_CASES = (
     ("empty", (None,) * 16),
     ("owned-single", (KNOWN_WALKER_A,) + (None,) * 15),
@@ -330,3 +339,47 @@ def test_whole_walker_negative_controls(mutant):
     actual = oracle.execute_walker(state, candidate="lifecycle-mutant-" + mutant,
                                    stop_after_first=True)
     assert actual[0] != expected[0]
+
+
+@pytest.mark.parametrize("entry", tuple(oracle.PLAIN_WRAPPERS))
+@pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
+@pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
+def test_plain_wrapper_direct_plan_matches_original(entry, free, incoming_x):
+    expected = oracle.execute_wrapper(entry, free=free, candidate=None,
+                                      incoming_x=incoming_x)
+    actual = oracle.execute_wrapper(entry, free=free, candidate="lifecycle",
+                                    incoming_x=incoming_x)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["candidate_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("entry", tuple(oracle.OFFSET_WRAPPERS))
+@pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
+@pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
+@pytest.mark.parametrize("wrap", (False, True), ids=("ordinary", "coordinate-wrap"))
+def test_offset_wrapper_direct_plan_matches_original(entry, free, incoming_x, wrap):
+    setup = ()
+    if wrap:
+        _, _, x_delta, y_delta = oracle.OFFSET_WRAPPERS[entry]
+        x_base = 4 if x_delta < 0 else 0xFFF8
+        y_base = (-y_delta) & 0xFFFF
+        setup = (oracle.write_word(0xFFF150, x_base) +
+                 oracle.write_word(0xFF7DB0, 0) +
+                 oracle.write_word(0xFFF152, y_base) +
+                 oracle.write_word(0xFF7DB2, 0))
+    expected = oracle.execute_wrapper(entry, free=free, candidate=None,
+                                      incoming_x=incoming_x, setup_writes=setup)
+    actual = oracle.execute_wrapper(entry, free=free, candidate="lifecycle",
+                                    incoming_x=incoming_x, setup_writes=setup)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["candidate_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("entry", tuple((*oracle.PLAIN_WRAPPERS, *oracle.OFFSET_WRAPPERS)))
+def test_new_wrapper_direct_plan_survives_fresh_process(entry):
+    _, outer_state, future, _, stats = oracle.execute_wrapper(
+        entry, free=0, candidate="lifecycle", incoming_x=False, include_raw=True)
+    assert stats["candidate_hits"] == 1
+    assert oracle.fresh_process_future(outer_state) == future

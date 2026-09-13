@@ -44,6 +44,22 @@ GUARD_TARGETS = (0x1B7354, 0x1B742A, 0x1B744A)
 GUARD_ADDRESSES = {0x1B7354: 0xFFF171, 0x1B742A: 0xFFF172, 0x1B744A: 0xFFF16F}
 GUARD_SLOT_TYPES = {0x1B742A: 0x39}
 CALLER_POOLS.update({0x1B7354: 0x1B5266, 0x1B742A: 0x1B524E, 0x1B744A: 0x1B5266})
+DIRECT_CALLER_POOLS = dict(CALLER_POOLS)
+PLAIN_WRAPPERS = {
+    0x1B700C: (0x1B525E, 0x1B80FC),
+    0x1B6D84: (0x1B5266, 0x1B7F30),
+    0x1B6726: (0x1B525E, 0x1B8070),
+    0x1B68CA: (0x1B5256, 0x1B7C9C),
+    0x1B6C4E: (0x1B524E, 0x1B7A6C),
+    0x1B65D4: (0x1B525E, 0x1B82B4),
+}
+OFFSET_WRAPPERS = {
+    0x1B66F2: (0x1B525E, 0x1B7A1C, 8, 12),
+    0x1B670C: (0x1B525E, 0x1B7E54, -8, 4),
+    0x1B6870: (0x1B525E, 0x1B7B34, 9, 7),
+}
+CALLER_POOLS.update({entry: callee for entry, (callee, _) in PLAIN_WRAPPERS.items()})
+CALLER_POOLS.update({entry: callee for entry, (callee, _, _, _) in OFFSET_WRAPPERS.items()})
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
@@ -309,6 +325,55 @@ def execute_dispatch(target: int, *, free: int | None, candidate: str | None, in
         if include_raw:
             return at_outer, outer_state, future, future_state, recovery.stats if recovery else None
         return result
+    finally:
+        machine.close()
+
+
+def execute_wrapper(entry: int, *, free: int | None, candidate: str | None,
+                    incoming_x: bool, setup_writes: tuple[tuple[int, int], ...] = (),
+                    include_raw: bool = False):
+    """Qualify one concrete spawn wrapper at its direct original entry."""
+    if entry in PLAIN_WRAPPERS:
+        callee, template = PLAIN_WRAPPERS[entry]
+    elif entry in OFFSET_WRAPPERS:
+        callee, template, _, _ = OFFSET_WRAPPERS[entry]
+    else:
+        raise ValueError(f"unsupported spawn wrapper {entry:06X}")
+    machine = cold_fixture(callee, free=free, incoming_x=incoming_x, pc_entry=entry)
+    try:
+        if setup_writes:
+            machine.gates([entry])
+            assert machine.run(instructions=1) == "gate"
+            registers = machine.registers()
+            assert machine.atomic(target=machine.info["tick"] + 1_000_000,
+                                  cycles=1, instructions=1, last_pc=entry,
+                                  writes=list(setup_writes), registers=registers)
+        outer = int.from_bytes(machine.peek_ram(STACK & 0xFFFF, 4), "big") & 0xFFFFFF
+        machine.gates([entry, outer])
+        assert machine.run(instructions=1) == "gate"
+        stats = None
+        if candidate:
+            from aladdin_sega.boundary import spawn_offset_caller, spawn_plain_caller
+            planner = spawn_offset_caller if entry in OFFSET_WRAPPERS else spawn_plain_caller
+            plan = planner(machine, machine.registers(), entry)
+            assert machine.atomic(target=machine.info["tick"] + 1_000_000,
+                                  cycles=plan.cycles, instructions=plan.instructions,
+                                  writes=list(plan.writes), registers=plan.registers,
+                                  last_pc=plan.last_pc)
+            stats = {"candidate_hits": 1, "fallbacks": 0,
+                     "direct_python_calls": plan.direct_calls}
+        else:
+            machine.gate(entry, bypass_once=True)
+            assert machine.run(instructions=20_000) == "gate"
+        outer_state = machine.snapshot()
+        at_outer = observable(machine)
+        machine.gates([])
+        assert machine.run(instructions=150) == "limit"
+        future_state = machine.snapshot()
+        future = observable(machine)
+        if include_raw:
+            return at_outer, outer_state, future, future_state, stats
+        return at_outer, future, stats
     finally:
         machine.close()
 

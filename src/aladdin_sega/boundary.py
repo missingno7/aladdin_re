@@ -81,6 +81,15 @@ SPAWN_PRIMARY_GUARD_ENTRY = 0x1B742A
 SPAWN_PRIMARY_GUARD_LAST_PC = 0x1B6EB0
 SPAWN_LOWER_DISPATCH_ENTRY = 0x1B74D6
 SPAWN_LOWER_DISPATCH_LAST_PC = 0x1B74E0
+SPAWN_PLAIN_LOWER_ONE_ENTRY = 0x1B700C
+SPAWN_PLAIN_UPPER_ENTRY = 0x1B6D84
+SPAWN_PLAIN_LOWER_TWO_ENTRY = 0x1B6726
+SPAWN_PLAIN_REVERSE_ENTRY = 0x1B68CA
+SPAWN_PLAIN_PRIMARY_ENTRY = 0x1B6C4E
+SPAWN_PLAIN_LOWER_THREE_ENTRY = 0x1B65D4
+SPAWN_OFFSET_PLUS_ENTRY = 0x1B66F2
+SPAWN_OFFSET_MIXED_ENTRY = 0x1B670C
+SPAWN_OFFSET_SECONDARY_ENTRY = 0x1B6870
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
 SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY = 0x1B738A
@@ -510,134 +519,149 @@ def spawn_primary_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan
                       prefix.direct_calls + selected.direct_calls)
 
 
-def spawn_lower_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPlan:
-    """Recover ``1B74D6``'s fixed-template lower-pool allocation."""
+# These are concrete ROM facts, not a generic calling-convention layer. Every
+# row has the same twelve-byte LEA absolute / BSR word / RTS wrapper shape.
+SPAWN_PLAIN_CALLER_FACTS = {
+    SPAWN_REVERSE_PLAIN_CALLER_ENTRY: (SPAWN_REGION_REVERSE_ENTRY, 0x1B79E0),
+    SPAWN_UPPER_PLAIN_CALLER_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B80AC),
+    SPAWN_UPPER_STANDARD_CALLER_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B7C10),
+    SPAWN_UPPER_SECONDARY_CALLER_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B7C24),
+    SPAWN_UPPER_TERTIARY_CALLER_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B7C38),
+    SPAWN_LOWER_DISPATCH_ENTRY: (SPAWN_REGION_LOWER_ENTRY, 0x1B7A30),
+    SPAWN_PLAIN_LOWER_ONE_ENTRY: (SPAWN_REGION_LOWER_ENTRY, 0x1B80FC),
+    SPAWN_PLAIN_UPPER_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B7F30),
+    SPAWN_PLAIN_LOWER_TWO_ENTRY: (SPAWN_REGION_LOWER_ENTRY, 0x1B8070),
+    SPAWN_PLAIN_REVERSE_ENTRY: (SPAWN_REGION_REVERSE_ENTRY, 0x1B7C9C),
+    SPAWN_PLAIN_PRIMARY_ENTRY: (SPAWN_REGION_ENTRY, 0x1B7A6C),
+    SPAWN_PLAIN_LOWER_THREE_ENTRY: (SPAWN_REGION_LOWER_ENTRY, 0x1B82B4),
+}
+SPAWN_PLAIN_CALLER_ENTRIES = tuple(SPAWN_PLAIN_CALLER_FACTS)
+
+# Three observed lower-pool wrappers have one more position-adjustment suffix.
+SPAWN_OFFSET_CALLER_FACTS = {
+    SPAWN_OFFSET_PLUS_ENTRY: (0x1B7A1C, 8, 12),
+    SPAWN_OFFSET_MIXED_ENTRY: (0x1B7E54, -8, 4),
+    SPAWN_OFFSET_SECONDARY_ENTRY: (0x1B7B34, 9, 7),
+}
+SPAWN_OFFSET_CALLER_ENTRIES = tuple(SPAWN_OFFSET_CALLER_FACTS)
+
+
+def _plain_wrapper_shape(machine, entry, allocator, template):
+    raw = machine.peek_rom(entry, 12)
+    if (raw[:2] != bytes.fromhex('4df9') or
+            int.from_bytes(raw[2:6], 'big') != template or raw[6:8] != bytes.fromhex('6100') or
+            entry + 8 + int.from_bytes(raw[8:10], 'big', signed=True) != allocator or
+            raw[10:12] != bytes.fromhex('4e75')):
+        raise UnsupportedCandidate('plain spawn wrapper ROM shape')
+
+
+def spawn_plain_caller(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
+    """Recover one ROM-validated LEA/BSR/RTS allocator wrapper."""
+    try:
+        allocator, template = SPAWN_PLAIN_CALLER_FACTS[entry]
+    except KeyError as error:
+        raise UnsupportedCandidate('unknown plain spawn caller') from error
     sp = registers['a7']
     if sp & 1:
-        raise UnsupportedCandidate('unaligned lower dispatch caller stack')
+        raise UnsupportedCandidate('unaligned plain spawn caller stack')
+    _plain_wrapper_shape(machine, entry, allocator, template)
+    _spans_disjoint([('plain spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('plain spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
     outer = _read(machine, sp, 4)
-    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B74E0, 4),
-                        {**registers, 'a6': 0x1B7A30, 'a7': sp - 4,
-                         'pc': SPAWN_REGION_LOWER_ENTRY}, 0x1B74DC, direct_calls=1)
-    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
-                            SPAWN_REGION_LOWER_ENTRY)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': template, 'a7': sp - 4, 'pc': allocator},
+                        entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers, allocator)
     final = dict(selected.registers)
     final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
     return AtomicPlan(prefix.cycles + selected.cycles + 16,
                       prefix.instructions + selected.instructions + 1,
                       tuple(dict((*prefix.writes, *selected.writes)).items()), final,
-                      SPAWN_LOWER_DISPATCH_LAST_PC,
-                      prefix.direct_calls + selected.direct_calls)
+                      entry + 10, prefix.direct_calls + selected.direct_calls)
+
+
+def _offset_wrapper_shape(machine, entry, template, x_delta, y_delta):
+    raw = machine.peek_rom(entry, 26)
+    x_opcode = bytes.fromhex('046d' if x_delta < 0 else '066d')
+    if (raw[:2] != bytes.fromhex('4df9') or
+            int.from_bytes(raw[2:6], 'big') != template or raw[6:8] != bytes.fromhex('6100') or
+            entry + 8 + int.from_bytes(raw[8:10], 'big', signed=True) != SPAWN_REGION_LOWER_ENTRY or
+            raw[10:12] != bytes.fromhex('660c') or raw[12:14] != x_opcode or
+            int.from_bytes(raw[14:16], 'big') != abs(x_delta) or raw[16:18] != bytes.fromhex('0002') or
+            raw[18:20] != bytes.fromhex('066d') or
+            int.from_bytes(raw[20:22], 'big') != y_delta or raw[22:24] != bytes.fromhex('0004') or
+            raw[24:26] != bytes.fromhex('4e75')):
+        raise UnsupportedCandidate('offset spawn caller ROM shape')
+
+
+def spawn_offset_caller(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
+    """Recover an observed lower allocation followed by signed position offsets."""
+    try:
+        template, x_delta, y_delta = SPAWN_OFFSET_CALLER_FACTS[entry]
+    except KeyError as error:
+        raise UnsupportedCandidate('unknown offset spawn caller') from error
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned offset spawn caller stack')
+    _offset_wrapper_shape(machine, entry, template, x_delta, y_delta)
+    _spans_disjoint([('offset spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('offset spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': template, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_LOWER_ENTRY}, entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_LOWER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (selected.registers['sr'] & 0x04):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          entry + 24, prefix.direct_calls + selected.direct_calls)
+    planned = dispatch_plan_view(machine, AtomicPlan(prefix.cycles + selected.cycles,
+                                                      prefix.instructions + selected.instructions,
+                                                      writes, final, selected.last_pc,
+                                                      prefix.direct_calls + selected.direct_calls))
+    y_before = _read(planned, final['a5'] + 4, 2)
+    offsets = tuple(game.offset_spawn_position(
+        lambda address, size: _read(planned, address, size), final['a5'], x_delta, y_delta))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF,
+                 sr=_add_sr(selected.registers['sr'], y_before, y_delta, 2))
+    return AtomicPlan(prefix.cycles + selected.cycles + 64,
+                      prefix.instructions + selected.instructions + 4,
+                      tuple(dict((*writes, *offsets)).items()), final, entry + 24,
+                      prefix.direct_calls + selected.direct_calls + 1)
+
+
+def spawn_lower_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B74D6``'s fixed-template lower-pool allocation."""
+    return spawn_plain_caller(machine, registers, SPAWN_LOWER_DISPATCH_ENTRY)
 
 
 def spawn_reverse_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B7232``'s direct reverse-pool allocator wrapper."""
-    sp = registers['a7']
-    if sp & 1:
-        raise UnsupportedCandidate('unaligned plain reverse caller stack')
-    _spans_disjoint([('plain reverse caller pool', 0xFF7E82, 24 * 66),
-                     ('plain reverse caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
-    outer = _read(machine, sp, 4)
-    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B723C, 4),
-                        {**registers, 'a6': 0x1B79E0, 'a7': sp - 4,
-                         'pc': SPAWN_REGION_REVERSE_ENTRY}, 0x1B7238, direct_calls=1)
-    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
-                            SPAWN_REGION_REVERSE_ENTRY)
-    final = dict(selected.registers)
-    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
-    return AtomicPlan(prefix.cycles + selected.cycles + 16,
-                      prefix.instructions + selected.instructions + 1,
-                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
-                      SPAWN_REVERSE_PLAIN_CALLER_LAST_PC,
-                      prefix.direct_calls + selected.direct_calls)
+    return spawn_plain_caller(machine, registers, SPAWN_REVERSE_PLAIN_CALLER_ENTRY)
 
 
 def spawn_upper_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B6F76``'s direct upper-pool allocator wrapper."""
-    sp = registers['a7']
-    if sp & 1:
-        raise UnsupportedCandidate('unaligned plain upper caller stack')
-    _spans_disjoint([('plain upper caller pool', 0xFF7E82, 24 * 66),
-                     ('plain upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
-    outer = _read(machine, sp, 4)
-    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6F80, 4),
-                        {**registers, 'a6': 0x1B80AC, 'a7': sp - 4,
-                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6F7C, direct_calls=1)
-    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
-                            SPAWN_REGION_UPPER_ENTRY)
-    final = dict(selected.registers)
-    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
-    return AtomicPlan(prefix.cycles + selected.cycles + 16,
-                      prefix.instructions + selected.instructions + 1,
-                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
-                      SPAWN_UPPER_PLAIN_CALLER_LAST_PC,
-                      prefix.direct_calls + selected.direct_calls)
+    return spawn_plain_caller(machine, registers, SPAWN_UPPER_PLAIN_CALLER_ENTRY)
 
 
 def spawn_upper_standard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B6E7A``'s direct upper-pool allocator wrapper."""
-    sp = registers['a7']
-    if sp & 1:
-        raise UnsupportedCandidate('unaligned standard upper caller stack')
-    _spans_disjoint([('standard upper caller pool', 0xFF7E82, 24 * 66),
-                     ('standard upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
-    outer = _read(machine, sp, 4)
-    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6E84, 4),
-                        {**registers, 'a6': 0x1B7C10, 'a7': sp - 4,
-                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6E80, direct_calls=1)
-    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
-                            SPAWN_REGION_UPPER_ENTRY)
-    final = dict(selected.registers)
-    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
-    return AtomicPlan(prefix.cycles + selected.cycles + 16,
-                      prefix.instructions + selected.instructions + 1,
-                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
-                      SPAWN_UPPER_STANDARD_CALLER_LAST_PC,
-                      prefix.direct_calls + selected.direct_calls)
+    return spawn_plain_caller(machine, registers, SPAWN_UPPER_STANDARD_CALLER_ENTRY)
 
 
 def spawn_upper_secondary_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B6E90``'s direct upper-pool allocator wrapper."""
-    sp = registers['a7']
-    if sp & 1:
-        raise UnsupportedCandidate('unaligned secondary upper caller stack')
-    _spans_disjoint([('secondary upper caller pool', 0xFF7E82, 24 * 66),
-                     ('secondary upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
-    outer = _read(machine, sp, 4)
-    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6E9A, 4),
-                        {**registers, 'a6': 0x1B7C24, 'a7': sp - 4,
-                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6E96, direct_calls=1)
-    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
-                            SPAWN_REGION_UPPER_ENTRY)
-    final = dict(selected.registers)
-    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
-    return AtomicPlan(prefix.cycles + selected.cycles + 16,
-                      prefix.instructions + selected.instructions + 1,
-                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
-                      SPAWN_UPPER_SECONDARY_CALLER_LAST_PC,
-                      prefix.direct_calls + selected.direct_calls)
+    return spawn_plain_caller(machine, registers, SPAWN_UPPER_SECONDARY_CALLER_ENTRY)
 
 
 def spawn_upper_tertiary_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B6EA6``'s direct upper-pool allocator wrapper."""
-    sp = registers['a7']
-    if sp & 1:
-        raise UnsupportedCandidate('unaligned tertiary upper caller stack')
-    _spans_disjoint([('tertiary upper caller pool', 0xFF7E82, 24 * 66),
-                     ('tertiary upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
-    outer = _read(machine, sp, 4)
-    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6EB0, 4),
-                        {**registers, 'a6': 0x1B7C38, 'a7': sp - 4,
-                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6EAC, direct_calls=1)
-    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
-                            SPAWN_REGION_UPPER_ENTRY)
-    final = dict(selected.registers)
-    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
-    return AtomicPlan(prefix.cycles + selected.cycles + 16,
-                      prefix.instructions + selected.instructions + 1,
-                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
-                      SPAWN_UPPER_TERTIARY_CALLER_LAST_PC,
-                      prefix.direct_calls + selected.direct_calls)
+    return spawn_plain_caller(machine, registers, SPAWN_UPPER_TERTIARY_CALLER_ENTRY)
 
 
 def spawn_upper_typed_caller(machine, registers: dict[str, int]) -> AtomicPlan:
@@ -931,11 +955,6 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
         SPAWN_REVERSE_CALLER_ENTRY: spawn_reverse_caller,
         SPAWN_UPPER_VARIANT_CALLER_ENTRY: spawn_upper_variant_caller,
         SPAWN_UPPER_SCRIPTED_CALLER_ENTRY: spawn_upper_scripted_caller,
-        SPAWN_REVERSE_PLAIN_CALLER_ENTRY: spawn_reverse_plain_caller,
-        SPAWN_UPPER_PLAIN_CALLER_ENTRY: spawn_upper_plain_caller,
-        SPAWN_UPPER_STANDARD_CALLER_ENTRY: spawn_upper_standard_caller,
-        SPAWN_UPPER_SECONDARY_CALLER_ENTRY: spawn_upper_secondary_caller,
-        SPAWN_UPPER_TERTIARY_CALLER_ENTRY: spawn_upper_tertiary_caller,
         SPAWN_UPPER_TYPED_CALLER_ENTRY: spawn_upper_typed_caller,
         SPAWN_UPPER_TYPED_SECONDARY_ENTRY: spawn_upper_typed_secondary_caller,
         SPAWN_LOWER_RESET_ENTRY: spawn_lower_reset_caller,
@@ -947,12 +966,11 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
         SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY: spawn_primary_double_guard_caller,
         SPAWN_PRIMARY_INVERSE_GUARD_ENTRY: spawn_primary_inverse_guard_caller,
         SPAWN_PRIMARY_MIXED_GUARD_ENTRY: spawn_primary_mixed_guard_caller,
-        SPAWN_LOWER_DISPATCH_ENTRY: spawn_lower_dispatch_caller,
         SPAWN_UPPER_DISPATCH_GUARD_ENTRY: spawn_upper_dispatch_guard_caller,
         SPAWN_UPPER_DISPATCH_ENTRY: spawn_upper_dispatch_caller,
     }
     callback_function = callbacks.get(target)
-    if callback_function is None:
+    if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS and callback_function is None:
         raise UnsupportedCandidate(f'spawn dispatcher target {target:06X} is not recovered')
     extra = [('lower reset flag', 0xFFF104, 1)] if target == SPAWN_LOWER_RESET_ENTRY else []
     _spans_disjoint([('spawn dispatcher MOVEM frame', sp - 4, 64),
@@ -963,7 +981,13 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
     prefix = AtomicPlan(16, 1, _bytes(sp - 4, SPAWN_DISPATCH_CALL_LAST_PC, 4),
                         {**registers, 'a7': sp - 4, 'pc': target},
                         SPAWN_DISPATCH_CALL_ENTRY, direct_calls=1)
-    callback = callback_function(dispatch_plan_view(machine, prefix), prefix.registers)
+    planner = dispatch_plan_view(machine, prefix)
+    if target in SPAWN_PLAIN_CALLER_FACTS:
+        callback = spawn_plain_caller(planner, prefix.registers, target)
+    elif target in SPAWN_OFFSET_CALLER_FACTS:
+        callback = spawn_offset_caller(planner, prefix.registers, target)
+    else:
+        callback = callback_function(planner, prefix.registers)
     restored = {name: _read(machine, sp + 4 * index, 4)
                 for index, name in enumerate(('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7',
                                                'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6'))}
