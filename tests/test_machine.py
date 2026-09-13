@@ -82,6 +82,17 @@ def test_invalid_limits_and_mutant():
         assert hashlib.sha256(m.snapshot()).digest() != expected
 
 
+def test_gate_capacity_supports_collection_family_and_rejects_overflow():
+    with Machine(synthetic_rom()) as m:
+        m.gates(list(range(0x200, 0x280, 2)))
+        before = m.snapshot()
+        with pytest.raises(NativeError, match='Invalid gate set'):
+            m.gates(list(range(0x200, 0x282, 2)))
+        assert m.snapshot() == before
+        assert m.run(instructions=1) == 'gate'
+        assert m.info['pc'] == 0x200
+
+
 def test_irq_admission_precedes_handler_gate_and_trap_resumes():
     rom = bytearray(synthetic_rom())
     rom[0x78:0x7c] = (0x240).to_bytes(4, "big")

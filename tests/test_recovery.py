@@ -538,7 +538,7 @@ def test_replace_dispatch_counts_prefix_subset_and_respects_deadline(entry):
     assert candidate.on_gate(machine, 10000)
     assert candidate.stats["replace_hits"] == 1
     assert candidate.stats["counted_replace_hits"] == int(entry == COUNTED_REPLACE_ENTRY)
-    assert candidate.stats["direct_python_calls"] == 3 + int(entry == COUNTED_REPLACE_ENTRY)
+    assert candidate.stats["direct_python_calls"] == 4 + int(entry == COUNTED_REPLACE_ENTRY)
     machine.atomic_result = False
     assert not candidate.on_gate(machine, 10001)
     assert machine.atomic_call["target"] == 10001

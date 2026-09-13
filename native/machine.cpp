@@ -163,7 +163,7 @@ AL_API int al_gate(void* ptr, std::uint32_t pc, std::uint32_t bypass) noexcept {
 }
 AL_API int al_gates(void* ptr, const std::uint32_t* pcs, std::uint64_t count) noexcept {
     return protect([&] {
-        auto& h = get(ptr); require(count <= 16 && (pcs || !count), "Invalid gate set");
+        auto& h = get(ptr); require(count <= 64 && (pcs || !count), "Invalid gate set");
         for (std::uint64_t i=0; i<count; ++i) require(pcs[i] <= 0xffffffu, "Gate address out of range");
         h.executor.gates.clear();
         if (count) h.executor.gates.assign(pcs, pcs+count);

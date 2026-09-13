@@ -13,7 +13,7 @@ import zipfile
 from carrier_v060 import BASELINE, ROOT
 
 
-def run(output, witness, replay, baseline=BASELINE):
+def run(output, witness, replay, baseline=BASELINE, candidate='carrier'):
     output.mkdir(parents=True, exist_ok=True)
     archive = subprocess.check_output(["git", "-c", f"safe.directory={ROOT.as_posix()}",
         "archive", "--format=zip", baseline, "src/aladdin_sega"], cwd=ROOT)
@@ -31,7 +31,7 @@ def run(output, witness, replay, baseline=BASELINE):
                            PYTHONPYCACHEPREFIX=str(frozen / "empty-cache"),
                            ALADDIN_NATIVE_LIBRARY=str(ROOT / "build/libaladdin_native.dll"))
                 command = [sys.executable, "-m", "aladdin_sega", "compare", str(artifact),
-                           "--rom", str(ROOT / "assets/Aladdin (USA).md"), "--candidate", "carrier",
+                           "--rom", str(ROOT / "assets/Aladdin (USA).md"), "--candidate", candidate if name == 'current' else 'carrier',
                            "--diagnostics", "--output", str(output / label)]
                 start = time.perf_counter()
                 done = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
@@ -61,5 +61,6 @@ if __name__ == "__main__":
     parser.add_argument("--witness", type=Path, default=ROOT / "artifacts/carrier/witness-v060/witness.alreplay")
     parser.add_argument("--replay", type=Path, default=ROOT / "recordings/current/20260912T210640.729016Z.alreplay")
     parser.add_argument("--baseline", default=BASELINE, help="Frozen git commit/ref; defaults to the 0.6 evidence")
+    parser.add_argument('--candidate', default='carrier', choices=('carrier', 'lifecycle'))
     args = parser.parse_args()
-    run(args.output.resolve(), args.witness.resolve(), args.replay.resolve(), args.baseline)
+    run(args.output.resolve(), args.witness.resolve(), args.replay.resolve(), args.baseline, args.candidate)

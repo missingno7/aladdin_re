@@ -88,7 +88,7 @@ def _read_source_byte(machine, address: int) -> tuple[int, bool]:
         return _read(machine, address, 1), True
     raise UnsupportedCandidate("script source is neither immutable ROM nor work RAM")
 
-def _clear_objects(machine, registers, *, sp, pair=False, extra_spans=()):
+def _clear_objects(machine, registers, *, sp, pair=False, extra_spans=(), include_semantics=True):
     """One RAM-domain adapter: aggregate cost and final residue, no helper plans."""
     record, a6, d0 = (registers[name] for name in ("a1", "a6", "d0"))
     read = lambda address, size: _read(machine, address, size)
@@ -113,11 +113,11 @@ def _clear_objects(machine, registers, *, sp, pair=False, extra_spans=()):
                   (sp - 12, a6, 4), (sp - 14, d0, 2)] if linked else
                  [(sp - 4, 0x1ABE74, 4), (sp - 8, a6, 4), (sp - 10, d0, 2)])
         cycles, instructions = (332, 26) if linked else (168, 13)
-        semantic = game.clear_pair(read, record)
+        semantic = game.clear_pair(read, record) if include_semantics else ()
     else:
         slots = [(sp - 4, a6, 4), (sp - 6, d0, 2)]
         cycles, instructions = 96, 8
-        semantic = game.release_buffer(read, record)
+        semantic = game.release_buffer(read, record) if include_semantics else ()
     writes = [byte for address, value, size in slots for byte in _bytes(address, value, size)]
     cycles += sum(82 + 22 * length for length in lengths if length)
     instructions += sum(5 + 2 * length for length in lengths if length)
@@ -143,8 +143,8 @@ def clear_object_pair(machine, registers: dict[str, int]) -> AtomicPlan:
                       PAIR_LAST_PC, direct_calls=1 + bool(linked))
 
 
-def _initialize_object_effects(machine, *, record, template, entry_sp):
-    """Expand the 19-byte object template into selected fields of a 66-byte record."""
+def _object_template(machine, *, record, template, entry_sp):
+    """Validate the original template/record domain and read its 19 source bytes."""
     if (record | template | entry_sp) & 1:
         raise UnsupportedCandidate("unaligned object template, record or stack")
     spans = [("initialized record", record, 66), ("initializer return", entry_sp, 4)]
@@ -160,7 +160,12 @@ def _initialize_object_effects(machine, *, record, template, entry_sp):
     else:
         raise UnsupportedCandidate("object template is neither immutable ROM nor work RAM")
     _spans_disjoint(spans)
-    return tuple(game.initialize(record, data))
+    return data
+
+
+def _initialize_object_effects(machine, *, record, template, entry_sp):
+    return tuple(game.initialize(record, _object_template(machine, record=record,
+                                                         template=template, entry_sp=entry_sp)))
 
 
 def initialize_object(machine, registers: dict[str, int]) -> AtomicPlan:
@@ -193,26 +198,29 @@ def finish_object(machine, registers: dict[str, int]) -> AtomicPlan:
                       FINISH_LAST_PC, direct_calls=3 + bool(linked))
 
 
-def replace_object(machine, registers: dict[str, int], *, increment_total=False, extra_spans=()) -> AtomicPlan:
+def replace_object(machine, registers: dict[str, int], *, increment_total=False, extra_spans=(),
+                   template=0x1B7ABC, return_site=REPLACE_LAST_PC, amount=0) -> AtomicPlan:
     """1AF4C6 replacement boundary, optionally including the 1AF4C2 +15 call."""
     a1, sp, sr = (registers[key] for key in ("a1", "a7", "sr"))
     return_pc = _read(machine, sp, 4)
     spans = [("outer return", sp, 4), *extra_spans]
     writes = []
-    if increment_total:
-        total = _read(machine, 0xFFF14E, 2) + 15
+    amount = 15 if increment_total else amount
+    if amount:
+        total = _read(machine, 0xFFF14E, 2) + amount
         sr = (sr & ~0x10) | (0x10 if total > 0xFFFF else 0)
-        spans.append(("object total", 0xFFF14E, 2))
-        writes.extend(_bytes(0xFFF14E, total, 2))
+        if not any(start <= 0xFFF14E and start + size >= 0xFFF150 for _, start, size in extra_spans):
+            spans.append(("object total", 0xFFF14E, 2))
     cycles, instructions, cleared, linked = _clear_objects(machine, registers, sp=sp - 4,
-                                                          pair=True, extra_spans=spans)
-    initialized = _initialize_object_effects(machine, record=a1, template=0x1B7ABC, entry_sp=sp - 4)
-    writes.extend((*cleared, *_bytes(sp - 4, 0x1AF4D6, 4), *initialized))
-    return AtomicPlan(544 + cycles + 58 * increment_total, 32 + instructions + 3 * increment_total,
+                                                          pair=True, extra_spans=spans, include_semantics=False)
+    data = _object_template(machine, record=a1, template=template, entry_sp=sp - 4)
+    semantic = game.retire_collected_object(lambda address, size: _read(machine, address, size), a1, data, amount)
+    writes.extend((*cleared, *_bytes(sp - 4, return_site, 4), *semantic))
+    return AtomicPlan(544 + cycles + 58 * bool(amount), 32 + instructions + 3 * bool(amount),
                       tuple(dict(writes).items()),
-                      {"a5": a1, "a6": 0x1B7ACF, "a7": sp + 4,
+                      {"a5": a1, "a6": template + 19, "a7": sp + 4,
                        "pc": return_pc & 0xFFFFFF, "sr": _logic_sr(sr, 0, 4)},
-                      REPLACE_LAST_PC, direct_calls=3 + bool(linked) + int(increment_total))
+                      return_site, direct_calls=4 + bool(linked) + bool(amount))
 
 
 def increment_decimal_counter(machine):
@@ -303,3 +311,203 @@ def detach_object(machine, registers: dict[str, int]) -> AtomicPlan:
                       {"d0": d0, "a2": a2 + 2, "a7": sp + 4,
                        "pc": return_override & 0xFFFFFF, "sr": _logic_sr(sr, return_override, 4)},
                       CALLER_LAST_PC, direct_calls=direct_calls)
+
+
+# Same concrete two-call sound ABI at ten collection sites. These are ROM facts,
+# not resume IDs: the Python activation retains its entry while sound runs.
+# kind, return after second JSR, final RTS, amount, replacement template
+COLLECTION_ROUTES = {
+    TRANSITION_ENTRY: ('primary', SOUND_RETURN, REPLACE_LAST_PC, 0, 0x1B7ABC),
+    0x1AF21E: ('secondary', 0x1AF258, 0x1AF4D6, 15, 0x1B7ABC),
+    0x1AF264: ('quarter', 0x1AF2A6, 0x1AF4D6, 15, 0x1B7ABC),
+    0x1AF2B0: ('flag177', 0x1AF2F2, 0x1AF2F8, 0, 0),
+    0x1AF2FA: ('flag178', 0x1AF33C, 0x1AF342, 0, 0),
+    0x1AF344: ('timer100', 0x1AF378, 0x1AF382, 100, 0x1B7ABC),
+    0x1AF384: ('flag100', 0x1AF3B0, 0x1AF3C0, 100, 0x1B7ABC),
+    0x1AF3C2: ('flag25', 0x1AF3E4, 0x1AF3FE, 25, 0x1B7CD8),
+    0x1AF400: ('spawn', 0x1AF422, 0x1AF466, 0, 0x1B7CC4),
+    0x1AF4A0: ('plain15', 0x1AF4BC, 0x1AF4D6, 15, 0x1B7ABC),
+    0x1AF4D8: ('count25', 0x1AF4FA, 0x1AF514, 25, 0x1B7CD8),
+    0x1AF53E: ('reset15', 0x1AF4BC, 0x1AF4D6, 15, 0x1B7ABC),
+}
+COLLECTION_GLOBALS = tuple(('collection input/effect', address, size) for address, size in (
+    (0xFFEFE0, 4), (0xFFF003, 1), (0xFFF0A4, 2), (0xFFF0D8, 1),
+    (0xFFF0E9, 1), (0xFFF10A, 1), (0xFFF11C, 1), (0xFFF14E, 2), (0xFFF176, 4),
+    (0xFFF57D, 1), (0xFF7DFE, 4)))
+
+
+def _add_sr(sr, left, right, width):
+    mask, sign = (1 << (8 * width)) - 1, 1 << (8 * width - 1)
+    total = left + right; result = total & mask
+    out = _logic_sr(sr & ~0x1F, result, width)
+    if total > mask: out |= 0x11
+    if (~(left ^ right) & (left ^ result)) & sign: out |= 2
+    return out
+
+
+def _collection_guard(machine, registers):
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned collection record/stack')
+    _spans_disjoint([('collection record', record, 66), ('collection frame', sp - 28, 32),
+                     *COLLECTION_GLOBALS])
+    return lambda address, size: _read(machine, address, size)
+
+
+def _collection_suffix(machine, registers, entry):
+    kind, resume, last, amount, template = COLLECTION_ROUTES[entry]
+    sp, sr = registers['a7'], registers['sr']
+    if kind == 'spawn':
+        return _spawn_collection(machine, registers)
+    if kind in ('timer100', 'flag100'):
+        value = _read(machine, 0xFFF14E, 2)
+        writes = (*_bytes(0xFFF14E, value + amount, 2),
+                  *_bytes(sp - 4, 0x1AF382 if kind == 'timer100' else 0x1AF3BA, 4))
+        if kind == 'flag100': writes += ((0xFFF179, 255),)
+        return AtomicPlan(74 + 20 * (kind == 'flag100'), 4 + (kind == 'flag100'), writes,
+            {'a7': sp+4, 'pc': _read(machine, sp, 4) & 0xFFFFFF,
+             'sr': _add_sr(sr, value, amount, 2)}, last, direct_calls=1)
+    if not template:
+        return AtomicPlan(16, 1, (), {'a7': sp+4, 'pc': _read(machine, sp, 4) & 0xFFFFFF}, last)
+    tail = replace_object(machine, registers, template=template, return_site=last,
+                          amount=amount, extra_spans=COLLECTION_GLOBALS)
+    branch = kind in ('primary', 'secondary', 'quarter')
+    return AtomicPlan(tail.cycles + 10 * branch, tail.instructions + branch,
+                      tail.writes, tail.registers, tail.last_pc, tail.direct_calls)
+
+
+def begin_collection(machine, registers, entry):
+    """One collection entry: accepted state changes, optional original sound, retirement.
+
+    Aggregate recipes cover actual straight-line paths. Internal clear/init/total
+    calls compose through existing adapters; no per-instruction executor is used.
+    """
+    kind, resume, last, amount, template = COLLECTION_ROUTES[entry]
+    read = _collection_guard(machine, registers)
+    sp, sr, record = registers['a7'], registers['sr'], registers['a1']
+    if kind == 'secondary' and read(0xFFF0D8, 1):
+        return AtomicPlan(42, 3, (), {'sr': _logic_sr(sr, read(0xFFF0D8, 1), 1),
+            'a7': sp+4, 'pc': read(sp, 4) & 0xFFFFFF}, 0x1A91C4), False
+    if kind == 'quarter' and read(0xFFEFE0, 2) == 0x3939:
+        return AtomicPlan(46, 3, (), {'sr': _logic_sr(sr, 0, 2),
+            'a7': sp+4, 'pc': read(sp, 4) & 0xFFFFFF}, 0x1A91C4), False
+    try:
+        writes = game.collection_state(read, record, kind)
+    except ValueError as error:
+        raise UnsupportedCandidate(str(error)) from error
+    # Before-sound instruction sums; variable decimal path uses its established recipe.
+    cycles, instructions = {'flag25': (20, 1), 'count25': (20, 1), 'plain15': (0, 0),
+        'reset15': (30, 2), 'flag177': (112, 6), 'flag178': (112, 6), 'spawn': (20, 1),
+        'timer100': (20, 1), 'flag100': (0, 0), 'secondary': (76, 5),
+        'quarter': (82, 5), 'primary': (48, 3)}[kind]
+    direct = 1
+    sound = read(0xFFF57D, 1)
+    wants_sound = True
+    if kind == 'count25': sr = _add_sr(sr, read(0xFFF003, 1), 1, 1)
+    restored = dict(registers)
+    if kind in ('primary', 'secondary', 'quarter'):
+        wants_sound = kind != 'quarter' or ((read(0xFFF10A, 1) + 1) & 255) >= 4
+        if kind == 'quarter': sr = _add_sr(sr, read(0xFFF10A, 1), 1, 1)
+        if wants_sound:
+            digits = read(0xFFEFE2 if kind == 'secondary' else 0xFFEFE0, 2)
+            if digits == 0x3939:
+                flag = read(record+52, 1)
+                cycles = (152 if kind == 'primary' else 180) + (88 if flag else 0)
+                instructions = (10 if kind == 'primary' else 12) + (8 if flag else 0)
+                if flag:
+                    table = (('object state table byte', writes[0][0], 1),)
+                    _spans_disjoint([('sound frame', sp-28, 32), *COLLECTION_GLOBALS, *table])
+                    _clear_objects(machine, registers, sp=sp-4, pair=True,
+                                   extra_spans=(*COLLECTION_GLOBALS, *table), include_semantics=False)
+                    restored['d0'] = (registers['d0'] & 0xFFFF0000) | read(record+50, 2)
+                direct += 2
+            else:
+                cycles += 132 if digits & 255 == 0x39 else 94
+                instructions += 8 if digits & 255 == 0x39 else 6
+                if kind == 'quarter': cycles += 36; instructions += 2
+                sr &= ~0x10
+                direct += 1
+    restored['sr'] = sr
+    if kind in ('timer100', 'flag100'):
+        init_return = 0x1AF35C if kind == 'timer100' else 0x1AF394
+        retired = replace_object(machine, restored, return_site=init_return,
+                                 extra_spans=COLLECTION_GLOBALS)
+        cycles += retired.cycles - 16; instructions += retired.instructions - 1
+        writes.extend(retired.writes); direct += retired.direct_calls
+        restored.update(retired.registers, a7=sp)
+        sr = restored['sr']
+    if wants_sound:
+        sr = _logic_sr(sr, sound, 1)
+        cycles += 24 if sound else 26; instructions += 2
+    if not (wants_sound and sound):
+        suffix = _collection_suffix(machine, dict(restored, sr=sr), entry)
+        final = dict(restored, sr=sr); final.update(suffix.registers)
+        return AtomicPlan(cycles + suffix.cycles, instructions + suffix.instructions,
+            tuple(dict((*writes, *suffix.writes)).items()), final, suffix.last_pc,
+            direct + suffix.direct_calls), False
+    sound_id = 13 if kind == 'secondary' else 12 if kind == 'quarter' else (
+        105 if kind in ('count25', 'flag25') else 11 if kind in ('primary', 'plain15', 'reset15') else 93 if kind == 'spawn' else 100)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index*4, restored[name], 4))
+    writes.extend((*_bytes(sp-24, sound_id, 4), *_bytes(sp-28, resume-6, 4)))
+    final = dict(restored, a7=sp-28, pc=0x1E58B8, sr=sr)
+    return AtomicPlan(cycles+84, instructions+3, tuple(dict(writes).items()), final,
+                      resume-12, direct), True
+
+
+def finish_collection(machine, registers, entry):
+    sp = registers['a7'] + 24
+    restored = dict(registers, a7=sp)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        restored[name] = _read(machine, sp-index*4, 4)
+    _collection_guard(machine, restored)
+    suffix = _collection_suffix(machine, restored, entry)
+    final = {name: restored[name] for name in ('d0', 'd1', 'a0', 'a1', 'a6')}
+    final.update(suffix.registers)
+    return AtomicPlan(60+suffix.cycles, 2+suffix.instructions, suffix.writes, final,
+                      suffix.last_pc, suffix.direct_calls)
+
+
+def relocate_collection(machine, registers):
+    """1AF516: search six secondary slots, then move the complete object record."""
+    record, sp, sr, d0 = (registers[k] for k in ('a1', 'a7', 'sr', 'd0'))
+    read = _collection_guard(machine, registers)
+    _spans_disjoint([('source object', record, 66), ('secondary pool', 0xFF84B2, 396),
+                     ('relocation frame', sp-4, 8)])
+    destination, index = game.free_object(read, 0xFF84B2, 6)
+    writes = list(_bytes(sp-4, 0x1AF51A, 4))
+    if destination is None:
+        return AtomicPlan(324, 30, tuple(writes),
+            {'d0': (d0 & 0xFFFF0000) | 0xFFFF, 'a5': 0xFF863E,
+             'sr': _logic_sr(sr, read(0xFF85FC, 1), 1),
+             'a7': sp+4, 'pc': read(sp, 4) & 0xFFFFFF}, 0x1AF53C, direct_calls=1)
+    writes = (*writes, *_bytes(sp-4, record, 4), *game.relocate_object(read, record, destination))
+    return AtomicPlan(922+40*index, 81+4*index, tuple(dict(writes).items()),
+        {'d0': (d0 & 0xFFFF0000) | (5-index), 'd7': registers['d7'] | 0xFFFF,
+         'a5': destination+66, 'sr': _logic_sr(sr, 0, 1),
+                      'a7': sp+4, 'pc': read(sp, 4) & 0xFFFFFF}, 0x1AF53C, direct_calls=2)
+
+
+def _spawn_collection(machine, registers):
+    record, sp, sr, d0 = (registers[k] for k in ('a1', 'a7', 'sr', 'd0'))
+    read = _collection_guard(machine, registers)
+    _spans_disjoint([('primary pool', 0xFF7E82, 24*66), ('spawn frame', sp-4, 8), *COLLECTION_GLOBALS])
+    if record < 0xFF84B2 and record+66 > 0xFF7E82 and (record-0xFF7E82) % 66:
+        raise UnsupportedCandidate('source partially overlaps primary pool slots')
+    # The preceding activation makes the source occupied before searching.
+    # No mutable mirror: this one known read dependency is explicit in the search.
+    destination, index = game.free_object(read, 0xFF7E82, 24, occupied=record)
+    writes = [*game.activate_collection(record), *_bytes(sp-4, 0x1AF44E, 4)]
+    if destination is None:
+        value = 0x84 if record == 0xFF8470 else read(0xFF8470, 1)
+        return AtomicPlan(1152, 108, tuple(writes),
+            {'d0': (d0 & 0xFFFF0000) | 0xFFFF, 'a5': 0xFF84B2,
+             'sr': _logic_sr(sr, value, 1), 'a7': sp+4, 'pc': read(sp, 4) & 0xFFFFFF},
+            0x1AF466, direct_calls=2)
+    _spans_disjoint([('source record', record, 66), ('spawned record', destination, 66)])
+    template = machine.peek_rom(0x1B7CC4, 19)
+    writes.extend((*game.spawn_collection(read, record, destination, template), *_bytes(sp-4, 0x1AF45A, 4)))
+    return AtomicPlan(750+40*index, 45+4*index, tuple(dict(writes).items()),
+        {'d0': (d0 & 0xFFFF0000) | (23-index), 'a5': destination, 'a6': 0x1B7CD7,
+         'sr': _logic_sr(sr, read(record+4, 2), 2), 'a7': sp+4, 'pc': read(sp, 4) & 0xFFFFFF},
+        0x1AF466, direct_calls=4)

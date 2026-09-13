@@ -18,7 +18,7 @@ def main():
     parser.add_argument("witness", type=Path)
     parser.add_argument("--rom", type=Path, default=ROOT / "assets/Aladdin (USA).md")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/review/edit-loop")
-    parser.add_argument("--candidate", default="leaf", choices=("leaf", "carrier"))
+    parser.add_argument("--candidate", default="leaf", choices=("leaf", "carrier", "lifecycle"))
     args = parser.parse_args()
     native = ROOT / "build/libaladdin_native.dll"
     native_hash = hashlib.sha256(native.read_bytes()).hexdigest()

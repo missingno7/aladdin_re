@@ -6,7 +6,8 @@ from .boundary import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY,
                         INIT_ENTRY, FINISH_ENTRY, ROM_SHA256, clear_auxiliary_buffer,
                         COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, clear_object_pair, detach_object,
                         initialize_object, finish_object, replace_object, TRANSITION_ENTRY,
-                        SOUND_RETURN, begin_object_transition, finish_object_transition)
+                        SOUND_RETURN, begin_object_transition, finish_object_transition,
+                        COLLECTION_ROUTES, begin_collection, finish_collection, relocate_collection)
 
 
 @dataclass
@@ -22,6 +23,7 @@ class Candidate:
         "gates": 0, "candidate_hits": 0, "fallbacks": 0,
         "leaf_hits": 0, "pair_hits": 0, "caller_hits": 0, "direct_python_calls": 0,
         "initializer_hits": 0, "finish_hits": 0,
+        "collection_hits": 0, "collection_entries": {}, "relocation_hits": 0,
         "replace_hits": 0, "counted_replace_hits": 0,
         "carrier_entries": 0, "carrier_completed": 0, "legacy_entries": 0, "legacy_returns": 0,
         "local_fallbacks": 0, "foreign_returns": 0, "legacy_deadline_fallbacks": 0,
@@ -29,8 +31,9 @@ class Candidate:
     })
 
     _names = {
-        "leaf", "pair", "init", "finish", "replace", "composed", "carrier",
+        "leaf", "pair", "init", "finish", "replace", "composed", "carrier", "lifecycle",
         "carrier-mutant-result", "carrier-mutant-continuation", "carrier-mutant-timing",
+        "lifecycle-mutant-result", "lifecycle-mutant-continuation", "lifecycle-mutant-timing",
         "mutant-result", "mutant-continuation", "mutant-timing",
     }
 
@@ -44,7 +47,11 @@ class Candidate:
 
     @property
     def is_carrier(self) -> bool:
-        return self.name == "carrier" or self.name.startswith("carrier-mutant-")
+        return self.name == "carrier" or self.is_lifecycle or self.name.startswith("carrier-mutant-")
+
+    @property
+    def is_lifecycle(self) -> bool:
+        return self.name == 'lifecycle' or self.name.startswith('lifecycle-mutant-')
 
     @property
     def mutation(self) -> str | None:
@@ -58,7 +65,8 @@ class Candidate:
         if self.is_carrier:
             # The 1AF4C6 tail is owned inside this region; the other ten paths
             # still enter via the counted replacement boundary.
-            return (TRANSITION_ENTRY, COUNTED_REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
+            base = (TRANSITION_ENTRY, COUNTED_REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
+            return tuple(dict.fromkeys((*COLLECTION_ROUTES, 0x1AF516, *base))) if self.is_lifecycle else base
         if self.is_composed:
             return (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
         if self.name == "replace":
@@ -94,16 +102,23 @@ class Candidate:
             machine.run(instructions=1)
         return False
 
-    def _transition(self, machine, target):
+    def _transition(self, machine, target, entry=TRANSITION_ENTRY):
         self.stats["gates"] += 1
         regs = machine.registers()
+        collection = self.is_lifecycle and entry in COLLECTION_ROUTES
+        resume = COLLECTION_ROUTES[entry][1] if collection else SOUND_RETURN
         try:
-            plan, legacy = begin_object_transition(machine, regs)
+            plan, legacy = begin_collection(machine, regs, entry) if collection else begin_object_transition(machine, regs)
             if not self._apply(machine, self._mutate(plan), target):
-                return self._fallback(machine, TRANSITION_ENTRY, "scheduler admission")
+                return self._fallback(machine, entry, "scheduler admission")
         except UnsupportedCandidate as error:
-            return self._fallback(machine, TRANSITION_ENTRY, f"unsupported domain: {error}")
+            return self._fallback(machine, entry, f"unsupported domain: {error}")
         self.stats["carrier_entries"] += 1
+        if collection:
+            self.stats['collection_hits'] += 1
+            entries = self.stats['collection_entries']
+            key = f'{entry:06X}'
+            entries[key] = entries.get(key, 0) + 1
         if not legacy:
             self.stats["carrier_completed"] += 1
             return True
@@ -112,27 +127,28 @@ class Candidate:
         self.stats["legacy_entries"] += 1
         machine.in_sound_call = True
         try:
-            machine.gates([SOUND_RETURN])
+            machine.gates([resume])
             while machine.run(target=target) == "gate":
                 self.stats["gates"] += 1
                 returned = machine.registers()
                 if returned["a7"] != sp - 24:
                     self.stats["foreign_returns"] += 1
-                    machine.gate(SOUND_RETURN, bypass_once=True)
+                    machine.gate(resume, bypass_once=True)
                     continue
-                if (returned["pc"] != SOUND_RETURN or machine.peek_ram((sp - 24) & 65535, 28) != frame
-                        or int.from_bytes(machine.peek_ram((sp - 28) & 65535, 4), "big") != SOUND_RETURN):
+                if (returned["pc"] != resume or machine.peek_ram((sp - 24) & 65535, 28) != frame
+                        or int.from_bytes(machine.peek_ram((sp - 28) & 65535, 4), "big") != resume):
                     raise ValueError("Object sound return/frame mismatch")
                 self.stats["legacy_returns"] += 1
                 reason = "scheduler admission"
                 try:
-                    if self._apply(machine, finish_object_transition(machine, returned), target):
+                    suffix = finish_collection(machine, returned, entry) if collection else finish_object_transition(machine, returned)
+                    if self._apply(machine, suffix, target):
                         self.stats["carrier_completed"] += 1
                         return True
                 except UnsupportedCandidate as error:
                     reason = f"unsupported domain: {error}"
                 self.stats["local_fallbacks"] += 1
-                self._fallback(machine, SOUND_RETURN, reason)
+                self._fallback(machine, resume, reason)
                 return True
             # Never cross the caller's input/frame deadline to preserve Python
             # ownership. The prefix stays committed; original code owns the rest.
@@ -156,13 +172,17 @@ class Candidate:
             raise ValueError("Recovery dispatch needs the scheduler master-tick deadline")
         if self.is_carrier and entry == TRANSITION_ENTRY:
             return self._transition(machine, target)
+        if self.is_lifecycle and entry in COLLECTION_ROUTES:
+            return self._transition(machine, target, entry)
         if entry not in self.gate_pcs:
             raise ValueError("Recovery dispatch does not match the stopped PC")
         self.stats["gates"] += 1
         fallback_reason = "scheduler admission"
         try:
             registers = machine.registers()
-            if entry == CALLER_ENTRY and self.is_composed:
+            if entry == 0x1AF516 and self.is_lifecycle:
+                plan = relocate_collection(machine, registers)
+            elif entry == CALLER_ENTRY and self.is_composed:
                 plan = detach_object(machine, registers)
             elif entry in (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY):
                 plan = replace_object(machine, registers, increment_total=entry == COUNTED_REPLACE_ENTRY)
@@ -193,13 +213,15 @@ class Candidate:
             elif entry in (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY):
                 self.stats["replace_hits"] += 1
                 self.stats["counted_replace_hits"] += int(entry == COUNTED_REPLACE_ENTRY)
+            elif entry == 0x1AF516:
+                self.stats['relocation_hits'] += 1
             else:
                 self.stats["caller_hits"] += 1
             return True
         return self._fallback(machine, entry, fallback_reason)
 
     def _mutate(self, plan: AtomicPlan) -> AtomicPlan:
-        if self.name.startswith("carrier-mutant-"):
+        if self.name.startswith(("carrier-mutant-", "lifecycle-mutant-")):
             if self.name.endswith("timing"):
                 return AtomicPlan(plan.cycles + 2, plan.instructions, plan.writes, plan.registers, plan.last_pc, plan.direct_calls)
             writes = list(plan.writes)

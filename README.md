@@ -56,6 +56,16 @@ result so a stale installed package is not mistaken for source-tree code.
 Original play remains the default. Recovery candidates are explicit replay
 choices. The current carrier needs no persisted Python continuation.
 
+The 0.9 `lifecycle` candidate expands the object-collection/retirement family,
+including shared sound seams, companion allocation and object relocation:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\dev.py compare recordings\current\20260912T210640.729016Z.alreplay --candidate lifecycle --diagnostics --output artifacts\lifecycle\new-full
+```
+
+See [the subsystem report](docs/collection-subsystem.md) for its recovery-cost
+log and the distinction between recorded paths and constructed branch fixtures.
+
 ## Build on Windows
 
 Requirements are Python 3.12 x64, CMake/Ninja, a C++17 compiler, and the pinned
@@ -80,7 +90,7 @@ Install the player package separately when native or packaged Python changes:
 
 ```powershell
 $env:CMAKE_GENERATOR = 'Ninja'
-$env:CMAKE_ARGS = "-DPORTFORGE_ROOT=D:/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe -DCMAKE_CXX_COMPILER=C:/msys64/mingw64/bin/g++.exe -DCMAKE_MAKE_PROGRAM=$PWD/.venv/Scripts/ninja.exe -DBUILD_TESTING=OFF"
+$env:CMAKE_ARGS = "-DPORTFORGE_ROOT=D:/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe -DCMAKE_CXX_COMPILER=C:/msys64/mingw64/bin/g++.exe -DCMAKE_MAKE_PROGRAM=$PWD/.venv/Scripts/ninja.exe -DBUILD_TESTING=OFF".Replace('\', '/')
 .\.venv\Scripts\python.exe -m pip install . --no-build-isolation --no-deps
 ```
 

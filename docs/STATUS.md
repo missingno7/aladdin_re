@@ -6,6 +6,44 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Collection outcomes and object retirement (0.9.0)
+
+**CONTINUE + MECHANIZE.** The `lifecycle` candidate owns a coherent family of
+twelve collection entries plus object relocation, sharing cleanup/initialization
+with the existing cluster. Nine substantive recovery steps cover decimal caps
+and state publication, fractional collection, accumulator variants, transition
+flags, retirement before/after sound, companion allocation and full-record
+relocation. The cost log distinguishes game reasoning from new numeric machine
+recipes: the latter remain handwritten, but later steps reused the same sound,
+stack, admission, snapshot and verification mechanisms. No per-site continuation
+type or snapshot state was introduced.
+
+The same semantic retirement, search, relocation and initialization source is
+independent of the machine API. A byte-image qualification calls the production
+collection/retirement functions with no Machine alive. This is portability of
+the recovered game effects, not a CPU-free whole game. Work RAM remains the one
+production state authority.
+
+All **345 Python tests**, seven native suites and 19 frozen 0.6 continuation tests
+pass. New recorded witnesses pass complete native-state/frame/PCM equality,
+150 original continuation instructions, fresh-process safe-exit restore,
+result/return/timing controls and exact inside-sound input delivery. The full
+user recording passes all **225 observations**, terminal state/frame and whole
+PCM, with **four fallbacks unchanged**. Python edit-to-verdict is 0.677 s for PASS
+and 0.624 s for a deliberately wrong clear, with no build or install.
+
+Recorded coverage adds five sound/retirement activations and three relocation
+activations; the other new branches have original-ROM constructed fixtures,
+not new recording coverage. Pair and initializer gates each fire five fewer
+times. Replaced instructions increase 58,652 -> 58,983; execution crossings
+35,248 -> 35,260 and measured API crossings 247,180 -> 247,182. These are context,
+not the decision criterion. Base gates increase 7 -> 19. The sole native change
+raises the existing gate-set bound 16 -> 64; no scheduler/device changes.
+
+See [collection-subsystem.md](collection-subsystem.md) for the semantic scope,
+real ROM map, per-step manual-cost log, coverage limits, evidence and retrospective.
+Earlier experiments and verdicts below remain historical evidence.
+
 ## Shared semantic helpers in production (0.8.0)
 
 **CONVERGING for the existing cluster.** The previous experiment's duplicate

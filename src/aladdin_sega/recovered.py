@@ -45,3 +45,79 @@ def unlink(read, linked):
         return []
     return [(linked + offset, 0) for offset in range(62, 66)] + [
         (linked + 60, read(linked + 60, 1) & ~0x04)]
+
+
+def collection_state(read, record, kind):
+    """State changes made when a collection handler accepts an object.
+
+    Names describe established effects, not guessed identities of collectibles.
+    Sound and retirement are separate stages because original sound can observe
+    the committed prefix. Values here are bytes in the one authoritative RAM.
+    """
+    if kind == 'flag25':
+        return [(0xFFF176, 255)]
+    if kind == 'count25':
+        return [(0xFFF003, (read(0xFFF003, 1) + 1) & 255)]
+    if kind == 'reset15':
+        return [(0xFFF0A4, 0), (0xFFF0A5, 0)]
+    if kind in ('flag177', 'flag178'):
+        flag = 0xFFF177 if kind == 'flag177' else 0xFFF178
+        return [(flag, 255), (record, 0x84),
+                *[(record + 10 + i, b) for i, b in enumerate(bytes.fromhex('00121618'))],
+                (record + 55, 0), (0xFF7DFE, 0), (0xFF7DFF, 0x70),
+                (0xFF7E00, 1), (0xFF7E01, 0x90)]
+    if kind == 'timer100':
+        return [(0xFFF0E9, 0x20)]
+    if kind == 'spawn':
+        return [(0xFFF11C, 255)]
+    if kind in ('primary', 'secondary'):
+        shift = 2 if kind == 'secondary' else 0
+        digits = read(0xFFEFE0 + shift, 2)
+        if digits == 0x3939:
+            flag = read(record + 52, 1)
+            index = read(record + 50, 2)
+            index = index - 65536 if index & 0x8000 else index
+            return [(0xFFAE87 + index, flag)] if flag else []
+        return [(address + shift, value) for address, value in increment_counter(digits)]
+    if kind == 'quarter':
+        count = (read(0xFFF10A, 1) + 1) & 255
+        return [(0xFFF10A, count if count < 4 else 0),
+                *(increment_counter(read(0xFFEFE0, 2)) if count >= 4 else [])]
+    return []
+
+
+def retire_collected_object(read, record, template, amount=0):
+    """Accumulate the collection value, release its pair and install the retirement template."""
+    total = (read(0xFFF14E, 2) + amount) & 0xFFFF if amount else None
+    return [*([(0xFFF14E, total >> 8), (0xFFF14F, total & 255)] if amount else []),
+            *clear_pair(read, record), *initialize(record, template)]
+
+
+def free_object(read, start, count, stride=66, *, occupied=None):
+    """Find the first inactive record in the specified original object pool."""
+    for index in range(count):
+        if start + index * stride != occupied and read(start + index * stride, 1) == 0:
+            return start + index * stride, index
+    return None, count
+
+
+def relocate_object(read, record, destination):
+    """Move a 66-byte object to the secondary pool, installing its new script."""
+    data = [read(record + offset, 1) for offset in range(66)]
+    data[0], data[55] = 0x82, 0
+    data[32:36] = bytes.fromhex('00125710')
+    return [(record, 0), *[(record + 32 + i, b) for i, b in enumerate(data[32:36])],
+            (record + 55, 0), *[(destination + i, b) for i, b in enumerate(data)]]
+
+
+def activate_collection(record):
+    """Install the collected object's active script and reset its script cursors."""
+    return [(record, 0x84), (record + 6, 1), (record + 55, 0), (record + 54, 0),
+            *[(record+32+i, b) for i,b in enumerate(bytes.fromhex('00121c30'))],
+            *[(record+10+i, b) for i,b in enumerate(bytes.fromhex('001215e0'))]]
+
+
+def spawn_collection(read, record, destination, template):
+    """Initialize a companion at the collected object's current position."""
+    return [*initialize(destination, template),
+            *[(destination+offset, read(record+offset, 1)) for offset in range(2, 6)]]
