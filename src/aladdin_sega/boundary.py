@@ -474,6 +474,38 @@ _CONTACT_SOUND_PREFIX = {
 }
 
 
+def _contact_decay_accounting(read, sr):
+    """Return the exact aggregate cost and residue of reset's 1B03F2 calls."""
+    count, counter = read(0xFF7E21, 1), read(0xFFEFFA, 1)
+    calls = 1 + min(count, 2)
+    residue = 0x1AE5C0 if count == 0 else 0x1AE5D0 if count == 1 else 0x1AE5E0
+    blocker = read(0xFF7E20, 1)
+    if blocker:
+        # Calls reach 1B03F2's FF7E20 TST/RTS short path, with the caller's
+        # intervening FF7E21 comparisons accounting for the later deltas.
+        cycles, instructions = 214, 13
+        if count:
+            cycles += 140; instructions += 10
+        if count > 1:
+            cycles += 110; instructions += 8
+        # The first and second exits follow CMP #0/#1, while a third returns
+        # directly from 1B03F2 with the blocker's TST CCR.
+        final_value = 0 if count <= 1 else blocker
+        return cycles, instructions, residue, _logic_sr(sr, final_value, 1), calls
+    cycles, instructions = (258, 16) if counter == 0 else (300, 19)
+    if count:
+        cycles += 116 if counter == 0 else 184 if counter == 1 else 188
+        instructions += 8 if counter == 0 else 13 if counter == 1 else 14
+    if count > 1:
+        cycles += 86 if counter < 2 else 158
+        instructions += 6 if counter < 2 else 12
+    final_value = 0 if count <= 1 else 10 if counter == 0 else 0x28
+    # SUBQ.B in the positive-counter path writes X; its following CMP leaves
+    # that X result intact.  The zero-counter MOVE path does not alter X.
+    final_sr = _logic_sr(sr & ~0x10 if counter else sr, final_value, 1)
+    return cycles, instructions, residue, final_sr, calls
+
+
 def _contact_guard(machine, registers, *, sound_frame=False):
     """Validate the caller frame before reading the contact live-RAM domain."""
     sp = registers['a7']
@@ -510,36 +542,15 @@ def begin_contact(machine, registers):
     if path in ('reset', 'pointer_reset') and not read(0xFFF57D, 1):
         if route not in _CONTACT_RESET_BASE:
             raise UnsupportedCandidate('contact reset route')
-        if read(0xFF7E20, 1):
-            # 1B03F2 still executes but short-circuits on this live guard;
-            # its different per-call cost remains original until measured.
-            raise UnsupportedCandidate('contact reset decay blocker')
-        count, counter = read(0xFF7E21, 1), read(0xFFEFFA, 1)
         cycles, instructions = _CONTACT_RESET_BASE[route]
-        if counter == 0:
-            cycles -= 42; instructions -= 3
-        if count:
-            if counter == 0:
-                cycles += 116; instructions += 8
-            elif counter == 1:
-                cycles += 184; instructions += 13
-            else:
-                cycles += 188; instructions += 14
-        if count > 1:
-            if counter == 0:
-                cycles += 86; instructions += 6
-            elif counter == 1:
-                cycles += 86; instructions += 6
-            else:
-                cycles += 158; instructions += 12
-        bsr_return = 0x1AE5C0 if count == 0 else 0x1AE5D0 if count == 1 else 0x1AE5E0
+        decay_cycles, decay_instructions, bsr_return, final_sr, calls = _contact_decay_accounting(read, sr)
+        cycles += decay_cycles - 300; instructions += decay_instructions - 19
         writes = (*game.contact_reset(read, pointer_reset=path == 'pointer_reset'),
                   *_bytes(sp - 4, bsr_return, 4))
-        final_value = 0 if count <= 1 else 10 if counter == 0 else 0x28
         return AtomicPlan(cycles, instructions, tuple(writes),
                           {'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
-                           'sr': _logic_sr(sr, final_value, 1)}, 0x1AE5E0,
-                          direct_calls=1 + bool(count) + bool(count > 1))
+                           'sr': final_sr}, 0x1AE5E0,
+                          direct_calls=calls)
     raise UnsupportedCandidate(f'contact {path} requires the synchronous reset seam')
 
 
@@ -573,28 +584,18 @@ def finish_contact_sound(machine, registers):
     read = _contact_guard(machine, restored_frame, sound_frame=True)
     if read(sp - 28, 4) != 0x1AE5B6:
         raise UnsupportedCandidate('contact sound return slot')
-    if (read(0xFFF0E9, 1) or read(0xFFF0E6, 1) or read(0xFF7E20, 1)
-            or read(0xFFF0F2, 1)):
+    if read(0xFFF0E9, 1) or read(0xFFF0E6, 1) or read(0xFFF0F2, 1):
         raise UnsupportedCandidate('contact sound return domain')
     restored = dict(registers, a7=sp)
     for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
         restored[name] = read(sp - index * 4, 4)
-    count, counter = read(0xFF7E21, 1), read(0xFFEFFA, 1)
-    cycles, instructions = (258, 16) if counter == 0 else (300, 19)
-    if count:
-        cycles += 116 if counter == 0 else 184 if counter == 1 else 188
-        instructions += 8 if counter == 0 else 13 if counter == 1 else 14
-    if count > 1:
-        cycles += 86 if counter < 2 else 158
-        instructions += 6 if counter < 2 else 12
-    bsr_return = 0x1AE5C0 if count == 0 else 0x1AE5D0 if count == 1 else 0x1AE5E0
+    cycles, instructions, bsr_return, final_sr, calls = _contact_decay_accounting(read, restored['sr'])
     writes = (*game.contact_repeated_decay(read), *_bytes(sp - 4, bsr_return, 4))
-    final_value = 0 if count <= 1 else 10 if counter == 0 else 0x28
     return AtomicPlan(cycles, instructions, tuple(writes),
                       {**{name: restored[name] for name in ('d0', 'd1', 'a0', 'a1', 'a6')},
                        'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
-                       'sr': _logic_sr(restored['sr'], final_value, 1)}, 0x1AE5DC,
-                      direct_calls=1 + bool(count) + bool(count > 1))
+                       'sr': final_sr}, 0x1AE5DC,
+                      direct_calls=calls)
 
 
 def _add_sr(sr, left, right, width):

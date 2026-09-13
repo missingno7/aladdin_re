@@ -83,7 +83,7 @@ def test_soundoff_guard_rejects_global_alias_in_saved_return_scratch(address):
     assert (machine.peek_ram(0, 65536), machine.registers()) == before
 
 
-def test_soundoff_ff7e20_blocked_decay_falls_back_to_original_timing():
+def test_soundoff_ff7e20_blocked_decay_matches_original_timing():
     with contact_machine() as machine:
         for address, value in ((0xFFF0C1, 0), (0xFFF57D, 0),
                                (0xFFF11F, 1), (0xFFEFFA, 1),
@@ -101,11 +101,52 @@ def test_soundoff_ff7e20_blocked_decay_falls_back_to_original_timing():
         machine.gates([CONTACT_ENTRY])
         assert machine.run(instructions=1) == "gate"
         candidate = Candidate("lifecycle")
-        assert not candidate.on_gate(machine, machine.info["tick"] + 1_000_000)
-        machine.gates([0])
-        assert machine.run(instructions=10_000) == "gate"
+        assert candidate.on_gate(machine, machine.info["tick"] + 1_000_000)
         machine.gates([])
         assert (machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()) == expected
+        assert candidate.stats["contact_hits"] == 1
+
+
+def _blocked_native_compare(*, sound, count, counter):
+    with contact_machine() as machine:
+        for address, value in ((0xFFF0C1, 0), (0xFFF57D, sound),
+                               (0xFFF11F, 1), (0xFFEFFA, counter),
+                               (0xFF7E21, count), (0xFF7E20, 1)):
+            native_write(machine, address, bytes((value,)))
+        initial = machine.snapshot()
+        machine.gates([0])
+        machine.gate(CONTACT_ENTRY, bypass_once=True)
+        assert machine.run(instructions=100_000) == "gate"
+        machine.gates([])
+        expected = (machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio())
+
+        machine.restore(initial)
+        machine.audio()
+        machine.gates([CONTACT_ENTRY])
+        assert machine.run(instructions=1) == "gate"
+        candidate = Candidate("lifecycle")
+        candidate.on_gate(machine, machine.info["tick"] + 1_000_000)
+        machine.gates([0])
+        assert machine.run(instructions=100_000) == "gate"
+        machine.gates([])
+        actual = machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()
+        assert actual == expected
+        return candidate.stats
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 255])
+@pytest.mark.parametrize("counter", [0, 1, 2, 255])
+def test_blocked_decay_direct_boundary_matrix_matches_original(count, counter):
+    stats = _blocked_native_compare(sound=0, count=count, counter=counter)
+    assert stats["contact_hits"] == 1 and stats["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 255])
+@pytest.mark.parametrize("counter", [0, 1, 2, 255])
+def test_blocked_decay_sound_suffix_boundary_matrix_matches_original(count, counter):
+    stats = _blocked_native_compare(sound=1, count=count, counter=counter)
+    assert stats["contact_hits"] == stats["legacy_returns"] == 1
+    assert stats["local_fallbacks"] == 0
 
 
 RECORDED_DISPATCH_FIXTURE = Path(
@@ -283,3 +324,38 @@ def test_sound_prefix_preserves_incoming_x_at_first_native_callee_entry():
         # an incorrect incoming CCR transformation.
         assert prefix.registers["sr"] == expected[1]["sr"]
         assert prefix.cycles == expected[0]["m68k_cycles"] - initial_info["m68k_cycles"]
+
+
+@pytest.mark.parametrize("sound", [0, 1])
+@pytest.mark.parametrize("count,counter,expected_x", [
+    (0, 1, False),  # A positive EFFA takes SUBQ.B on the first call.
+    (1, 1, False),  # SUBQ.B clears X on a non-borrowing decrement.
+    (2, 1, False),  # The repeated positive decrement also clears X.
+    (1, 0, True),   # FF7E20-blocked/zero-counter path never performs SUBQ.
+])
+def test_contact_decay_return_matches_original_incoming_x(sound, count, counter, expected_x):
+    """Qualify X at the outer return after direct and sound decay routes."""
+    with _contact_machine_with_x_set() as machine:
+        for address, value in ((0xFFF0C1, 0), (0xFFF57D, sound),
+                               (0xFFF11F, 1), (0xFFEFFA, counter),
+                               (0xFF7E21, count), (0xFF7E20, 1 if counter == 0 else 0)):
+            native_write(machine, address, bytes((value,)))
+        initial = machine.snapshot()
+        machine.gates([0])
+        machine.gate(CONTACT_ENTRY, bypass_once=True)
+        assert machine.run(instructions=100_000) == "gate"
+        machine.gates([])
+        expected = (machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio())
+
+        machine.restore(initial)
+        machine.audio()
+        machine.gates([CONTACT_ENTRY])
+        assert machine.run(instructions=1) == "gate"
+        candidate = Candidate("lifecycle")
+        assert candidate.on_gate(machine, machine.info["tick"] + 1_000_000)
+        machine.gates([0])
+        assert machine.run(instructions=100_000) == "gate"
+        machine.gates([])
+        assert (machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()) == expected
+        assert bool(machine.registers()["sr"] & 0x10) is expected_x
+        assert candidate.stats["contact_hits"] == 1

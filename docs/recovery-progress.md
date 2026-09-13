@@ -254,3 +254,42 @@ Python. Final evidence includes 646 tests, both full corpora, a tracked-script
 recapture and strict witness with fresh-process exit restore, plus all three
 negative controls. The report retains the baseline counter definitions and
 records actual manual work, reuse and remaining unsupported domains.
+
+## Shared repeated-decay recipe
+
+After the expanded contact checkpoint, `_contact_decay_accounting(read, sr)`
+replaces the duplicated timing/instruction/last-BSR/final-CCR calculation in
+direct reset and the sound-return suffix. It also admits the understood
+`FF7E20` blocked-decay route instead of declining the whole direct entry or
+remaining suffix. No game-source function changed, and no new gate, native API,
+snapshot state or continuation rule was added. The production boundary diff
+is 40 added / 39 removed lines, including the new domain and correction; this
+is shared handwritten calculation, not generated code.
+
+The full-return CCR tests found a latent defect beyond the earlier prefix-X
+fix: the original positive, unblocked decrement clears X, while blocked and
+zero-counter paths preserve it. The shared calculation now implements that
+distinction for both production callers. Constructed original-machine matrices
+qualify count/counter boundaries, blocker values (including a negative byte),
+stack residue, and full-return CCR. No new recorded gameplay coverage is claimed
+for the blocked case merely because those constructed tests pass.
+
+Final evidence:
+
+- `artifacts/grinding/parent/contact-decay-pytest.log`: **693 passed in 27.24 s**.
+- `artifacts/grinding/terra/contact-decay-final-old-v2/comparison.json` and
+  `contact-decay-final-new/comparison.json`: **225 + 244 observations PASS**,
+  with current recursive production hashes.
+- `artifacts/grinding/parent/contact-decay-witness/report.json`: recorded
+  type-7B sound case, full native snapshot/frame/PCM equality, 150 original
+  instructions, fresh-process entry replay and safe-exit restore PASS.
+- `artifacts/grinding/parent/contact-decay-controls/report.json`: result
+  DIVERGENCE, continuation/timing CANDIDATE_ERROR; all rejected.
+
+The next adjacent semantic work has original-only coverage: the two retained
+recordings reach `1AEC00` 92/54 times, its decrement branch 6/1 times and its
+counter-retirement branch 6/4 times. The latter calls the already recovered
+pair cleanup, buffer release and initialization functions. Those counts and
+unmodified branch snapshots are in
+`artifacts/grinding/parent/sibling-census-{old,new}`; they are future recovery
+inputs, not candidate qualification.

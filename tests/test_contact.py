@@ -154,6 +154,26 @@ def test_contact_soundoff_reset_routes_and_repeated_decay_match_original(route, 
         assert candidate.stats['contact_hits'] == 1
 
 
+@pytest.mark.parametrize('counter,count,blocker', [(0, 0, 1), (1, 0, 1),
+                                                    (2, 1, 1), (255, 255, 0x80)])
+def test_contact_soundoff_blocked_decay_repeats_match_original(counter, count, blocker):
+    with contact_machine() as machine:
+        for address, value in ((0xfff0c1, 0), (0xfff57d, 0), (0xffeffa, counter),
+                               (0xff7e21, count), (0xff7e20, blocker)):
+            native_write(machine, address, bytes((value,)))
+        initial = machine.snapshot(); machine.gates([0]); machine.gate(CONTACT_ENTRY, bypass_once=True)
+        assert machine.run(instructions=10_000) == 'gate'
+        machine.gates([])
+        expected = machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()
+        machine.restore(initial); machine.audio(); machine.gates([CONTACT_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        candidate = Candidate('lifecycle')
+        assert candidate.on_gate(machine, machine.info['tick'] + 1_000_000)
+        machine.gates([])
+        assert (machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()) == expected
+        assert candidate.stats['contact_hits'] == 1
+
+
 @pytest.mark.parametrize('route,writes', [
     ('be', [(0xfff0be, 1)]), ('d0', [(0xfff0d0, 1)]),
     ('d7', [(0xfff0d7, 1)]), ('cd', [(0xfff0cd, 1)]),
@@ -221,6 +241,27 @@ def test_contact_sound31_routes_and_repeated_decay_match_original(route, counter
         native_write(machine, 0xFF8000, (0x300).to_bytes(4, 'big'))
         initial = machine.snapshot()
         machine.gates([0x300]); machine.gate(CONTACT_ENTRY, bypass_once=True)
+        assert machine.run(instructions=10_000) == 'gate'
+        machine.gates([])
+        expected = machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()
+        machine.restore(initial); machine.audio(); machine.gates([CONTACT_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        candidate = Candidate('lifecycle')
+        assert candidate.on_gate(machine, machine.info['tick'] + 1_000_000)
+        machine.gates([])
+        assert (machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()) == expected
+        assert candidate.stats['contact_hits'] == candidate.stats['legacy_returns'] == 1
+
+
+@pytest.mark.parametrize('counter,count,blocker', [(0, 0, 1), (1, 0, 1),
+                                                    (2, 1, 1), (255, 255, 0x80)])
+def test_contact_sound31_blocked_decay_repeats_match_original(counter, count, blocker):
+    with contact_machine() as machine:
+        for address, value in ((0xfff0c1, 0), (0xfff57d, 1), (0xffeffa, counter),
+                               (0xff7e21, count), (0xff7e20, blocker)):
+            native_write(machine, address, bytes((value,)))
+        native_write(machine, 0xFF8000, (0x300).to_bytes(4, 'big'))
+        initial = machine.snapshot(); machine.gates([0x300]); machine.gate(CONTACT_ENTRY, bypass_once=True)
         assert machine.run(instructions=10_000) == 'gate'
         machine.gates([])
         expected = machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()

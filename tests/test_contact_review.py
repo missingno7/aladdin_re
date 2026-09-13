@@ -142,13 +142,12 @@ def test_soundoff_reset_rejects_the_bsr_residue_alias_surface(stack):
     assert (machine.peek_ram(0, 65536), machine.registers()) == before
 
 
-def test_soundoff_reset_refuses_the_unmeasured_decay_blocker_before_writes():
+def test_soundoff_reset_blocked_decay_has_its_measured_single_call_recipe():
     machine = _contact_machine({0xFFF0C1: 0, 0xFFF57D: 0, 0xFFF11F: 1,
                                 0xFFEFFA: 1, 0xFF7E20: 1})
-    before = machine.peek_ram(0, 65536), machine.registers()
-    with pytest.raises(UnsupportedCandidate, match="decay blocker"):
-        begin_contact(machine, machine.registers())
-    assert (machine.peek_ram(0, 65536), machine.registers()) == before
+    plan = begin_contact(machine, machine.registers())
+    assert (plan.cycles, plan.instructions, plan.direct_calls) == (412, 29, 1)
+    assert plan.registers["sr"] == 0x2014
 
 
 def test_sound31_suffix_rejects_a_foreign_local_activation():
@@ -176,7 +175,7 @@ def test_sound31_measures_each_early_reset_gate(address, cycles, instructions):
     assert machine.peek_ram(0, 65536) == before
 
 
-@pytest.mark.parametrize("address", [0xFFF0E9, 0xFFF0E6, 0xFF7E20, 0xFFF0F2])
+@pytest.mark.parametrize("address", [0xFFF0E9, 0xFFF0E6, 0xFFF0F2])
 def test_sound31_suffix_rechecks_each_decay_guard_after_native_sound(address):
     machine = _contact_machine({0xFFF0C1: 0, 0xFFF57D: 1, 0xFFF11F: 1, 0xFFEFFA: 1})
     prefix = begin_contact_sound(machine, machine.registers())

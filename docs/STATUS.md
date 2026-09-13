@@ -6,6 +6,20 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Shared decay accounting
+
+Direct contact reset and the sound-return suffix now use one private timing,
+instruction, final-CCR and return-residue calculation. The previously refused
+`FF7E20` blocked-decay case is qualified for both callers. Review also corrected
+the outer X flag: an unblocked positive decrement clears it, while blocked or
+zero-counter paths preserve it. Semantic game functions are unchanged.
+
+All **693 tests** pass, both full recordings remain equal with current source
+receipts, and the recorded composed sound witness passes strict state/frame/PCM,
+150 original instructions and fresh-process safe-exit restore. Negative controls
+remain rejected. This is a small shared mechanism justified by two real callers,
+not a new execution framework; see [recovery-progress.md](recovery-progress.md).
+
 ## Expanded contact family and type-7B composition
 
 The `lifecycle` candidate now composes `1ABC82 → 1AE9D4 → 1AE4F8` directly,
