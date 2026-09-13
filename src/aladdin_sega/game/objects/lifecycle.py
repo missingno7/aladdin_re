@@ -163,6 +163,18 @@ def finish_lower_scripted_spawn(record):
             for offset, byte in enumerate(bytes.fromhex('00125a4c'))]
 
 
+def select_spawn_dispatch_slot(read, cursor, flag_base):
+    """Read one dispatcher slot and its enable byte from the live tables.
+
+    The walker keeps table layout, register effects and loop accounting at the
+    machine boundary. This semantic fragment names the game-level selection
+    that determines whether a slot dispatches a callback at all.
+    """
+    slot = read(cursor, 2)
+    index = slot >> 1
+    return index, read(flag_base + index, 1)
+
+
 def finish_upper_dispatch_spawn(record):
     """Apply 1B745E's type, script, and enabled-flag residue."""
     return [(record, 0x44), *((record + 0x20 + offset, byte)

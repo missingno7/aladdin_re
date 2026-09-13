@@ -56,6 +56,9 @@ DISPATCH_CALLBACKS = (
     SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY,
 )
 
+WALKER_ENTRY = 0x1AE44A
+WALKER_EXIT = 0x1AE47C
+
 
 def write_word(address: int, value: int) -> tuple[tuple[int, int], ...]:
     return tuple((address + i, (value >> (8 * (1 - i))) & 0xFF) for i in range(2))
@@ -132,6 +135,105 @@ def dispatcher_fixture(target: int, *, free: int | None = 0, incoming_x: bool = 
                           cycles=1, instructions=1, last_pc=SPAWN_DISPATCH_ITERATION_ENTRY,
                           writes=[], registers=registers)
     return machine
+
+
+def walker_fixture(fixture: str | Path | bytes, *, registers: dict[str, int] | None = None,
+                   writes: tuple[tuple[int, int], ...] = ()):
+    """Restore a captured walker entry, with optional test-only overrides."""
+    machine = Machine(read_rom(DEFAULT_ROM))
+    if isinstance(fixture, (bytes, bytearray)):
+        machine.restore(bytes(fixture))
+    else:
+        path = Path(fixture)
+        if path.suffix != ".state":
+            path = path.with_suffix(".state")
+        machine.restore(path.read_bytes())
+    if machine.info["pc"] != WALKER_ENTRY:
+        machine.close()
+        raise ValueError(f"walker fixture is not parked at {WALKER_ENTRY:06X}")
+    if registers or writes:
+        machine.gates([WALKER_ENTRY])
+        if machine.run(instructions=1) != "gate":
+            machine.close()
+            raise RuntimeError("could not park walker fixture for override")
+        updated = machine.registers()
+        if registers:
+            updated.update(registers)
+        if not machine.atomic(target=machine.info["tick"] + 1_000_000,
+                              cycles=1, instructions=1, last_pc=WALKER_ENTRY,
+                              writes=list(writes), registers=updated):
+            machine.close()
+            raise RuntimeError("walker fixture override was not accepted")
+    return machine
+
+
+def _callback_flag(callback: int) -> int:
+    rom = read_rom(DEFAULT_ROM)
+    for flag in range(256):
+        address = 0x004154 + flag * 4
+        if int.from_bytes(rom[address:address + 4], "big") & 0xFFFFFF == callback:
+            return flag
+    raise ValueError(f"callback {callback:06X} is absent from the fixed ROM table")
+
+
+def constructed_walker_state(*, count: int = 16,
+                             callbacks: tuple[int | None, ...] | None = None,
+                             stride: int = 0x258, incoming_x: bool = False,
+                             exhausted: bool = False, cursor: int = 0xFF6000,
+                             slot_indices: tuple[int, ...] | None = None,
+                             initial_d0: int = 0) -> bytes:
+    """Build a small walker state from the normal cold oracle setup.
+
+    The table identity remains the real ROM table (A1=4154, A2=FFAE87). Every
+    cursor word and flag byte is explicit RAM fixture input, and callback
+    addresses are resolved from that fixed ROM table. This keeps qualification
+    independent of recorded artifact files while retaining the normal cold
+    setup path used by the other oracles.
+    """
+    if not 1 <= count <= 16:
+        raise ValueError("walker count must be in one..sixteen")
+    if callbacks is None:
+        callbacks = (None,) * count
+    if len(callbacks) < count:
+        raise ValueError("callback sequence is shorter than walker count")
+    if slot_indices is None:
+        slot_indices = tuple(0x100 + index for index in range(count))
+    if len(slot_indices) < count:
+        raise ValueError("slot index sequence is shorter than walker count")
+    machine = cold_fixture(0x1B5266, free=0, pc_entry=WALKER_ENTRY)
+    try:
+        machine.gates([WALKER_ENTRY])
+        if machine.run(instructions=1) != "gate":
+            raise RuntimeError("could not park constructed walker")
+        registers = machine.registers()
+        registers.update({"a0": cursor, "a1": 0x004154, "a2": 0xFFAE87,
+                          "d4": count - 1, "d5": stride & 0xFFFFFFFF,
+                          "d0": initial_d0 & 0xFFFFFFFF,
+                          "d6": 0, "sr": (registers["sr"] & ~0x1F) |
+                          (0x10 if incoming_x else 0)})
+        writes_list = []
+        for index in range(count):
+            slot_address = (cursor + stride * index) & 0xFFFFFFFF
+            slot_index = slot_indices[index]
+            writes_list.extend(write_word(slot_address, slot_index << 1))
+            callback = callbacks[index]
+            flag = 0 if callback is None else _callback_flag(callback)
+            writes_list.append((0xFFAE87 + slot_index, flag))
+        # Seed every known 24-slot object pool as free. The callback itself
+        # can still be made exhausted explicitly without changing the walker
+        # selection inputs.
+        for base, pool_count, direction in ENTRY_BASES.values():
+            for index in range(pool_count):
+                writes_list.append(((base + direction * 0x42 * index) & 0xFFFFFF,
+                                    1 if exhausted else 0))
+        writes = tuple(writes_list)
+        if not machine.atomic(target=machine.info["tick"] + 1_000_000,
+                              cycles=1, instructions=1, last_pc=WALKER_ENTRY,
+                              writes=list(writes), registers=registers):
+            raise RuntimeError("constructed walker setup was not accepted")
+        return machine.snapshot()
+    finally:
+        machine.close()
 
 
 def observable(machine):
@@ -211,6 +313,111 @@ def execute_dispatch(target: int, *, free: int | None, candidate: str | None, in
         machine.close()
 
 
+def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
+                   register_overrides: dict[str, int] | None = None,
+                   writes: tuple[tuple[int, int], ...] = (),
+                   future_instructions: int = 150, include_raw: bool = False,
+                   stop_after_first: bool = False):
+    """Run a complete captured walker through its outer exit boundary."""
+    machine = walker_fixture(fixture, registers=register_overrides, writes=writes)
+    try:
+        if isinstance(fixture, (bytes, bytearray)):
+            metadata = {}
+        else:
+            metadata_path = Path(fixture)
+            if metadata_path.suffix != ".json":
+                metadata_path = metadata_path.with_suffix(".json")
+            metadata = json.loads(metadata_path.read_text())
+            if metadata.get("entry") != WALKER_ENTRY or metadata.get("exit") != WALKER_EXIT:
+                raise ValueError("walker fixture metadata has an unexpected boundary")
+        machine.gates([WALKER_ENTRY, WALKER_EXIT])
+        recovery = Candidate(candidate) if candidate else None
+        if recovery:
+            recovery.arm(machine)
+            machine.gates(list(dict.fromkeys((*recovery.gate_pcs, WALKER_ENTRY, WALKER_EXIT))))
+        iterations = 0
+        while iterations < 32:
+            if machine.run(instructions=100_000) != "gate":
+                break
+            pc = machine.info["pc"]
+            if pc == WALKER_EXIT:
+                break
+            if pc != WALKER_ENTRY:
+                if recovery:
+                    recovery.on_gate(machine, machine.info["tick"] + 1_000_000)
+                else:
+                    machine.gate(pc, bypass_once=True)
+                    machine.run(instructions=1)
+                continue
+            iterations += 1
+            if recovery:
+                handled = recovery.on_gate(machine, machine.info["tick"] + 1_000_000)
+                if stop_after_first:
+                    if not handled:
+                        raise AssertionError("negative witness did not admit its first plan")
+                    at_outer = observable(machine)
+                    outer_state = machine.snapshot()
+                    stats = recovery.stats
+                    if include_raw:
+                        return at_outer, outer_state, None, None, stats, iterations
+                    return at_outer, None, stats, iterations
+                if not handled:
+                    # A declined aggregate must hand the remaining native
+                    # loop back to the established per-iteration seam.
+                    machine.gates(list(dict.fromkeys(
+                        (*recovery.gate_pcs, SPAWN_DISPATCH_ITERATION_ENTRY,
+                         WALKER_ENTRY, WALKER_EXIT))))
+            else:
+                machine.gate(WALKER_ENTRY, bypass_once=True)
+                machine.run(instructions=1)
+        reached_exit = machine.info["pc"] == WALKER_EXIT
+        if not reached_exit:
+            raise RuntimeError("walker did not reach its qualified outer exit")
+        at_outer = observable(machine) if reached_exit else None
+        outer_state = machine.snapshot() if reached_exit else None
+        if reached_exit:
+            machine.gates([])
+            if machine.run(instructions=future_instructions) != "limit":
+                raise RuntimeError("walker future did not reach instruction limit")
+            future_state = machine.snapshot()
+            future = observable(machine)
+        else:
+            future_state = None
+            future = None
+        stats = recovery.stats if recovery else None
+        if include_raw:
+            return at_outer, outer_state, future, future_state, stats, iterations
+        return at_outer, future, stats, iterations
+    finally:
+        machine.close()
+
+
+def recorded_walker_rows(directory: str | Path) -> list[dict]:
+    """Qualify explicitly supplied captured walkers for an evidence report."""
+    directory = Path(directory)
+    paths = tuple(sorted(directory.glob("walker-*.state")))
+    if not paths:
+        raise ValueError(f"walker directory has no walker-*.state files: {directory}")
+    rows = []
+    for path in paths:
+        metadata = json.loads(path.with_suffix(".json").read_text())
+        expected = execute_walker(path, candidate=None)
+        actual = execute_walker(path, candidate="lifecycle", include_raw=True)
+        outer, outer_state, future, _, stats, iterations = actual
+        rows.append({"fixture": path.name, "provenance": "recorded walker state",
+                     "state_sha256": artifacts.digest(path.read_bytes()),
+                     "history_id": metadata.get("history_id"),
+                     "frame": metadata.get("frame"),
+                     "callbacks": metadata.get("callbacks"),
+                     "entry": metadata.get("entry"), "exit": metadata.get("exit"),
+                     "native_iterations": expected[3], "candidate_iterations": iterations,
+                     "equal_outer": outer == expected[0],
+                     "equal_future": future == expected[1],
+                     "fresh_process_150": fresh_process_future(outer_state) == future,
+                     "stats": stats})
+    return rows
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--entry", action="append", type=lambda value: int(value, 0), default=None)
@@ -222,6 +429,8 @@ def main(argv=None):
     parser.add_argument("--free", type=int, default=0)
     parser.add_argument("--exhausted", action="store_true")
     parser.add_argument("--incoming-x", action="store_true")
+    parser.add_argument("--walker-directory", type=Path,
+                        help="explicit directory of captured walker .state/.json evidence")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     if args.fresh_child:
@@ -256,6 +465,8 @@ def main(argv=None):
                      "free": free, "incoming_x": args.incoming_x, "equal_outer": actual == expected,
                      "equal_future": actual_future == expected_future, "fresh_process_150": fresh,
                      "stats": stats})
+    if args.walker_directory is not None:
+        rows.extend(recorded_walker_rows(args.walker_directory))
     result = {"status": "PASS" if all(row["equal_outer"] and row["equal_future"]
                                         and row.get("fresh_process_150") is not False for row in rows) else "FAIL",
               "native_library": str(library_path()), "frame_ticks": FRAME_TICKS,

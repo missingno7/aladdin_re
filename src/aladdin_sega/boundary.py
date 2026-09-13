@@ -49,6 +49,8 @@ SPAWN_DISPATCH_ITERATION_ENTRY = 0x1AE468
 SPAWN_DISPATCH_ITERATION_LAST_PC = 0x1AE478
 SPAWN_DISPATCH_CALL_ENTRY = 0x1AE46C
 SPAWN_DISPATCH_CALL_LAST_PC = 0x1AE46E
+SPAWN_DISPATCH_WALKER_ENTRY = 0x1AE44A
+SPAWN_DISPATCH_WALKER_LAST_PC = 0x1AE47C
 SPAWN_UPPER_VARIANT_CALLER_ENTRY = 0x1B7262
 SPAWN_UPPER_VARIANT_CALLER_LAST_PC = 0x1B728C
 SPAWN_UPPER_SCRIPTED_CALLER_ENTRY = 0x1B72D4
@@ -1059,7 +1061,7 @@ def spawn_dispatch_iteration(machine, registers: dict[str, int]) -> AtomicPlan:
     callback = spawn_dispatch_call(dispatch_plan_view(machine, prefix), prefix.registers)
     final = dict(callback.registers)
     d4, d5, d6 = (final[name] for name in ('d4', 'd5', 'd6'))
-    final['a0'] = (final['a0'] + _signed_word(d5)) & 0xFFFFFF
+    final['a0'] = (final['a0'] + _signed_word(d5)) & 0xFFFFFFFF
     final['d6'] = (d6 & 0xFFFF0000) | ((d6 + 0x10) & 0xFFFF)
     final['d4'] = (d4 & 0xFFFF0000) | ((d4 - 1) & 0xFFFF)
     final['sr'] = _add_sr(final['sr'], d6 & 0xFFFF, 0x10, 2)
@@ -1070,6 +1072,90 @@ def spawn_dispatch_iteration(machine, registers: dict[str, int]) -> AtomicPlan:
                       tuple(dict((*prefix.writes, *callback.writes)).items()), final,
                       SPAWN_DISPATCH_ITERATION_LAST_PC,
                       prefix.direct_calls + callback.direct_calls)
+
+
+def spawn_dispatch_walker(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover the bounded ``1AE44A..1AE47C`` spawn-table walker.
+
+    Setup through ``1AE446`` remains native. Starting at the loop head, this
+    owns one to sixteen slots selected by the existing D4 DBRA counter. Known
+    callbacks compose through ``spawn_dispatch_iteration``; an unknown
+    callback declines before the aggregate plan can be admitted, allowing the
+    native instruction stream to retain that slot.
+    """
+    sp, a1, a2, d4, d5 = (registers[name] for name in ('a7', 'a1', 'a2', 'd4', 'd5'))
+    count = (d4 & 0xFFFF) + 1
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned spawn dispatcher walker stack')
+    if count > 16:
+        raise UnsupportedCandidate('spawn dispatcher walker count is outside one pass')
+    if a1 != 0x004154 or a2 != 0xFFAE87:
+        raise UnsupportedCandidate('spawn dispatcher walker table identity')
+
+    # Validate every potential slot before planning. D5 is a signed original
+    # cursor stride; the running plan supplies all later alias-visible reads.
+    cursor = registers['a0'] & 0xFFFFFFFF
+    stride = _signed_word(d5)
+    for _ in range(count):
+        _address(cursor, 2)
+        cursor = (cursor + stride) & 0xFFFFFFFF
+
+    current = AtomicPlan(0, 0, (), dict(registers),
+                         SPAWN_DISPATCH_WALKER_ENTRY)
+    for _ in range(count):
+        view = dispatch_plan_view(machine, current)
+        state = dict(current.registers)
+        cursor = state['a0'] & 0xFFFFFFFF
+        flag_index, flag = game.select_spawn_dispatch_slot(
+            lambda address, size: _read(view, address, size), cursor, a2)
+        d2 = (state['d2'] & 0xFFFF0000) | flag_index
+        d1 = (state['d1'] & 0xFFFFFF00) | flag
+        remaining = state['d4'] & 0xFFFF
+        final_iteration = remaining == 0
+
+        if not flag:
+            d6 = state['d6']
+            final = {**state,
+                     'd1': d1,
+                     'd2': d2,
+                     'a0': (cursor + stride) & 0xFFFFFFFF,
+                     'd6': (d6 & 0xFFFF0000) | ((d6 + 0x10) & 0xFFFF),
+                     'd4': (state['d4'] & 0xFFFF0000) | ((remaining - 1) & 0xFFFF),
+                     'sr': _add_sr(state['sr'], d6 & 0xFFFF, 0x10, 2),
+                     'pc': SPAWN_DISPATCH_WALKER_LAST_PC if final_iteration else
+                           SPAWN_DISPATCH_WALKER_ENTRY}
+            step = AtomicPlan(70 if final_iteration else 66, 7, (), final,
+                              SPAWN_DISPATCH_ITERATION_LAST_PC, direct_calls=1)
+        else:
+            target = int.from_bytes(view.peek_rom(a1 + flag * 4, 4), 'big') & 0xFFFFFF
+            d1 = (state['d1'] & 0xFFFF0000) | ((flag * 4) & 0xFFFF)
+            selected = AtomicPlan(92, 10, _bytes(0xFF7DB2, state['d6'], 2),
+                                  {**state, 'd1': d1, 'd2': d2,
+                                   'd3': (state['d3'] & 0xFFFFFF00) | flag,
+                                   'a4': target, 'pc': SPAWN_DISPATCH_ITERATION_ENTRY,
+                                   'sr': _logic_sr(state['sr'] & ~0x10, state['d6'], 2)},
+                                  0x1AE462, direct_calls=1)
+            callback = spawn_dispatch_iteration(dispatch_plan_view(view, selected),
+                                                selected.registers)
+            step = AtomicPlan(selected.cycles + callback.cycles,
+                              selected.instructions + callback.instructions,
+                              tuple(dict((*selected.writes, *callback.writes)).items()),
+                              callback.registers, callback.last_pc,
+                              selected.direct_calls + callback.direct_calls)
+
+        current = AtomicPlan(current.cycles + step.cycles,
+                             current.instructions + step.instructions,
+                             tuple(dict((*current.writes, *step.writes)).items()),
+                             step.registers, step.last_pc,
+                             current.direct_calls + step.direct_calls)
+
+    if current.registers['pc'] != SPAWN_DISPATCH_WALKER_LAST_PC:
+        raise UnsupportedCandidate('spawn dispatcher walker did not reach its return')
+    # The bounded product boundary is the original RTS instruction. It stays
+    # native so the future-continuation witness also verifies its outer return.
+    return AtomicPlan(current.cycles, current.instructions, current.writes,
+                      current.registers, SPAWN_DISPATCH_ITERATION_LAST_PC,
+                      current.direct_calls)
 
 def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,
                         return_site, last_pc, extra_writes=(), extra_spans=(),

@@ -222,3 +222,111 @@ def test_lower_reset_cannot_alias_parent_saved_registers():
         assert machine.snapshot() == before
     finally:
         machine.close()
+
+
+KNOWN_WALKER_A = 0x1B72D4
+KNOWN_WALKER_B = 0x1B6802
+UNKNOWN_WALKER = 0x1B670C
+WALKER_CASES = (
+    ("empty", (None,) * 16),
+    ("owned-single", (KNOWN_WALKER_A,) + (None,) * 15),
+    ("owned-multiple", (KNOWN_WALKER_A, KNOWN_WALKER_B) + (None,) * 14),
+    ("unresolved", (KNOWN_WALKER_A, UNKNOWN_WALKER) + (None,) * 14),
+)
+
+
+@pytest.mark.parametrize("name,callbacks", WALKER_CASES,
+                         ids=[case[0] for case in WALKER_CASES])
+def test_constructed_whole_walker_matches_outer_and_future(name, callbacks):
+    """Constructed cases qualify the aggregate boundary without artifacts."""
+    state = oracle.constructed_walker_state(callbacks=callbacks)
+    expected = oracle.execute_walker(state, candidate=None)
+    actual = oracle.execute_walker(state, candidate="lifecycle")
+    assert expected[3] == 16
+    assert actual[2]["spawn_walker_hits"] == 1
+    assert actual[:2] == expected[:2]
+    assert actual[2]["candidate_hits"] > 0
+    if name != "unresolved":
+        assert actual[3] == 1
+        assert actual[2]["spawn_caller_hits"] == 0
+
+
+@pytest.mark.parametrize("name,callbacks", WALKER_CASES,
+                         ids=[case[0] for case in WALKER_CASES])
+def test_constructed_whole_walker_candidate_survives_fresh_process(name, callbacks):
+    state = oracle.constructed_walker_state(callbacks=callbacks)
+    _, outer_state, future, _, stats, iterations = oracle.execute_walker(
+        state, candidate="lifecycle", include_raw=True)
+    assert iterations <= 16
+    assert stats["candidate_hits"] > 0
+    assert oracle.fresh_process_future(outer_state) == future
+
+
+@pytest.mark.parametrize("count", (1, 2, 16))
+def test_walker_counts_match_original(count):
+    state = oracle.constructed_walker_state(count=count)
+    expected = oracle.execute_walker(state, candidate=None)
+    actual = oracle.execute_walker(state, candidate="lifecycle")
+    assert expected[3] == count
+    assert actual[2]["spawn_walker_hits"] == 1
+    assert actual[:2] == expected[:2]
+
+
+@pytest.mark.parametrize("d5,count", ((2, 2), (0xFFFF_FFFE, 2),
+                                      (0x1234_0002, 1)))
+def test_walker_signed_stride_and_high_word_match(d5, count):
+    state = oracle.constructed_walker_state(count=count, stride=d5)
+    expected = oracle.execute_walker(state, candidate=None)
+    actual = oracle.execute_walker(state, candidate="lifecycle")
+    assert actual[:2] == expected[:2]
+
+
+def test_walker_last_cursor_crossing_24bit_ram_preserves_32bit_register():
+    state = oracle.constructed_walker_state(count=1, stride=2)
+    # Move the sole cursor word to the final two bytes of the 24-bit RAM
+    # window; the post-step register is still a full 32-bit value.
+    expected = oracle.execute_walker(state, candidate=None,
+                                     register_overrides={"a0": 0x00FF_FFFE},
+                                     writes=oracle.write_word(0x00FF_FFFE, 0x200))
+    actual = oracle.execute_walker(state, candidate="lifecycle",
+                                   register_overrides={"a0": 0x00FF_FFFE},
+                                   writes=oracle.write_word(0x00FF_FFFE, 0x200))
+    assert actual[:2] == expected[:2]
+    assert actual[0]["registers"]["a0"] == 0x0100_0000
+    assert actual[2]["spawn_walker_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+def test_walker_incoming_x_matches_original():
+    state = oracle.constructed_walker_state(count=2, incoming_x=True)
+    expected = oracle.execute_walker(state, candidate=None)
+    actual = oracle.execute_walker(state, candidate="lifecycle")
+    assert actual[:2] == expected[:2]
+
+
+def test_walker_planned_register_frame_may_alias_cursor():
+    """The second selection sees the first callback's planned MOVEM write."""
+    cursor = oracle.STACK - 60
+    state = oracle.constructed_walker_state(
+        count=2, callbacks=(KNOWN_WALKER_A, KNOWN_WALKER_B), stride=2,
+        cursor=cursor, slot_indices=(0x100, 0), initial_d0=4)
+    # D0's saved low word overwrites the second slot with 4 (flag index 2).
+    # Seed that resulting index as well, so a second callback really executes.
+    writes = ((0xFFAE89, oracle._callback_flag(KNOWN_WALKER_B)),)
+    expected = oracle.execute_walker(state, candidate=None, writes=writes)
+    actual = oracle.execute_walker(state, candidate="lifecycle", writes=writes)
+    assert actual[:2] == expected[:2]
+    assert actual[0]["registers"]["d2"] & 0xFFFF == 2
+    assert actual[0]["registers"]["a4"] == KNOWN_WALKER_B
+    assert actual[2]["candidate_hits"] > 0
+    assert actual[2]["spawn_walker_hits"] == 1
+    assert actual[2]["spawn_caller_hits"] == 0
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_whole_walker_negative_controls(mutant):
+    state = oracle.constructed_walker_state(count=1)
+    expected = oracle.execute_walker(state, candidate=None)
+    actual = oracle.execute_walker(state, candidate="lifecycle-mutant-" + mutant,
+                                   stop_after_first=True)
+    assert actual[0] != expected[0]

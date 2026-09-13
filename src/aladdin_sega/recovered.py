@@ -32,6 +32,7 @@ from .game.objects.lifecycle import (
     retire_collected_object,
     spawn_collection,
     spawn_region,
+    select_spawn_dispatch_slot,
     unlink,
 )
 
@@ -67,5 +68,6 @@ __all__ = [
     "retire_collected_object",
     "spawn_collection",
     "spawn_region",
+    "select_spawn_dispatch_slot",
     "unlink",
 ]

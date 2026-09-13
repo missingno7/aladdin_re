@@ -193,6 +193,28 @@ def test_named_mutants_stage_a_distinct_leaf_result(name):
     assert mutant != original
 
 
+@pytest.mark.parametrize("family", ("carrier", "lifecycle"))
+@pytest.mark.parametrize("writes", ((), ((0xFF6000, 1),)))
+@pytest.mark.parametrize("fault", ("result", "continuation", "timing"))
+def test_carrier_mutants_change_the_named_contract_without_requiring_writes(family, writes, fault):
+    """Empty walkers and skipped guards still need executable negative controls."""
+    from aladdin_sega.boundary import AtomicPlan
+    registers = {**{f"d{i}": 0 for i in range(8)},
+                 **{f"a{i}": 0 for i in range(8)}, "pc": 0x1AE47C, "sr": 0x2000}
+    plan = AtomicPlan(66, 7, writes, registers, 0x1AE478)
+    changed = Candidate(f"{family}-mutant-{fault}")._mutate(plan)
+    if fault == "timing":
+        assert changed.cycles != plan.cycles
+        assert changed.writes == writes and changed.registers == registers
+    elif fault == "continuation":
+        assert changed.registers["pc"] != registers["pc"]
+        assert changed.writes == writes and changed.cycles == plan.cycles
+    else:
+        assert changed.writes != writes or changed.registers != registers
+        assert changed.registers["pc"] == registers["pc"]
+        assert changed.cycles == plan.cycles
+
+
 def test_atomic_uses_the_scheduler_deadline_and_refusal_falls_back_one_opcode():
     accepted = leaf_machine(count=0)
     candidate = Candidate()

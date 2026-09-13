@@ -6,7 +6,35 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
-## Current guarded callback composition
+## Current bounded spawn walker
+
+The column spawn loop `1AE44A` now owns selection, empty slots and direct
+composition of the 22 supported callbacks across up to 16 remaining slots.
+It exits **before** the original RTS at `1AE47C`; setup and unsupported callbacks
+remain original. Unsupported later selections discard the staged plan before
+admission. Existing per-iteration recovery remains available on fallback.
+RAM stays authoritative; no new snapshot, native API or continuation mechanism.
+
+**853 tests pass** (41.42 seconds), including constructed empty/multiple/unknown
+paths, counts, signed strides, planned MOVEM aliasing, strict outer state,
+150 original future instructions, fresh-process restore and negative controls.
+Eight explicitly captured original walkers also pass that qualification.
+The cursor edge test exposed and fixed 24-bit truncation of ADDA.W's 32-bit A0.
+
+The full **26,378-frame** cold history passes strict comparison with zero
+restores. Standalone spawn-caller activations fall **435 to 105**, while 1,904
+walker plans execute. Total candidate activations increase 3,846 to 5,420 and
+fallbacks 681 to 1,493: empty passes now have an entry gate and unsuccessful
+aggregate plans can retry at shorter boundaries. This is real internal caller
+composition, **not** evidence of a global crossing reduction. Direct calls
+5,365 to 35,209 include slot-selector calls, not just fused callbacks.
+
+Evidence: `artifacts/spawn-walker/full/comparison.json` and
+`artifacts/spawn-walker/recorded.json`. Reproduce captured-state qualification:
+`python scripts/oracle_witness.py --walker-directory artifacts/spawn-frontier --fresh-process`.
+Default tests construct their inputs and do not depend on ignored artifacts.
+
+## Guarded callback composition baseline (`e7cf15d`)
 
 The dispatcher callback map now includes **22 targets**: the prior 19 plus
 `1B7354`, `1B742A`, and `1B744A`. Their existing recovered guards read `FFF171`,
