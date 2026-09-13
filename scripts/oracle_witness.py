@@ -39,7 +39,9 @@ ENTRY_BASES = {
     0x1B525E: (0xFF8368, 20, -1),
     0x1B5266: (0xFF7F06, 20, 1),
 }
+CALLER_POOLS = {0x1B6ED0: 0x1B5266, 0x1B6F0C: 0x1B525E, 0x1B6F1E: 0x1B525E}
 DISPATCH_CALLBACKS = (
+    *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
     SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY,
     SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY,
@@ -75,6 +77,7 @@ def cold_fixture(entry: int, *, free: int | None = 0, incoming_x: bool = False,
     base, count, direction = ENTRY_BASES[entry]
     writes = list(write_long(STACK + 4 * i, SAFE_RETURN) for i in range(-16, 151))
     flat = [byte for group in writes for byte in group]
+    flat.append((0xFFF104, 0xA5))
     flat += list(write_word(0xFFF150, 1) + write_word(0xFF7DB0, 1))
     flat += list(write_word(0xFFF152, 1) + write_word(0xFF7DB2, 1))
     if free is not None and not 0 <= free < count:
@@ -100,7 +103,7 @@ def cold_fixture(entry: int, *, free: int | None = 0, incoming_x: bool = False,
 def dispatcher_fixture(target: int, *, free: int | None = 0, incoming_x: bool = False):
     if target not in DISPATCH_CALLBACKS:
         raise ValueError(f"unsupported dispatcher callback {target:06X}")
-    machine = cold_fixture(0x1B5266, free=free, incoming_x=incoming_x,
+    machine = cold_fixture(CALLER_POOLS.get(target, 0x1B5266), free=free, incoming_x=incoming_x,
                            pc_entry=SPAWN_DISPATCH_ITERATION_ENTRY)
     machine.gates([SPAWN_DISPATCH_ITERATION_ENTRY])
     assert machine.run(instructions=1) == "gate"
@@ -133,7 +136,7 @@ def fresh_process_future(state: bytes) -> dict:
 
 
 def execute(entry: int, *, free: int | None, candidate: str | None, incoming_x: bool):
-    machine = cold_fixture(entry, free=free, incoming_x=incoming_x)
+    machine = cold_fixture(CALLER_POOLS.get(entry, entry), free=free, incoming_x=incoming_x, pc_entry=entry)
     try:
         outer = int.from_bytes(machine.peek_ram(STACK & 0xFFFF, 4), "big") & 0xFFFFFF
         machine.gates([entry, outer])

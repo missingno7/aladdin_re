@@ -19,7 +19,9 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         begin_contact_sibling_sound_seam, finish_contact_sibling_sound,
                         SPAWN_REGION_ENTRIES, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY, SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY, SPAWN_UPPER_SECONDARY_CALLER_ENTRY, SPAWN_UPPER_TERTIARY_CALLER_ENTRY, SPAWN_UPPER_TYPED_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_GUARD_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY, SPAWN_PRIMARY_GUARD_ENTRY, SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY, SPAWN_PRIMARY_INVERSE_GUARD_ENTRY, SPAWN_PRIMARY_MIXED_GUARD_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY, SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_GUARD_ENTRY, SPAWN_DISPATCH_ITERATION_ENTRY,
                         spawn_region, spawn_reverse_caller, spawn_reverse_plain_caller, spawn_upper_plain_caller, spawn_upper_standard_caller, spawn_upper_secondary_caller, spawn_upper_tertiary_caller, spawn_upper_typed_caller, spawn_upper_caller, spawn_upper_guard_caller, spawn_primary_dispatch_caller, spawn_primary_guard_caller, spawn_lower_dispatch_caller, spawn_primary_double_guard_caller, spawn_primary_inverse_guard_caller, spawn_primary_mixed_guard_caller, spawn_upper_variant_caller, spawn_upper_scripted_caller, spawn_upper_dispatch_caller, spawn_upper_dispatch_guard_caller, spawn_dispatch_iteration)
-from .boundary import SPAWN_UPPER_TYPED_SECONDARY_ENTRY, spawn_upper_typed_secondary_caller
+from .boundary import (SPAWN_UPPER_TYPED_SECONDARY_ENTRY, spawn_upper_typed_secondary_caller,
+                       SPAWN_LOWER_RESET_ENTRY, SPAWN_LOWER_SCRIPTED_ENTRY,
+                       spawn_lower_reset_caller, spawn_lower_scripted_caller)
 
 
 @dataclass
@@ -82,7 +84,9 @@ class Candidate:
             # The 1AF4C6 tail is owned inside this region; the other ten paths
             # still enter via the counted replacement boundary.
             base = (TRANSITION_ENTRY, COUNTED_REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
-            return tuple(dict.fromkeys((COLLECTION_DISPATCH_ENTRY, CONTACT_ENTRY,
+            return tuple(dict.fromkeys((SPAWN_UPPER_TYPED_SECONDARY_ENTRY,
+                                        SPAWN_LOWER_RESET_ENTRY, SPAWN_LOWER_SCRIPTED_ENTRY,
+                                        COLLECTION_DISPATCH_ENTRY, CONTACT_ENTRY,
                                         CONTACT_SIBLING_ENTRY, CONTACT_SIBLING_WRAPPER,
                                         CONTACT_SIBLING_DIRECT, *COLLECTION_ROUTES,
                                         0x1AF516, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY, SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY, SPAWN_UPPER_SECONDARY_CALLER_ENTRY, SPAWN_UPPER_TERTIARY_CALLER_ENTRY, SPAWN_UPPER_TYPED_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_GUARD_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY, SPAWN_PRIMARY_GUARD_ENTRY, SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY, SPAWN_PRIMARY_INVERSE_GUARD_ENTRY, SPAWN_PRIMARY_MIXED_GUARD_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY, SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_GUARD_ENTRY, SPAWN_DISPATCH_ITERATION_ENTRY,
@@ -100,10 +104,7 @@ class Candidate:
     def arm(self, machine) -> None:
         if machine.rom_sha256 != ROM_SHA256:
             raise UnsupportedCandidate("recovery candidate requires the verified USA ROM SHA-256")
-        gates = list(self.gate_pcs)
-        if self.is_lifecycle:
-            gates.append(SPAWN_UPPER_TYPED_SECONDARY_ENTRY)
-        machine.gates(gates)
+        machine.gates(list(self.gate_pcs))
         machine.candidate_identity = self.name
 
     def _apply(self, machine, plan, target):
@@ -543,10 +544,14 @@ class Candidate:
                 return self._fallback(machine, entry, f'unsupported domain: {error}')
             self.stats['spawn_caller_hits'] += 1
             return True
-        if self.is_lifecycle and entry == SPAWN_UPPER_TYPED_SECONDARY_ENTRY:
+        if self.is_lifecycle and entry in (SPAWN_UPPER_TYPED_SECONDARY_ENTRY,
+                                          SPAWN_LOWER_RESET_ENTRY, SPAWN_LOWER_SCRIPTED_ENTRY):
             self.stats['gates'] += 1
             try:
-                plan = self._mutate(spawn_upper_typed_secondary_caller(machine, machine.registers()))
+                caller = {SPAWN_UPPER_TYPED_SECONDARY_ENTRY: spawn_upper_typed_secondary_caller,
+                          SPAWN_LOWER_RESET_ENTRY: spawn_lower_reset_caller,
+                          SPAWN_LOWER_SCRIPTED_ENTRY: spawn_lower_scripted_caller}[entry]
+                plan = self._mutate(caller(machine, machine.registers()))
                 if not self._apply(machine, plan, target):
                     return self._fallback(machine, entry, 'scheduler admission')
             except UnsupportedCandidate as error:

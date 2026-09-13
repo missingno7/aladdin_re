@@ -149,6 +149,20 @@ def finish_upper_typed_spawn(record, script=0x0012337a, object_type=0x20):
             (record, object_type)]
 
 
+def reset_lower_spawn_flag():
+    """Clear FFF104 before allocation, even when the lower pool is full.
+
+    The flag's wider gameplay meaning is not yet established.
+    """
+    return [(0xFFF104, 0)]
+
+
+def finish_lower_scripted_spawn(record):
+    """Install the 1B6F1E callback's successful object script."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('00125a4c'))]
+
+
 def finish_upper_dispatch_spawn(record):
     """Apply 1B745E's type, script, and enabled-flag residue."""
     return [(record, 0x44), *((record + 0x20 + offset, byte)

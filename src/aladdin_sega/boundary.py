@@ -67,6 +67,8 @@ SPAWN_UPPER_TYPED_CALLER_ENTRY = 0x1B6EB2
 SPAWN_UPPER_TYPED_CALLER_LAST_PC = 0x1B6ECE
 SPAWN_UPPER_TYPED_SECONDARY_ENTRY = 0x1B6ED0
 SPAWN_UPPER_TYPED_SECONDARY_LAST_PC = 0x1B6EEC
+SPAWN_LOWER_RESET_ENTRY = 0x1B6F0C
+SPAWN_LOWER_SCRIPTED_ENTRY = 0x1B6F1E
 SPAWN_UPPER_CALLER_ENTRY = 0x1B735E
 SPAWN_UPPER_CALLER_LAST_PC = 0x1B7388
 SPAWN_UPPER_GUARD_ENTRY = 0x1B7354
@@ -687,6 +689,56 @@ def spawn_upper_typed_secondary_caller(machine, registers: dict[str, int]) -> At
     return AtomicPlan(prefix.cycles + selected.cycles + 84, prefix.instructions + selected.instructions + 5, tuple(dict((*writes, *suffix)).items()), final, SPAWN_UPPER_TYPED_SECONDARY_LAST_PC, prefix.direct_calls + selected.direct_calls)
 
 
+def spawn_lower_reset_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Clear the shared spawn flag, then allocate from the descending lower pool."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned lower reset caller stack')
+    _spans_disjoint([('lower reset pool', 0xFF7E82, 24 * 66),
+                     ('lower reset frame', sp - 8, 12),
+                     ('lower reset flag', 0xFFF104, 1), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(50, 3, (*game.reset_lower_spawn_flag(), *_bytes(sp - 4, 0x1B6F1C, 4)),
+                        {**registers, 'a6': 0x1B7C4C, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_LOWER_ENTRY,
+                         'sr': _logic_sr(registers['sr'], 0, 1)}, 0x1B6F18, direct_calls=2)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_LOWER_ENTRY)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()),
+                      {**selected.registers, 'a7': sp + 4, 'pc': outer & 0xFFFFFF},
+                      0x1B6F1C, prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_lower_scripted_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Allocate a lower-pool object; install its script only on success."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned lower scripted caller stack')
+    _spans_disjoint([('lower scripted pool', 0xFF7E82, 24 * 66),
+                     ('lower scripted frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6F28, 4),
+                        {**registers, 'a6': 0x1B8250, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_LOWER_ENTRY}, 0x1B6F24, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_LOWER_ENTRY)
+    writes = (*prefix.writes, *selected.writes)
+    final = {**selected.registers, 'a7': sp + 4, 'pc': outer & 0xFFFFFF}
+    if not final['sr'] & 4:
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2,
+                          tuple(dict(writes).items()), final, 0x1B6F32,
+                          prefix.direct_calls + selected.direct_calls)
+    suffix = game.finish_lower_scripted_spawn(final['a5'])
+    final['sr'] = _logic_sr(final['sr'], 0x00125A4C, 4)
+    return AtomicPlan(prefix.cycles + selected.cycles + 48,
+                      prefix.instructions + selected.instructions + 3,
+                      tuple(dict((*writes, *suffix)).items()), final, 0x1B6F32,
+                      prefix.direct_calls + selected.direct_calls + 1)
+
+
 def spawn_upper_dispatch_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B744A``'s guard before the upper dispatcher callback."""
     sp = registers['a7']
@@ -883,6 +935,9 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
         SPAWN_UPPER_SECONDARY_CALLER_ENTRY: spawn_upper_secondary_caller,
         SPAWN_UPPER_TERTIARY_CALLER_ENTRY: spawn_upper_tertiary_caller,
         SPAWN_UPPER_TYPED_CALLER_ENTRY: spawn_upper_typed_caller,
+        SPAWN_UPPER_TYPED_SECONDARY_ENTRY: spawn_upper_typed_secondary_caller,
+        SPAWN_LOWER_RESET_ENTRY: spawn_lower_reset_caller,
+        SPAWN_LOWER_SCRIPTED_ENTRY: spawn_lower_scripted_caller,
         SPAWN_UPPER_CALLER_ENTRY: spawn_upper_caller,
         SPAWN_PRIMARY_DISPATCH_ENTRY: spawn_primary_dispatch_caller,
         SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY: spawn_primary_double_guard_caller,
@@ -894,11 +949,12 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
     callback_function = callbacks.get(target)
     if callback_function is None:
         raise UnsupportedCandidate(f'spawn dispatcher target {target:06X} is not recovered')
+    extra = [('lower reset flag', 0xFFF104, 1)] if target == SPAWN_LOWER_RESET_ENTRY else []
     _spans_disjoint([('spawn dispatcher MOVEM frame', sp - 4, 64),
                      ('spawn dispatcher indexed clear',
                       (registers['a2'] + _signed_word(registers['d2'])) & 0xFFFFFF, 1),
                      ('spawn dispatcher pool', 0xFF7E82, 24 * 66),
-                     *SPAWN_REGION_GLOBALS])
+                     *SPAWN_REGION_GLOBALS, *extra])
     prefix = AtomicPlan(16, 1, _bytes(sp - 4, SPAWN_DISPATCH_CALL_LAST_PC, 4),
                         {**registers, 'a7': sp - 4, 'pc': target},
                         SPAWN_DISPATCH_CALL_ENTRY, direct_calls=1)
@@ -999,6 +1055,8 @@ def spawn_dispatch_iteration(machine, registers: dict[str, int]) -> AtomicPlan:
                       SPAWN_UPPER_SECONDARY_CALLER_ENTRY,
                       SPAWN_UPPER_TERTIARY_CALLER_ENTRY,
                       SPAWN_UPPER_TYPED_CALLER_ENTRY,
+                      SPAWN_UPPER_TYPED_SECONDARY_ENTRY, SPAWN_LOWER_RESET_ENTRY,
+                      SPAWN_LOWER_SCRIPTED_ENTRY,
                       SPAWN_UPPER_CALLER_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY,
                       SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY,
                       SPAWN_PRIMARY_INVERSE_GUARD_ENTRY,

@@ -6,6 +6,64 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Recorded spawn-neighbor expansion
+
+The bounded dispatcher iteration at `1AE468` now composes **19 callback targets**
+(previously 16). Added composition for the existing type-33 callback `1B6ED0`
+(template `1B7C24`, script `1235AC`) and recovered two observed neighbors:
+
+- `1B6F0C`: clear byte `FFF104`, allocate through descending pool entry `1B525E`
+  using template `1B7C4C`, return at `1B6F1C`. Clearing also occurs on exhaustion;
+  the flag's wider game meaning is deliberately unnamed.
+- `1B6F1E`: allocate through `1B525E` using template `1B8250`; on success install
+  script `125A4C`; exit at `1B6F32`. Allocation failure leaves that script untouched.
+
+The parent calls these adapters directly, including the existing allocator,
+then restores its outer ABI and continues at `1AE44A` / `1AE47C`. Dispatcher
+setup, lookup and remaining callbacks remain original. No whole-dispatcher claim.
+The type-33 gate now belongs to the canonical gate set; sound returns and sound
+deadline fallback no longer silently remove it. The reset callback also excludes
+aliasing its flag with the parent's saved register frame before committing writes.
+
+Verification: **737 tests pass** (32.65 seconds), including the reusable raw-ROM
+witness matrix for first/last free slot and exhaustion, both incoming X states,
+independent caller and composed parent, strict full machine/RAM/register/time/
+frame/PCM equality and 150 native future instructions. All three parents have
+fresh-process continuation and result/return/timing negative controls. Separately,
+all **29 recorded entry occurrences** pass strict outer and future equality plus
+fresh-process restore: 13 enclosing iterations and 16 original callback entries.
+These counts overlap the same original flows; they are not 29 distinct gameplay events.
+Evidence is in `artifacts/spawn-neighbors/`; the reproducible constructed oracle
+and regressions are `scripts/oracle_witness.py` and `tests/test_spawn_oracle.py`.
+
+Recovery-cost note: semantic work was identifying the reset ordering and successful
+script assignment, plus qualifying the existing typed variant. Mechanical work
+was two familiar BSR/RTS aggregates and final CCR formulas (50 boundary lines),
+checked against the ROM. Existing planned views, allocator, alias spans, AtomicPlan,
+mutants, future execution and fresh-process oracle were reused. **No new machine
+execution concept** was introduced. The three callback/allocator boundaries are
+internal on admitted parent paths; independent adapters remain for original callers.
+This is another bounded composition step, not evidence of a CPU-free subsystem.
+
+The full current user history (`4b153763…`, 26,378 frames) passes original versus
+lifecycle with zero restores and strict equality at every canonical frame. The
+new original observations also exactly match the prior optimization baseline.
+
+| Full-history measurement | Before | After |
+| --- | ---: | ---: |
+| Fallback activations | 720 | 707 |
+| Spawn caller activations | 419 | 435 |
+| Standalone allocator activations | 79 | 63 |
+| Direct Python calls | 5,299 | 5,339 |
+| Total candidate activations | 3,846 | 3,846 |
+| Replaced M68000 instructions | 127,469 | 127,634 |
+
+The unchanged total activations and 16 fewer standalone allocator hits reflect
+callers absorbing allocator work rather than adding another machine visit.
+All 13 formerly unsupported selected dispatcher targets disappear from fallback
+reasons. Other original callers still use standalone adapters. Full receipts:
+`artifacts/spawn-neighbors/full/comparison.json` and its reference/candidate files.
+
 ## Current player and history model
 
 Each history begins at one fixed cold root.  A node stores an immutable embedded

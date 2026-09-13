@@ -171,3 +171,12 @@ def test_native_connected_region_branches_match_original(monkeypatch, digits, so
         assert policy.stats["legacy_returns"] == bool(sound)
         assert policy.stats["foreign_returns"] == int(reentrant)
         assert (candidate.snapshot(), candidate.audio()) == expected
+
+
+@pytest.mark.parametrize("deadline", (False, True))
+def test_lifecycle_spawn_gates_survive_sound_seam(monkeypatch, deadline):
+    machine = sound_machine(monkeypatch, deadline=deadline)
+    candidate = Candidate("lifecycle")
+    assert candidate.on_gate(machine, 100000)
+    assert machine.armed == candidate.gate_pcs
+    assert {0x1B6ED0, 0x1B6F0C, 0x1B6F1E}.issubset(machine.armed)

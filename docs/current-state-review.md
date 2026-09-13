@@ -1,4 +1,10 @@
-# Combined working-tree review
+# Historical combined working-tree review
+
+This records the pre-history-redesign checkout review. For current status see
+[STATUS.md](STATUS.md). The indexed-clear regression now lives in
+`tests/test_spawn_oracle.py`. The subsequent spawn-neighbor milestone qualifies
+`1B6ED0` and fixes gate preservation across normal and deadline sound returns.
+
 
 Main remains `498f531`. The working tree combines the dispatcher iteration
 milestone with further caller recovery from another task. It now directly

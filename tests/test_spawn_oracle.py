@@ -66,7 +66,7 @@ def test_spawn_mutants_cannot_match_original_outer_or_future(entry, mutant):
 
 
 @pytest.mark.parametrize("target", tuple(oracle.DISPATCH_CALLBACKS))
-def test_sixteen_dispatch_callbacks_match_original_outer_and_future(target):
+def test_dispatch_callbacks_match_original_outer_and_future(target):
     expected, expected_future, _ = oracle.execute_dispatch(
         target, free=0, candidate=None, incoming_x=False)
     actual, actual_future, stats = oracle.execute_dispatch(
@@ -143,5 +143,46 @@ def test_dispatch_unknown_callback_is_rejected_before_saved_frame_write():
         # Fallback retires the native entry; its one instruction is a MOVEM
         # and therefore cannot have modified the callback's frame contents.
         assert machine.peek_ram(0, 65536) != before
+    finally:
+        machine.close()
+
+
+@pytest.mark.parametrize("target", tuple(oracle.CALLER_POOLS))
+@pytest.mark.parametrize("free", (0, 19, None))
+@pytest.mark.parametrize("incoming_x", (False, True))
+@pytest.mark.parametrize("parent", (False, True))
+def test_spawn_neighbors_outer_and_future(target, free, incoming_x, parent):
+    execute = oracle.execute_dispatch if parent else oracle.execute
+    expected = execute(target, free=free, candidate=None, incoming_x=incoming_x)
+    actual = execute(target, free=free, candidate="lifecycle", incoming_x=incoming_x)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("target", tuple(oracle.CALLER_POOLS))
+def test_spawn_neighbors_fresh_process(target):
+    _, state, future, _, _ = oracle.execute_dispatch(
+        target, free=0, candidate="lifecycle", incoming_x=False, include_raw=True)
+    assert oracle.fresh_process_future(state) == future
+
+
+@pytest.mark.parametrize("target", tuple(oracle.CALLER_POOLS))
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_spawn_neighbors_negative_controls(target, mutant):
+    expected = oracle.execute_dispatch(target, free=0, candidate=None, incoming_x=False)
+    actual = oracle.execute_dispatch(target, free=0, candidate="lifecycle-mutant-" + mutant, incoming_x=False)
+    assert actual[:2] != expected[:2]
+
+
+def test_lower_reset_cannot_alias_parent_saved_registers():
+    from aladdin_sega.boundary import spawn_dispatch_iteration, UnsupportedCandidate
+    machine = oracle.dispatcher_fixture(0x1B6F0C)
+    try:
+        registers = machine.registers()
+        registers["a7"] = 0xFFF120
+        before = machine.snapshot()
+        with pytest.raises(UnsupportedCandidate):
+            spawn_dispatch_iteration(machine, registers)
+        assert machine.snapshot() == before
     finally:
         machine.close()
