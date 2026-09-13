@@ -6,6 +6,20 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Connected contact retirement
+
+The lifecycle carrier now owns bounded `1AEC00` retirement through wrappers
+`1AE9C6`/`1AE9DA` and the existing dispatcher. Known cleanup, initialization and
+contact behavior compose directly, including C6's existing synchronous sound
+path. Decrement and type-13 retirement remain explicit original fallbacks;
+internal `1AECD8`/`1AED0C` entries are oracle-only.
+
+All **794 tests** pass. Both full recordings pass **225 + 244** checkpoints with
+current receipts. Recorded retirement and sound witnesses pass strict outer
+state/frame/PCM, 150 native instructions and fresh-process restore; negative
+controls reject errors. Python edit-to-verdict remains below one second without
+rebuilding. See [contact-retirement.md](contact-retirement.md) for scope and costs.
+
 ## Shared decay accounting
 
 Direct contact reset and the sound-return suffix now use one private timing,

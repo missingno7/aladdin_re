@@ -31,6 +31,28 @@ def contact_path(read):
     return (path, route if path == 'early' else None)
 
 
+def contact_sibling_route(read, record):
+    """Classify 1AEC00 through its bounded counter-retirement arm."""
+    if not read(0xFFF0D8, 1):
+        return 'contact', None
+    distance = read(0xFF7E02, 2)
+    limit = read(record + 2, 2)
+    if (read(0xFF7E49, 1) and distance < limit) or (not read(0xFF7E49, 1) and distance >= limit):
+        return 'early', None
+    if read(record + 1, 1):
+        return 'decrement', None
+    kind = read(record, 1)
+    if kind == 0x13:
+        return 'type13', kind
+    if kind == 0x18:
+        return 'retire18', kind
+    if kind == 0x10:
+        return 'retire10', kind
+    if kind == 0x11:
+        return 'retire11', kind
+    return 'retire', kind
+
+
 def contact_decay(read):
     """One exact 1B03F2 pass; repeat callers may invoke it up to three times."""
     if read(0xFFF0E9, 1) or read(0xFFF0E6, 1) or read(0xFF7E20, 1):

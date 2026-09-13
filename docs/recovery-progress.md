@@ -293,3 +293,13 @@ pair cleanup, buffer release and initialization functions. Those counts and
 unmodified branch snapshots are in
 `artifacts/grinding/parent/sibling-census-{old,new}`; they are future recovery
 inputs, not candidate qualification.
+
+## Connected contact retirement
+
+The next qualified expansion is [contact-retirement.md](contact-retirement.md).
+It reuses the shared finish tail and sound seam beneath two wrappers, with
+recorded state-changing retirement and sound witnesses, 794 tests and both full
+recordings. Three outer entries were added; two internal retirement points remain
+oracle-only. New work was game predicates plus exact branch/wrapper accounting,
+with no new machine protocol. The continuing pressure is handwritten numeric
+recipes, not a proliferation of continuation systems.

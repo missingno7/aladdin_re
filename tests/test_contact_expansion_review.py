@@ -327,18 +327,20 @@ def test_sound_prefix_preserves_incoming_x_at_first_native_callee_entry():
 
 
 @pytest.mark.parametrize("sound", [0, 1])
-@pytest.mark.parametrize("count,counter,expected_x", [
-    (0, 1, False),  # A positive EFFA takes SUBQ.B on the first call.
-    (1, 1, False),  # SUBQ.B clears X on a non-borrowing decrement.
-    (2, 1, False),  # The repeated positive decrement also clears X.
-    (1, 0, True),   # FF7E20-blocked/zero-counter path never performs SUBQ.
+@pytest.mark.parametrize("count,counter,blocker,expected_x", [
+    (0, 1, 0, False),       # A positive EFFA takes SUBQ.B on the first call.
+    (1, 1, 0, False),       # SUBQ.B clears X on a non-borrowing decrement.
+    (2, 1, 0, False),       # The repeated positive decrement also clears X.
+    (255, 255, 0, False),   # Saturated repeat count still performs SUBQ.B.
+    (1, 0, 1, True),        # FF7E20-blocked/zero-counter path preserves X.
+    (255, 255, 0x80, True), # Nonzero blocker preserves X on every repeated call.
 ])
-def test_contact_decay_return_matches_original_incoming_x(sound, count, counter, expected_x):
+def test_contact_decay_return_matches_original_incoming_x(sound, count, counter, blocker, expected_x):
     """Qualify X at the outer return after direct and sound decay routes."""
     with _contact_machine_with_x_set() as machine:
         for address, value in ((0xFFF0C1, 0), (0xFFF57D, sound),
                                (0xFFF11F, 1), (0xFFEFFA, counter),
-                               (0xFF7E21, count), (0xFF7E20, 1 if counter == 0 else 0)):
+                               (0xFF7E21, count), (0xFF7E20, blocker)):
             native_write(machine, address, bytes((value,)))
         initial = machine.snapshot()
         machine.gates([0])

@@ -28,6 +28,11 @@ COLLECTION_DISPATCH_TABLE = 0x1CBE
 CONTACT_ENTRY = 0x1AE4F8
 CONTACT_DISPATCH_ENTRY = 0x1AE9D4
 CONTACT_DISPATCH_LOCAL_RETURN = 0x1AE9D8
+CONTACT_SIBLING_WRAPPER = 0x1AE9C6
+CONTACT_SIBLING_DIRECT = 0x1AE9DA
+CONTACT_SIBLING_ENTRY = 0x1AEC00
+CONTACT_SIBLING_RETIREMENT = 0x1AECD8
+CONTACT_SIBLING_TAIL = 0x1AED0C
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -184,24 +189,34 @@ def initialize_object(machine, registers: dict[str, int]) -> AtomicPlan:
                        "sr": _logic_sr(sr, 0, 4)}, INIT_LAST_PC)
 
 
-def finish_object(machine, registers: dict[str, int]) -> AtomicPlan:
-    """1AE954: accumulate, clear the pair, and install template 1B7940."""
+def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,
+                        return_site, last_pc, extra_writes=(), extra_spans=(),
+                        accumulate=True, final_d7=None):
+    """Build the shared pair-release/template-install tail without a new seam."""
     a1, a6, sp, d0, d7, sr = (registers[key] for key in ("a1", "a6", "a7", "d0", "d7", "sr"))
     return_pc = _read(machine, sp, 4)
-    value = _read(machine, a1 + 8, 1)
-    total = _read(machine, 0xFFF14E, 2) + value
-    carry_sr = (sr & ~0x10) | (0x10 if total > 0xFFFF else 0)
+    value = _read(machine, a1 + 8, 1) if accumulate else None
+    total = _read(machine, 0xFFF14E, 2) + value if accumulate else None
+    carry_sr = ((sr & ~0x10) | (0x10 if total > 0xFFFF else 0)) if accumulate else sr
+    spans = (("object total", 0xFFF14E, 2),) if accumulate else ()
     cycles, instructions, writes, linked = _clear_objects(machine, registers, sp=sp - 4, pair=True,
-        extra_spans=(("outer return", sp, 4), ("object total", 0xFFF14E, 2)))
+        extra_spans=(("outer return", sp, 4), *spans, *extra_spans))
     initialized = _initialize_object_effects(machine, record=a1, template=0x1B7940, entry_sp=sp - 4)
     # The repeated buffer clear sees a null pointer. Only its final stack
     # residue survives; no second semantic clear or saved-register bridge.
-    writes = (*writes, *_bytes(0xFFF14E, total, 2), *_bytes(sp - 8, a6, 4),
-              *_bytes(sp - 10, d0, 2), *_bytes(sp - 4, 0x1AE976, 4), *initialized)
-    return AtomicPlan(706 + cycles, 45 + instructions, tuple(dict(writes).items()),
-                      {"d7": (d7 & 0xFFFF0000) | value, "a5": a1, "a6": 0x1B7953,
+    accumulated = _bytes(0xFFF14E, total, 2) if accumulate else ()
+    writes = (*writes, *accumulated, *_bytes(sp - 8, a6, 4),
+              *_bytes(sp - 10, d0, 2), *_bytes(sp - 4, return_site, 4), *extra_writes, *initialized)
+    return AtomicPlan(static_cycles + cycles, static_instructions + instructions, tuple(dict(writes).items()),
+                      {"d7": (d7 & 0xFFFF0000) | (value if final_d7 is None else final_d7), "a5": a1, "a6": 0x1B7953,
                        "a7": sp + 4, "pc": return_pc & 0xFFFFFF, "sr": _logic_sr(carry_sr, 0, 4)},
-                      FINISH_LAST_PC, direct_calls=3 + bool(linked))
+                      last_pc, direct_calls=3 + bool(linked))
+
+
+def finish_object(machine, registers: dict[str, int]) -> AtomicPlan:
+    """1AE954: accumulate, clear the pair, and install template 1B7940."""
+    return _finish_object_plan(machine, registers, static_cycles=706, static_instructions=45,
+                               return_site=0x1AE976, last_pc=FINISH_LAST_PC)
 
 
 def replace_object(machine, registers: dict[str, int], *, increment_total=False, extra_spans=(),
@@ -363,7 +378,8 @@ def begin_collection_dispatch(machine, registers):
                      ('collection dispatch globals', 0xFFF0F5, 2)])
     kind = _read(machine, record, 1)
     target = int.from_bytes(machine.peek_rom(COLLECTION_DISPATCH_TABLE + 4 * kind, 4), 'big') & 0xFFFFFF
-    if target not in (*COLLECTION_ROUTES, CONTACT_DISPATCH_ENTRY):
+    if target not in (*COLLECTION_ROUTES, CONTACT_DISPATCH_ENTRY,
+                      CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
     dispatch_sr = sr & ~0x1F
     if kind == 0:
@@ -454,6 +470,234 @@ CONTACT_GLOBALS = tuple(('contact state', address, 1) for address in (
     0xFFEFFF, 0xFFF11F, 0xFFF0D8, 0xFFF57D, 0xFF7E21,
     0xFF7E20, 0xFFEFFA, 0xFF7E77)) + (
     ('contact state', 0xFFF0B0, 2), ('contact state', 0xFF7E60, 4))
+
+CONTACT_SIBLING_GLOBALS = (
+    ('contact sibling state', 0xFFF0D8, 1), ('contact sibling state', 0xFFF0E9, 1),
+    ('contact sibling state', 0xFF7E02, 2), ('contact sibling state', 0xFF7E49, 1),
+)
+
+_CONTACT_SIBLING_RETIRE = {
+    # Cost from 1AECD8 to the 1AED0C tail, after the latter's own RTS body.
+    'retire18': (88, 8, ()),
+    'retire10': (122, 10, ((0xFFF0E9, 0x20),)),
+    'retire11': (140, 12, ((0xFFF0E9, 0x20),)),
+    'retire': (122, 11, ()),
+}
+
+
+def _contact_sibling_tail(machine, registers, *, extra_spans=()):
+    """1AED0C's shared pair-release/template-install tail alone."""
+    return _finish_object_plan(machine, registers, static_cycles=670, static_instructions=42,
+                               return_site=0x1AED22, last_pc=0x1AED22,
+                               extra_spans=extra_spans, accumulate=False,
+                               final_d7=registers['d7'] & 0xFFFF)
+
+
+def begin_contact_sibling_tail(machine, registers):
+    """Exact external 1AED0C tail; it has no direction or counter precondition."""
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact sibling record/stack')
+    _spans_disjoint([('contact sibling record', record, 66),
+                     ('contact sibling tail return', sp - 10, 14)])
+    return _contact_sibling_tail(machine, registers)
+
+
+def begin_contact_sibling_retirement(machine, registers):
+    """1AECD8: type-13-free counter retirement through the existing finish tail."""
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact sibling record/stack')
+    _spans_disjoint([('contact sibling record', record, 66),
+                     ('contact sibling return', sp - 10, 14),
+                     ('contact sibling total', 0xFFF14E, 2),
+                     ('contact sibling mode', 0xFFF0E9, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    kind = read(record, 1)
+    if kind == 0x13:
+        raise UnsupportedCandidate('contact sibling type13 is not recovered')
+    route = 'retire18' if kind == 0x18 else 'retire10' if kind == 0x10 else \
+            'retire11' if kind == 0x11 else 'retire'
+    cycles, instructions, extra_writes = _CONTACT_SIBLING_RETIRE[route]
+    value = read(record + 8, 1)
+    total = read(0xFFF14E, 2) + value
+    add_sr = (registers['sr'] & ~0x10) | (0x10 if total > 0xFFFF else 0)
+    tail = _contact_sibling_tail(machine, dict(registers, sr=add_sr),
+                                 extra_spans=(('contact sibling total', 0xFFF14E, 2),
+                                              ('contact sibling mode', 0xFFF0E9, 1)))
+    final = dict(tail.registers)
+    final['d7'] = (registers['d7'] & 0xFFFF0000) | value
+    writes = (*_bytes(0xFFF14E, total, 2), *extra_writes, *tail.writes)
+    return AtomicPlan(cycles + tail.cycles, instructions + tail.instructions,
+                      tuple(dict(writes).items()), final, tail.last_pc, tail.direct_calls)
+
+
+def begin_contact_sibling(machine, registers):
+    """1AEC00 through the accepted counter-retirement branch and its RTS."""
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact sibling record/stack')
+    _spans_disjoint([('contact sibling record', record, 66),
+                     ('contact sibling return', sp - 10, 14), *CONTACT_SIBLING_GLOBALS,
+                     ('contact sibling total', 0xFFF14E, 2)])
+    read = lambda address, size: _read(machine, address, size)
+    route, _ = game.contact_sibling_route(read, record)
+    if route in _CONTACT_SIBLING_RETIRE:
+        # The outer route reads all sibling inputs before entering the tail.
+        kind = read(record, 1)
+        cycles, instructions, extra_writes = _CONTACT_SIBLING_RETIRE[route]
+        value = read(record + 8, 1)
+        total = read(0xFFF14E, 2) + value
+        add_sr = (registers['sr'] & ~0x10) | (0x10 if total > 0xFFFF else 0)
+        tail = _contact_sibling_tail(machine, dict(registers, sr=add_sr), extra_spans=(
+            *CONTACT_SIBLING_GLOBALS, ('contact sibling total', 0xFFF14E, 2)))
+        final = dict(tail.registers)
+        final['d7'] = (registers['d7'] & 0xFFFF0000) | value
+        prefix_cycles, prefix_instructions = (124, 10) if read(0xFF7E49, 1) else (116, 9)
+        writes = (*_bytes(0xFFF14E, total, 2), *extra_writes, *tail.writes)
+        return AtomicPlan(prefix_cycles + cycles + tail.cycles,
+                          prefix_instructions + instructions + tail.instructions,
+                          tuple(dict(writes).items()), final, tail.last_pc, tail.direct_calls)
+    if route == 'contact':
+        return AtomicPlan(42, 3, (),
+                          {'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF,
+                           'sr': _logic_sr(registers['sr'], 0, 1)}, 0x1AED22)
+    if route == 'early':
+        direction, distance, limit = read(0xFF7E49, 1), read(0xFF7E02, 2), read(record + 2, 2)
+        # MOVE.W FF7E02,D7 then CMP.W 2(A1),D7.  Taken direction arms
+        # differ only in the branch timing; CMP preserves X and writes NZVC.
+        result = (distance - limit) & 0xFFFF
+        sr = _logic_sr(registers['sr'], result, 2)
+        if distance < limit:
+            sr |= 1
+        if ((distance ^ limit) & (distance ^ result) & 0x8000):
+            sr |= 2
+        return AtomicPlan(106 if direction else 108, 8, (),
+                          {'d7': (registers['d7'] & 0xFFFF0000) | distance,
+                           'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF, 'sr': sr},
+                          0x1AED22)
+    raise UnsupportedCandidate(f'contact sibling {route} is not recovered')
+
+
+def begin_contact_sibling_wrapper(machine, registers, entry):
+    """Compose 1AE9C6/1AE9DA around an admitted sibling or direct contact."""
+    if entry not in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+        raise UnsupportedCandidate('unknown contact sibling wrapper')
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned contact sibling wrapper stack')
+    _spans_disjoint([('contact sibling wrapper frame', sp - 10, 14),
+                     ('contact sibling wrapper record', registers['a1'], 66),
+                     *CONTACT_SIBLING_GLOBALS])
+    # The first BSR's residue is retained only when 1AEC00 returns directly;
+    # the C6 contact arm overwrites it with its second BSR return.
+    sibling_return = 0x1AE9CA if entry == CONTACT_SIBLING_WRAPPER else 0x1AE9DE
+    callback = AtomicPlan(18, 1, _bytes(sp - 4, sibling_return, 4),
+                          {**registers, 'a7': sp - 4, 'pc': CONTACT_SIBLING_ENTRY},
+                          entry, direct_calls=1)
+    planner = dispatch_plan_view(machine, callback)
+    read = lambda address, size: _read(planner, address, size)
+    route, _ = game.contact_sibling_route(read, registers['a1'])
+    if entry == CONTACT_SIBLING_WRAPPER and route == 'contact':
+        contact_return = 0x1AE9D8
+        contact_callback = AtomicPlan(106, 7, _bytes(sp - 4, contact_return, 4),
+                                      {**registers, 'a7': sp - 4, 'pc': CONTACT_ENTRY},
+                                      CONTACT_SIBLING_WRAPPER, direct_calls=2)
+        contact = begin_contact(dispatch_plan_view(machine, contact_callback), contact_callback.registers)
+        final = dict(contact.registers)
+        final.update(a7=sp + 4, pc=read(sp, 4) & 0xFFFFFF)
+        return AtomicPlan(contact_callback.cycles + contact.cycles + 16,
+                          contact_callback.instructions + contact.instructions + 1,
+                          tuple(dict((*contact_callback.writes, *contact.writes)).items()), final,
+                          CONTACT_DISPATCH_LOCAL_RETURN,
+                          contact_callback.direct_calls + contact.direct_calls)
+    sibling = begin_contact_sibling(planner, callback.registers)
+    if entry == CONTACT_SIBLING_DIRECT:
+        final = dict(sibling.registers)
+        final.update(a7=sp + 4, pc=read(sp, 4) & 0xFFFFFF)
+        return AtomicPlan(callback.cycles + sibling.cycles + 16,
+                          callback.instructions + sibling.instructions + 1,
+                          tuple(dict((*callback.writes, *sibling.writes)).items()), final,
+                          0x1AE9DE, callback.direct_calls + sibling.direct_calls)
+    # 1AE9CA tests D8 and its taken BNE targets the single RTS at 1A91C4.
+    if not read(0xFFF0D8, 1):
+        raise UnsupportedCandidate('contact sibling wrapper contact arm did not compose')
+    final = dict(sibling.registers)
+    final.update(a7=sp + 4, pc=read(sp, 4) & 0xFFFFFF,
+                 sr=_logic_sr(sibling.registers['sr'], read(0xFFF0D8, 1), 1))
+    return AtomicPlan(callback.cycles + sibling.cycles + 42,
+                      callback.instructions + sibling.instructions + 3,
+                      tuple(dict((*callback.writes, *sibling.writes)).items()), final,
+                      0x1A91C4, callback.direct_calls + sibling.direct_calls)
+
+
+def begin_contact_sibling_dispatch(machine, registers, dispatch, entry):
+    """Compose the recorded table prefix with one bounded sibling wrapper."""
+    sp = registers['a7']
+    if entry not in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+        raise UnsupportedCandidate('unknown dispatched contact sibling wrapper')
+    if dispatch.registers.get('pc') != entry or dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('contact sibling dispatch prefix identity')
+    callback_registers = {**registers, **dispatch.registers}
+    wrapper = begin_contact_sibling_wrapper(dispatch_plan_view(machine, dispatch), callback_registers, entry)
+    final = dict(dispatch.registers)
+    final.update(wrapper.registers)
+    return AtomicPlan(dispatch.cycles + wrapper.cycles, dispatch.instructions + wrapper.instructions,
+                      tuple(dict((*dispatch.writes, *wrapper.writes)).items()), final,
+                      wrapper.last_pc, dispatch.direct_calls + wrapper.direct_calls)
+
+
+def begin_contact_sibling_wrapper_sound(machine, registers, entry):
+    """Enter C6's D8-zero contact arm through the existing command-31 seam."""
+    if entry != CONTACT_SIBLING_WRAPPER:
+        raise UnsupportedCandidate('only C6 reaches the sibling contact sound arm')
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned contact sibling wrapper stack')
+    _spans_disjoint([('contact sibling wrapper frame', sp - 10, 14),
+                     ('contact sibling wrapper record', registers['a1'], 66),
+                     *CONTACT_SIBLING_GLOBALS])
+    read = lambda address, size: _read(machine, address, size)
+    if game.contact_sibling_route(read, registers['a1'])[0] != 'contact':
+        raise UnsupportedCandidate('contact sibling wrapper is not on its contact arm')
+    # BSR sibling + D8-zero return + TST/BNE + BSR contact.  The contact BSR
+    # overwrites the earlier sibling return slot before the sound frame starts.
+    contact_callback = AtomicPlan(106, 7, _bytes(sp - 4, CONTACT_DISPATCH_LOCAL_RETURN, 4),
+                                  {**registers, 'a7': sp - 4, 'pc': CONTACT_ENTRY},
+                                  CONTACT_SIBLING_WRAPPER, direct_calls=2)
+    sound = begin_contact_sound(dispatch_plan_view(machine, contact_callback), contact_callback.registers)
+    return AtomicPlan(contact_callback.cycles + sound.cycles,
+                      contact_callback.instructions + sound.instructions,
+                      tuple(dict((*contact_callback.writes, *sound.writes)).items()), sound.registers,
+                      sound.last_pc, contact_callback.direct_calls + sound.direct_calls)
+
+
+def finish_contact_sibling_wrapper_sound(machine, registers):
+    """Finish C6's shared contact sound suffix and execute its final RTS."""
+    contact = finish_contact_sound(machine, registers)
+    local_sp = contact.registers['a7']
+    if contact.registers.get('pc') != CONTACT_DISPATCH_LOCAL_RETURN:
+        raise UnsupportedCandidate('contact sibling wrapper local contact return')
+    final = dict(contact.registers)
+    final.update(a7=local_sp + 4, pc=_read(machine, local_sp, 4) & 0xFFFFFF)
+    return AtomicPlan(contact.cycles + 16, contact.instructions + 1, contact.writes, final,
+                      CONTACT_DISPATCH_LOCAL_RETURN, contact.direct_calls)
+
+
+def begin_contact_sibling_dispatch_sound(machine, registers, dispatch, entry):
+    """Compose the table prefix with C6's already-qualified contact sound seam."""
+    sp = registers['a7']
+    if entry != CONTACT_SIBLING_WRAPPER:
+        raise UnsupportedCandidate('only C6 has a dispatched sibling contact sound arm')
+    if dispatch.registers.get('pc') != entry or dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('contact sibling dispatch sound prefix identity')
+    callback_registers = {**registers, **dispatch.registers}
+    sound = begin_contact_sibling_wrapper_sound(dispatch_plan_view(machine, dispatch), callback_registers, entry)
+    final = dict(dispatch.registers)
+    final.update(sound.registers)
+    return AtomicPlan(dispatch.cycles + sound.cycles, dispatch.instructions + sound.instructions,
+                      tuple(dict((*dispatch.writes, *sound.writes)).items()), final,
+                      sound.last_pc, dispatch.direct_calls + sound.direct_calls)
 
 _CONTACT_RESET_BASE = {
     'be': (470, 33), 'd0': (526, 37), 'd7': (554, 39),
