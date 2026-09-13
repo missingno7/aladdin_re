@@ -53,6 +53,56 @@ def contact_sibling_route(read, record):
     return 'retire', kind
 
 
+def contact_script_selector(read):
+    """Classify 1AD150's flag-priority script-pointer selection.
+
+    The selector itself has no external device calls.  It returns the selected
+    immutable pointer when that pointer is fixed by the branch, or the table
+    index for the one ROM-table arm.  The boundary owns the cartridge read and
+    exact machine residue.
+    """
+    if read(0xFFF0D7, 1):
+        return 'd7', 0x121964, None, False
+    if read(0xFFF173, 1):
+        if not read(0xFFF0C1, 1):
+            return 'f173-c1zero', 0x121C28, None, False
+        value = read(0xFFF0B0, 2)
+        if value == 1:
+            return 'f173-b0-1', 0x121FD4, None, False
+        if value == 2:
+            return 'f173-b0-2', 0x121FD4, None, False
+        return 'f173-default', 0x121D5A, None, True
+    if read(0xFFF115, 1):
+        return 'f115', 0x125E72, None, False
+    if read(0xFFF0CD, 1):
+        d3 = read(0xFFF0D3, 1)
+        if 0x50 <= d3 < 0x52:
+            return 'cd-50-51', 0x121964, None, False
+        if d3 == 0x60:
+            return 'cd-60', 0x122336, None, False
+    # 1AD1CE is reached after the optional CD arm, but is not part of it.
+    if read(0xFFF0D3, 1) == 0x5E:
+        return 'cd-5e', 0x122336, None, False
+    if read(0xFFF0DB, 1):
+        return 'db', 0x12181A, None, False
+    if read(0xFFF0D0, 1):
+        return 'd0-table', None, (read(0xFF7E04, 2) >> 2) & 0xF, False
+    if read(0xFFF0D2, 1):
+        return 'd2', 0x121C62, None, False
+    if not read(0xFFF0C1, 1):
+        return 'normal', 0x121AD8, None, False
+    if read(0xFFF0DE, 1):
+        return 'de', 0x12231E, None, False
+    if read(0xFFF0DF, 1):
+        return 'df', 0x122298, None, False
+    if read(0xFFF0ED, 1):
+        return 'ed', 0x121FA6, None, False
+    value = read(0xFFF0B0, 2)
+    if value in (1, 2):
+        return f'b0-{value}', 0x122006, None, False
+    return 'c1-default', 0x121D9A, None, False
+
+
 def contact_decay(read):
     """One exact 1B03F2 pass; repeat callers may invoke it up to three times."""
     if read(0xFFF0E9, 1) or read(0xFFF0E6, 1) or read(0xFF7E20, 1):

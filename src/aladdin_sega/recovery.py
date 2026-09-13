@@ -15,7 +15,8 @@ from .boundary import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY,
                         CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT,
                         begin_contact_sibling, begin_contact_sibling_wrapper,
                         begin_contact_sibling_dispatch, begin_contact_sibling_wrapper_sound,
-                        finish_contact_sibling_wrapper_sound, begin_contact_sibling_dispatch_sound)
+                        finish_contact_sibling_wrapper_sound, begin_contact_sibling_dispatch_sound,
+                        begin_contact_sibling_sound, finish_contact_sibling_sound)
 
 
 @dataclass
@@ -246,14 +247,19 @@ class Candidate:
                         return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
                 except UnsupportedCandidate:
                     return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+                decrement_sound = sound.last_pc == 0x1AEC46
                 return self._run_sound_seam(
                     machine, target, sp=dispatch_registers['a7'] - 8,
-                    resume=0x1AE5B6, return_slot=0x1AE5B6,
+                    resume=0x1AEC52 if decrement_sound else 0x1AE5B6,
+                    return_slot=0x1AEC52 if decrement_sound else 0x1AE5B6,
                     suffix=lambda returned: finish_contact_sibling_wrapper_sound(machine, returned),
                     suffix_transform=self._mutate,
-                    on_complete=lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
-                                         self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1),
-                                         self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1)),
+                    on_complete=(lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
+                                          self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1)))
+                    if decrement_sound else
+                    (lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
+                              self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1),
+                              self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1))),
                 )
             self.stats['collection_dispatch_hits'] += 1
             self.stats['contact_sibling_hits'] += 1
@@ -321,21 +327,27 @@ class Candidate:
                 if not self._apply(machine, self._mutate(plan), target):
                     return self._fallback(machine, entry, 'scheduler admission')
             except UnsupportedCandidate as error:
-                if entry != CONTACT_SIBLING_WRAPPER:
-                    return self._fallback(machine, entry, f'unsupported domain: {error}')
                 try:
-                    sound = begin_contact_sibling_wrapper_sound(machine, registers, entry)
+                    sound = (begin_contact_sibling_sound(machine, registers)
+                             if entry == CONTACT_SIBLING_ENTRY else
+                             begin_contact_sibling_wrapper_sound(machine, registers, entry))
                     if not self._apply(machine, self._mutate(sound), target):
                         return self._fallback(machine, entry, 'scheduler admission')
                 except UnsupportedCandidate:
                     return self._fallback(machine, entry, f'unsupported domain: {error}')
+                decrement_sound = sound.last_pc == 0x1AEC46
                 return self._run_sound_seam(
-                    machine, target, sp=registers['a7'] - 4,
-                    resume=0x1AE5B6, return_slot=0x1AE5B6,
-                    suffix=lambda returned: finish_contact_sibling_wrapper_sound(machine, returned),
+                    machine, target, sp=registers['a7'] if entry == CONTACT_SIBLING_ENTRY else registers['a7'] - 4,
+                    resume=0x1AEC52 if decrement_sound else 0x1AE5B6,
+                    return_slot=0x1AEC52 if decrement_sound else 0x1AE5B6,
+                    suffix=(lambda returned: finish_contact_sibling_sound(machine, returned))
+                    if entry == CONTACT_SIBLING_ENTRY else
+                    (lambda returned: finish_contact_sibling_wrapper_sound(machine, returned)),
                     suffix_transform=self._mutate,
-                    on_complete=lambda: (self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1),
-                                         self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1)),
+                    on_complete=(lambda: self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1))
+                    if decrement_sound else
+                    (lambda: (self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1),
+                              self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1))),
                 )
             self.stats['contact_sibling_hits'] += 1
             return True

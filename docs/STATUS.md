@@ -6,6 +6,20 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Contact decrement and selector
+
+The `lifecycle` candidate now composes `1AEC00`'s non-`0x13` decrement branch
+with the finite `1AD150` script selector, command `8`, wrappers `1AE9C6` /
+`1AE9DA`, and the existing dispatcher. The selector remains internal because
+later recordings show other callers. Type `0x13`, counter wrap, and command
+`0x6A` remain whole-entry original fallbacks.
+
+All **988 tests** pass. The explicit current old-225 and new-244 recordings,
+plus all four later recordings, pass terminal state/frame/PCM comparison with
+matching 19-module recursive source receipts. Strict state-changing witness,
+150-instruction future, fresh restore, result/return/timing controls, and the
+no-build edit loop pass. See [contact-selector.md](contact-selector.md).
+
 ## Connected contact retirement
 
 The lifecycle carrier now owns bounded `1AEC00` retirement through wrappers

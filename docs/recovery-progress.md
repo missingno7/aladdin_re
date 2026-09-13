@@ -303,3 +303,67 @@ recordings. Three outer entries were added; two internal retirement points remai
 oracle-only. New work was game predicates plus exact branch/wrapper accounting,
 with no new machine protocol. The continuing pressure is handwritten numeric
 recipes, not a proliferation of continuation systems.
+
+## Additional user recordings, 13 September
+
+Four new recordings add 705.50 seconds (about 11 minutes 46 seconds) of input.
+The user reports reaching substantially later gameplay; exact level identities
+have not yet been traced. They are independent replay segments with embedded
+initial snapshots, not a claimed gap-free continuous recording.
+
+| Recording under `recordings/` | Duration | Input events |
+| --- | ---: | ---: |
+| `20260913T115733.435810Z.alreplay` | 164.01 s | 814 |
+| `20260913T120021.302185Z.alreplay` | 166.13 s | 856 |
+| `20260913T120456.956960Z.alreplay` | 274.20 s | 1332 |
+| `20260913T120812.124863Z.alreplay` | 101.16 s | 340 |
+
+All four archives validate as completed current-format captures and their
+embedded initial states restore. Four new standalone snapshots also restore.
+This is artifact validation, not full original/candidate replay equivalence.
+Hashes and snapshot names are retained in
+`artifacts/grinding/new-late-corpus/inventory.json`. Include these segments in
+the next frozen recovery milestone integration and use them for new path census.
+
+## Contact decrement and script selector
+
+`1AEC00` now owns its non-`0x13` counter-decrement arm through the internal
+`1AD150` flag-priority selector. The direct entry, C6 and DA wrappers, and the
+existing collection dispatcher compose the same live-RAM semantic result. The
+sound-enabled path uses command `8` through the existing 28-byte synchronous
+seam: its real first return is `1AEC4C`, its verified second-JSR resume is
+`1AEC52`, and the runner retains its frame, return-slot, deadline,
+foreign-return, and safe-snapshot checks. No standalone selector gate or new
+sound/continuation mechanism was introduced.
+
+The selector's ROM-table arm preserves D0's upper word and its shifted-index
+CCR/X residue. It is internally reusable because newer recordings invoke it
+from callers beyond the recovered decrement path. Type `0x13` and its command
+`0x6A` route, `A1+1 == 0` wrap, and all standalone selector callers remain
+whole-entry original fallback before candidate writes.
+
+Final evidence:
+
+- `artifacts/grinding/terra/selector-decrement-final-suite.xml`: **988 tests,
+  0 failures, 0 errors, 0 skips, 48.338 s**.
+- Six current-source receipts pass with matching reference/candidate terminal
+  state, frame, PCM, and all 19 recursive module hashes:
+  `selector-decrement-final-old`, `selector-decrement-final-new244`, and
+  `selector-decrement-final-late1` through `late4` under
+  `artifacts/grinding/terra/`. The old input is explicitly
+  `recordings/current/20260912T210640.729016Z.alreplay`.
+- `artifacts/grinding/parent/decrement-recorded-witness/report.json` captures
+  an unmodified old replay C6 decrement activation: strict state/frame/PCM,
+  150 native instructions, and fresh-process entry/exit restore pass with two
+  gates, six direct Python calls, one original sound span, 65 instructions and
+  970 charged cycles. Result/return/timing controls reject at
+  `artifacts/grinding/parent/decrement-controls/report.json`.
+- `artifacts/grinding/parent/decrement-edit-loop/result.json` passes in
+  0.849 s and rejects a selector-pointer mutation in 0.779 s, with no native
+  build or installation.
+
+The manual work was semantic flag priority and connected counter/type effects,
+plus handwritten branch timing/CCR/stack recipes. Existing planning views,
+AtomicPlans, wrappers/dispatcher, and the synchronous sound seam were reused.
+The next adjacent task should map external selector callers or type-`0x13`
+retirement separately; these results do not turn either into recovered scope.

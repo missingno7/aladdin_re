@@ -66,6 +66,198 @@ def test_internal_retirement_tail_points_are_oracle_only():
     assert ENTRY["1AED0C"] not in gates
 
 
+SELECTOR_FIXTURES = [
+    ("old", ROOT / "selector-recorded" / "old.alsnap"),
+    ("new", ROOT / "selector-recorded" / "new.alsnap"),
+]
+SELECTOR_FLAGS = (0xFFF0D7, 0xFFF173, 0xFFF115, 0xFFF0CD, 0xFFF0DB,
+                  0xFFF0D0, 0xFFF0D2, 0xFFF0C1, 0xFFF0DE, 0xFFF0DF, 0xFFF0ED)
+SELECTOR_SENTINELS = {0xFFF0E7: 0xA5, 0xFF7E77: 0x5A, 0xFFF0CC: 0xC3}
+
+
+def _selector_cases():
+    cases = [("priority_d7", {0xFFF0D7: 1}, 0x121964, 0x00,
+                              (0x34, 4)),
+             ("priority_f173", {0xFFF173: 1}, 0x121C28, 0x04,
+                              (0x92, 10)),
+             ("priority_115", {0xFFF115: 1}, 0x125E72, 0x04,
+                              (0xA6, 11)),
+             ("priority_cd", {0xFFF0CD: 1}, 0x121AD8, 0x04,
+                              (0x16E, 26)),
+             ("priority_db", {0xFFF0DB: 1}, 0x12181A, 0x00,
+                              (0xE4, 16)),
+             ("priority_d0", {0xFFF0D0: 1}, 0x1218CA, 0x04,
+                              (0x13C, 23)),
+             ("priority_d2", {0xFFF0D2: 1}, 0x121C62, 0x00,
+                              (0x118, 20)),
+             ("priority_c1", {0xFFF0C1: 1}, 0x121D9A, 0x09,
+                              (0x1DC, 34)),
+             ("priority_de", {0xFFF0DE: 1}, 0x121AD8, 0x04,
+                              (0x134, 22)),
+             ("priority_df", {0xFFF0DF: 1}, 0x121AD8, 0x04,
+                              (0x134, 22)),
+             ("priority_ed", {0xFFF0ED: 1}, 0x121AD8, 0x04,
+                              (0x134, 22)),
+             ("priority_all", {address: 1 for address in SELECTOR_FLAGS},
+                              0x121964, 0x00, (0x34, 4))]
+    cases.extend([
+        ("f173_plus_115", {0xFFF173: 1, 0xFFF115: 1}, 0x121C28, 0x04, (0x92, 10)),
+        ("115_plus_cd", {0xFFF115: 1, 0xFFF0CD: 1}, 0x125E72, 0x04, (0xA6, 11)),
+        ("cd_miss_plus_db", {0xFFF0CD: 1, 0xFFF0D3: 0x4F, 0xFFF0DB: 1},
+         0x12181A, 0x00, (0x11E, 20)),
+        ("d3_5e_plus_db", {0xFFF0CD: 1, 0xFFF0D3: 0x5E, 0xFFF0DB: 1},
+         0x122336, 0x04, (0x134, 21)),
+        ("d3_5e_without_cd", {0xFFF0D3: 0x5E},
+         0x122336, 0x04, (0xDE, 15)),
+        ("d3_5e_without_cd_db", {0xFFF0D3: 0x5E, 0xFFF0DB: 1},
+         0x122336, 0x04, (0xDE, 15)),
+        ("d3_5e_without_cd_d0", {0xFFF0D3: 0x5E, 0xFFF0D0: 1},
+         0x122336, 0x04, (0xDE, 15)),
+        ("d0_plus_d2", {0xFFF0D0: 1, 0xFFF0D2: 1}, 0x1218CA, 0x04, (0x13C, 23)),
+        ("c1_plus_de_df_ed", {0xFFF0C1: 1, 0xFFF0DE: 1, 0xFFF0DF: 1, 0xFFF0ED: 1},
+         0x12231E, 0x00, (0x14E, 24)),
+        ("c1_b0_0_normal", {0xFFF0C1: 1, 0xFFF0B0: 0}, 0x121D9A, 0x09, (0x1DC, 34)),
+        ("c1_b0_1_normal", {0xFFF0C1: 1, 0xFFF0B0: 1}, 0x122006, 0x04, (0x1A2, 30)),
+        ("c1_b0_2_normal", {0xFFF0C1: 1, 0xFFF0B0: 2}, 0x122006, 0x04, (0x1CE, 33)),
+        ("c1_b0_3_normal", {0xFFF0C1: 1, 0xFFF0B0: 3}, 0x121D9A, 0x00, (0x1DC, 34)),
+    ])
+    for value, selected, ccr, cost in (
+        (0x4F, 0x121AD8, 0x04, (0x16E, 26)),
+        (0x50, 0x121964, 0x04, (0xF8, 17)),
+        (0x51, 0x121964, 0x04, (0xF8, 17)),
+        (0x52, 0x121AD8, 0x04, (0x18A, 28)),
+        (0x5D, 0x121AD8, 0x04, (0x18A, 28)),
+        (0x5E, 0x122336, 0x04, (0x134, 21)),
+        (0x5F, 0x121AD8, 0x04, (0x18A, 28)),
+        (0x60, 0x122336, 0x04, (0x116, 19)),
+        (0x61, 0x121AD8, 0x04, (0x18A, 28)),
+    ):
+        cases.append((f"d3_{value:02X}", {0xFFF0CD: 1, 0xFFF0D3: value},
+                      selected, ccr, cost))
+    for c1, b0, selected, ccr, cost in (
+        (0, 0, 0x121C28, 0x04, (0x92, 10)),
+        (1, 0, 0x121D5A, 0x04, (0xEC, 16)),
+        (1, 1, 0x121FD4, 0x04, (0xB2, 12)),
+        (1, 2, 0x121FD4, 0x04, (0xCE, 14)),
+        (1, 3, 0x121D5A, 0x04, (0xEC, 16)),
+    ):
+        cases.append((f"f173_c1_{c1}_b0_{b0}",
+                      {0xFFF173: 1, 0xFFF0C1: c1, 0xFFF0B0: b0},
+                      selected, ccr, cost))
+    for value, selected, ccr in (
+        (0x0000, 0x1218CA, 0x04), (0x0001, 0x1218CA, 0x04),
+        (0x0003, 0x1218CA, 0x04), (0x0004, 0x1218BC, 0x00),
+        (0x0007, 0x1218BC, 0x00), (0x0008, 0x1218AE, 0x00),
+        (0x003B, 0x121876, 0x00), (0x003C, 0x121868, 0x00),
+        (0x003F, 0x121868, 0x00), (0x0040, 0x1218CA, 0x04),
+        (0xFFFF, 0x121868, 0x00),
+    ):
+        cases.append((f"d0_{value:04X}", {0xFFF0D0: 1, 0xFF7E04: value},
+                      selected, ccr, (0x13C, 23)))
+    return cases
+
+
+def _selector_run(path, changes, incoming_x=None):
+    with Machine(read_rom(DEFAULT_ROM)) as machine:
+        artifacts.restore_snapshot(machine, path.read_bytes())
+        for address in SELECTOR_FLAGS:
+            native_write(machine, address, b"\0")
+        native_write(machine, 0xFFF0D3, b"\0")
+        native_write(machine, 0xFFF0B0, b"\0\0")
+        native_write(machine, 0xFF7E04, b"\0\0")
+        for address, value in SELECTOR_SENTINELS.items():
+            native_write(machine, address, bytes((value,)))
+        for address, value in changes.items():
+            native_write(machine, address, value.to_bytes(2 if address in (0xFFF0B0, 0xFF7E04) else 1, "big"))
+        if incoming_x is not None:
+            selector_pc = machine.info["pc"]
+            machine.gates([selector_pc])
+            assert machine.run(instructions=1) == "gate"
+            registers = machine.registers()
+            sr = (registers["sr"] & ~0x10) | (0x10 if incoming_x else 0)
+            assert machine.atomic(target=machine.info["tick"] + 1_000_000,
+                                  cycles=1, instructions=1, last_pc=selector_pc,
+                                  writes=[], registers={"sr": sr})
+        before = machine.info
+        before_ram = machine.peek_ram(0, 65536)
+        machine.gates([0x1AEC64])
+        assert machine.run(instructions=10000) == "gate"
+        outer = (artifacts.snapshot_bytes(machine), machine.info, machine.registers(),
+                 machine.peek_ram(0, 65536), machine.frame()[2], machine.audio())
+        changed = {offset: (old, new) for offset, (old, new) in enumerate(zip(before_ram, outer[3]))
+                   if old != new}
+        cost = (outer[1]["m68k_cycles"] - before["m68k_cycles"],
+                outer[1]["m68k_instructions"] - before["m68k_instructions"])
+        machine.gates([])
+        assert machine.run(instructions=150) == "limit"
+        future = (artifacts.snapshot_bytes(machine), machine.info, machine.registers(),
+                  machine.peek_ram(0, 65536), machine.frame()[2], machine.audio())
+    return outer, future, changed, cost
+
+
+@pytest.mark.parametrize("corpus,path", SELECTOR_FIXTURES)
+@pytest.mark.parametrize("name,changes,selected,ccr,cost", _selector_cases(),
+                         ids=lambda value: str(value))
+def test_selector_matrix_full_original_state(corpus, path, name, changes, selected, ccr, cost):
+    first = _selector_run(path, changes)
+    second = _selector_run(path, changes)
+    assert first == second
+    outer, future, changed, actual_cost = first
+    assert outer[1]["pc"] == 0x1AEC64
+    assert outer[2]["a2"] & 0xFFFFFF == selected
+    assert outer[2]["sr"] & 0x1F == ccr
+    assert actual_cost == cost
+    assert future[1]["m68k_instructions"] - outer[1]["m68k_instructions"] == 150
+    assert set(changed) <= {0x7E77, 0xF0E7, 0xF0CC}
+
+
+SELECTOR_TABLE_X_CASES = [
+    (value, selected, ccr)
+    for value, selected, ccr in (
+        (0x0000, 0x1218CA, 0x04), (0x0001, 0x1218CA, 0x04),
+        (0x0003, 0x1218CA, 0x04), (0x0004, 0x1218BC, 0x00),
+        (0x0007, 0x1218BC, 0x00), (0x0008, 0x1218AE, 0x00),
+        (0x003B, 0x121876, 0x00), (0x003C, 0x121868, 0x00),
+        (0x003F, 0x121868, 0x00), (0x0040, 0x1218CA, 0x04),
+        (0xFFFF, 0x121868, 0x00),
+    )
+]
+
+
+@pytest.mark.parametrize("corpus,path", SELECTOR_FIXTURES)
+@pytest.mark.parametrize("incoming_x", [0, 1])
+@pytest.mark.parametrize("value,selected,ccr", SELECTOR_TABLE_X_CASES)
+def test_selector_table_shifts_have_full_x_and_future_contract(corpus, path, incoming_x,
+                                                               value, selected, ccr):
+    changes = {0xFFF0D0: 1, 0xFF7E04: value}
+    first = _selector_run(path, changes, incoming_x=incoming_x)
+    second = _selector_run(path, changes, incoming_x=incoming_x)
+    assert first == second
+    outer, future, changed, cost = first
+    assert outer[2]["a2"] & 0xFFFFFF == selected
+    assert outer[2]["sr"] & 0x1F == ccr
+    assert bool(outer[2]["sr"] & 0x10) is False
+    assert cost == (0x13C, 23)
+    assert future[1]["m68k_instructions"] - outer[1]["m68k_instructions"] == 150
+    assert set(changed) <= {0x7E77, 0xF0E7, 0xF0CC}
+
+
+@pytest.mark.parametrize("corpus,path", SELECTOR_FIXTURES)
+@pytest.mark.parametrize("incoming_x", [0, 1])
+@pytest.mark.parametrize("changes,selected,ccr", [
+    ({0xFFF0D7: 1}, 0x121964, 0x00),
+    ({0xFFF173: 1}, 0x121C28, 0x04),
+    ({0xFFF0C1: 1}, 0x121D9A, 0x09),
+])
+def test_selector_non_table_routes_preserve_incoming_x(corpus, path, incoming_x,
+                                                        changes, selected, ccr):
+    outer, future, _, cost = _selector_run(path, changes, incoming_x=incoming_x)
+    assert outer[2]["a2"] & 0xFFFFFF == selected
+    assert outer[2]["sr"] & 0x1F == (ccr | (0x10 if incoming_x else 0))
+    assert cost[0] > 0 and cost[1] > 0
+    assert future[1]["m68k_instructions"] - outer[1]["m68k_instructions"] == 150
+
+
 def _fixture_paths():
     paths = [
         (corpus, name, ROOT / corpus / f"{name}.alsnap")

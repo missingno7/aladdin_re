@@ -476,6 +476,225 @@ CONTACT_SIBLING_GLOBALS = (
     ('contact sibling state', 0xFF7E02, 2), ('contact sibling state', 0xFF7E49, 1),
 )
 
+# 1AD150's priority inputs are live RAM.  The sole table arm reads immutable
+# cartridge data at 121828; the boundary reads that data only after this guard
+# has admitted the full mutable selector domain.
+CONTACT_SELECTOR_GLOBALS = tuple(('contact selector state', address, 1) for address in (
+    0xFFF0D7, 0xFFF173, 0xFFF115, 0xFFF0CD, 0xFFF0D3, 0xFFF0DB,
+    0xFFF0D0, 0xFFF0D2, 0xFFF0C1, 0xFFF0DE, 0xFFF0DF, 0xFFF0ED,
+    0xFFF0E7, 0xFF7E77, 0xFFF0CC,
+)) + (('contact selector state', 0xFFF0B0, 2),
+      ('contact selector state', 0xFF7E04, 2))
+
+
+def _cmp_sr(sr, left, right, width):
+    """68000 CMP flags for ``left - right`` while retaining X."""
+    mask, sign = (1 << (8 * width)) - 1, 1 << (8 * width - 1)
+    left &= mask; right &= mask
+    result = (left - right) & mask
+    out = _logic_sr(sr, result, width)
+    if left < right:
+        out |= 1
+    if ((left ^ right) & (left ^ result) & sign):
+        out |= 2
+    return out
+
+
+def _subq_byte_sr(sr, value):
+    """The decrement's SUBQ.B #1 residue, including its X/C result."""
+    value &= 0xFF
+    result = (value - 1) & 0xFF
+    out = _logic_sr(sr & ~0x10, result, 1)
+    if value == 0:
+        out |= 0x11
+    if value == 0x80:
+        out |= 2
+    return out
+
+
+def _contact_selector(machine, registers):
+    """Plan the pure 1AD150 selector through its BSR return at 1AEC64."""
+    sp, sr = registers['a7'], registers['sr']
+    read = lambda address, size: _read(machine, address, size)
+    key, selected, table_index, clears_cc = game.contact_script_selector(read)
+    writes = []
+    if key != 'd7':
+        writes.extend(((0xFF7E77, 0), (0xFFF0E7, 0)))
+    if clears_cc:
+        writes.append((0xFFF0CC, 0))
+    costs = {
+        'd7': (52, 4), 'f173-c1zero': (146, 10),
+        'f173-b0-1': (178, 12), 'f173-b0-2': (206, 14),
+        'f173-default': (236, 16), 'f115': (166, 11),
+        'cd-50-51': (248, 17), 'cd-60': (278, 19),
+        'db': (228, 16), 'd0-table': (316, 23), 'd2': (280, 20),
+        'normal': (308, 22), 'de': (334, 24), 'df': (360, 26),
+        'ed': (386, 28), 'b0-1': (418, 30), 'b0-2': (462, 33),
+        'c1-default': (476, 34),
+    }
+    # CD's fall-through costs depend on the two earlier comparisons.  The
+    # selector semantic identifies the final arm; the boundary retains this
+    # instruction-level distinction without retaining mutable state.
+    cd, d3 = read(0xFFF0CD, 1), read(0xFFF0D3, 1)
+    if key == 'cd-5e':
+        cycles, instructions = (308, 21) if cd else (222, 15)
+    else:
+        cycles, instructions = costs[key]
+        if cd and key in ('normal', 'db', 'd0-table', 'd2', 'de', 'df', 'ed',
+                          'b0-1', 'b0-2', 'c1-default'):
+            extra_cycles, extra_instructions = (58, 4) if d3 < 0x50 else (86, 6)
+            cycles += extra_cycles; instructions += extra_instructions
+    if key == 'd0-table':
+        selected = int.from_bytes(machine.peek_rom(0x121828 + table_index * 4, 4), 'big')
+        final_sr = _logic_sr(sr & ~0x10, table_index << 2, 2)
+        d0 = (registers['d0'] & 0xFFFF0000) | (table_index << 2)
+    elif key == 'd7':
+        final_sr = _logic_sr(sr, read(0xFFF0D7, 1), 1)
+    elif key == 'f115':
+        # The terminal CLR.B 7E77 follows the LEA and therefore supplies Z.
+        final_sr = _logic_sr(sr, 0, 1)
+    elif key == 'db':
+        final_sr = _logic_sr(sr, read(0xFFF0DB, 1), 1)
+    elif key == 'd2':
+        final_sr = _logic_sr(sr, read(0xFFF0D2, 1), 1)
+    elif key in ('de', 'df', 'ed'):
+        address = {'de': 0xFFF0DE, 'df': 0xFFF0DF, 'ed': 0xFFF0ED}[key]
+        final_sr = _logic_sr(sr, read(address, 1), 1)
+    elif key == 'c1-default':
+        final_sr = _cmp_sr(sr, read(0xFFF0B0, 2), 2, 2)
+    else:
+        # The remaining arms terminate in a CLR/TST or equality comparison.
+        final_sr = _logic_sr(sr, 0, 1)
+    last = {'d7': 0x1AD15E, 'f115': 0x1AD18A, 'cd-50-51': 0x1AD1B4,
+            'cd-60': 0x1AD1CC, 'cd-5e': 0x1AD1E4, 'db': 0x1AD1F4,
+            'd0-table': 0x1AD216, 'd2': 0x1AD226, 'normal': 0x1AD294,
+            'de': 0x1AD240, 'df': 0x1AD250, 'ed': 0x1AD260,
+            'b0-1': 0x1AD294, 'b0-2': 0x1AD294, 'c1-default': 0x1AD28C,
+            'f173-c1zero': 0x1AD2DA, 'f173-b0-1': 0x1AD294,
+            'f173-b0-2': 0x1AD294, 'f173-default': 0x1AD2D2}[key]
+    final = {**registers, 'a2': selected, 'a7': sp + 4,
+             'pc': _read(machine, sp, 4) & 0xFFFFFF, 'sr': final_sr}
+    if key == 'd0-table':
+        final['d0'] = d0
+    return AtomicPlan(cycles, instructions, tuple(writes), final, last, direct_calls=1)
+
+
+def _contact_sibling_decrement_suffix(machine, registers):
+    """1AEC64: install the selected script and finish the non-13 arm."""
+    record, sp = registers['a1'], registers['a7']
+    read = lambda address, size: _read(machine, address, size)
+    kind = read(record, 1)
+    if kind == 0x13:
+        raise UnsupportedCandidate('contact sibling decrement type13 is not recovered')
+    saved_a2, outer_return = read(sp, 4), read(sp + 4, 4)
+    writes = [*_bytes(0xFF7E60, registers['a2'], 4), (0xFF7E77, 0),
+              *_bytes(0xFFF0B0, 0, 2), (0xFFF0CC, 0)]
+    cycles, instructions = 152, 10
+    final_sr = _cmp_sr(registers['sr'], kind, 0x18, 1)
+    if kind == 0x18:
+        writes.extend(((record, 0x84), *_bytes(record + 0x20, 0x1248B6, 4), (record + 0x37, 0)))
+        cycles, instructions = 202, 13
+        final_sr = _logic_sr(final_sr, 0, 1)
+    return AtomicPlan(cycles, instructions, tuple(writes),
+                      {'a2': saved_a2, 'a7': sp + 8, 'pc': outer_return & 0xFFFFFF,
+                       'sr': final_sr}, 0x1AED22, direct_calls=1)
+
+
+def _contact_sibling_decrement(machine, registers):
+    """1AEC32 sound-off counter decrement, BSR selector, and local suffix."""
+    record, sp = registers['a1'], registers['a7']
+    read = lambda address, size: _read(machine, address, size)
+    counter = read(record + 1, 1)
+    if not counter:
+        raise UnsupportedCandidate('contact sibling counter wraps')
+    if read(record, 1) == 0x13:
+        raise UnsupportedCandidate('contact sibling decrement type13 is not recovered')
+    prefix_sr = _logic_sr(_subq_byte_sr(registers['sr'], counter), read(0xFFF57D, 1), 1)
+    prefix = AtomicPlan(92, 6,
+                        (*_bytes(record + 1, counter - 1, 1), *_bytes(sp - 4, registers['a2'], 4),
+                         *_bytes(sp - 8, 0x1AEC64, 4)),
+                        {**registers, 'a7': sp - 8, 'pc': 0x1AD150, 'sr': prefix_sr},
+                        0x1AEC60, direct_calls=1)
+    selector = _contact_selector(dispatch_plan_view(machine, prefix), prefix.registers)
+    planned = AtomicPlan(prefix.cycles + selector.cycles, prefix.instructions + selector.instructions,
+                         tuple(dict((*prefix.writes, *selector.writes)).items()), selector.registers,
+                         selector.last_pc, prefix.direct_calls + selector.direct_calls)
+    suffix = _contact_sibling_decrement_suffix(dispatch_plan_view(machine, planned), selector.registers)
+    final = dict(registers); final.update(selector.registers); final.update(suffix.registers)
+    return AtomicPlan(prefix.cycles + selector.cycles + suffix.cycles,
+                      prefix.instructions + selector.instructions + suffix.instructions,
+                      tuple(dict((*prefix.writes, *selector.writes, *suffix.writes)).items()), final,
+                      suffix.last_pc, prefix.direct_calls + selector.direct_calls + suffix.direct_calls)
+
+
+def _contact_sibling_decrement_sound(machine, registers):
+    """1AEC32 through its command-8 request, before native sound executes."""
+    record, sp = registers['a1'], registers['a7']
+    read = lambda address, size: _read(machine, address, size)
+    counter = read(record + 1, 1)
+    if not counter or read(record, 1) == 0x13:
+        raise UnsupportedCandidate('contact sibling command8 decrement domain')
+    if not read(0xFFF57D, 1):
+        raise UnsupportedCandidate('contact sibling command8 is sound-disabled')
+    sr = _logic_sr(_subq_byte_sr(registers['sr'], counter), read(0xFFF57D, 1), 1)
+    writes = [*_bytes(record + 1, counter - 1, 1)]
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index * 4, registers[name], 4))
+    writes.extend((*_bytes(sp - 24, 8, 4), *_bytes(sp - 28, 0x1AEC4C, 4)))
+    return AtomicPlan(124, 6, tuple(writes),
+                      {**registers, 'a7': sp - 28, 'pc': 0x1E58B8, 'sr': sr},
+                      0x1AEC46, direct_calls=1)
+
+
+def begin_contact_sibling_sound(machine, registers):
+    """1AEC00's non-13 decrement arm through its existing command-8 seam."""
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact sibling sound record/stack')
+    _spans_disjoint([('contact sibling sound record', record, 66),
+                     ('contact sibling sound frame', sp - 28, 32), *CONTACT_SIBLING_GLOBALS,
+                     *CONTACT_SELECTOR_GLOBALS, ('contact sibling sound state', 0xFFF57D, 1),
+                     ('contact sibling script', 0xFF7E60, 4)])
+    read = lambda address, size: _read(machine, address, size)
+    if game.contact_sibling_route(read, record)[0] != 'decrement':
+        raise UnsupportedCandidate('contact sibling is not on its decrement arm')
+    direction, distance = read(0xFF7E49, 1), read(0xFF7E02, 2)
+    outer_cycles, outer_instructions = (126, 10) if direction else (118, 9)
+    outer = AtomicPlan(outer_cycles, outer_instructions, (),
+                       {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                        'pc': 0x1AEC32}, 0x1AEC2E)
+    sound = _contact_sibling_decrement_sound(dispatch_plan_view(machine, outer), outer.registers)
+    return AtomicPlan(outer.cycles + sound.cycles, outer.instructions + sound.instructions,
+                      tuple(dict((*outer.writes, *sound.writes)).items()), sound.registers,
+                      sound.last_pc, outer.direct_calls + sound.direct_calls)
+
+
+def finish_contact_sibling_sound(machine, registers):
+    """Resume command 8 at 1AEC52 and finish the selected non-13 script arm."""
+    if registers['pc'] != 0x1AEC52 or registers['a7'] & 1:
+        raise UnsupportedCandidate('foreign contact sibling command8 return')
+    sp = registers['a7'] + 24
+    restored = dict(registers, a7=sp)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        restored[name] = _read(machine, sp - index * 4, 4)
+    record = restored['a1']
+    _spans_disjoint([('contact sibling sound record', record, 66),
+                     ('contact sibling sound frame', sp - 28, 32), *CONTACT_SIBLING_GLOBALS,
+                     *CONTACT_SELECTOR_GLOBALS, ('contact sibling sound state', 0xFFF57D, 1),
+                     ('contact sibling script', 0xFF7E60, 4)])
+    local = AtomicPlan(110, 5, (*_bytes(sp - 4, restored['a2'], 4),
+                                *_bytes(sp - 8, 0x1AEC64, 4)),
+                       {**restored, 'a7': sp - 8, 'pc': 0x1AD150}, 0x1AEC60, direct_calls=1)
+    selector = _contact_selector(dispatch_plan_view(machine, local), local.registers)
+    planned = AtomicPlan(local.cycles + selector.cycles, local.instructions + selector.instructions,
+                         tuple(dict((*local.writes, *selector.writes)).items()), selector.registers,
+                         selector.last_pc, local.direct_calls + selector.direct_calls)
+    suffix = _contact_sibling_decrement_suffix(dispatch_plan_view(machine, planned), selector.registers)
+    final = dict(restored); final.update(selector.registers); final.update(suffix.registers)
+    return AtomicPlan(planned.cycles + suffix.cycles, planned.instructions + suffix.instructions,
+                      tuple(dict((*planned.writes, *suffix.writes)).items()), final,
+                      suffix.last_pc, planned.direct_calls + suffix.direct_calls)
+
 _CONTACT_SIBLING_RETIRE = {
     # Cost from 1AECD8 to the 1AED0C tail, after the latter's own RTS body.
     'retire18': (88, 8, ()),
@@ -539,9 +758,24 @@ def begin_contact_sibling(machine, registers):
         raise UnsupportedCandidate('unaligned contact sibling record/stack')
     _spans_disjoint([('contact sibling record', record, 66),
                      ('contact sibling return', sp - 10, 14), *CONTACT_SIBLING_GLOBALS,
-                     ('contact sibling total', 0xFFF14E, 2)])
+                     *CONTACT_SELECTOR_GLOBALS, ('contact sibling sound', 0xFFF57D, 1),
+                     ('contact sibling script', 0xFF7E60, 4), ('contact sibling total', 0xFFF14E, 2)])
     read = lambda address, size: _read(machine, address, size)
     route, _ = game.contact_sibling_route(read, record)
+    if route == 'decrement':
+        if read(0xFFF57D, 1):
+            raise UnsupportedCandidate('contact sibling decrement requires command8 seam')
+        direction, distance = read(0xFF7E49, 1), read(0xFF7E02, 2)
+        prefix_cycles, prefix_instructions = (126, 10) if direction else (118, 9)
+        prefix = AtomicPlan(prefix_cycles, prefix_instructions, (),
+                            {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                             'pc': 0x1AEC32}, 0x1AEC2E)
+        decrement = _contact_sibling_decrement(dispatch_plan_view(machine, prefix), prefix.registers)
+        final = dict(prefix.registers); final.update(decrement.registers)
+        return AtomicPlan(prefix.cycles + decrement.cycles,
+                          prefix.instructions + decrement.instructions,
+                          tuple(dict((*prefix.writes, *decrement.writes)).items()), final,
+                          decrement.last_pc, prefix.direct_calls + decrement.direct_calls)
     if route in _CONTACT_SIBLING_RETIRE:
         # The outer route reads all sibling inputs before entering the tail.
         kind = read(record, 1)
@@ -648,9 +882,9 @@ def begin_contact_sibling_dispatch(machine, registers, dispatch, entry):
 
 
 def begin_contact_sibling_wrapper_sound(machine, registers, entry):
-    """Enter C6's D8-zero contact arm through the existing command-31 seam."""
-    if entry != CONTACT_SIBLING_WRAPPER:
-        raise UnsupportedCandidate('only C6 reaches the sibling contact sound arm')
+    """Enter a sibling wrapper's admitted command-31 or command-8 sound arm."""
+    if entry not in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+        raise UnsupportedCandidate('unknown contact sibling sound wrapper')
     sp = registers['a7']
     if sp & 1:
         raise UnsupportedCandidate('unaligned contact sibling wrapper stack')
@@ -658,7 +892,18 @@ def begin_contact_sibling_wrapper_sound(machine, registers, entry):
                      ('contact sibling wrapper record', registers['a1'], 66),
                      *CONTACT_SIBLING_GLOBALS])
     read = lambda address, size: _read(machine, address, size)
-    if game.contact_sibling_route(read, registers['a1'])[0] != 'contact':
+    route = game.contact_sibling_route(read, registers['a1'])[0]
+    if route == 'decrement':
+        sibling_return = 0x1AE9CA if entry == CONTACT_SIBLING_WRAPPER else 0x1AE9DE
+        callback = AtomicPlan(18, 1, _bytes(sp - 4, sibling_return, 4),
+                              {**registers, 'a7': sp - 4, 'pc': CONTACT_SIBLING_ENTRY},
+                              entry, direct_calls=1)
+        sound = begin_contact_sibling_sound(dispatch_plan_view(machine, callback), callback.registers)
+        return AtomicPlan(callback.cycles + sound.cycles,
+                          callback.instructions + sound.instructions,
+                          tuple(dict((*callback.writes, *sound.writes)).items()), sound.registers,
+                          sound.last_pc, callback.direct_calls + sound.direct_calls)
+    if entry != CONTACT_SIBLING_WRAPPER or route != 'contact':
         raise UnsupportedCandidate('contact sibling wrapper is not on its contact arm')
     # BSR sibling + D8-zero return + TST/BNE + BSR contact.  The contact BSR
     # overwrites the earlier sibling return slot before the sound frame starts.
@@ -673,7 +918,24 @@ def begin_contact_sibling_wrapper_sound(machine, registers, entry):
 
 
 def finish_contact_sibling_wrapper_sound(machine, registers):
-    """Finish C6's shared contact sound suffix and execute its final RTS."""
+    """Finish C6/DA's admitted contact or decrement sound suffix and RTS."""
+    if registers['pc'] == 0x1AEC52:
+        sibling = finish_contact_sibling_sound(machine, registers)
+        local_sp, local_pc = sibling.registers['a7'], sibling.registers['pc']
+        if local_pc == 0x1AE9CA:
+            if _read(machine, 0xFFF0D8, 1) == 0:
+                raise UnsupportedCandidate('contact sibling command8 wrapper D8 return')
+            final = dict(sibling.registers)
+            final.update(a7=local_sp + 4, pc=_read(machine, local_sp, 4) & 0xFFFFFF,
+                         sr=_logic_sr(sibling.registers['sr'], _read(machine, 0xFFF0D8, 1), 1))
+            return AtomicPlan(sibling.cycles + 42, sibling.instructions + 3, sibling.writes, final,
+                              0x1A91C4, sibling.direct_calls)
+        if local_pc == 0x1AE9DE:
+            final = dict(sibling.registers)
+            final.update(a7=local_sp + 4, pc=_read(machine, local_sp, 4) & 0xFFFFFF)
+            return AtomicPlan(sibling.cycles + 16, sibling.instructions + 1, sibling.writes, final,
+                              0x1AE9DE, sibling.direct_calls)
+        raise UnsupportedCandidate('contact sibling command8 wrapper return identity')
     contact = finish_contact_sound(machine, registers)
     local_sp = contact.registers['a7']
     if contact.registers.get('pc') != CONTACT_DISPATCH_LOCAL_RETURN:
@@ -685,10 +947,10 @@ def finish_contact_sibling_wrapper_sound(machine, registers):
 
 
 def begin_contact_sibling_dispatch_sound(machine, registers, dispatch, entry):
-    """Compose the table prefix with C6's already-qualified contact sound seam."""
+    """Compose the table prefix with an admitted sibling sound seam."""
     sp = registers['a7']
-    if entry != CONTACT_SIBLING_WRAPPER:
-        raise UnsupportedCandidate('only C6 has a dispatched sibling contact sound arm')
+    if entry not in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+        raise UnsupportedCandidate('unknown dispatched sibling sound wrapper')
     if dispatch.registers.get('pc') != entry or dispatch.registers.get('a7') != sp - 4:
         raise UnsupportedCandidate('contact sibling dispatch sound prefix identity')
     callback_registers = {**registers, **dispatch.registers}
