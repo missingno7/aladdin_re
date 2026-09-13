@@ -1,15 +1,33 @@
-param([switch]$Mute)
+param(
+    [switch]$Mute,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$PlayerArgs
+)
+
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
+$previousPythonPath = $env:PYTHONPATH
+$previousNativeLibrary = $env:ALADDIN_NATIVE_LIBRARY
 try {
     $projectPython = Join-Path $PSScriptRoot '.venv/Scripts/python.exe'
+    $nativeLibrary = Join-Path $PSScriptRoot 'build/libaladdin_native.dll'
     if (-not (Test-Path -LiteralPath $projectPython)) {
         throw 'Build the project first using the commands in README.md.'
     }
-    $playerArgs = @('-m', 'aladdin_sega', 'play')
-    if ($Mute) { $playerArgs += '--mute' }
-    & $projectPython @playerArgs
+    if (-not (Test-Path -LiteralPath $nativeLibrary)) {
+        throw 'Build the native DLL first using the commands in README.md.'
+    }
+    $source = Join-Path $PSScriptRoot 'src'
+    $env:PYTHONPATH = if ($env:PYTHONPATH) { "$source;$env:PYTHONPATH" } else { $source }
+    $env:ALADDIN_NATIVE_LIBRARY = $nativeLibrary
+    $args = @('-m', 'aladdin_sega', 'play') + $PlayerArgs
+    if ($Mute) { $args += '--mute' }
+    & $projectPython @args
     if ($LASTEXITCODE -ne 0) { throw "Player exited with code $LASTEXITCODE" }
 } finally {
+    if ($null -eq $previousPythonPath) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue }
+    else { $env:PYTHONPATH = $previousPythonPath }
+    if ($null -eq $previousNativeLibrary) { Remove-Item Env:ALADDIN_NATIVE_LIBRARY -ErrorAction SilentlyContinue }
+    else { $env:ALADDIN_NATIVE_LIBRARY = $previousNativeLibrary }
     Pop-Location
 }

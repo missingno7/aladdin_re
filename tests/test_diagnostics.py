@@ -47,8 +47,8 @@ def test_failed_execution_keeps_inspection_without_claiming_a_restorable_save(tm
     d.capture(StoppedMachine(snapshot_error=True), tmp_path / "candidate", execution_error="original failure")
     meta = json.loads((tmp_path / "candidate/machine.json").read_text())
     assert meta["execution_error"] == "original failure"
-    assert meta["capture_errors"]["state.alsnap"] == "Execution invalidated"
-    assert "state.alsnap" not in meta
+    assert meta["capture_errors"]["oracle-state.bin"] == "Execution invalidated"
+    assert "oracle-state.bin" not in meta
     assert meta["registers"]["pc"] == 0x1234
     assert (tmp_path / "candidate/ram.bin").stat().st_size == 65536
     assert "reference" in d.compare(tmp_path)["unavailable"]
@@ -69,25 +69,3 @@ def test_capture_does_not_change_machine_or_consume_pending_pcm(tmp_path):
         d.capture(StoppedMachine(), tmp_path / "capture")
 
 
-def test_diagnostics_never_turn_worker_failure_into_equivalence(tmp_path, monkeypatch):
-    replay = tmp_path / "input.alreplay"
-    replay.write_bytes(b"input bytes retained exactly")
-    def worker(role, command, **kwargs):
-        directory = command[command.index("--diagnostics") + 1]
-        d.capture(StoppedMachine(snapshot_error=role == "candidate"), directory,
-                  execution_error="broken candidate" if role == "candidate" else None)
-        if role == "candidate":
-            raise v.WorkerFailure(role, command, "broken candidate")
-        return v.WorkerResult(role, command, {}, "", "")
-    monkeypatch.setattr(v, "run_worker", worker)
-    report = v.compare_replay(tmp_path / "rom", replay, candidate="mutant-result",
-                              output=tmp_path / "out", diagnostics=True)
-    assert report["status"] == "CANDIDATE_ERROR"
-    assert report["compared"] is False
-    assert report["diagnostics"]["captures"]["candidate"]["execution_error"] == "broken candidate"
-    from pathlib import Path
-    assert Path(report["diagnostics"]["replay"]).read_bytes() == replay.read_bytes()
-    # Each invocation owns a fresh directory; no prior run's capture can leak in.
-    again = v.compare_replay(tmp_path / "rom", replay, candidate="mutant-result",
-                             output=tmp_path / "out", diagnostics=True)
-    assert report["diagnostics"]["directory"] != again["diagnostics"]["directory"]

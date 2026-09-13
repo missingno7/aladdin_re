@@ -7,9 +7,13 @@ import sys
 import pytest
 
 from aladdin_sega import boundary
-from aladdin_sega.machine import Machine
-from aladdin_sega.profile import DEFAULT_ROM, read_rom
-from test_spawn_region import ENTRY_FIXTURES, _occupy, _prepare
+
+oracle_spec = importlib.util.spec_from_file_location(
+    'oracle_witness', Path(__file__).resolve().parents[1] / 'scripts' / 'oracle_witness.py')
+oracle = importlib.util.module_from_spec(oracle_spec)
+sys.modules[oracle_spec.name] = oracle
+oracle_spec.loader.exec_module(oracle)
+cold_fixture = oracle.cold_fixture
 
 
 spec = importlib.util.spec_from_file_location('spawn_allocator_facts',
@@ -77,19 +81,22 @@ def test_wrong_boundary_cost_is_rejected(rom, monkeypatch):
         facts.check_boundary_arms(arms)
 
 
-PLAN_FIXTURES = (*ENTRY_FIXTURES,
-                 ('lower', boundary.SPAWN_REGION_LOWER_ENTRY,
-                  Path('artifacts/grinding/luna/allocator-arms-1b524e/old-225/1AE2AA-1B5262.alsnap'),
-                  0xFF8368, 20, -1))
+PLAN_FIXTURES = (
+    ('enclosing', boundary.SPAWN_REGION_ENTRY, 0xFF7E82, 24, 1),
+    ('reverse', boundary.SPAWN_REGION_REVERSE_ENTRY, 0xFF8470, 24, -1),
+    ('upper', boundary.SPAWN_REGION_UPPER_ENTRY, 0xFF7F06, 20, 1),
+    ('lower', boundary.SPAWN_REGION_LOWER_ENTRY, 0xFF8368, 20, -1),
+)
 
 
 def _assert_plan_matches_rom_facts(rom, fixture, free, planner=boundary.spawn_region):
-    _, entry, path, base, count, direction = fixture
+    _, entry, base, count, direction = fixture
     arm = facts.allocator_arms(rom)[entry]
-    with Machine(read_rom(DEFAULT_ROM)) as machine:
-        _prepare(machine, path, entry)
-        _occupy(machine, base, count, direction, free)
+    machine = cold_fixture(entry, free=None if free is None else (count - 1 if free == 'last' else free))
+    try:
         plan = planner(machine, machine.registers(), entry)
+    finally:
+        machine.close()
     if free is None:
         assert (plan.cycles, plan.instructions) == (
             arm.exhausted_cycles + arm.exhausted_fixed_cycles,
@@ -107,7 +114,7 @@ def _assert_plan_matches_rom_facts(rom, fixture, free, planner=boundary.spawn_re
 @pytest.mark.parametrize('fixture', PLAN_FIXTURES, ids=lambda item: item[0])
 @pytest.mark.parametrize('free', (0, 1, 'last', None))
 def test_runtime_spawn_plans_match_derived_scan_formula(rom, fixture, free):
-    last = fixture[4] - 1
+    last = fixture[3] - 1
     _assert_plan_matches_rom_facts(rom, fixture, last if free == 'last' else free)
 
 

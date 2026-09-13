@@ -10,7 +10,7 @@ Use only what this specific Aladdin recovery needs. The project must own its
 recovery control and policy; it need not own the implementation of every machine
 component. A concrete current limitation, rather than a hypothetical second game
 or backend, must justify new abstraction or component replacement. See the
-[current necessity review](architecture-review.md) for measured evidence.
+[current necessity review](archive/architecture-review.md) for measured evidence.
 
 PortForge is a bootstrap donor of useful implementations. It is neither the
 permanent owner of this project nor an indivisible engine dependency. Reuse its
@@ -39,7 +39,7 @@ Classify dependencies by their actual role:
   unused runtime dependencies; isolate useful test-only consumers.
 
 The compiler-observed inventory, reasons and next removal triggers live in
-[component-migration.md](component-migration.md). Do not infer runtime ownership
+[component-migration.md](archive/component-migration.md). Do not infer runtime ownership
 from directory names or from a broad dependency lock alone.
 
 ## The machine boundary

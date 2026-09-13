@@ -1,8 +1,61 @@
 import hashlib
+import ctypes as C
 import pytest
 
 from aladdin_sega.machine import Machine, NativeError
 from aladdin_sega.profile import FRAME_TICKS, DEFAULT_ROM, read_rom
+
+
+def _sized_export(machine):
+    """Independent two-call ABI reference for byte-exact export qualification."""
+    size = C.c_uint64()
+    machine._call('export', None, 0, C.byref(size))
+    buf = (C.c_uint8 * size.value)()
+    machine._call('export', buf, len(buf), C.byref(size))
+    return bytes(buf)
+
+
+def test_single_export_matches_sized_export_and_returns_owned_bytes():
+    with Machine(synthetic_rom()) as machine:
+        previous = None
+        for instructions in (0, 7, 29):
+            if instructions:
+                machine.run(instructions=instructions)
+            expected = _sized_export(machine)
+            count = machine.calls.get('export', 0)
+            actual = machine.snapshot()
+            assert machine.calls['export'] == count + 1
+            assert actual == expected
+            if previous:
+                assert previous[0] == previous[1]  # next export cannot alias earlier bytes
+                assert actual != previous[0]
+            previous = actual, bytes(bytearray(actual))
+        buffer = machine._snapshot_buffer
+        machine.restore(previous[0])
+        assert machine.snapshot() == previous[0]
+        assert machine._snapshot_buffer is buffer
+    assert machine._snapshot_buffer is None
+
+
+def test_direct_frame_copy_matches_byte_sequence_and_keeps_exact_length():
+    with Machine(read_rom()) as machine:
+        first = None
+        for frame in range(1, 121):
+            machine.run(target=frame * FRAME_TICKS)
+            machine.audio()
+            if frame not in (1, 70, 120):
+                continue
+            buf = (C.c_uint8 * (320 * 240 * 3))()
+            width, height = C.c_uint32(), C.c_uint32()
+            machine._call('frame', buf, len(buf), C.byref(width), C.byref(height))
+            expected = bytes(buf[:width.value * height.value * 3])
+            actual = machine.frame()
+            assert actual == (width.value, height.value, expected)
+            assert len(actual[2]) == width.value * height.value * 3
+            if first:
+                assert first[0] == first[1]
+            else:
+                first = actual[2], bytes(bytearray(actual[2]))
 
 
 def synthetic_rom():

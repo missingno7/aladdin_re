@@ -1,4 +1,4 @@
-"""Fresh-worker replay comparisons and snapshot continuation checks."""
+"""Strict Genesis comparisons over cold-start input histories."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,6 +12,10 @@ from typing import Any
 
 from . import artifacts
 from .machine import Machine
+from .history import HistoryStore, ROOT_ID, digest, encoded, write_json
+from .history_runtime import GenesisRun
+from .profile import read_rom
+from .receipt import execution_receipt
 
 
 class WorkerError(RuntimeError):
@@ -176,199 +180,152 @@ def compare_observations(reference, candidate):
     return {"equal": True, "last_matching_checkpoint": _anchor(last), "first_failing_interval": None}
 
 
-def _worker_command(recording, rom_path, candidate, observations, diagnostics=None):
-    command = [sys.executable, "-m", "aladdin_sega", "replay", str(recording), "--rom", str(rom_path),
-               "--candidate", candidate, "--observations", str(observations)]
-    if diagnostics is not None:
-        command.extend(("--diagnostics", str(diagnostics)))
-    return command
 
 
-def _write_report(output, report):
-    if output is not None:
-        output = Path(output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def execute_history(store, rom, *, node=None, candidate="original", tree=False, use_cache=False):
+    """Execute logical paths; traversal caches belong to this implementation only.
+
+    Tree verification starts cold and caches only states just computed in that
+    traversal. Persistent player caches are used only when explicitly requested.
+    """
+    nodes = store.nodes() if tree else None
+    selected = store.resolve(node or "main")
+    start = execution_receipt(candidate=candidate)
+    observations, endpoints = {}, {}
+    executed_frames = restores = 0
+    with GenesisRun(rom, candidate) as run:
+        if tree:
+            children = {key: [] for key in nodes}
+            for key, value in nodes.items():
+                if value["parent"] is not None:
+                    children[value["parent"]].append(key)
+            # An explicit traversal stack avoids a Python recursion limit on
+            # a long playthrough with many manual checkpoints.
+            stack = [(ROOT_ID, run.save())]
+            while stack:
+                key, saved = stack.pop()
+                run.restore(saved)
+                if key != ROOT_ID:
+                    restores += 1
+                    branch = nodes[key]
+                    edge = []
+                    before = run.frame
+                    run.advance(branch["end_frame"], branch["events"], lambda r: edge.append(r.observable()))
+                    executed_frames += run.frame - before
+                    observations[key] = edge
+                endpoints[key] = run.observable()
+                checkpoint = run.save()
+                for child in sorted(children[key], reverse=True):
+                    stack.append((child, checkpoint))
+        else:
+            path = store.flatten(selected)
+            restored = False
+            if use_cache:
+                for key, _ in reversed(store.ancestry(selected)):
+                    if key != ROOT_ID and run.restore_cache(store, key):
+                        restored = True
+                        restores = 1
+                        break
+            before = run.frame
+            edge = []
+            events = [event for event in path["events"] if event["frame"] >= run.frame]
+            run.advance(path["end_frame"], events, lambda r: edge.append(r.observable()))
+            executed_frames = run.frame - before
+            observations[selected] = edge
+            endpoints[selected] = run.observable()
+        stats = dict(run.candidate.stats) if run.candidate else {}
+        implementation = run.implementation
+    end = execution_receipt(candidate=candidate)
+    if any(start[k] != end[k] for k in ("python_modules_sha256", "native_binary_sha256")):
+        raise RuntimeError("Implementation changed during history execution")
+    return {"status": "COMPLETED", "compared": False, "root": ROOT_ID,
+            "history_id": selected, "mode": "tree" if tree else "cached" if use_cache else "cold",
+            "observations": observations, "endpoints": endpoints,
+            "executed_frames": executed_frames, "restores": restores,
+            "candidate_stats": stats, "implementation": implementation, "receipt": end}
 
 
-def _comparison_paths(output, temporary):
-    """Keep derived observations beside the report when the caller requested output."""
-    if output is None:
-        return None, temporary / "reference.observations.json", temporary / "candidate.observations.json"
+def _validate_execution(payload, store, selected, tree, candidate, receipt):
+    if (payload.get("status"), payload.get("compared"), payload.get("root"),
+            payload.get("history_id"), payload.get("mode")) != (
+            "COMPLETED", False, ROOT_ID, selected, "tree" if tree else "cold"):
+        raise ValueError("Worker history/execution contract mismatch")
+    actual_receipt = payload.get("receipt", {})
+    for key in ("python_modules_sha256", "native_binary_sha256"):
+        if actual_receipt.get(key) != receipt[key]:
+            raise ValueError("Worker implementation receipt mismatch: " + key)
+    if payload.get("implementation", {}).get("candidate") != candidate:
+        raise ValueError("Worker candidate identity mismatch")
+    nodes = store.nodes() if tree else {selected: store.node(selected)}
+    if set(payload.get("endpoints", {})) != set(nodes):
+        raise ValueError("Worker omitted a history endpoint")
+    observed = set(nodes) - {ROOT_ID} if tree else set(nodes)
+    if set(payload.get("observations", {})) != observed:
+        raise ValueError("Worker omitted a history input segment")
+    required = {"frame", "buttons", "state_sha256", "frame_sha256", "pcm_sha256", "pcm_bytes",
+                "tick", "pc", "sr", "m68k_cycles", "m68k_instructions", "z80_instructions", "vblanks"}
+    for key, node in nodes.items():
+        endpoint = payload["endpoints"][key]
+        if set(endpoint) != required or endpoint["frame"] != node["end_frame"] or endpoint["buttons"] != node["buttons"]:
+            raise ValueError("Incomplete or misplaced terminal machine observation")
+        if key in observed:
+            start = store.node(node["parent"])["end_frame"] if tree else 0
+            values = payload["observations"][key]
+            if len(values) != node["end_frame"] - start:
+                raise ValueError("Worker did not observe every canonical frame")
+            for frame, value in enumerate(values, start + 1):
+                if set(value) != required or value["frame"] != frame:
+                    raise ValueError("Incomplete or unordered frame observation")
+            if values and values[-1] != endpoint:
+                raise ValueError("Worker terminal disagrees with final frame")
+
+
+def compare_history(store_path, rom_path, *, node=None, candidate="lifecycle", tree=False,
+                    output=Path("artifacts/comparison"), timeout_seconds=120):
+    """Separate fresh workers, strict per-frame state/video/PCM and final equality."""
+    store = HistoryStore(store_path)
+    selected = store.resolve(node or "main")
     output = Path(output)
-    if output.suffix:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        stem = output.with_suffix("")
-        return output, stem.with_name(stem.name + ".reference.observations.json"), stem.with_name(stem.name + ".candidate.observations.json")
     output.mkdir(parents=True, exist_ok=True)
-    return output / "comparison.json", output / "reference.observations.json", output / "candidate.observations.json"
-
-
-def compare_replay(rom_path, recording, *, candidate, timeout_seconds=120, output=None, diagnostics=False):
-    """Run original and candidate independently, then compare only their outputs."""
-    rom_path, recording = Path(rom_path).resolve(), Path(recording).resolve()
-    if diagnostics and output is None:
-        raise ValueError("Diagnostic captures require an output path")
-    recording_data = artifacts.read_bounded(recording)
-    report = {"candidate": candidate,
-              "replay_sha256": artifacts.digest(recording_data), "timeout_seconds": timeout_seconds,
-              "contract": "full-machine-frame-pcm-60frames-v1", "evidence_level": "integrated-same-model",
-              "compared": False}
-    with tempfile.TemporaryDirectory(prefix="aladdin-compare-") as temporary:
-        temporary = Path(temporary)
-        report_path, reference_file, candidate_file = _comparison_paths(output, temporary)
-        diagnostic_dir = None
-        worker_recording = recording
-        if diagnostics:
-            diagnostic_dir = Path(tempfile.mkdtemp(prefix="diagnostics-", dir=report_path.parent)).resolve()
-            worker_recording = diagnostic_dir / "reproducer.alreplay"
-            worker_recording.write_bytes(recording_data)
-        def save_report():
-            if diagnostic_dir is not None:
-                from .diagnostics import compare
-                report["diagnostics"] = compare(diagnostic_dir)
-                report["diagnostics"]["replay_sha256"] = report["replay_sha256"]
-            _write_report(report_path, report)
-        reference_command = _worker_command(worker_recording, rom_path, "original", reference_file,
-                                             diagnostic_dir / "reference" if diagnostics else None)
-        candidate_command = _worker_command(worker_recording, rom_path, candidate, candidate_file,
-                                             diagnostic_dir / "candidate" if diagnostics else None)
-        report["reproducer"] = {"reference": reference_command, "candidate": candidate_command}
-        try:
-            reference = run_worker("reference", reference_command, timeout_seconds=timeout_seconds)
-            candidate_result = run_worker("candidate", candidate_command, timeout_seconds=timeout_seconds)
-        except WorkerError as error:
-            status = "CANDIDATE_ERROR" if type(error) is WorkerFailure and error.role == "candidate" else error.kind
-            report.update(status=status, worker=error.report())
-            if error.role == "candidate":
-                report["reference"] = reference.payload
-                if candidate_file.exists() and reference_file.exists():
-                    left = json.loads(reference_file.read_text(encoding="utf-8"))
-                    right = json.loads(candidate_file.read_text(encoding="utf-8"))
-                    partial = compare_observations(left, right)
-                    partial["execution_failure"] = error.report()
-                    report["comparison"] = partial
-            save_report()
-            return report
-        try:
-            reference_observations = json.loads(reference_file.read_text(encoding="utf-8"))
-            candidate_observations = json.loads(candidate_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            report.update(status="ERROR", detail=f"invalid worker observation file: {error}")
-            save_report()
-            return report
-        comparison = compare_observations(reference_observations, candidate_observations)
-        payload_fields = ("state_sha256", "frame_sha256", "pcm_sha256", "pcm_bytes")
-        payload_differences = {field: {"reference": reference.payload.get(field), "candidate": candidate_result.payload.get(field)}
-                               for field in payload_fields if reference.payload.get(field) != candidate_result.payload.get(field)}
-        comparison["terminal_payload"] = {"equal": not payload_differences, "differences": payload_differences}
-        comparison["equal"] = comparison["equal"] and not payload_differences
-        report["compared"] = True
-        report["observations"] = {
-            "reference": {"path": str(reference_file), "sha256": artifacts.digest(reference_file.read_bytes()),
-                          "count": len(reference_observations)},
-            "candidate": {"path": str(candidate_file), "sha256": artifacts.digest(candidate_file.read_bytes()),
-                          "count": len(candidate_observations)},
-        }
-        if candidate != "original" and candidate_result.payload.get("candidate_stats", {}).get("candidate_hits", 0) <= 0:
-            report.update(reference=reference.payload, candidate_receipt=candidate_result.payload, comparison=comparison,
-                          status="NOT_EXERCISED")
-            save_report()
-            return report
-        report.update(reference=reference.payload, candidate_receipt=candidate_result.payload, comparison=comparison,
-                      status="PASS" if comparison["equal"] else "DIVERGENCE")
-        save_report()
-        return report
-
-
-def _load_replay(data, machine):
-    kwargs = {"rom_sha256": machine.rom_sha256, "state_version": machine.state_version}
-    return artifacts.load_replay(data, **kwargs)
-
-
-def _load_snapshot(data, machine):
-    kwargs = {"rom_sha256": machine.rom_sha256, "state_version": machine.state_version}
-    return artifacts.load_snapshot(data, **kwargs)
-
-
-def _fresh_replay(path, rom_path, *, timeout_seconds):
-    command = [sys.executable, "-m", "aladdin_sega", "replay", str(path), "--rom", str(rom_path)]
+    identities = {key: store.flatten(key) for key in store.nodes()} if tree else store.flatten(selected)
+    payloads = {}
+    receipt = execution_receipt()
+    report = {"history_id": selected, "tree": tree, "candidate": candidate,
+              "contract": "strict-genesis-every-canonical-frame", "status": "ERROR"}
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds, check=False)
-    except subprocess.TimeoutExpired as error:
-        raise WorkerTimeout("fresh-process", command, f"worker exceeded {timeout_seconds:g} seconds") from error
-    if result.returncode:
-        raise WorkerFailure("fresh-process", command, "Fresh-process replay failed", stdout=result.stdout,
-                            stderr=result.stderr, returncode=result.returncode)
-    return _last_json(result.stdout)
-
-
-def snapshot_check(rom, rom_path, recording, *, timeout_seconds=60):
-    data = artifacts.read_bounded(recording)
-    with Machine(rom) as machine:
-        meta, initial, events = _load_replay(data, machine)
-        artifacts.restore_snapshot(machine, initial)
-        cursor = len(events) // 2
-        checkpoint_tick = events[cursor - 1]["tick"] if cursor else machine.info["tick"]
-        artifacts.play_events(machine, events[:cursor], checkpoint_tick)
-        checkpoint = artifacts.snapshot_bytes(machine)
-        suffix = events[cursor:]
-        derived = artifacts.Recorder(machine, origin="synthetic", reset_provenance="derived-checkpoint")
-        derived.events = [{**event, "seq": i} for i, event in enumerate(suffix)]
-        machine.audio(); pcm = hashlib.sha256()
-        artifacts.play_events(machine, suffix, meta["terminal_tick"], audio_sink=pcm.update)
-        expected, expected_frame, expected_pcm = artifacts.digest(machine.snapshot()), artifacts.digest(machine.frame()[2]), pcm.hexdigest()
-        suffix_archive = derived.finish(machine)
-    with tempfile.TemporaryDirectory(prefix="aladdin-snapshot-") as tmp:
-        path = Path(tmp) / "suffix.alreplay"; path.write_bytes(suffix_archive)
-        actual = _fresh_replay(path, rom_path, timeout_seconds=timeout_seconds)
-        if actual.get("state_sha256") != expected: raise RuntimeError("Fresh-process snapshot suffix diverged")
-        if actual.get("frame_sha256") != expected_frame or actual.get("pcm_sha256") != expected_pcm:
-            raise RuntimeError("Fresh-process snapshot suffix output diverged")
-    return {"status": "PASS", "scope": "fresh-process original suffix: full state, final frame, all suffix PCM",
-            "replay_sha256": artifacts.digest(data), "checkpoint_sha256": artifacts.digest(checkpoint),
-            "next_event_index": cursor, "suffix_events": len(suffix), "state_sha256": expected,
-            "pcm_sha256": expected_pcm, "frame_sha256": expected_frame, "cross_platform": "UNVERIFIED"}
-
-
-def check_saved_snapshots(rom, rom_path, recording, snapshots, *, timeout_seconds=60):
-    """Match separately saved live states against replay, then resume their suffixes."""
-    data, matches = artifacts.read_bounded(recording), []
-    with Machine(rom) as machine:
-        meta, initial, events = _load_replay(data, machine)
-        checkpoints = []
-        for path in snapshots:
-            raw = artifacts.read_bounded(path); info, state = _load_snapshot(raw, machine)
-            checkpoints.append((info["tick"], str(path), raw, state))
-        artifacts.restore_snapshot(machine, initial); cursor = 0
-        def observe_pcm(pcm):
-            for match in matches: match["pcm"].update(pcm)
-        for tick, path, raw, state in sorted(checkpoints):
-            if tick < machine.info["tick"] or tick > meta["terminal_tick"]: raise ValueError(f"Snapshot outside recording interval: {path}")
-            end = cursor
-            while end < len(events) and events[end]["tick"] < tick: end += 1
-            artifacts.play_events(machine, events[cursor:end], tick, audio_sink=observe_pcm); cursor = end
-            while machine.snapshot() != state:
-                if cursor >= len(events) or events[cursor]["tick"] != tick: raise RuntimeError(f"Saved snapshot does not match original replay: {path}")
-                machine.pad(events[cursor]["buttons"]); cursor += 1
-            matches.append({"path": path, "tick": tick, "sha256": artifacts.digest(raw), "next_event_index": cursor, "initial": raw, "pcm": hashlib.sha256()})
-        artifacts.play_events(machine, events[cursor:], meta["terminal_tick"], audio_sink=observe_pcm)
-        expected_state, expected_frame = artifacts.digest(machine.snapshot()), artifacts.digest(machine.frame()[2])
-    with tempfile.TemporaryDirectory(prefix="aladdin-live-snapshots-") as tmp:
-        for index, match in enumerate(matches):
-            remaining, expected_pcm = events[match["next_event_index"]:], match.pop("pcm").hexdigest()
-            with Machine(rom) as machine:
-                artifacts.restore_snapshot(machine, match["initial"])
-                recorder = artifacts.Recorder(machine, origin="synthetic", reset_provenance="derived-from-user-snapshot")
-                recorder.events = [{**e, "seq": i} for i, e in enumerate(remaining)]
-                pcm = hashlib.sha256(); artifacts.play_events(machine, remaining, meta["terminal_tick"], audio_sink=pcm.update)
-                if artifacts.digest(machine.snapshot()) != expected_state or artifacts.digest(machine.frame()[2]) != expected_frame: raise RuntimeError(f"Saved snapshot continuation diverged: {match['path']}")
-                suffix = recorder.finish(machine)
-                if pcm.hexdigest() != expected_pcm: raise RuntimeError(f"Saved snapshot PCM differs from uninterrupted replay: {match['path']}")
-            path = Path(tmp) / f"suffix-{index}.alreplay"; path.write_bytes(suffix)
-            actual = _fresh_replay(path, rom_path, timeout_seconds=timeout_seconds)
-            if (actual.get("state_sha256"), actual.get("frame_sha256"), actual.get("pcm_sha256")) != (expected_state, expected_frame, expected_pcm): raise RuntimeError(f"Fresh-process saved snapshot diverged: {match['path']}")
-            del match["initial"]; match.update(status="PASS", suffix_events=len(remaining), pcm_sha256=expected_pcm)
-    return {"status": "PASS", "scope": "live snapshots match replay; their fresh-process suffixes match full state, final frame and PCM",
-            "replay_sha256": artifacts.digest(data), "snapshots": matches, "state_sha256": expected_state,
-            "frame_sha256": expected_frame, "cross_platform": "UNVERIFIED"}
+        for role, choice in (("reference", "original"), ("candidate", candidate)):
+            result_path = output / (role + ".json")
+            command = [sys.executable, "-m", "aladdin_sega", "history-run", selected,
+                       "--history", str(Path(store_path).resolve()), "--rom", str(Path(rom_path).resolve()),
+                       "--candidate", choice, "--output", str(result_path.resolve())]
+            if tree:
+                command.append("--tree")
+            run_worker(role, command, timeout_seconds=timeout_seconds)
+            payloads[role] = json.loads(result_path.read_text())
+            _validate_execution(payloads[role], store, selected, tree, choice, receipt)
+        left, right = payloads["reference"], payloads["candidate"]
+        equal = left["observations"] == right["observations"] and left["endpoints"] == right["endpoints"]
+        first = None
+        for key in left["observations"]:
+            a, b = left["observations"][key], right["observations"].get(key, [])
+            if a != b:
+                for i in range(max(len(a), len(b))):
+                    av, bv = a[i] if i < len(a) else None, b[i] if i < len(b) else None
+                    if av != bv:
+                        first = {"node": key, "reference": av, "candidate": bv}
+                        break
+                break
+        current = {key: store.flatten(key) for key in store.nodes()} if tree else store.flatten(selected)
+        if current != identities:
+            raise ValueError("History graph changed during comparison")
+        exercised = right["candidate_stats"].get("candidate_hits", 0)
+        report.update(status=("PASS" if candidate == "original" or exercised else "NOT_EXERCISED") if equal else "DIVERGENCE",
+                      comparison={"equal": equal, "first_difference": first},
+                      reference={k:v for k,v in left.items() if k != "observations"},
+                      candidate_receipt={k:v for k,v in right.items() if k != "observations"})
+    except WorkerError as error:
+        report.update(status="CANDIDATE_ERROR" if error.role == "candidate" else error.kind, error=error.report())
+    except (OSError, ValueError, KeyError) as error:
+        report.update(status="ERROR", error=str(error))
+    write_json(output / "comparison.json", report)
+    return report

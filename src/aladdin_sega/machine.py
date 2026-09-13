@@ -66,6 +66,7 @@ class Machine:
         self.candidate_identity = "original"
         self.in_sound_call = False
         self.calls = {}  # Diagnostic API counts, not emulated or persisted state.
+        self._snapshot_buffer = None
         self.lib = load_library()
         self.handle = C.c_void_p()
         self.rom_sha256 = hashlib.sha256(rom).hexdigest()
@@ -90,6 +91,7 @@ class Machine:
             self._call("destroy")
             self.handle = C.c_void_p()
             self._ram = None
+            self._snapshot_buffer = None
 
     def __enter__(self):
         return self
@@ -180,11 +182,15 @@ class Machine:
         return C.addressof(self._ram)
 
     def snapshot(self):
+        # Native import bounds this state contract at 4 MiB. A reusable output
+        # buffer avoids a sizing export, which itself serializes and hashes the
+        # entire machine. This is scratch storage; callers receive owned bytes.
+        if self._snapshot_buffer is None:
+            self._snapshot_buffer = (U8 * (4 * 1024 * 1024))()
         size = U64()
-        self._call("export", None, 0, C.byref(size))
-        buf = (U8 * size.value)()
+        buf = self._snapshot_buffer
         self._call("export", buf, len(buf), C.byref(size))
-        return bytes(buf)
+        return C.string_at(buf, size.value)
 
     def restore(self, data):
         buf = (U8 * len(data)).from_buffer_copy(data)
@@ -205,7 +211,7 @@ class Machine:
         buf = (U8 * (320 * 240 * 3))()
         width, height = U32(), U32()
         self._call("frame", buf, len(buf), C.byref(width), C.byref(height))
-        return width.value, height.value, bytes(buf[:width.value * height.value * 3])
+        return width.value, height.value, C.string_at(buf, width.value * height.value * 3)
 
     def audio(self):
         count = U64()

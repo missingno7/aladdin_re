@@ -1,7 +1,7 @@
 """Concrete sound-frame continuation, original-ROM branches, and save integrity."""
 import pytest
 
-from aladdin_sega import artifacts
+from aladdin_sega.history_runtime import safe_state
 from aladdin_sega.machine import Machine
 from aladdin_sega.recovery import TRANSITION_ENTRY, SOUND_RETURN, begin_object_transition
 from aladdin_sega.recovery import Candidate
@@ -39,7 +39,7 @@ def sound_machine(monkeypatch, *, foreign=False, corrupt=None, deadline=False, s
             return "limit"
         assert machine.in_sound_call
         with pytest.raises(ValueError, match="synchronous sound"):
-            artifacts.snapshot_bytes(machine)
+            safe_state(machine)
         if deadline:
             machine.info.update(pc=0x1e57ac, tick=target)
             machine._registers["pc"] = 0x1e57ac
@@ -104,13 +104,6 @@ def test_prefix_refusal_does_not_enter_sound_or_commit_counter(monkeypatch):
     assert machine.peek_ram(0xefe0, 2) == b"00"
     assert machine.gate_call == (TRANSITION_ENTRY, True)
     assert not machine.in_sound_call and candidate.stats["legacy_entries"] == 0
-
-
-def test_persistent_evidence_archives_are_not_silently_loaded_by_synchronous_runtime():
-    old = artifacts.pack({"manifest.json": artifacts.json_bytes({"format": "alsnap", "version": 3}),
-                          "machine.bin": b"opaque", "object-transition.json": b"{}"})
-    with pytest.raises(ValueError, match="archive member"):
-        artifacts.load_snapshot(old, rom_sha256="0" * 64, state_version=1)
 
 
 @pytest.mark.parametrize("digits", [0x3939, 0x2930, 0x3040])

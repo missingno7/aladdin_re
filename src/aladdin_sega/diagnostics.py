@@ -19,7 +19,7 @@ def capture(machine, directory, *, execution_error=None, receipt=None):
         except Exception as error:
             meta["capture_errors"][key] = str(error)
     for name, read in (("ram.bin", lambda: machine.peek_ram(0, 65536)),
-                       ("state.alsnap", lambda: artifacts.snapshot_bytes(machine))):
+                       ("oracle-state.bin", machine.snapshot)):
         try:
             data = read()
             (directory / name).write_bytes(data)
@@ -33,8 +33,7 @@ def compare(directory):
     """Differences at the captured stops, not a claim about the first bad opcode."""
     directory = Path(directory)
     result = {"directory": str(directory.resolve()),
-              "scope": "terminal/failure stops; not the first differing instruction",
-              "replay": str((directory / "reproducer.alreplay").resolve())}
+              "scope": "terminal/failure stops; not the first differing instruction"}
     captures, ram = {}, {}
     for role in ("reference", "candidate"):
         try:

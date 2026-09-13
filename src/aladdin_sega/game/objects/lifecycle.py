@@ -130,3 +130,55 @@ def finish_upper_variant_spawn(record):
     return [(record, 0x3A), *((record + 0x20 + offset, byte)
               for offset, byte in enumerate(bytes.fromhex('00122bd8'))),
             (record + 0x29, 1)]
+
+
+def finish_upper_scripted_spawn(record):
+    """Apply ``1B72D4``'s upper-pool type, scripts, and mode flag."""
+    return [(record, 0x34), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00122c1e'))),
+            *((record + 0x0a + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('001217b4'))),
+            (record + 0x29, 6)]
+
+
+def finish_upper_typed_spawn(record, script=0x0012337a, object_type=0x20):
+    """Apply an upper typed caller's successful type and script fields."""
+    return [*((record + 0x0a + offset, 0) for offset in range(4)),
+            *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(script.to_bytes(4, 'big'))),
+            (record, object_type)]
+
+
+def finish_upper_dispatch_spawn(record):
+    """Apply 1B745E's type, script, and enabled-flag residue."""
+    return [(record, 0x44), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00122c40'))),
+            (record + 0x29, 1)]
+
+
+def finish_primary_double_guard_spawn(record):
+    """Apply 1B73A6's successful object type and script fields."""
+    return [(record, 0x3C), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('0012437e'))),
+            *((record + 0x0a + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('0012146c'))),
+            (record + 0x29, 1)]
+
+
+def finish_primary_inverse_guard_spawn(record):
+    """Apply 1B73D6's successful object type and script fields."""
+    return [(record, 0x3E), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('0012437e'))),
+            *((record + 0x0a + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('0012146c'))),
+            (record + 0x29, 1)]
+
+
+def finish_primary_mixed_guard_spawn(record):
+    """Apply ``1B73F2``'s primary-pool success identity and scripts."""
+    return [(record, 0x3f),
+            *[(record + 0x20 + offset, value)
+              for offset, value in enumerate(bytes.fromhex('0012437e'))],
+            *[(record + 0x0a + offset, value)
+              for offset, value in enumerate(bytes.fromhex('0012146c'))],
+            (record + 0x29, 1)]

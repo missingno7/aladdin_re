@@ -45,10 +45,48 @@ SPAWN_REGION_ENTRIES = (SPAWN_REGION_ENTRY, SPAWN_REGION_REVERSE_ENTRY,
 SPAWN_REGION_LAST_PC = 0x1B529E
 SPAWN_REVERSE_CALLER_ENTRY = 0x1B6802
 SPAWN_REVERSE_CALLER_LAST_PC = 0x1B681A
+SPAWN_DISPATCH_ITERATION_ENTRY = 0x1AE468
+SPAWN_DISPATCH_ITERATION_LAST_PC = 0x1AE478
+SPAWN_DISPATCH_CALL_ENTRY = 0x1AE46C
+SPAWN_DISPATCH_CALL_LAST_PC = 0x1AE46E
 SPAWN_UPPER_VARIANT_CALLER_ENTRY = 0x1B7262
 SPAWN_UPPER_VARIANT_CALLER_LAST_PC = 0x1B728C
+SPAWN_UPPER_SCRIPTED_CALLER_ENTRY = 0x1B72D4
+SPAWN_UPPER_SCRIPTED_CALLER_LAST_PC = 0x1B72FA
+SPAWN_REVERSE_PLAIN_CALLER_ENTRY = 0x1B7232
+SPAWN_REVERSE_PLAIN_CALLER_LAST_PC = 0x1B723C
+SPAWN_UPPER_PLAIN_CALLER_ENTRY = 0x1B6F76
+SPAWN_UPPER_PLAIN_CALLER_LAST_PC = 0x1B6F80
+SPAWN_UPPER_STANDARD_CALLER_ENTRY = 0x1B6E7A
+SPAWN_UPPER_STANDARD_CALLER_LAST_PC = 0x1B6E84
+SPAWN_UPPER_SECONDARY_CALLER_ENTRY = 0x1B6E90
+SPAWN_UPPER_SECONDARY_CALLER_LAST_PC = 0x1B6E9A
+SPAWN_UPPER_TERTIARY_CALLER_ENTRY = 0x1B6EA6
+SPAWN_UPPER_TERTIARY_CALLER_LAST_PC = 0x1B6EB0
+SPAWN_UPPER_TYPED_CALLER_ENTRY = 0x1B6EB2
+SPAWN_UPPER_TYPED_CALLER_LAST_PC = 0x1B6ECE
+SPAWN_UPPER_TYPED_SECONDARY_ENTRY = 0x1B6ED0
+SPAWN_UPPER_TYPED_SECONDARY_LAST_PC = 0x1B6EEC
 SPAWN_UPPER_CALLER_ENTRY = 0x1B735E
 SPAWN_UPPER_CALLER_LAST_PC = 0x1B7388
+SPAWN_UPPER_GUARD_ENTRY = 0x1B7354
+SPAWN_UPPER_GUARD_LAST_PC = 0x1B6EB0
+SPAWN_PRIMARY_DISPATCH_ENTRY = 0x1B7434
+SPAWN_PRIMARY_DISPATCH_LAST_PC = 0x1B7448
+SPAWN_PRIMARY_GUARD_ENTRY = 0x1B742A
+SPAWN_PRIMARY_GUARD_LAST_PC = 0x1B6EB0
+SPAWN_LOWER_DISPATCH_ENTRY = 0x1B74D6
+SPAWN_LOWER_DISPATCH_LAST_PC = 0x1B74E0
+SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
+SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
+SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY = 0x1B738A
+SPAWN_PRIMARY_DOUBLE_GUARD_LAST_PC = 0x1B73C0
+SPAWN_PRIMARY_INVERSE_GUARD_ENTRY = 0x1B73C2
+SPAWN_PRIMARY_INVERSE_GUARD_LAST_PC = 0x1B73F0
+SPAWN_PRIMARY_MIXED_GUARD_ENTRY = 0x1B73F2
+SPAWN_PRIMARY_MIXED_GUARD_LAST_PC = 0x1B7428
+SPAWN_UPPER_DISPATCH_ENTRY = 0x1B7454
+SPAWN_UPPER_DISPATCH_LAST_PC = 0x1B7472
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -395,6 +433,485 @@ def spawn_upper_caller(machine, registers: dict[str, int]) -> AtomicPlan:
                       prefix.direct_calls + selected.direct_calls)
 
 
+def spawn_upper_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B7354``'s observed guard and its established fallthrough.
+
+    A zero ``FFF171`` takes the distant RTS directly.  A nonzero value only
+    contributes the TST/BEQ prefix before entering the already qualified
+    upper-pool caller at ``1B735E``.
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper guard caller stack')
+    outer = _read(machine, sp, 4)
+    guard = _read(machine, 0xFFF171, 1)
+    tested_sr = _logic_sr(registers['sr'], guard, 1)
+    if guard == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': tested_sr},
+                          SPAWN_UPPER_GUARD_LAST_PC)
+    prefix = AtomicPlan(28, 2, (), {**registers, 'pc': SPAWN_UPPER_CALLER_ENTRY,
+                                     'sr': tested_sr}, 0x1B735A)
+    selected = spawn_upper_caller(dispatch_plan_view(machine, prefix), prefix.registers)
+    return AtomicPlan(prefix.cycles + selected.cycles,
+                      prefix.instructions + selected.instructions, selected.writes,
+                      selected.registers, selected.last_pc,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_primary_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B7434``'s slot predicate and primary-pool allocation."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned primary dispatch caller stack')
+    outer = _read(machine, sp, 4)
+    slot_type = _read(machine, 0xFF7E3C, 1)
+    compare_sr = (_sub_sr(registers['sr'], slot_type, 0x39, 1) & ~0x10) | (registers['sr'] & 0x10)
+    if compare_sr & 4:
+        return AtomicPlan(46, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': compare_sr},
+                          SPAWN_PRIMARY_DISPATCH_LAST_PC)
+    prefix = AtomicPlan(58, 4, _bytes(sp - 4, 0x1B7448, 4),
+                        {**registers, 'a6': 0x1B79CC, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_ENTRY}, 0x1B7444, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_PRIMARY_DISPATCH_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_primary_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B742A``'s guard before the primary dispatcher callback."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned primary guard caller stack')
+    outer = _read(machine, sp, 4)
+    guard = _read(machine, 0xFFF172, 1)
+    tested_sr = _logic_sr(registers['sr'], guard, 1)
+    if guard == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': tested_sr},
+                          SPAWN_PRIMARY_GUARD_LAST_PC)
+    prefix = AtomicPlan(28, 2, (), {**registers, 'pc': SPAWN_PRIMARY_DISPATCH_ENTRY,
+                                     'sr': tested_sr}, 0x1B7430)
+    selected = spawn_primary_dispatch_caller(dispatch_plan_view(machine, prefix), prefix.registers)
+    return AtomicPlan(prefix.cycles + selected.cycles,
+                      prefix.instructions + selected.instructions, selected.writes,
+                      selected.registers, selected.last_pc,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_lower_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B74D6``'s fixed-template lower-pool allocation."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned lower dispatch caller stack')
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B74E0, 4),
+                        {**registers, 'a6': 0x1B7A30, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_LOWER_ENTRY}, 0x1B74DC, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_LOWER_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_LOWER_DISPATCH_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_reverse_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B7232``'s direct reverse-pool allocator wrapper."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned plain reverse caller stack')
+    _spans_disjoint([('plain reverse caller pool', 0xFF7E82, 24 * 66),
+                     ('plain reverse caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B723C, 4),
+                        {**registers, 'a6': 0x1B79E0, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_REVERSE_ENTRY}, 0x1B7238, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_REVERSE_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_REVERSE_PLAIN_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6F76``'s direct upper-pool allocator wrapper."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned plain upper caller stack')
+    _spans_disjoint([('plain upper caller pool', 0xFF7E82, 24 * 66),
+                     ('plain upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6F80, 4),
+                        {**registers, 'a6': 0x1B80AC, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6F7C, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_UPPER_PLAIN_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_standard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6E7A``'s direct upper-pool allocator wrapper."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned standard upper caller stack')
+    _spans_disjoint([('standard upper caller pool', 0xFF7E82, 24 * 66),
+                     ('standard upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6E84, 4),
+                        {**registers, 'a6': 0x1B7C10, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6E80, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_UPPER_STANDARD_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_secondary_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6E90``'s direct upper-pool allocator wrapper."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned secondary upper caller stack')
+    _spans_disjoint([('secondary upper caller pool', 0xFF7E82, 24 * 66),
+                     ('secondary upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6E9A, 4),
+                        {**registers, 'a6': 0x1B7C24, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6E96, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_UPPER_SECONDARY_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_tertiary_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6EA6``'s direct upper-pool allocator wrapper."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned tertiary upper caller stack')
+    _spans_disjoint([('tertiary upper caller pool', 0xFF7E82, 24 * 66),
+                     ('tertiary upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6EB0, 4),
+                        {**registers, 'a6': 0x1B7C38, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6EAC, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_UPPER_TERTIARY_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_typed_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6EB2``'s upper allocator and successful typed suffix."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned typed upper caller stack')
+    _spans_disjoint([('typed upper caller pool', 0xFF7E82, 24 * 66),
+                     ('typed upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6EBC, 4),
+                        {**registers, 'a6': 0x1B7C10, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6EB8, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_TYPED_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_upper_typed_spawn(final['a5']))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 0x20, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 84,
+                      prefix.instructions + selected.instructions + 5,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_UPPER_TYPED_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_typed_secondary_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6ED0``'s upper allocator and successful typed suffix."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned secondary typed upper caller stack')
+    _spans_disjoint([('secondary typed upper caller pool', 0xFF7E82, 24 * 66),
+                     ('secondary typed upper caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B6EDA, 4),
+                        {**registers, 'a6': 0x1B7C24, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B6ED6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers, SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items()); final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26, prefix.instructions + selected.instructions + 2, writes, final, SPAWN_UPPER_TYPED_SECONDARY_LAST_PC, prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_upper_typed_spawn(final['a5'], 0x001235ac, 0x21))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 0x21, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 84, prefix.instructions + selected.instructions + 5, tuple(dict((*writes, *suffix)).items()), final, SPAWN_UPPER_TYPED_SECONDARY_LAST_PC, prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_dispatch_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B744A``'s guard before the upper dispatcher callback."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper dispatch guard caller stack')
+    outer = _read(machine, sp, 4)
+    guard = _read(machine, 0xFFF16F, 1)
+    tested_sr = _logic_sr(registers['sr'], guard, 1)
+    if guard == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': tested_sr},
+                          SPAWN_UPPER_DISPATCH_GUARD_LAST_PC)
+    prefix = AtomicPlan(28, 2, (), {**registers, 'pc': SPAWN_UPPER_DISPATCH_ENTRY,
+                                     'sr': tested_sr}, 0x1B7450)
+    selected = spawn_upper_dispatch_caller(dispatch_plan_view(machine, prefix), prefix.registers)
+    return AtomicPlan(prefix.cycles + selected.cycles,
+                      prefix.instructions + selected.instructions, selected.writes,
+                      selected.registers, selected.last_pc,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_primary_double_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B738A``'s two guards and primary-pool success suffix."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned primary double guard caller stack')
+    outer = _read(machine, sp, 4)
+    first = _read(machine, 0xFFF177, 1)
+    first_sr = _logic_sr(registers['sr'], first, 1)
+    if first == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': first_sr},
+                          SPAWN_PRIMARY_DOUBLE_GUARD_LAST_PC)
+    second = _read(machine, 0xFFF178, 1)
+    second_sr = _logic_sr(first_sr, second, 1)
+    if second == 0:
+        return AtomicPlan(66, 5, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': second_sr},
+                          SPAWN_PRIMARY_DOUBLE_GUARD_LAST_PC)
+    prefix = AtomicPlan(78, 6, _bytes(sp - 4, 0x1B73A4, 4),
+                        {**registers, 'a6': 0x1B79B8, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_ENTRY, 'sr': second_sr},
+                        0x1B73A0, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_PRIMARY_DOUBLE_GUARD_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_primary_double_guard_spawn(final['a5']))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 1, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 100,
+                      prefix.instructions + selected.instructions + 6,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_PRIMARY_DOUBLE_GUARD_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_primary_inverse_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B73C2``'s inverse primary allocator guard and suffix."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned primary inverse guard caller stack')
+    outer = _read(machine, sp, 4)
+    first = _read(machine, 0xFFF177, 1)
+    first_sr = _logic_sr(registers['sr'], first, 1)
+    if first != 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': first_sr},
+                          0x1B73F0)
+    prefix = AtomicPlan(54, 4, _bytes(sp - 4, 0x1B73D4, 4),
+                        {**registers, 'a6': 0x1B79B8, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_ENTRY, 'sr': first_sr},
+                        0x1B73D0, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          0x1B73F0,
+                          prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_primary_inverse_guard_spawn(final['a5']))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 1, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 100,
+                      prefix.instructions + selected.instructions + 6,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_PRIMARY_INVERSE_GUARD_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_primary_mixed_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B73F2``'s opposing primary-pool guards and suffix."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned primary mixed guard caller stack')
+    outer = _read(machine, sp, 4)
+    first = _read(machine, 0xFFF177, 1)
+    first_sr = _logic_sr(registers['sr'], first, 1)
+    if first == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': first_sr},
+                          SPAWN_PRIMARY_MIXED_GUARD_LAST_PC)
+    second = _read(machine, 0xFFF178, 1)
+    second_sr = _logic_sr(first_sr, second, 1)
+    if second != 0:
+        return AtomicPlan(66, 5, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': second_sr},
+                          SPAWN_PRIMARY_MIXED_GUARD_LAST_PC)
+    prefix = AtomicPlan(78, 6, _bytes(sp - 4, 0x1B740C, 4),
+                        {**registers, 'a6': 0x1B79B8, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_ENTRY, 'sr': second_sr},
+                        0x1B7408, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_PRIMARY_MIXED_GUARD_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_primary_mixed_guard_spawn(final['a5']))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 1, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 100,
+                      prefix.instructions + selected.instructions + 6,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_PRIMARY_MIXED_GUARD_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover the recorded ``1B7454`` upper-pool callback.
+
+    This callback has no cap or guard of its own: it fixes the template, uses
+    the existing upper allocator, and tags a successfully allocated slot.
+    The adjacent ``1B7354`` guard remains an original-only entry.
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper dispatch caller stack')
+    _spans_disjoint([('upper dispatch caller pool', 0xFF7E82, 24 * 66),
+                     ('upper dispatch caller frame', sp - 4, 8),
+                     *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B745E, 4),
+                        {**registers, 'a6': 0x1B79B8, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B745A, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_DISPATCH_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_upper_dispatch_spawn(final['a5']))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 1, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 76,
+                      prefix.instructions + selected.instructions + 5,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_UPPER_DISPATCH_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+
+
+def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Compose one admitted ``1AE46C`` callback and its MOVEM restore.
+
+    Lookup and loop ownership remain native.  This narrow parent span starts
+    after the dispatcher has saved D0-D7/A0-A6 and declines before JSR unless
+    the observed A4 callback is one of the qualified spawn callers.
+    """
+    sp, target = registers['a7'], registers['a4'] & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned spawn dispatcher call stack')
+    callbacks = {
+        SPAWN_REVERSE_CALLER_ENTRY: spawn_reverse_caller,
+        SPAWN_UPPER_VARIANT_CALLER_ENTRY: spawn_upper_variant_caller,
+        SPAWN_UPPER_SCRIPTED_CALLER_ENTRY: spawn_upper_scripted_caller,
+        SPAWN_REVERSE_PLAIN_CALLER_ENTRY: spawn_reverse_plain_caller,
+        SPAWN_UPPER_PLAIN_CALLER_ENTRY: spawn_upper_plain_caller,
+        SPAWN_UPPER_STANDARD_CALLER_ENTRY: spawn_upper_standard_caller,
+        SPAWN_UPPER_SECONDARY_CALLER_ENTRY: spawn_upper_secondary_caller,
+        SPAWN_UPPER_TERTIARY_CALLER_ENTRY: spawn_upper_tertiary_caller,
+        SPAWN_UPPER_TYPED_CALLER_ENTRY: spawn_upper_typed_caller,
+        SPAWN_UPPER_CALLER_ENTRY: spawn_upper_caller,
+        SPAWN_PRIMARY_DISPATCH_ENTRY: spawn_primary_dispatch_caller,
+        SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY: spawn_primary_double_guard_caller,
+        SPAWN_PRIMARY_INVERSE_GUARD_ENTRY: spawn_primary_inverse_guard_caller,
+        SPAWN_PRIMARY_MIXED_GUARD_ENTRY: spawn_primary_mixed_guard_caller,
+        SPAWN_LOWER_DISPATCH_ENTRY: spawn_lower_dispatch_caller,
+        SPAWN_UPPER_DISPATCH_ENTRY: spawn_upper_dispatch_caller,
+    }
+    callback_function = callbacks.get(target)
+    if callback_function is None:
+        raise UnsupportedCandidate(f'spawn dispatcher target {target:06X} is not recovered')
+    _spans_disjoint([('spawn dispatcher MOVEM frame', sp - 4, 64),
+                     ('spawn dispatcher indexed clear',
+                      (registers['a2'] + _signed_word(registers['d2'])) & 0xFFFFFF, 1),
+                     ('spawn dispatcher pool', 0xFF7E82, 24 * 66),
+                     *SPAWN_REGION_GLOBALS])
+    prefix = AtomicPlan(16, 1, _bytes(sp - 4, SPAWN_DISPATCH_CALL_LAST_PC, 4),
+                        {**registers, 'a7': sp - 4, 'pc': target},
+                        SPAWN_DISPATCH_CALL_ENTRY, direct_calls=1)
+    callback = callback_function(dispatch_plan_view(machine, prefix), prefix.registers)
+    restored = {name: _read(machine, sp + 4 * index, 4)
+                for index, name in enumerate(('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7',
+                                               'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6'))}
+    final = {**restored, 'a7': sp + 60, 'pc': 0x1AE472, 'sr': callback.registers['sr']}
+    return AtomicPlan(prefix.cycles + callback.cycles + 132,
+                      prefix.instructions + callback.instructions + 1,
+                      tuple(dict((*prefix.writes, *callback.writes)).items()), final,
+                      SPAWN_DISPATCH_CALL_LAST_PC,
+                      prefix.direct_calls + callback.direct_calls)
 
 def spawn_upper_variant_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover table callback 1B7262 through the upper allocator and $3A suffix."""
@@ -431,6 +948,85 @@ def spawn_upper_variant_caller(machine, registers: dict[str, int]) -> AtomicPlan
                       tuple(dict((*writes, *suffix)).items()), final,
                       SPAWN_UPPER_VARIANT_CALLER_LAST_PC,
                       prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_scripted_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B72D4``'s upper allocator and complete caller suffix."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper scripted caller stack')
+    _spans_disjoint([('upper scripted caller pool', 0xFF7E82, 24 * 66),
+                     ('upper scripted caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B72DE, 4),
+                        {**registers, 'a6': 0x1B79B8, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B72DA, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_SCRIPTED_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_upper_scripted_spawn(final['a5']))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 1, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 100,
+                      prefix.instructions + selected.instructions + 6,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_UPPER_SCRIPTED_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_dispatch_iteration(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover one admitted ``1AE468`` callback iteration.
+
+    The table lookup that selects ``A4`` and all later iterations remain
+    native.  This owns the exact save/call/restore/update sequence only when
+    that already-selected target has a recovered spawn caller.
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned spawn dispatcher iteration stack')
+    target = registers['a4'] & 0xFFFFFF
+    if target not in (SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
+                      SPAWN_UPPER_SCRIPTED_CALLER_ENTRY,
+                      SPAWN_REVERSE_PLAIN_CALLER_ENTRY,
+                      SPAWN_UPPER_PLAIN_CALLER_ENTRY,
+                      SPAWN_UPPER_STANDARD_CALLER_ENTRY,
+                      SPAWN_UPPER_SECONDARY_CALLER_ENTRY,
+                      SPAWN_UPPER_TERTIARY_CALLER_ENTRY,
+                      SPAWN_UPPER_TYPED_CALLER_ENTRY,
+                      SPAWN_UPPER_CALLER_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY,
+                      SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY,
+                      SPAWN_PRIMARY_INVERSE_GUARD_ENTRY,
+                      SPAWN_PRIMARY_MIXED_GUARD_ENTRY,
+                      SPAWN_LOWER_DISPATCH_ENTRY,
+                      SPAWN_UPPER_DISPATCH_ENTRY):
+        raise UnsupportedCandidate(f'spawn dispatcher target {target:06X} is not recovered')
+    names = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7',
+             'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6')
+    saved = tuple(byte for index, name in enumerate(names)
+                  for byte in _bytes(sp - 60 + 4 * index, registers[name], 4))
+    prefix = AtomicPlan(128, 1, saved,
+                        {**registers, 'a7': sp - 60, 'pc': SPAWN_DISPATCH_CALL_ENTRY},
+                        SPAWN_DISPATCH_ITERATION_ENTRY)
+    callback = spawn_dispatch_call(dispatch_plan_view(machine, prefix), prefix.registers)
+    final = dict(callback.registers)
+    d4, d5, d6 = (final[name] for name in ('d4', 'd5', 'd6'))
+    final['a0'] = (final['a0'] + _signed_word(d5)) & 0xFFFFFF
+    final['d6'] = (d6 & 0xFFFF0000) | ((d6 + 0x10) & 0xFFFF)
+    final['d4'] = (d4 & 0xFFFF0000) | ((d4 - 1) & 0xFFFF)
+    final['sr'] = _add_sr(final['sr'], d6 & 0xFFFF, 0x10, 2)
+    tail_cycles = 30 if (d4 & 0xFFFF) == 0 else 26
+    final['pc'] = 0x1AE47C if (d4 & 0xFFFF) == 0 else 0x1AE44A
+    return AtomicPlan(prefix.cycles + callback.cycles + tail_cycles,
+                      prefix.instructions + callback.instructions + 3,
+                      tuple(dict((*prefix.writes, *callback.writes)).items()), final,
+                      SPAWN_DISPATCH_ITERATION_LAST_PC,
+                      prefix.direct_calls + callback.direct_calls)
 
 def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,
                         return_site, last_pc, extra_writes=(), extra_spans=(),

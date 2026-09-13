@@ -66,33 +66,3 @@ def test_nonmonotonic_or_different_observations_produce_bounded_failure_interval
     assert divergent["first_failing_interval"]["to"]["candidate"]["id"] == "frame-20"
 
 
-def test_compare_requires_candidate_hit_and_validates_terminal_worker_payload(tmp_path, monkeypatch):
-    recording, rom = tmp_path / "capture.alreplay", tmp_path / "rom.md"
-    recording.write_bytes(b"opaque capture")
-    rom.write_bytes(b"rom")
-    base = {"status": "COMPLETED", "compared": False, "state_sha256": "state", "frame_sha256": "frame",
-            "pcm_sha256": "pcm", "pcm_bytes": 12, "candidate_stats": {"candidate_hits": 0}}
-
-    def worker(role, command, **_kwargs):
-        path = command[command.index("--observations") + 1]
-        Path(path).write_text(json.dumps([observation(1)]), encoding="utf-8")
-        return v.WorkerResult(role, command, dict(base), "", "")
-
-    monkeypatch.setattr(v, "run_worker", worker)
-    result = v.compare_replay(rom, recording, candidate="leaf", output=tmp_path / "out")
-    assert result["status"] == "NOT_EXERCISED"
-    assert result["compared"] is True
-
-    def different_terminal(role, command, **_kwargs):
-        path = command[command.index("--observations") + 1]
-        Path(path).write_text(json.dumps([observation(1)]), encoding="utf-8")
-        payload = dict(base)
-        payload["candidate_stats"] = {"candidate_hits": 1}
-        if role == "candidate":
-            payload["state_sha256"] = "wrong"
-        return v.WorkerResult(role, command, payload, "", "")
-
-    monkeypatch.setattr(v, "run_worker", different_terminal)
-    result = v.compare_replay(rom, recording, candidate="leaf", output=tmp_path / "terminal")
-    assert result["status"] == "DIVERGENCE"
-    assert result["comparison"]["terminal_payload"]["differences"]["state_sha256"]

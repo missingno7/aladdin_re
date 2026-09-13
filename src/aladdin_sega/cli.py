@@ -1,197 +1,101 @@
-"""User launch and headless diagnostics use the same machine and artifacts."""
+"""Player and developer commands share one cold-start history model."""
 import argparse
-import hashlib
 import json
 from pathlib import Path
-import platform
-import subprocess
-import sys
-import time
 
-from . import artifacts
-from .machine import Machine, NativeError, library_path, load_library
-from .profile import DEFAULT_ROM, FRAME_TICKS, MASTER_HZ, PROFILE_SHA256, read_rom
+from .history import HistoryStore, write_json
+from .history_runtime import Session
+from .machine import load_library, library_path
+from .profile import DEFAULT_ROM, read_rom
 from .receipt import execution_receipt
-from .verification import WorkerError
-
-
-def emit(value):
-    print(json.dumps(value, sort_keys=True))
+from .verification import execute_history, compare_history
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="aladdin-sega")
     sub = parser.add_subparsers(dest="command", required=True)
-    candidates = ["original", "leaf", "pair", "init", "finish", "replace", "composed", "carrier", "lifecycle",
-                  "mutant-result", "mutant-continuation", "mutant-timing",
-                  "carrier-mutant-result", "carrier-mutant-continuation", "carrier-mutant-timing",
-                  "lifecycle-mutant-result", "lifecycle-mutant-continuation", "lifecycle-mutant-timing"]
-    for name in ("doctor", "boot-check", "play", "replay", "snapshot-check", "resume-check", "compare"):
+    for name in ("doctor", "play", "history-run", "history-verify", "history-validate",
+                 "history-export", "history-capture"):
         p = sub.add_parser(name)
         p.add_argument("--rom", type=Path, default=DEFAULT_ROM)
-        if name in {"replay", "snapshot-check", "resume-check", "compare"}:
-            p.add_argument("artifact", type=Path)
-        if name in {"snapshot-check", "compare"}:
+        p.add_argument("--history", type=Path, default=Path("history"))
+        if name in {"history-run", "history-verify", "history-export"}:
+            p.add_argument("node", nargs="?", default="main")
+        if name in {"history-run", "history-verify"}:
+            p.add_argument("--candidate", default="original" if name == "history-run" else "lifecycle")
+            p.add_argument("--tree", action="store_true")
+            p.add_argument("--output", type=Path, default=Path("artifacts/comparison") if name == "history-verify" else None)
+        if name == "history-run":
+            mode = p.add_mutually_exclusive_group()
+            mode.add_argument("--cold", action="store_true", help="Run continuously from reset; this is the default")
+            mode.add_argument("--cache", action="store_true", help="Allow compatible player caches")
+        if name == "history-verify":
             p.add_argument("--timeout-seconds", type=float, default=120)
-        if name in {"replay", "compare"}:
-            p.add_argument("--candidate", choices=candidates, default="original" if name == "replay" else "leaf")
-        if name == "compare":
-            p.add_argument("--output", type=Path, default=Path("artifacts/comparison"))
-            p.add_argument("--diagnostics", action="store_true", help="Capture terminal/failure registers, RAM, saves and replay; best used with short witnesses")
-        if name in {"boot-check", "play"}:
-            p.add_argument("--frames", type=int, default=300 if name == "boot-check" else 0)
+        if name == "history-export":
+            p.add_argument("--output", type=Path, required=True)
+        if name == "history-capture":
+            p.add_argument("--frames", type=int, required=True)
+            p.add_argument("--input", action="append", default=[], metavar="FRAME:MASK")
+            p.add_argument("--checkpoint", type=int, action="append", default=[])
         if name == "play":
+            p.add_argument("--frames", type=int, default=0)
             p.add_argument("--mute", action="store_true")
-            p.add_argument("--record-from-start", action="store_true",
-                           help="Record immediately from reset or --snapshot; F5 stops and saves")
-            p.add_argument("--snapshot", type=Path, help="Continue playing from a saved .alsnap")
-            p.add_argument("--audio-report", type=Path, help="Write host audio buffer diagnostics on exit")
-        if name == "boot-check":
-            p.add_argument("--output", type=Path, default=Path("artifacts/boot"))
-        if name == "resume-check":
-            p.add_argument("--target", type=int, required=True)
-        if name == "replay":
-            p.add_argument("--diagnostics", type=Path, help="New directory for terminal/failure inspection (used by compare)")
-            p.add_argument("--observations", type=Path, help="Write ordered derived state/frame/PCM checkpoints")
-        if name == "snapshot-check":
-            p.add_argument("--snapshot", type=Path, action="append", default=[],
-                           help="Also match a separately saved live snapshot against this recording (repeatable)")
+            p.add_argument("--new", action="store_true")
+            p.add_argument("--node", help="Checkpoint ID or main; omit to open history panel")
+            p.add_argument("--audio-report", type=Path)
     args = parser.parse_args(argv)
     try:
-        rom = read_rom(args.rom)
-        start_receipt = execution_receipt() if args.command in {"replay", "resume-check"} else None
         if args.command == "doctor":
             lib = load_library()
-            emit({"status": "PASS", "scope": "ROM and native ABI availability", "python": platform.python_version(),
-                  "host": platform.platform(), "native_library": str(library_path()),
-                  "source_id": lib.al_source_id().decode(), "profile_sha256": PROFILE_SHA256,
-                  "receipt": execution_receipt()})
+            result = {"status": "PASS", "source_id": lib.al_source_id().decode(),
+                      "native_library": str(library_path()), "receipt": execution_receipt()}
         elif args.command == "play":
             from .frontend import play
-            play(rom, frames=args.frames, mute=args.mute, record_from_start=args.record_from_start,
-                 snapshot=args.snapshot, audio_report=args.audio_report)
-        elif args.command == "compare":
-            from .verification import compare_replay
-            result = compare_replay(args.rom.resolve(), args.artifact.resolve(), candidate=args.candidate,
-                                    timeout_seconds=args.timeout_seconds, output=args.output, diagnostics=args.diagnostics)
-            emit(result)
-            return 0 if result["status"] == "PASS" else 1
-        elif args.command == "boot-check":
-            if args.frames <= 0:
-                raise ValueError("--frames must be positive")
-            with Machine(rom) as machine:
-                begin = time.perf_counter()
-                # Drain each frame, as playback does, so all generated PCM is hashed.
-                pcm = hashlib.sha256()
-                pcm_bytes = 0
-                for frame in range(1, args.frames + 1):
-                    machine.run(target=frame * FRAME_TICKS)
-                    sound = machine.audio()
-                    pcm.update(sound)
-                    pcm_bytes += len(sound)
-                wall = time.perf_counter() - begin
-                width, height, rgb = machine.frame()
-                snap = artifacts.snapshot_bytes(machine)
-                original = machine.snapshot()
-                artifacts.restore_snapshot(machine, snap)
-                if machine.snapshot() != original:
-                    raise NativeError("Immediate snapshot round trip diverged")
-                args.output.mkdir(parents=True, exist_ok=True)
-                (args.output / "frame.ppm").write_bytes(f"P6\n{width} {height}\n255\n".encode() + rgb)
-                (args.output / "state.alsnap").write_bytes(snap)
-                result = {"status": "PASS", "scope": "cold boot; immediate same-process snapshot round trip",
-                          **machine.info, "source_id": machine.source_id, "host": platform.platform(),
-                          "profile_sha256": PROFILE_SHA256, "frames": args.frames,
-                          "emulated_seconds": machine.info["tick"] / MASTER_HZ, "wall_seconds": wall,
-                          "realtime_ratio": machine.info["tick"] / MASTER_HZ / wall,
-                          "audio_emulated": True, "pcm_bytes": pcm_bytes, "pcm_sha256": pcm.hexdigest(),
-                          "frame_sha256": artifacts.digest(rgb), "state_sha256": artifacts.digest(original),
-                          "instrumentation": "per-frame PCM drain; component timings unmeasured"}
-                (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
-                emit(result)
-        elif args.command == "snapshot-check":
-            from .verification import snapshot_check, check_saved_snapshots
-            if args.snapshot:
-                emit(check_saved_snapshots(rom, args.rom.resolve(), args.artifact, args.snapshot,
-                                          timeout_seconds=args.timeout_seconds))
-            else:
-                emit(snapshot_check(rom, args.rom.resolve(), args.artifact,
-                                    timeout_seconds=args.timeout_seconds))
+            if args.new and args.node:
+                raise ValueError("Choose either --new or --node")
+            play(read_rom(args.rom), frames=args.frames, mute=args.mute, history_path=args.history,
+                 node=args.node, new=args.new, audio_report=args.audio_report)
+            return 0
         else:
-            with Machine(rom) as machine:
-                data = artifacts.read_bounded(args.artifact)
-                pcm = hashlib.sha256()
-                candidate = observer = None
-                pcm_bytes = 0
-                def audio_sink(sound):
-                    nonlocal pcm_bytes
-                    pcm.update(sound)
-                    pcm_bytes += len(sound)
-                    if observer:
-                        observer.pcm(sound)
-                if args.command == "replay":
-                    meta, initial, events = artifacts.load_replay(data, rom_sha256=machine.rom_sha256, state_version=machine.state_version)
-                    artifacts.restore_snapshot(machine, initial)
-                    if args.candidate != "original":
-                        from .recovery import Candidate
-                        candidate = Candidate(args.candidate)
-                        candidate.arm(machine)
-                    if args.observations:
-                        from .verification import Observer
-                        observer = Observer()
-                    def capture_diagnostics(error=None):
-                        if args.diagnostics:
-                            from .diagnostics import capture
-                            try:
-                                capture(machine, args.diagnostics, execution_error=error,
-                                        receipt={**start_receipt, "candidate": args.candidate,
-                                                 "artifact_sha256": artifacts.digest(data),
-                                                 "capture_source_id": meta["source_id"]})
-                            except Exception as capture_error:
-                                # Diagnostics must never replace the execution exception.
-                                print(f"Diagnostic capture unavailable: {capture_error}", file=sys.stderr)
-                    try:
-                        artifacts.play_events(machine, events, meta["terminal_tick"], audio_sink=audio_sink,
-                                              on_gate=candidate.on_gate if candidate else None,
-                                              on_checkpoint=observer.checkpoint if observer else None)
-                    except BaseException as error:
-                        capture_diagnostics(str(error))
-                        if observer:
-                            args.observations.parent.mkdir(parents=True, exist_ok=True)
-                            observer.write(args.observations)  # completed checkpoints only
-                        raise
-                    capture_diagnostics()
-                    if observer:
-                        observer.finish(machine, meta["terminal_tick"])
-                        args.observations.parent.mkdir(parents=True, exist_ok=True)
-                        observer.write(args.observations)
-                else:
-                    artifacts.restore_snapshot(machine, data)
-                    artifacts.play_events(machine, [], args.target, audio_sink=audio_sink)
-                receipt = execution_receipt(artifact_sha256=artifacts.digest(data),
-                           capture_source=meta["source_id"] if args.command == "replay" else None,
-                           candidate=args.candidate if args.command == "replay" else "original")
-                if any(start_receipt[key] != receipt[key] for key in ("python_modules_sha256", "native_binary_sha256")):
-                    raise RuntimeError("Implementation files changed during execution; rerun in a fresh process for a valid receipt")
-                emit({"status": "COMPLETED", "compared": False, "scope": "successful execution; no equivalence verdict", **machine.info,
-                      "candidate_stats": candidate.stats if candidate else {}, "machine_api_calls": dict(machine.calls),
-                      "recovery_snapshot_safe": not machine.in_sound_call, "pcm_bytes": pcm_bytes,
-                      "interpreted_m68k_instructions": machine.info["m68k_instructions"] - (candidate.stats.get("replaced_m68k_instructions", 0) if candidate else 0),
-                      "receipt": receipt,
-                      "state_sha256": artifacts.digest(machine.snapshot()), "source_id": machine.source_id,
-                      "frame_sha256": artifacts.digest(machine.frame()[2]), "pcm_sha256": pcm.hexdigest()})
-        return 0
-    except FileNotFoundError as e:
-        emit({"status": "MISSING_INPUT", "detail": str(e)})
-        return 2
-    except subprocess.TimeoutExpired as e:
-        emit({"status": "TIMEOUT", "detail": str(e), "timeout_seconds": e.timeout})
-        return 3
-    except WorkerError as e:
-        emit({"status": e.kind, **e.report()})
-        return 3 if e.kind == "TIMEOUT" else 1
-    except (ValueError, KeyError, TypeError, OSError, RuntimeError, ImportError) as e:
-        emit({"status": "ERROR", "detail": str(e)})
+            store = HistoryStore(args.history)
+            if args.command == "history-validate":
+                result = {"status": "PASS", "nodes": len(store.nodes()), "main": store.resolve()}
+            elif args.command == "history-export":
+                result = store.flatten(store.resolve(args.node))
+                write_json(args.output, result)
+            elif args.command == "history-capture":
+                if args.frames <= 0:
+                    raise ValueError("--frames must be positive")
+                changes = {}
+                for item in args.input:
+                    frame, buttons = map(lambda v:int(v, 0), item.split(":"))
+                    if not 0 <= frame < args.frames or not 0 <= buttons <= 255 or frame in changes:
+                        raise ValueError("Invalid or repeated frame input")
+                    changes[frame] = buttons
+                held = 0
+                with Session(store, read_rom(args.rom)) as session:
+                    for frame in range(args.frames):
+                        held = changes.get(frame, held)
+                        session.step(held)
+                        if session.frame in args.checkpoint:
+                            session.checkpoint(reason="constructed")
+                result = {"status": "PASS", "history_id": store.resolve(), "frames": args.frames,
+                          "provenance": "constructed input scenario"}
+            elif args.command == "history-run":
+                if args.tree and args.cache:
+                    raise ValueError("Tree verification uses only its own freshly computed prefix states")
+                result = execute_history(store, read_rom(args.rom), node=args.node,
+                                         candidate=args.candidate, tree=args.tree, use_cache=args.cache)
+                if args.output:
+                    write_json(args.output, result)
+                    result = {k:v for k,v in result.items() if k not in {"observations", "endpoints"}}
+            else:
+                result = compare_history(args.history, args.rom, node=args.node, candidate=args.candidate,
+                                         tree=args.tree, output=args.output, timeout_seconds=args.timeout_seconds)
+        print(json.dumps(result))
+        return 0 if result.get("status", "PASS") in {"PASS", "COMPLETED"} else 1
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, ImportError) as error:
+        print(json.dumps({"status": "ERROR", "detail": str(error)}))
         return 1
 
 
