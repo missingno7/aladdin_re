@@ -17,8 +17,8 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         begin_contact_sibling_dispatch, begin_contact_sibling_wrapper_sound_seam,
                         finish_contact_sibling_wrapper_sound, begin_contact_sibling_dispatch_sound_seam,
                         begin_contact_sibling_sound_seam, finish_contact_sibling_sound,
-                        SPAWN_REGION_ENTRIES, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY,
-                        spawn_region, spawn_reverse_caller, spawn_upper_caller)
+                        SPAWN_REGION_ENTRIES, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
+                        spawn_region, spawn_reverse_caller, spawn_upper_caller, spawn_upper_variant_caller)
 
 
 @dataclass
@@ -84,7 +84,7 @@ class Candidate:
             return tuple(dict.fromkeys((COLLECTION_DISPATCH_ENTRY, CONTACT_ENTRY,
                                         CONTACT_SIBLING_ENTRY, CONTACT_SIBLING_WRAPPER,
                                         CONTACT_SIBLING_DIRECT, *COLLECTION_ROUTES,
-                                        0x1AF516, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY,
+                                        0x1AF516, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
                                         *SPAWN_REGION_ENTRIES, *base))) if self.is_lifecycle else base
         if self.is_composed:
             return (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
@@ -359,6 +359,16 @@ class Candidate:
             return True
         if self.is_lifecycle and entry in COLLECTION_ROUTES:
             return self._transition(machine, target, entry)
+        if self.is_lifecycle and entry == SPAWN_UPPER_VARIANT_CALLER_ENTRY:
+            self.stats['gates'] += 1
+            try:
+                plan = self._mutate(spawn_upper_variant_caller(machine, machine.registers()))
+                if not self._apply(machine, plan, target):
+                    return self._fallback(machine, entry, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, entry, f'unsupported domain: {error}')
+            self.stats['spawn_caller_hits'] += 1
+            return True
         if self.is_lifecycle and entry == SPAWN_UPPER_CALLER_ENTRY:
             self.stats['gates'] += 1
             try:

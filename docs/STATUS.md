@@ -691,3 +691,10 @@ outer return (`1AE46E` and late `1AE4EA`), cap, exhaustion, alias, deadline and
 native-future contracts. The shared coordinate tail preserves X from its final
 Y `ADD.W`; cap and exhaustion preserve incoming X. Recorded direct coverage is
 763 calls (538 allocation, 225 cap); exhaustion remains synthetic oracle coverage.
+
+## Upper variant dispatcher callback
+
+`1B7262..1B728C` now owns the adjacent upper-pool callback. It reads its own
+`FFEFE2` cap, composes `1B5266`, then writes type `0x3A`, script `0x122BD8`,
+and byte flag `1`. Its ordinary guest return remains the saved stack word;
+recorded fixtures demonstrate both `1AE46E` and `1AE4EA`.

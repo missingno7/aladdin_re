@@ -412,3 +412,11 @@ and CCR: CMP retains incoming X while the common tail retains X from the final
 `FFF152 + FF7DB2` `ADD.W`. Existing allocator planning, RAM guards and semantic
 initializer/placement are reused. `1B7354` remains outside scope because its
 recorded path is only the `FFF171 == 0` guard into an RTS.
+
+## Upper variant callback `1B7262`
+
+This sibling reuses the live-RAM upper allocator, initializer and placement
+through the existing direct composition. Its separate cap is `FFEFE2`; accepted
+objects receive `0x3A`, `0x122BD8`, and `A5+0x29 = 1`. The callback remains
+bounded: exhaustion and aliases are synthetic original-ROM controls, while the
+51 recorded entries supply cap/success and both saved-return forms.

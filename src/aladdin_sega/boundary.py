@@ -45,6 +45,8 @@ SPAWN_REGION_ENTRIES = (SPAWN_REGION_ENTRY, SPAWN_REGION_REVERSE_ENTRY,
 SPAWN_REGION_LAST_PC = 0x1B529E
 SPAWN_REVERSE_CALLER_ENTRY = 0x1B6802
 SPAWN_REVERSE_CALLER_LAST_PC = 0x1B681A
+SPAWN_UPPER_VARIANT_CALLER_ENTRY = 0x1B7262
+SPAWN_UPPER_VARIANT_CALLER_LAST_PC = 0x1B728C
 SPAWN_UPPER_CALLER_ENTRY = 0x1B735E
 SPAWN_UPPER_CALLER_LAST_PC = 0x1B7388
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
@@ -392,6 +394,43 @@ def spawn_upper_caller(machine, registers: dict[str, int]) -> AtomicPlan:
                       tuple(dict((*writes, *suffix)).items()), final, SPAWN_UPPER_CALLER_LAST_PC,
                       prefix.direct_calls + selected.direct_calls)
 
+
+
+def spawn_upper_variant_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover table callback 1B7262 through the upper allocator and $3A suffix."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper variant caller stack')
+    _spans_disjoint([('upper variant caller pool', 0xFF7E82, 24 * 66),
+                     ('upper variant caller frame', sp - 8, 12),
+                     ('upper variant cap', 0xFFEFE2, 2), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    cap = _read(machine, 0xFFEFE2, 2)
+    compare_sr = (_sub_sr(registers['sr'], cap, 0x3939, 2) & ~0x10) | (registers['sr'] & 0x10)
+    if compare_sr & 4:
+        return AtomicPlan(46, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': compare_sr},
+                          SPAWN_UPPER_VARIANT_CALLER_LAST_PC)
+    prefix = AtomicPlan(66, 4, _bytes(sp - 4, 0x1B7278, 4),
+                        {**registers, 'a6': 0x1B79B8, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B7274, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 22,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_VARIANT_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_upper_variant_spawn(final['a5']))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 1, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 72,
+                      prefix.instructions + selected.instructions + 5,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_UPPER_VARIANT_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
 
 def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,
                         return_site, last_pc, extra_writes=(), extra_spans=(),

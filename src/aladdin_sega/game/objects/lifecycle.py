@@ -123,3 +123,10 @@ def finish_upper_spawn(record):
     return [(record, 0x40), *((record + 0x20 + offset, byte)
               for offset, byte in enumerate(bytes.fromhex('00122c12'))),
             (record + 0x29, 0)]
+
+
+def finish_upper_variant_spawn(record):
+    """Apply 1B727A's type, script, and enabled-flag residue to an upper slot."""
+    return [(record, 0x3A), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00122bd8'))),
+            (record + 0x29, 1)]
