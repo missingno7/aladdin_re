@@ -222,7 +222,7 @@ def _signed_word(value: int) -> int:
 def spawn_region(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
     """Recover one allocation-backed ``1B524E..1B529E`` entry arm.
 
-    All three observed allocation arms share the initializer and coordinate
+    All four observed allocation arms share the initializer and coordinate
     tail.  The selected pool remains live RAM; only the final residue is
     staged after the full pool, frame, template, globals, and indexed-clear
     spans are proved disjoint.

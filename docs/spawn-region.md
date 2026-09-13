@@ -62,6 +62,43 @@ and changes the recorded upper-arm verdict from PASS to DIVERGENCE without a
 native build or installation:
 `artifacts/grinding/terra/spawn-region/final-edit-loop/result.json`.
 
+## ROM fact check
+
+`scripts/spawn_allocator_facts.py` is a development-only recognizer for the
+four exact selector loops and their four enclosing BSR/BNE sites.  From the
+validated bytes it derives the selector start, count, direction, stride, BSR
+return target, exhausted `A5`, and the free/occupied/exhausted scan formulas.
+It then rejects any mismatch against `_SPAWN_REGION_ARMS`.  It also requires
+the exact shared `1B526C` tail and failure `RTS`; normal recovery never reads
+or decodes ROM at runtime.
+
+The input that remains manual is the small fixed-mode timing table: selector
+first/occupied/terminal adjustment, shared-tail cost, and BSR/BNE/BRA/RTS
+costs.  These are explicit in the report rather than inferred by a generic
+emulator.  Recognized count/direction/branch bytes select and combine those
+inputs into the count-dependent scan formulas and each arm's fixed cost.
+The tests also call the actual `spawn_region` planner for all four arms at
+free indices 0, 1, final, and exhausted, checking its emitted cycles,
+instructions, selected slot, and exhausted endpoint against the derived facts.
+Their controls reject changed selector opcodes, a BSR redirected to historical
+interior address `1AFD12`, a selector operand that produces the former wrong
+upper endpoint, a changed boundary cost, and changed emitted scan accounting.
+This mechanizes the four mistakes that would otherwise remain handwritten
+without creating an IR, recompiler, native API, or recovery seam.
+
+The final mechanization suite is
+`artifacts/grinding/terra/spawn-region/fact-check-final-suite.xml`: **1,071
+tests, no failures, errors, or skips in 50.389 seconds**. The extended runtime
+planner check is `fact-check-runtime-final-suite.xml`: **1,088 tests, no
+failures, errors, or skips in 50.023 seconds**. The source checker
+report is `artifacts/grinding/terra/spawn-region/allocator-facts-report.json`;
+the preserved no-build semantic edit loop is
+`artifacts/grinding/terra/spawn-region/fact-check-edit-loop/result.json`.
+The final six-replay receipt audit is
+`artifacts/grinding/terra/spawn-region/fact-check-replay-audit.json`; all six
+terminal state/frame/PCM comparisons pass with both receipts matching the
+current 19-module source tree.
+
 Frozen final evidence is `artifacts/grinding/terra/spawn-region/final-suite.xml`:
 **1,063 tests with no failures, errors, or skips in 49.665 seconds**.  The six
 explicit comparison receipts are `spawn-region-final-{old225,new244,late1,

@@ -15,12 +15,18 @@ interior address, not a callable entry.  Pool, template, frame, global, and
 indexed-clear aliases reject before candidate writes.  See
 [spawn-region.md](spawn-region.md) for the measured domain and coverage.
 
-The frozen suite has **1,063 passing tests**.  The current old-225, new-244,
+The frozen suite has **1,088 passing tests**.  The current old-225, new-244,
 and four later user recordings all pass terminal state/frame/PCM comparison;
 both original and lifecycle receipts match the current 19-module source tree.
 Recorded B5256/B5266 witnesses pass strict outer state, 150 native future,
 safe/fresh restore, and result/return/timing controls.  The disposable edit
 loop rejects an indexed-clear mutation with the build DLL unchanged.
+
+The development-only allocator fact checker now derives each arm's selector
+geometry, BSR return, exhausted endpoint, and scan formula from the verified
+ROM bytes before comparing them to the boundary constants.  It rejects changed
+opcodes, a bad callee/interior target, the old upper endpoint, and changed
+costs.  It is not a recovery-time ROM decoder.
 
 ## Type-13 allocation retirement
 
