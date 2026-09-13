@@ -306,3 +306,31 @@ buffer-service dependencies, while1AFE1C exposes a command-stream engine.
 Neither is hidden by adopting new protocols or counting unobserved branches.
 Predicate control-flow evidence is explicitly weaker than exact machine candidate
 qualification; it will guide, not replace, that qualification.
+
+
+## Direct-plan qualification consolidation
+
+Two independently written collision/suffix prototypes excluded serialized machine
+state from their claimed strict assertions. Root review rejected both; the stated
+journal/gate-bookkeeping rationale had no supporting proof. The suffix had12of16
+nonidentical snapshots. This was a verification-workflow failure, not evidence that
+historical machine effects could safely be discarded. Neither entered production.
+
+The existing `execute_region` runner now also accepts one direct `plan_factory`,
+mutually exclusive with production candidate dispatch. `qualify_atomic_plan`
+uses that same runner for original and plan execution and requires full outer
+observables (including serialized state),150native future instructions and fresh
+process continuation. It returns the existing named result; no new manifest,
+registry, replay loop, native API or production recovery policy was introduced.
+A regression proves that wrong `last_pc` can leave info/register/RAM/frame/PCM
+identical while changing only serialized state, and that the qualifier rejects it.
+Result/return/timing mutants and two real contact planners are also exercised.
+666focused oracle/contact regressions pass in67.91s; production source and the
+previous full-history qualification are unchanged by this tooling edit.
+
+The corrected suffix uses the shared helper and passes18cases under the complete
+contract. Errors were final-instruction PCs, BE/C0 branch accounting and MOVE/BTST
+CCR effects. Its duplicate local original/candidate runners and selected-key
+assertions became unnecessary. The collision prototype is undergoing the same
+migration. Semantic branch interpretation, domain/alias proofs and exact plan
+recipes remain manual; the comparison contract is no longer redefined per script.

@@ -467,8 +467,15 @@ def setup_fixture(fixture: str | Path | bytes, entry: int):
 def execute_region(fixture: str | Path | bytes, *, entry: int,
                    candidate: str | None, register_overrides: dict[str, int] | None = None,
                    future_instructions: int = 150, include_raw: bool = False,
-                   stop_after_first: bool = False, expected_return: int | None = None):
-    """Qualify an entry fixture through its explicit outer return boundary."""
+                   stop_after_first: bool = False, expected_return: int | None = None,
+                   plan_factory=None):
+    """Execute a production candidate or one direct plan to an explicit boundary.
+
+    Direct RAM-only prototypes should call ``qualify_atomic_plan`` to retain
+    the complete comparison and fresh-process continuation contract.
+    """
+    if plan_factory is not None and (candidate is not None or stop_after_first):
+        raise ValueError("Direct plan qualification cannot also dispatch a candidate or stop early")
     machine = setup_fixture(fixture, entry)
     try:
         if register_overrides:
@@ -487,7 +494,19 @@ def execute_region(fixture: str | Path | bytes, *, entry: int,
         machine.gates([entry, outer])
         assert machine.run(instructions=1) == "gate"
         recovery = Candidate(candidate) if candidate else None
-        if recovery:
+        plan_stats = None
+        if plan_factory is not None:
+            plan = plan_factory(machine, machine.registers())
+            if not machine.atomic(target=machine.info["tick"] + 1_000_000,
+                                  cycles=plan.cycles, instructions=plan.instructions,
+                                  writes=list(plan.writes), registers=plan.registers,
+                                  last_pc=plan.last_pc):
+                raise AssertionError("direct oracle plan was not admitted")
+            plan_stats = {"candidate_hits": 1, "fallbacks": 0,
+                          "replaced_m68k_instructions": plan.instructions,
+                          "charged_m68k_cycles": plan.cycles,
+                          "direct_python_calls": plan.direct_calls}
+        elif recovery:
             recovery.arm(machine)
             machine.gates(list(dict.fromkeys((*recovery.gate_pcs, entry, outer))))
             handled = None
@@ -523,12 +542,36 @@ def execute_region(fixture: str | Path | bytes, *, entry: int,
             raise RuntimeError("setup future did not reach instruction limit")
         future_state = machine.snapshot()
         future = observable(machine)
-        stats = recovery.stats if recovery else None
+        stats = recovery.stats if recovery else plan_stats
         if include_raw:
             return ExecutionResult(at_outer, future, stats, outer_state, future_state)
         return ExecutionResult(at_outer, future, stats)
     finally:
         machine.close()
+
+
+def qualify_atomic_plan(fixture: str | Path | bytes, *, entry: int, exit_pc: int,
+                        plan_factory):
+    """Qualify one RAM-only plan with the full existing machine contract.
+
+    Prototypes provide concrete plan facts, not their own execution loop or
+    a selection of observable keys. Legacy seams remain production-candidate
+    witnesses; this helper admits exactly one AtomicPlan and requires its exit.
+    """
+    expected = execute_region(fixture, entry=entry, candidate=None,
+                              expected_return=exit_pc, include_raw=True)
+    actual = execute_region(fixture, entry=entry, candidate=None,
+                            expected_return=exit_pc, include_raw=True,
+                            plan_factory=plan_factory)
+    for boundary, reference, result in (("outer", expected.outer, actual.outer),
+                                         ("future", expected.future, actual.future)):
+        differences = sorted(key for key in reference.keys() | result.keys()
+                             if reference.get(key) != result.get(key))
+        if differences:
+            raise AssertionError(f"{boundary} divergence: {', '.join(differences)}")
+    if fresh_process_future(actual.outer_state) != actual.future:
+        raise AssertionError("fresh-process future divergence")
+    return actual
 
 
 def execute_setup(fixture: str | Path | bytes, *, entry: int,
