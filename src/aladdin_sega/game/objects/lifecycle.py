@@ -107,3 +107,12 @@ def spawn_region(destination, template, d2, d3, x, y, clear_address):
             *((destination + 4 + offset, (y >> (8 * (1 - offset))) & 0xff)
               for offset in range(2)),
             (clear_address, 0)]
+
+def finish_reverse_spawn(read, record):
+    """Apply 1B680C's successful reverse-pool position correction."""
+    x = (read(record + 2, 2) + 8) & 0xFFFF
+    y = (read(record + 4, 2) - 1) & 0xFFFF
+    return [*((record + 2 + offset, (x >> (8 * (1 - offset))) & 0xff)
+              for offset in range(2)),
+            *((record + 4 + offset, (y >> (8 * (1 - offset))) & 0xff)
+              for offset in range(2))]

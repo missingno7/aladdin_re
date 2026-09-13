@@ -6,6 +6,24 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Reverse-pool spawn caller
+
+The lifecycle candidate now owns recorded enclosing caller `1B6802..1B681A`:
+it sets template `1B7D8C`, directly composes the existing reverse-pool
+allocation/initializer/placement operation, and adjusts a successful new
+object by `A5+2 += 8`, `A5+4 -= 1` before returning.  Exhaustion retains the
+allocator result and skips those writes.  Six replays contain 16 true caller
+entries.  Strict original outer/F150, safe/fresh restore, deadline and alias
+fallback, mutant, edit-loop, and six-replay evidence are recorded in
+[spawn-caller.md](spawn-caller.md).  The frozen suite has **1,112 passing
+tests**; old-225, new-244, and all four later recordings pass terminal
+state/frame/PCM comparison with both receipts matching the current 19-module
+source tree.
+
+The separate `1B7354..1B7388` caller remains out of scope: all 53 recorded
+entries branch at `FFF171 == 0` to unrecovered `1B6EB0` before its `1B5266`
+allocator call.  Its callee return witness does not establish that guarded
+caller path.
 ## Explicit sound-seam invocation facts
 
 The synchronous runner now receives one immutable `SoundSeam` built by the

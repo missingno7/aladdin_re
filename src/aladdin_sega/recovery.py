@@ -17,7 +17,8 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         begin_contact_sibling_dispatch, begin_contact_sibling_wrapper_sound_seam,
                         finish_contact_sibling_wrapper_sound, begin_contact_sibling_dispatch_sound_seam,
                         begin_contact_sibling_sound_seam, finish_contact_sibling_sound,
-                        SPAWN_REGION_ENTRIES, spawn_region)
+                        SPAWN_REGION_ENTRIES, SPAWN_REVERSE_CALLER_ENTRY,
+                        spawn_region, spawn_reverse_caller)
 
 
 @dataclass
@@ -37,7 +38,7 @@ class Candidate:
         "collection_dispatch_hits": 0,
         "contact_hits": 0,
         "contact_sibling_hits": 0,
-        "spawn_region_hits": 0,
+        "spawn_region_hits": 0, "spawn_caller_hits": 0,
         "replace_hits": 0, "counted_replace_hits": 0,
         "carrier_entries": 0, "carrier_completed": 0, "legacy_entries": 0, "legacy_returns": 0,
         "local_fallbacks": 0, "foreign_returns": 0, "legacy_deadline_fallbacks": 0,
@@ -83,7 +84,8 @@ class Candidate:
             return tuple(dict.fromkeys((COLLECTION_DISPATCH_ENTRY, CONTACT_ENTRY,
                                         CONTACT_SIBLING_ENTRY, CONTACT_SIBLING_WRAPPER,
                                         CONTACT_SIBLING_DIRECT, *COLLECTION_ROUTES,
-                                        0x1AF516, *SPAWN_REGION_ENTRIES, *base))) if self.is_lifecycle else base
+                                        0x1AF516, SPAWN_REVERSE_CALLER_ENTRY,
+                                        *SPAWN_REGION_ENTRIES, *base))) if self.is_lifecycle else base
         if self.is_composed:
             return (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
         if self.name == "replace":
@@ -357,6 +359,16 @@ class Candidate:
             return True
         if self.is_lifecycle and entry in COLLECTION_ROUTES:
             return self._transition(machine, target, entry)
+        if self.is_lifecycle and entry == SPAWN_REVERSE_CALLER_ENTRY:
+            self.stats['gates'] += 1
+            try:
+                plan = self._mutate(spawn_reverse_caller(machine, machine.registers()))
+                if not self._apply(machine, plan, target):
+                    return self._fallback(machine, entry, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, entry, f'unsupported domain: {error}')
+            self.stats['spawn_caller_hits'] += 1
+            return True
         if self.is_lifecycle and entry in SPAWN_REGION_ENTRIES:
             self.stats['gates'] += 1
             try:

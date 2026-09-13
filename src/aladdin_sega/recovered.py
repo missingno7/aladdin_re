@@ -13,6 +13,7 @@ from .game.objects.contact import (contact_decay, contact_path, contact_reaction
 from .game.objects.lifecycle import (
     activate_collection,
     clear_pair,
+    finish_reverse_spawn,
     free_object,
     free_object_reverse,
     initialize,
@@ -36,6 +37,7 @@ __all__ = [
     "contact_repeated_decay",
     "contact_sibling_route",
     "contact_script_selector",
+    "finish_reverse_spawn",
     "free_object",
     "free_object_reverse",
     "increment_counter",

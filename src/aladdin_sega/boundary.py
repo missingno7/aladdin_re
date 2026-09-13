@@ -43,6 +43,8 @@ SPAWN_REGION_UPPER_ENTRY = 0x1B5266
 SPAWN_REGION_ENTRIES = (SPAWN_REGION_ENTRY, SPAWN_REGION_REVERSE_ENTRY,
                         SPAWN_REGION_LOWER_ENTRY, SPAWN_REGION_UPPER_ENTRY)
 SPAWN_REGION_LAST_PC = 0x1B529E
+SPAWN_REVERSE_CALLER_ENTRY = 0x1B6802
+SPAWN_REVERSE_CALLER_LAST_PC = 0x1B681A
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -293,6 +295,59 @@ def spawn_region(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
                        'pc': return_pc & 0xFFFFFF, 'sr': _logic_sr(sr, 0, 1)},
                       SPAWN_REGION_LAST_PC, direct_calls=2)
 
+
+def _sub_sr(sr, left, right, width):
+    """68000 SUBI status residue, including its X/C borrow result."""
+    mask, sign = (1 << (8 * width)) - 1, 1 << (8 * width - 1)
+    left &= mask; right &= mask
+    result = (left - right) & mask
+    out = _logic_sr(sr & ~0x1F, result, width)
+    if left < right:
+        out |= 0x11
+    if ((left ^ right) & (left ^ result) & sign):
+        out |= 2
+    return out
+
+
+def spawn_reverse_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover recorded 1B6802's B5256 creation and successful-slot correction."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned reverse spawn caller stack')
+    _spans_disjoint([('reverse spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('reverse spawn caller frame', sp - 8, 12),
+                     *SPAWN_REGION_GLOBALS])
+    outer_return = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, 0x1B680C, 4),
+                        {**registers, 'a6': 0x1B7D8C, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_REVERSE_ENTRY},
+                        0x1B6808, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_REVERSE_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (selected.registers['sr'] & 0x04):
+        # BNE 1B681A then RTS: the allocator left Z clear and no slot exists.
+        final.update(a7=sp + 4, pc=outer_return & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2,
+                          writes, final, SPAWN_REVERSE_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    planned = dispatch_plan_view(machine, AtomicPlan(prefix.cycles + selected.cycles,
+                                                      prefix.instructions + selected.instructions,
+                                                      writes, final, selected.last_pc,
+                                                      prefix.direct_calls + selected.direct_calls))
+    record = selected.registers['a5']
+    read = lambda address, size: _read(planned, address, size)
+    correction = tuple(game.finish_reverse_spawn(read, record))
+    y = read(record + 4, 2)
+    final.update(a7=sp + 4, pc=outer_return & 0xFFFFFF,
+                 sr=_sub_sr(selected.registers['sr'], y, 1, 2))
+    return AtomicPlan(prefix.cycles + selected.cycles + 64,
+                      prefix.instructions + selected.instructions + 4,
+                      tuple(dict((*writes, *correction)).items()), final,
+                      SPAWN_REVERSE_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
 
 def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,
                         return_site, last_pc, extra_writes=(), extra_spans=(),
