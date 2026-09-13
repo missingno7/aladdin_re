@@ -163,6 +163,37 @@ def finish_lower_scripted_spawn(record):
             for offset, byte in enumerate(bytes.fromhex('00125a4c'))]
 
 
+def finish_type_8a_spawn(record):
+    """Apply callback 1B723E's object type and script pointer."""
+    return [(record, 0x8A), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00124494')))]
+
+
+def finish_type_41_spawn(record):
+    """Apply callback 1B728E's object type, script pointer, and mode."""
+    return [(record, 0x41), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00125d7e'))), (record + 0x29, 2)]
+
+
+def finish_type_84_spawn(record):
+    """Apply callback 1B72AE's object type, auxiliary byte, script, and mode."""
+    return [(record, 0x84), (record + 6, 0x21), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00123e7a'))), (record + 0x29, 2)]
+
+
+def finish_type_4c_spawn(record):
+    """Apply callback 1B70D4's object type, script, cleared field, and mode."""
+    return [(record, 0x4C), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00123e36'))),
+            *((record + 0x0A + offset, 0) for offset in range(4)), (record + 0x29, 1)]
+
+
+def finish_guarded_lower_spawn(record):
+    """Apply callback 1B71A0's successful object script pointer."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('00124318'))]
+
+
 def select_spawn_dispatch_slot(read, cursor, flag_base):
     """Read one dispatcher slot and its enable byte from the live tables.
 

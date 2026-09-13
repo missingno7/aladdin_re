@@ -14,6 +14,32 @@ assert _SPEC.loader is not None
 _SPEC.loader.exec_module(oracle)
 
 
+CLOSURE_OUTPUTS = {
+    0x1B723E: ((0, 0x8A), (0x20, 0x00124494)),
+    0x1B728E: ((0, 0x41), (0x20, 0x00125D7E), (0x29, 2)),
+    0x1B72AE: ((0, 0x84), (6, 0x21), (0x20, 0x00123E7A), (0x29, 2)),
+    0x1B70D4: ((0, 0x4C), (0x20, 0x00123E36), (0x0A, 0), (0x29, 1)),
+}
+
+
+def _outer_record_bytes(state: bytes, fields):
+    from aladdin_sega.machine import Machine
+    from aladdin_sega.profile import DEFAULT_ROM, read_rom
+
+    machine = Machine(read_rom(DEFAULT_ROM))
+    try:
+        machine.restore(state)
+        base = machine.registers()["a5"] & 0xFFFF
+        ram = machine.peek_ram(0, 65536)
+        values = {}
+        for offset, expected in fields:
+            size = 1 if offset in (0, 6, 0x29) else 4
+            values[offset] = int.from_bytes(ram[base + offset:base + offset + size], "big")
+        return values
+    finally:
+        machine.close()
+
+
 @pytest.mark.parametrize("entry", tuple(oracle.ENTRY_BASES))
 @pytest.mark.parametrize("free", (0, 1, None), ids=("first-free", "second-free", "exhausted"))
 @pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
@@ -383,3 +409,92 @@ def test_new_wrapper_direct_plan_survives_fresh_process(entry):
         entry, free=0, candidate="lifecycle", incoming_x=False, include_raw=True)
     assert stats["candidate_hits"] == 1
     assert oracle.fresh_process_future(outer_state) == future
+
+
+@pytest.mark.parametrize("entry", tuple(oracle.CLOSURE_WRAPPERS))
+@pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
+@pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
+def test_remaining_recorded_closures_direct_outer_future_and_fresh(entry, free, incoming_x):
+    expected = oracle.execute_wrapper(entry, free=free, candidate=None,
+                                      incoming_x=incoming_x)
+    actual = oracle.execute_wrapper(entry, free=free, candidate="lifecycle",
+                                    incoming_x=incoming_x, include_raw=True)
+    assert actual[0] == expected[0]
+    assert actual[2] == expected[1]
+    assert actual[4]["candidate_hits"] == 1
+    assert actual[4]["fallbacks"] == 0
+    assert oracle.fresh_process_future(actual[1]) == actual[2]
+
+
+@pytest.mark.parametrize("entry,fields", tuple(CLOSURE_OUTPUTS.items()))
+def test_remaining_closure_semantic_suffix_writes_are_present(entry, fields):
+    _, outer_state, _, _, stats = oracle.execute_wrapper(
+        entry, free=0, candidate="lifecycle", incoming_x=False, include_raw=True)
+    assert stats["candidate_hits"] == 1
+    observed = _outer_record_bytes(outer_state, fields)
+    assert observed == {offset: expected for offset, expected in fields}
+
+
+@pytest.mark.parametrize("guard_value", (0, 1), ids=("guard-clear", "guard-set"))
+@pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
+def test_remaining_guarded_closure_direct_skip_taken_and_exhausted(guard_value, free):
+    setup = ((0xFFF12A, guard_value),)
+    expected = oracle.execute_wrapper(0x1B71A0, free=free, candidate=None,
+                                      incoming_x=False, setup_writes=setup)
+    actual = oracle.execute_wrapper(0x1B71A0, free=free, candidate="lifecycle",
+                                    incoming_x=False, setup_writes=setup)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["candidate_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("target", (*oracle.CLOSURE_WRAPPERS, oracle.SAFE_RETURN))
+@pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
+@pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
+def test_remaining_callbacks_dispatcher_outer_future_and_fresh(target, free, incoming_x):
+    expected = oracle.execute_dispatch(target, free=free, candidate=None,
+                                       incoming_x=incoming_x)
+    actual = oracle.execute_dispatch(target, free=free, candidate="lifecycle",
+                                     incoming_x=incoming_x)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["spawn_caller_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+    _, outer_state, future, _, stats = oracle.execute_dispatch(
+        target, free=free, candidate="lifecycle", incoming_x=incoming_x,
+        include_raw=True)
+    assert stats["spawn_caller_hits"] == 1
+    assert oracle.fresh_process_future(outer_state) == future
+
+
+@pytest.mark.parametrize("guard_value", (0, 1), ids=("guard-clear", "guard-set"))
+@pytest.mark.parametrize("free", (0, None), ids=("slot-available", "pool-exhausted"))
+def test_remaining_guarded_closure_dispatcher_skip_taken_and_exhausted(guard_value, free):
+    expected = oracle.execute_dispatch(0x1B71A0, free=free, candidate=None,
+                                       incoming_x=False, guard_value=guard_value)
+    actual = oracle.execute_dispatch(0x1B71A0, free=free, candidate="lifecycle",
+                                     incoming_x=False, guard_value=guard_value)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["spawn_caller_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+def test_safe_return_callback_is_handled_only_as_dispatcher_child():
+    """1B65BE is a real selected child, never a standalone global hook."""
+    assert oracle.SAFE_RETURN not in oracle.Candidate("lifecycle").gate_pcs
+    expected = oracle.execute_dispatch(oracle.SAFE_RETURN, free=0, candidate=None,
+                                       incoming_x=False)
+    actual = oracle.execute_dispatch(oracle.SAFE_RETURN, free=0,
+                                     candidate="lifecycle", incoming_x=False)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["spawn_caller_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+    assert actual[2]["direct_python_calls"] == 1
+
+
+@pytest.mark.parametrize("free", (0, 19))
+def test_guarded_spawn_success_installs_its_script(free):
+    _, state, _, _, stats = oracle.execute_wrapper(
+        0x1B71A0, free=free, candidate="lifecycle", incoming_x=False,
+        setup_writes=((0xFFF12A, 1),), include_raw=True)
+    assert stats["candidate_hits"] == 1
+    assert _outer_record_bytes(state, ((0x20, 0x124318),)) == {0x20: 0x124318}

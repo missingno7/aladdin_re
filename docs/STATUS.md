@@ -6,7 +6,30 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
-## Recorded spawn callback families
+## Remaining observed spawn callbacks
+
+The dispatcher now composes **37 targets**. Added successful type/script/mode
+suffixes for `1B723E`, `1B728E`, `1B72AE`, `1B70D4`, the `FFF12A`-guarded lower
+spawn `1B71A0`, and the selected RTS callback `1B65BE`. The latter is never a
+global gate: its production ownership exists only inside the dispatcher.
+The type `8A`, `41`, `84`, `4C` and guarded-script effects live in lifecycle
+helpers; original ROM shape, registers, timing and admission remain in boundary.
+
+**1,182 tests pass** in 76.95 seconds. Production guard skip/taken and allocation
+first/late/exhausted branches are compared strictly, including 150 subsequent
+native instructions and fresh processes. Explicit output checks protect the
+guarded success script write that review caught missing from the first draft.
+Full **26,378-frame** cold history passes with zero restores and matching source
+receipts: `artifacts/spawn-closure/full/comparison.json`. Against `c87ca97`,
+fallbacks drop 1069 to 1010, allocator activations 21 to 17, total candidate
+activations 5382 to 5378, direct Python calls rise 35695 to 35762.
+
+These targets close the unresolved callback identities in the recorded column
+and row censuses. This does not prove all ROM table targets or unrecorded paths
+are recovered. The row walker remains native; its eight-state prototype passes
+strict outer/future/fresh-process checks using the column carrier's mechanics.
+
+## Recorded spawn callback families (`c87ca97`)
 
 The spawn dispatcher now composes **31 callback targets**, adding six plain
 template/allocator callers and three allocation-success position adjustments.

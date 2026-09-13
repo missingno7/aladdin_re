@@ -90,6 +90,12 @@ SPAWN_PLAIN_LOWER_THREE_ENTRY = 0x1B65D4
 SPAWN_OFFSET_PLUS_ENTRY = 0x1B66F2
 SPAWN_OFFSET_MIXED_ENTRY = 0x1B670C
 SPAWN_OFFSET_SECONDARY_ENTRY = 0x1B6870
+SPAWN_CLOSURE_LOWER_ENTRY = 0x1B723E
+SPAWN_CLOSURE_UPPER_ENTRY = 0x1B728E
+SPAWN_CLOSURE_REVERSE_ENTRY = 0x1B72AE
+SPAWN_CLOSURE_UPPER_CLEAR_ENTRY = 0x1B70D4
+SPAWN_CLOSURE_GUARD_ENTRY = 0x1B71A0
+SPAWN_CLOSURE_SAFE_RETURN_ENTRY = 0x1B65BE
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
 SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY = 0x1B738A
@@ -545,6 +551,23 @@ SPAWN_OFFSET_CALLER_FACTS = {
 }
 SPAWN_OFFSET_CALLER_ENTRIES = tuple(SPAWN_OFFSET_CALLER_FACTS)
 
+# The remaining dispatcher callbacks have distinct ROM suffixes.  The raw
+# instruction images are part of the admission facts, rather than a decoder.
+SPAWN_CLOSURE_CALLER_FACTS = {
+    SPAWN_CLOSURE_LOWER_ENTRY: (SPAWN_REGION_LOWER_ENTRY, 0x1B79E0,
+        bytes.fromhex('4df9001b79e06100e018660c1abc008a2b7c0012449400204e75'),
+        game.finish_type_8a_spawn, 60, 4, 0x1B7256, (0x00124494, 4)),
+    SPAWN_CLOSURE_UPPER_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B79B8,
+        bytes.fromhex('4df9001b79b86100dfd066121abc00412b7c00125d7e00201b7c000200294e75'),
+        game.finish_type_41_spawn, 76, 5, 0x1B72AC, (2, 1)),
+    SPAWN_CLOSURE_REVERSE_ENTRY: (SPAWN_REGION_REVERSE_ENTRY, 0x1B79B8,
+        bytes.fromhex('4df9001b79b86100dfa066181abc00841b7c002100062b7c00123e7a00201b7c000200294e75'),
+        game.finish_type_84_spawn, 92, 6, 0x1B72D2, (2, 1)),
+    SPAWN_CLOSURE_UPPER_CLEAR_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B79B8,
+        bytes.fromhex('4df9001b79b86100e18a66161abc004c2b7c00123e36002042ad000a1b7c000100294e75'),
+        game.finish_type_4c_spawn, 100, 6, 0x1B70F6, (1, 1)),
+}
+
 
 def _plain_wrapper_shape(machine, entry, allocator, template):
     raw = machine.peek_rom(entry, 12)
@@ -632,6 +655,77 @@ def spawn_offset_caller(machine, registers: dict[str, int], entry: int) -> Atomi
                       prefix.instructions + selected.instructions + 4,
                       tuple(dict((*writes, *offsets)).items()), final, entry + 24,
                       prefix.direct_calls + selected.direct_calls + 1)
+
+
+def spawn_closure_caller(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
+    """Recover one verified remaining allocator callback through its parent dispatcher."""
+    try:
+        allocator, template, shape, finish, suffix_cycles, suffix_instructions, last_pc, ccr = SPAWN_CLOSURE_CALLER_FACTS[entry]
+    except KeyError as error:
+        raise UnsupportedCandidate('unknown closure spawn caller') from error
+    sp = registers['a7']
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('closure spawn caller ROM shape')
+    _spans_disjoint([('closure spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('closure spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': template, 'a7': sp - 4, 'pc': allocator},
+                        entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers, allocator)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers); final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    if not (final['sr'] & 4):
+        return AtomicPlan(prefix.cycles + selected.cycles + 26, prefix.instructions + selected.instructions + 2,
+                          writes, final, last_pc, prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(finish(final['a5']))
+    final['sr'] = _logic_sr(final['sr'], ccr[0], ccr[1])
+    return AtomicPlan(prefix.cycles + selected.cycles + suffix_cycles,
+                      prefix.instructions + selected.instructions + suffix_instructions,
+                      tuple(dict((*writes, *suffix)).items()), final, last_pc,
+                      prefix.direct_calls + selected.direct_calls + 1)
+
+
+def spawn_closure_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover 1B71A0's FFF12A guard and its lower-pool successful suffix."""
+    entry, sp = SPAWN_CLOSURE_GUARD_ENTRY, registers['a7']
+    shape = bytes.fromhex('4a3900fff12a671a4df9001b78f06100e0ae660e2b7c001243180020046d000800044e75')
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('closure guarded spawn ROM shape')
+    outer, guard = _read(machine, sp, 4), _read(machine, 0xFFF12A, 1)
+    tested_sr = _logic_sr(registers['sr'], guard, 1)
+    if guard == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4, 'pc': outer & 0xFFFFFF, 'sr': tested_sr}, 0x1B71C2)
+    _spans_disjoint([('closure guarded spawn pool', 0xFF7E82, 24 * 66), ('closure guard frame', sp - 8, 12),
+                     ('closure guard flag', 0xFFF12A, 1), *SPAWN_REGION_GLOBALS])
+    prefix = AtomicPlan(54, 4, _bytes(sp - 4, 0x1B71B2, 4),
+                        {**registers, 'a6': 0x1B78F0, 'a7': sp - 4, 'pc': SPAWN_REGION_LOWER_ENTRY, 'sr': tested_sr},
+                        0x1B71AE, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers, SPAWN_REGION_LOWER_ENTRY)
+    writes, final = tuple(dict((*prefix.writes, *selected.writes)).items()), dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    if not (final['sr'] & 4):
+        return AtomicPlan(prefix.cycles + selected.cycles + 26, prefix.instructions + selected.instructions + 2,
+                          writes, final, 0x1B71C2, prefix.direct_calls + selected.direct_calls)
+    view = dispatch_plan_view(machine, AtomicPlan(prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+                              writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    y = _read(view, final['a5'] + 4, 2)
+    suffix = (*game.finish_guarded_lower_spawn(final['a5']),
+              *game.offset_spawn_position(lambda address, size: _read(view, address, size), final['a5'], 0, -8))
+    final['sr'] = _sub_sr(selected.registers['sr'], y, 8, 2)
+    return AtomicPlan(prefix.cycles + selected.cycles + 68, prefix.instructions + selected.instructions + 4,
+                      tuple(dict((*writes, *suffix)).items()), final, 0x1B71C2,
+                      prefix.direct_calls + selected.direct_calls + 2)
+
+
+def spawn_closure_safe_return(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover callback 1B65BE only when the dispatcher has selected it."""
+    sp = registers['a7']
+    if sp & 1 or machine.peek_rom(SPAWN_CLOSURE_SAFE_RETURN_ENTRY, 2) != bytes.fromhex('4e75'):
+        raise UnsupportedCandidate('closure safe return ROM shape')
+    outer = _read(machine, sp, 4)
+    return AtomicPlan(16, 1, (), {**registers, 'a7': sp + 4, 'pc': outer & 0xFFFFFF},
+                      SPAWN_CLOSURE_SAFE_RETURN_ENTRY)
 
 
 def spawn_lower_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPlan:
@@ -968,9 +1062,12 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
         SPAWN_PRIMARY_MIXED_GUARD_ENTRY: spawn_primary_mixed_guard_caller,
         SPAWN_UPPER_DISPATCH_GUARD_ENTRY: spawn_upper_dispatch_guard_caller,
         SPAWN_UPPER_DISPATCH_ENTRY: spawn_upper_dispatch_caller,
+        SPAWN_CLOSURE_GUARD_ENTRY: spawn_closure_guard_caller,
+        SPAWN_CLOSURE_SAFE_RETURN_ENTRY: spawn_closure_safe_return,
     }
     callback_function = callbacks.get(target)
-    if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS and callback_function is None:
+    if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
+            and target not in SPAWN_CLOSURE_CALLER_FACTS and callback_function is None:
         raise UnsupportedCandidate(f'spawn dispatcher target {target:06X} is not recovered')
     extra = [('lower reset flag', 0xFFF104, 1)] if target == SPAWN_LOWER_RESET_ENTRY else []
     _spans_disjoint([('spawn dispatcher MOVEM frame', sp - 4, 64),
@@ -986,6 +1083,8 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
         callback = spawn_plain_caller(planner, prefix.registers, target)
     elif target in SPAWN_OFFSET_CALLER_FACTS:
         callback = spawn_offset_caller(planner, prefix.registers, target)
+    elif target in SPAWN_CLOSURE_CALLER_FACTS:
+        callback = spawn_closure_caller(planner, prefix.registers, target)
     else:
         callback = callback_function(planner, prefix.registers)
     restored = {name: _read(machine, sp + 4 * index, 4)

@@ -73,6 +73,33 @@ recovered row walker. Evidence: `artifacts/spawn-row-frontier/summary.json`.
 
 ## Original frontier evidence
 
+The subsequent six-callback batch closes the remaining observed column/row
+callback identities: four type/script/mode suffixes, a guarded script/Y-offset
+spawn and the selected RTS no-op. Semantic suffix helpers remain in game source;
+carrier facts reuse existing allocation/admission and success/failure patterns.
+No new gate, native API, snapshot state, scheduler rule or mutable authority.
+Boundary +100/-1, semantic +31, exports +10; these include explicit ROM checks
+and one shared suffix recipe. New manual execution protocols: zero.
+
+Review caught a missing guarded-success script write despite a passing separate
+prototype. Qualification was corrected to exercise the production guard-taken
+path, with an explicit script assertion. Oracle tuple-index edits also required
+a frozen rerun. This is real review/rework cost, not evidence that the batch was
+fully routine or that lower model effort has been proven cheaper overall.
+1,182 tests pass in 76.95s; full 26,378-frame history passes with zero restores.
+Fallbacks 1069 to 1010; candidate activations 5382 to 5378; allocator activations
+21 to 17; direct calls 35695 to 35762; replaced instructions 340935 to 341397.
+Evidence: `artifacts/spawn-closure/full/comparison.json`.
+
+The row prototype reuses the column call/iteration/walker mechanics with its
+specific postincrement cursor, X-offset write and guest PCs; eight recorded
+states pass strict outer, 150-instruction future and fresh restore. This is a
+second concrete case for small shared walker facts, not production row recovery.
+Captured caller returns establish BSR sites `1AB554 -> 1AE406`,
+`1AB666 -> 1AE488`, `1AB770 -> 1AE47E`; setup and these outer callers stay native.
+Evidence: `artifacts/spawn-row-frontier/prototype.json` and
+`artifacts/spawn-row-frontier/confirmed-call-sites.txt`.
+
 Cold original census of history `4b1537634fdda81e023983a12acdafca3607cc7fd7db7a7f98372340554e5b60`
 found 1,916 complete passes of the 16-slot loop `1AE44A..1AE47C`:
 1,577 entirely empty, 272 nonempty using only the 19 recovered callback targets,

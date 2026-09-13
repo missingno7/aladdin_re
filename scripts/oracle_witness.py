@@ -41,7 +41,8 @@ ENTRY_BASES = {
 }
 CALLER_POOLS = {0x1B6ED0: 0x1B5266, 0x1B6F0C: 0x1B525E, 0x1B6F1E: 0x1B525E}
 GUARD_TARGETS = (0x1B7354, 0x1B742A, 0x1B744A)
-GUARD_ADDRESSES = {0x1B7354: 0xFFF171, 0x1B742A: 0xFFF172, 0x1B744A: 0xFFF16F}
+GUARD_ADDRESSES = {0x1B7354: 0xFFF171, 0x1B742A: 0xFFF172, 0x1B744A: 0xFFF16F,
+                   0x1B71A0: 0xFFF12A}
 GUARD_SLOT_TYPES = {0x1B742A: 0x39}
 CALLER_POOLS.update({0x1B7354: 0x1B5266, 0x1B742A: 0x1B524E, 0x1B744A: 0x1B5266})
 DIRECT_CALLER_POOLS = dict(CALLER_POOLS)
@@ -60,6 +61,19 @@ OFFSET_WRAPPERS = {
 }
 CALLER_POOLS.update({entry: callee for entry, (callee, _) in PLAIN_WRAPPERS.items()})
 CALLER_POOLS.update({entry: callee for entry, (callee, _, _, _) in OFFSET_WRAPPERS.items()})
+# These five recorded callback rows use the same allocator planners but have
+# distinct, semantic post-allocation suffixes.  Keep them out of
+# DIRECT_CALLER_POOLS: production reaches them as dispatcher children, while
+# the direct oracle still qualifies their concrete machine boundary.
+CLOSURE_WRAPPERS = {
+    0x1B723E: (0x1B525E,),  # type 0x8A, template 0x124494
+    0x1B728E: (0x1B5266,),  # type 0x41, template 0x125D7E
+    0x1B72AE: (0x1B5256,),  # reverse type 0x84, template 0x123E7A
+    0x1B70D4: (0x1B5266,),  # upper type 0x4C, template 0x123E36
+    0x1B71A0: (0x1B525E,),  # guarded lower, template 0x124318
+}
+CALLER_POOLS.update({entry: callee for entry, (callee,) in CLOSURE_WRAPPERS.items()})
+CALLER_POOLS[SAFE_RETURN] = 0x1B5266
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
@@ -134,7 +148,7 @@ def cold_fixture(entry: int, *, free: int | None = 0, incoming_x: bool = False,
 def dispatcher_fixture(target: int, *, free: int | None = 0, incoming_x: bool = False,
                        guard_value: int | None = None, stack: int = STACK,
                        initial_d0: int = 0):
-    if target not in DISPATCH_CALLBACKS:
+    if target not in DISPATCH_CALLBACKS and target != SAFE_RETURN:
         raise ValueError(f"unsupported dispatcher callback {target:06X}")
     machine = cold_fixture(CALLER_POOLS.get(target, 0x1B5266), free=free, incoming_x=incoming_x,
                            pc_entry=SPAWN_DISPATCH_ITERATION_ENTRY,
@@ -337,6 +351,8 @@ def execute_wrapper(entry: int, *, free: int | None, candidate: str | None,
         callee, template = PLAIN_WRAPPERS[entry]
     elif entry in OFFSET_WRAPPERS:
         callee, template, _, _ = OFFSET_WRAPPERS[entry]
+    elif entry in CLOSURE_WRAPPERS:
+        callee = CLOSURE_WRAPPERS[entry][0]
     else:
         raise ValueError(f"unsupported spawn wrapper {entry:06X}")
     machine = cold_fixture(callee, free=free, incoming_x=incoming_x, pc_entry=entry)
@@ -353,9 +369,16 @@ def execute_wrapper(entry: int, *, free: int | None, candidate: str | None,
         assert machine.run(instructions=1) == "gate"
         stats = None
         if candidate:
-            from aladdin_sega.boundary import spawn_offset_caller, spawn_plain_caller
-            planner = spawn_offset_caller if entry in OFFSET_WRAPPERS else spawn_plain_caller
-            plan = planner(machine, machine.registers(), entry)
+            from aladdin_sega.boundary import (spawn_offset_caller, spawn_plain_caller,
+                                               spawn_closure_caller, spawn_closure_guard_caller)
+            if entry in OFFSET_WRAPPERS:
+                plan = spawn_offset_caller(machine, machine.registers(), entry)
+            elif entry in PLAIN_WRAPPERS:
+                plan = spawn_plain_caller(machine, machine.registers(), entry)
+            elif entry == 0x1B71A0:
+                plan = spawn_closure_guard_caller(machine, machine.registers())
+            else:
+                plan = spawn_closure_caller(machine, machine.registers(), entry)
             assert machine.atomic(target=machine.info["tick"] + 1_000_000,
                                   cycles=plan.cycles, instructions=plan.instructions,
                                   writes=list(plan.writes), registers=plan.registers,
