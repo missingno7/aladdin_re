@@ -938,12 +938,15 @@ def spawn_dispatch_call(machine, registers: dict[str, int]) -> AtomicPlan:
         SPAWN_UPPER_TYPED_SECONDARY_ENTRY: spawn_upper_typed_secondary_caller,
         SPAWN_LOWER_RESET_ENTRY: spawn_lower_reset_caller,
         SPAWN_LOWER_SCRIPTED_ENTRY: spawn_lower_scripted_caller,
+        SPAWN_UPPER_GUARD_ENTRY: spawn_upper_guard_caller,
         SPAWN_UPPER_CALLER_ENTRY: spawn_upper_caller,
+        SPAWN_PRIMARY_GUARD_ENTRY: spawn_primary_guard_caller,
         SPAWN_PRIMARY_DISPATCH_ENTRY: spawn_primary_dispatch_caller,
         SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY: spawn_primary_double_guard_caller,
         SPAWN_PRIMARY_INVERSE_GUARD_ENTRY: spawn_primary_inverse_guard_caller,
         SPAWN_PRIMARY_MIXED_GUARD_ENTRY: spawn_primary_mixed_guard_caller,
         SPAWN_LOWER_DISPATCH_ENTRY: spawn_lower_dispatch_caller,
+        SPAWN_UPPER_DISPATCH_GUARD_ENTRY: spawn_upper_dispatch_guard_caller,
         SPAWN_UPPER_DISPATCH_ENTRY: spawn_upper_dispatch_caller,
     }
     callback_function = callbacks.get(target)
@@ -1046,24 +1049,6 @@ def spawn_dispatch_iteration(machine, registers: dict[str, int]) -> AtomicPlan:
     sp = registers['a7']
     if sp & 1:
         raise UnsupportedCandidate('unaligned spawn dispatcher iteration stack')
-    target = registers['a4'] & 0xFFFFFF
-    if target not in (SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
-                      SPAWN_UPPER_SCRIPTED_CALLER_ENTRY,
-                      SPAWN_REVERSE_PLAIN_CALLER_ENTRY,
-                      SPAWN_UPPER_PLAIN_CALLER_ENTRY,
-                      SPAWN_UPPER_STANDARD_CALLER_ENTRY,
-                      SPAWN_UPPER_SECONDARY_CALLER_ENTRY,
-                      SPAWN_UPPER_TERTIARY_CALLER_ENTRY,
-                      SPAWN_UPPER_TYPED_CALLER_ENTRY,
-                      SPAWN_UPPER_TYPED_SECONDARY_ENTRY, SPAWN_LOWER_RESET_ENTRY,
-                      SPAWN_LOWER_SCRIPTED_ENTRY,
-                      SPAWN_UPPER_CALLER_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY,
-                      SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY,
-                      SPAWN_PRIMARY_INVERSE_GUARD_ENTRY,
-                      SPAWN_PRIMARY_MIXED_GUARD_ENTRY,
-                      SPAWN_LOWER_DISPATCH_ENTRY,
-                      SPAWN_UPPER_DISPATCH_ENTRY):
-        raise UnsupportedCandidate(f'spawn dispatcher target {target:06X} is not recovered')
     names = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7',
              'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6')
     saved = tuple(byte for index, name in enumerate(names)

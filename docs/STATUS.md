@@ -6,7 +6,28 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
-## Recorded spawn-neighbor expansion
+## Current guarded callback composition
+
+The dispatcher callback map now includes **22 targets**: the prior 19 plus
+`1B7354`, `1B742A`, and `1B744A`. Their existing recovered guards read `FFF171`,
+`FFF172`, and `FFF16F`; zero skips allocation, otherwise execution falls through
+to already recovered callers. No new semantic helper, timing recipe, native API,
+snapshot rule, or gate was required. Three map entries compose those existing
+callers; the redundant iteration support whitelist was deleted. Unsupported
+targets still fail planning before admission or machine writes.
+
+The full source-pinned suite passes **821 tests** in 39.36 seconds. Constructed
+guard matrices cover skipped/taken guards, allocation/exhaustion, independent
+and parent execution, strict outer and 150-instruction future comparison, plus
+fresh-process restoration. The original census records 26 guard callback visits
+across 21 formerly unresolved complete walker passes. See the compact
+[recovery cost log](recovery-cost-log.md) for the enclosing ownership frontier.
+Full 26,378-frame cold history comparison passes with zero restores: fallbacks
+707 to 681, direct Python calls 5,339 to 5,365, and unchanged total candidate
+activations (3,846). This removes the 26 selected guard fallbacks without adding
+an execution gate. Receipts: `artifacts/spawn-guards/full/comparison.json`.
+
+## Recorded spawn-neighbor expansion (`1e43a73` baseline)
 
 The bounded dispatcher iteration at `1AE468` now composes **19 callback targets**
 (previously 16). Added composition for the existing type-33 callback `1B6ED0`
@@ -45,7 +66,7 @@ execution concept** was introduced. The three callback/allocator boundaries are
 internal on admitted parent paths; independent adapters remain for original callers.
 This is another bounded composition step, not evidence of a CPU-free subsystem.
 
-The full current user history (`4b153763…`, 26,378 frames) passes original versus
+The full current user history (`4b153763â€¦`, 26,378 frames) passes original versus
 lifecycle with zero restores and strict equality at every canonical frame. The
 new original observations also exactly match the prior optimization baseline.
 

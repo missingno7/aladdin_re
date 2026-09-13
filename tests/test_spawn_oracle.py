@@ -174,6 +174,42 @@ def test_spawn_neighbors_negative_controls(target, mutant):
     assert actual[:2] != expected[:2]
 
 
+@pytest.mark.parametrize("target", oracle.GUARD_TARGETS)
+@pytest.mark.parametrize("guard_value", (0, 1), ids=("guard-clear", "guard-set"))
+@pytest.mark.parametrize("free", (0, None), ids=("slot-available", "pool-exhausted"))
+@pytest.mark.parametrize("parent", (False, True), ids=("direct", "dispatcher"))
+def test_recorded_dispatch_guards_match_original_outer_and_future(
+        target, guard_value, free, parent):
+    """Qualify three observed targets in constructed strict fixtures."""
+    execute = oracle.execute_dispatch if parent else oracle.execute
+    expected = execute(target, free=free, candidate=None, incoming_x=False,
+                       guard_value=guard_value)
+    actual = execute(target, free=free, candidate="lifecycle", incoming_x=False,
+                     guard_value=guard_value)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("target", oracle.GUARD_TARGETS)
+@pytest.mark.parametrize("guard_value", (0, 1), ids=("guard-clear", "guard-set"))
+def test_recorded_dispatch_guards_survive_fresh_process(target, guard_value):
+    _, state, future, _, _ = oracle.execute_dispatch(
+        target, free=0, candidate="lifecycle", incoming_x=False,
+        guard_value=guard_value, include_raw=True)
+    assert oracle.fresh_process_future(state) == future
+
+
+@pytest.mark.parametrize("target", oracle.GUARD_TARGETS)
+def test_guard_reads_see_parent_planned_frame_writes(target):
+    """A guard may alias the parent MOVEM/JSR bytes when the planned view is used."""
+    kwargs = dict(free=0, incoming_x=False, guard_value=0,
+                  stack=0xFFF1AC, initial_d0=0x00010100)
+    expected = oracle.execute_dispatch(target, candidate=None, **kwargs)
+    actual = oracle.execute_dispatch(target, candidate="lifecycle", **kwargs)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["fallbacks"] == 0
+
+
 def test_lower_reset_cannot_alias_parent_saved_registers():
     from aladdin_sega.boundary import spawn_dispatch_iteration, UnsupportedCandidate
     machine = oracle.dispatcher_fixture(0x1B6F0C)

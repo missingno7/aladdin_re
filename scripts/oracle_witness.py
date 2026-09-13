@@ -40,6 +40,10 @@ ENTRY_BASES = {
     0x1B5266: (0xFF7F06, 20, 1),
 }
 CALLER_POOLS = {0x1B6ED0: 0x1B5266, 0x1B6F0C: 0x1B525E, 0x1B6F1E: 0x1B525E}
+GUARD_TARGETS = (0x1B7354, 0x1B742A, 0x1B744A)
+GUARD_ADDRESSES = {0x1B7354: 0xFFF171, 0x1B742A: 0xFFF172, 0x1B744A: 0xFFF16F}
+GUARD_SLOT_TYPES = {0x1B742A: 0x39}
+CALLER_POOLS.update({0x1B7354: 0x1B5266, 0x1B742A: 0x1B524E, 0x1B744A: 0x1B5266})
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
@@ -62,7 +66,9 @@ def write_long(address: int, value: int) -> tuple[tuple[int, int], ...]:
 
 
 def cold_fixture(entry: int, *, free: int | None = 0, incoming_x: bool = False,
-                 pc_entry: int | None = None):
+                 pc_entry: int | None = None, guard_entry: int | None = None,
+                 guard_value: int | None = None, slot_type: int | None = None,
+                 stack: int = STACK, initial_d0: int = 0):
     if entry not in ENTRY_BASES:
         raise ValueError(f"unsupported spawn entry {entry:06X}")
     rom = read_rom(DEFAULT_ROM)
@@ -71,13 +77,19 @@ def cold_fixture(entry: int, *, free: int | None = 0, incoming_x: bool = False,
         machine.run(target=FRAME_TICKS * frame)
         machine.audio()
     registers = machine.registers()
-    registers.update({"a2": 0xFF6000, "a6": TEMPLATE, "a7": STACK,
-                      "d0": 0, "d2": 3, "d3": 1, "pc": entry if pc_entry is None else pc_entry,
+    registers.update({"a2": 0xFF6000, "a6": TEMPLATE, "a7": stack,
+                      "d0": initial_d0, "d2": 3, "d3": 1, "pc": entry if pc_entry is None else pc_entry,
                       "sr": (registers["sr"] & ~0x1F) | (0x10 if incoming_x else 0)})
     base, count, direction = ENTRY_BASES[entry]
-    writes = list(write_long(STACK + 4 * i, SAFE_RETURN) for i in range(-16, 151))
+    writes = list(write_long(stack + 4 * i, SAFE_RETURN) for i in range(-16, 151))
     flat = [byte for group in writes for byte in group]
     flat.append((0xFFF104, 0xA5))
+    if guard_value is not None:
+        if guard_entry not in GUARD_ADDRESSES:
+            raise ValueError(f"unsupported guard entry {guard_entry!r}")
+        flat.append((GUARD_ADDRESSES[guard_entry], guard_value & 0xFF))
+    if slot_type is not None:
+        flat.append((0xFF7E3C, slot_type & 0xFF))
     flat += list(write_word(0xFFF150, 1) + write_word(0xFF7DB0, 1))
     flat += list(write_word(0xFFF152, 1) + write_word(0xFF7DB2, 1))
     if free is not None and not 0 <= free < count:
@@ -100,15 +112,22 @@ def cold_fixture(entry: int, *, free: int | None = 0, incoming_x: bool = False,
     return machine
 
 
-def dispatcher_fixture(target: int, *, free: int | None = 0, incoming_x: bool = False):
+def dispatcher_fixture(target: int, *, free: int | None = 0, incoming_x: bool = False,
+                       guard_value: int | None = None, stack: int = STACK,
+                       initial_d0: int = 0):
     if target not in DISPATCH_CALLBACKS:
         raise ValueError(f"unsupported dispatcher callback {target:06X}")
     machine = cold_fixture(CALLER_POOLS.get(target, 0x1B5266), free=free, incoming_x=incoming_x,
-                           pc_entry=SPAWN_DISPATCH_ITERATION_ENTRY)
+                           pc_entry=SPAWN_DISPATCH_ITERATION_ENTRY,
+                           guard_entry=target if target in GUARD_ADDRESSES else None,
+                           guard_value=guard_value,
+                           slot_type=GUARD_SLOT_TYPES.get(target) if guard_value else None,
+                           stack=stack, initial_d0=initial_d0)
     machine.gates([SPAWN_DISPATCH_ITERATION_ENTRY])
     assert machine.run(instructions=1) == "gate"
     registers = machine.registers()
-    registers.update({"a0": 0xFF6000, "a4": target, "d4": 2, "d5": 0, "d6": 0})
+    registers.update({"a0": 0xFF6000, "a4": target, "d0": initial_d0,
+                      "d4": 2, "d5": 0, "d6": 0})
     assert machine.atomic(target=machine.info["tick"] + 1_000_000,
                           cycles=1, instructions=1, last_pc=SPAWN_DISPATCH_ITERATION_ENTRY,
                           writes=[], registers=registers)
@@ -135,8 +154,12 @@ def fresh_process_future(state: bytes) -> dict:
         return json.loads(result.stdout)
 
 
-def execute(entry: int, *, free: int | None, candidate: str | None, incoming_x: bool):
-    machine = cold_fixture(CALLER_POOLS.get(entry, entry), free=free, incoming_x=incoming_x, pc_entry=entry)
+def execute(entry: int, *, free: int | None, candidate: str | None, incoming_x: bool,
+            guard_value: int | None = None):
+    machine = cold_fixture(CALLER_POOLS.get(entry, entry), free=free, incoming_x=incoming_x,
+                           pc_entry=entry, guard_entry=entry if entry in GUARD_ADDRESSES else None,
+                           guard_value=guard_value,
+                           slot_type=GUARD_SLOT_TYPES.get(entry) if guard_value else None)
     try:
         outer = int.from_bytes(machine.peek_ram(STACK & 0xFFFF, 4), "big") & 0xFFFFFF
         machine.gates([entry, outer])
@@ -158,8 +181,11 @@ def execute(entry: int, *, free: int | None, candidate: str | None, incoming_x: 
 
 
 def execute_dispatch(target: int, *, free: int | None, candidate: str | None, incoming_x: bool,
-                     include_raw: bool = False):
-    machine = dispatcher_fixture(target, free=free, incoming_x=incoming_x)
+                     include_raw: bool = False, guard_value: int | None = None,
+                     stack: int = STACK, initial_d0: int = 0):
+    machine = dispatcher_fixture(target, free=free, incoming_x=incoming_x,
+                                 guard_value=guard_value, stack=stack,
+                                 initial_d0=initial_d0)
     try:
         machine.gates([SPAWN_DISPATCH_ITERATION_ENTRY, 0x1AE44A, 0x1AE47C])
         assert machine.run(instructions=1) == "gate"
