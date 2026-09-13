@@ -10,6 +10,7 @@ rules, not handwritten lines.
 | --- | --- | --- | ---: | --- |
 | `1e43a73` spawn neighbors | Reset-before-lower-allocation and successful script installation; existing type-33 callback joins parent; dispatcher 16 to 19 targets | Allocator, staged reads/writes, exact outer plan, alias guard, strict oracle/future/restore/mutants | 0 | Two familiar BSR/RTS aggregates and final CCR recipes; 737 tests, 29 recorded occurrences, full 26,378-frame PASS; allocator activations 79 to 63, direct calls 5299 to 5339 |
 | Guard composition | Existing guards `1B7354`, `1B742A`, `1B744A` become internal calls; dispatcher 19 to 22 targets | Existing guard/caller plans and all qualification machinery | 0 | Three routing entries; deleted duplicate support whitelist. No new semantic body or machine recipe. 821 tests and full 26,378-frame history pass; fallbacks 707 to 681, direct calls 5339 to 5365, unchanged 3846 candidate activations. |
+| Contact activation `1AFD84` | Existing dispatcher directly owns guarded motion/proximity, shared dispatch flag tail and accepted player/object transition; no child gate | AtomicPlan, planned dispatch RAM, alias exclusions, CCR helpers, the now-shared region oracle, future/restore/mutants/history | 0 | Original census:121 visits including9 activations.119 admitted plans;2 scheduler refusals. Full26378-frame PASS;1268 tests. Independent branch matrix caught borrowed-vs-unborrowed timing and final impulse CCR errors missed by the recorded prototype. Repetitive exact machine accounting remains a manual tax; no new protocol was required. |
 
 ## Bounded whole column walker
 
@@ -28,6 +29,25 @@ migration; they are evidence, not maintained production APIs.
 
 This is tooling consolidation, not recovered gameplay or a new execution
 protocol. Standalone strict witnesses remain; no comparison field was dropped.
+The existing full suite passed 1,226 tests in 81.77 s before gameplay integration.
+
+### Contact activation review
+
+Semantic source gained the reusable accepted motion/script/object publication.
+Branch classification and exact arithmetic residues are still machine-shaped;
+this is a qualified intermediate representation, not a detached contact system.
+The enclosing dispatcher absorbs this callback without a standalone hook.
+Recorded state-changing coverage exists in both directions; the blocked guard,
+wraparound arithmetic and record/global aliases are constructed ROM witnesses.
+The alias domain is deliberately refused before writes, preserving native
+fallback. No unresolved device call is involved in this transition.
+
+Marginal integration reused all existing mechanisms. Manual timing/CCR mistakes
+were still possible and were caught by an independent matrix; this is evidence
+for checked mechanical recipes, not for inventing a new recovery architecture.
+The neutral region oracle was reused immediately rather than writing another
+gate/return/future loop for the new tests. Next investigate the adjacent contact
+family as a batch; do not add thin BSR/RTS wrappers solely to move entry gates.
 
 ### Whole setup-parent retrospective (14 September)
 

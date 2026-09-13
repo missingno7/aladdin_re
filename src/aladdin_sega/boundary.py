@@ -33,6 +33,8 @@ CONTACT_SIBLING_DIRECT = 0x1AE9DA
 CONTACT_SIBLING_ENTRY = 0x1AEC00
 CONTACT_SIBLING_RETIREMENT = 0x1AECD8
 CONTACT_SIBLING_TAIL = 0x1AED0C
+CONTACT_ACTIVATION_ENTRY = 0x1AFD84
+CONTACT_ACTIVATION_TAIL = 0x1AE6B4
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
 CONTACT_TYPE13_RETURN = 0x1AECEE
@@ -1538,7 +1540,7 @@ def begin_collection_dispatch(machine, registers):
                      ('collection dispatch globals', 0xFFF0F5, 2)])
     kind = _read(machine, record, 1)
     target = int.from_bytes(machine.peek_rom(COLLECTION_DISPATCH_TABLE + 4 * kind, 4), 'big') & 0xFFFFFF
-    if target not in (*COLLECTION_ROUTES, CONTACT_DISPATCH_ENTRY,
+    if target not in (*COLLECTION_ROUTES, CONTACT_DISPATCH_ENTRY, CONTACT_ACTIVATION_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
     dispatch_sr = sr & ~0x1F
@@ -1622,6 +1624,100 @@ def finish_contact_dispatch_sound(machine, registers):
     final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
     return AtomicPlan(contact.cycles + 16, contact.instructions + 1, contact.writes, final,
                       CONTACT_DISPATCH_LOCAL_RETURN, contact.direct_calls)
+
+
+CONTACT_ACTIVATION_GLOBALS = tuple((name, address, size) for name, address, size in (
+    ('contact activation vertical', 0xFF7E5A, 2),
+    ('contact activation blocked', 0xFFF0E7, 1),
+    ('contact activation motion', 0xFF7DFC, 2),
+    ('contact activation base', 0xFF7DF8, 2),
+    ('contact activation impulse', 0xFF7DFE, 2),
+    ('contact activation script', 0xFF7E60, 4),
+    ('contact activation script mode', 0xFF7E77, 1),
+    ('contact activation contact', 0xFFF0BE, 1),
+    ('contact activation contact mode', 0xFFF0C0, 1),
+    ('contact activation player', 0xFF7E02, 2),
+    ('contact activation horizontal impulse', 0xFF7E58, 1),
+    ('contact activation dispatch flag', 0xFFF0F5, 1),
+))
+
+
+def begin_contact_activation(machine, registers):
+    """Recover 1AFD84 through its guarded proximity and RTS paths."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact activation record/stack')
+    _spans_disjoint([('contact activation record', record, 66),
+                     ('contact activation return', sp, 4), *CONTACT_ACTIVATION_GLOBALS])
+    read = lambda address, size: _read(machine, address, size)
+    ret = read(sp, 4) & 0xFFFFFF
+    vertical = read(0xFF7E5A, 2)
+    if vertical & 0x8000:
+        return AtomicPlan(42, 3, (), {'a7': sp + 4, 'pc': ret,
+                                       'sr': _logic_sr(sr, vertical, 2)}, 0x1AFE1A)
+    blocked = read(0xFFF0E7, 1)
+    if blocked:
+        return AtomicPlan(70, 5, (), {'a7': sp + 4, 'pc': ret,
+                                       'sr': _logic_sr(sr, blocked, 1)}, 0x1AFE1A)
+    delta = (read(record + 4, 2) - read(0xFF7DF8, 2)) & 0xFFFF
+    distance = (read(0xFF7DFC, 2) - delta) & 0xFFFF
+    distance_sr = _sub_sr(sr, read(0xFF7DFC, 2), delta, 2)
+    borrowed_distance = bool(distance_sr & 1)
+    if borrowed_distance:
+        before_negate = distance
+        distance = (-distance) & 0xFFFF
+        distance_sr = _sub_sr(distance_sr, 0, before_negate, 2)
+    if distance >= 6:
+        return AtomicPlan(170 if borrowed_distance else 168, 14 if borrowed_distance else 13,
+                          ((0xFFF0F5, 0xFF),),
+                          {'d2': (registers['d2'] & 0xFFFF0000) | delta,
+                           'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                           'a7': sp + 4, 'pc': ret,
+                           'sr': _cmp_sr(distance_sr, distance, 6, 2)},
+                          CONTACT_ACTIVATION_TAIL + 6)
+    d0 = (registers['d0'] & 0xFFFF0000) | ((read(0xFF7E02, 2) - read(record + 2, 2)) & 0xFFFF)
+    impulse_sr = _sub_sr(distance_sr, read(0xFF7E02, 2), read(record + 2, 2), 2)
+    negative = bool(d0 & 0x8000)
+    if negative:
+        before_negate = d0 & 0xFFFF
+        d0 = (d0 & 0xFFFF0000) | ((-d0) & 0xFFFF)
+        impulse_sr = _sub_sr(impulse_sr, 0, before_negate, 2)
+    shifted = d0 & 0xFF
+    d0 = (d0 & 0xFFFFFF00) | (shifted >> 3)
+    impulse_sr = _logic_sr(impulse_sr & ~0x1F, d0 & 0xFF, 1)
+    if shifted & 4:
+        impulse_sr |= 0x11
+    if negative:
+        shifted_word = d0 & 0xFFFF
+        d0 = (d0 & 0xFFFF0000) | ((-shifted_word) & 0xFFFF)
+        impulse_sr = _sub_sr(impulse_sr, 0, shifted_word, 2)
+        last = 0x1AFE1A
+    else:
+        last = 0x1AFE0C
+    # The terminal MOVE.B publishes the impulse, supplies N/Z, clears V/C,
+    # and retains X from the preceding shift or negation.
+    impulse_sr = _logic_sr(impulse_sr, d0 & 0xFF, 1)
+    writes = game.activate_contact(record, delta, d0)
+    return AtomicPlan((422 if borrowed_distance else 420) if negative else (412 if borrowed_distance else 410),
+                      (30 if borrowed_distance else 29) if negative else (28 if borrowed_distance else 27), tuple(writes),
+                      {'d0': d0, 'd2': (registers['d2'] & 0xFFFF0000) | delta,
+                       'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                       'a7': sp + 4, 'pc': ret, 'sr': impulse_sr}, last, direct_calls=1)
+
+
+def begin_contact_activation_dispatch(machine, registers, dispatch):
+    """Compose collection dispatch type 01 and its direct activation callback."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_ACTIVATION_ENTRY or dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('contact activation dispatch prefix identity')
+    callback_registers = {**registers, **dispatch.registers}
+    activation = begin_contact_activation(dispatch_plan_view(machine, dispatch), callback_registers)
+    final = dict(callback_registers)
+    final.update(activation.registers)
+    return AtomicPlan(dispatch.cycles + activation.cycles,
+                      dispatch.instructions + activation.instructions,
+                      tuple(dict((*dispatch.writes, *activation.writes)).items()), final,
+                      activation.last_pc, dispatch.direct_calls + activation.direct_calls)
 
 
 CONTACT_GLOBALS = tuple(('contact state', address, 1) for address in (

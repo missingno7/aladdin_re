@@ -144,6 +144,26 @@ def contact_reaction(read):
     return writes
 
 
+def activate_contact(record, motion_delta, horizontal_impulse):
+    """Publish the accepted contact activation's object and player-side state.
+
+    Guard predicates and machine timing remain at the ROM boundary.  This body
+    only names the durable player motion, script, object transition, and
+    horizontal-impulse effects after that boundary accepts proximity.
+    """
+    return [
+        (0xFF7DFC, (motion_delta >> 8) & 0xFF), (0xFF7DFD, motion_delta & 0xFF),
+        (0xFF7E5A, 0xF8), (0xFF7E5B, 0),
+        (0xFF7DFE, 0), (0xFF7DFF, 0xB0),
+        (0xFF7E60, 0), (0xFF7E61, 0x12), (0xFF7E62, 0x1C), (0xFF7E63, 0x62),
+        (0xFF7E77, 0), (0xFFF0BE, 0xFF), (0xFFF0C0, 0),
+        (record, 0x84),
+        (record + 0x20, 0), (record + 0x21, 0x12),
+        (record + 0x22, 0x2D), (record + 0x23, 0xB2),
+        (record + 0x37, 0), (0xFF7E58, horizontal_impulse & 0xFF),
+    ]
+
+
 def _overlay(read, writes, address, size):
     values = {at: value for at, value in writes}
     if size == 1:

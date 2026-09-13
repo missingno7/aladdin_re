@@ -11,6 +11,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         dispatch_plan_view, CONTACT_ENTRY, CONTACT_DISPATCH_ENTRY, begin_contact_dispatch,
                         begin_contact_dispatch_sound, finish_contact_dispatch_sound, begin_contact,
                         begin_contact_sound, finish_contact_sound, begin_collection,
+                        CONTACT_ACTIVATION_ENTRY, begin_contact_activation_dispatch,
                         finish_collection, relocate_collection, CONTACT_SIBLING_ENTRY,
                         CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT,
                         begin_contact_sibling, begin_contact_sibling_wrapper,
@@ -40,6 +41,7 @@ class Candidate:
         "collection_hits": 0, "collection_entries": {}, "relocation_hits": 0,
         "collection_dispatch_hits": 0,
         "contact_hits": 0,
+        "contact_activation_hits": 0,
         "contact_sibling_hits": 0,
         "spawn_region_hits": 0, "spawn_caller_hits": 0, "spawn_walker_hits": 0, "spawn_row_walker_hits": 0,
         "spawn_setup_hits": 0,
@@ -264,6 +266,16 @@ class Candidate:
                 )
             self.stats['collection_dispatch_hits'] += 1
             self.stats['contact_hits'] += 1
+            return True
+        if entry == CONTACT_ACTIVATION_ENTRY:
+            try:
+                plan = begin_contact_activation_dispatch(machine, dispatch_registers, prefix)
+                if not self._apply(machine, self._mutate(plan), target):
+                    return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+            self.stats['collection_dispatch_hits'] += 1
+            self.stats['contact_activation_hits'] += 1
             return True
         if entry in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
             try:

@@ -6,6 +6,34 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Dispatcher-owned contact activation
+
+The existing `1ABC82` dispatcher now composes type `01`'s `1AFD84` contact
+activation directly through its guarded exits, `1AE6B4` dispatch-flag tail,
+or accepted motion/script/object transition to `1ABCA0`. No child gate or
+new execution mechanism was introduced. Semantic writes live in
+`game/objects/contact.py`; exact registers, CCR, timing and alias admission
+remain in `boundary.py`.
+
+The current cold history contains 121 visits: 79 negative-motion exits,
+33 shared-tail exits and nine activations (three left, six right). The blocked
+flag branch is constructed coverage. Eight recorded fixtures pass strict
+outer equality, 150 native instructions and fresh-process restore. **1,268
+tests pass** (84.14 s), including 42 new checks for arithmetic boundaries,
+register words, both directions, alias fallback, deadlines and all three mutants.
+
+The full **26,378-frame** comparison passes with zero restores and matching
+production hashes. Contact activation admits 119 plans; two scheduler refusals
+execute original code. Total gate hits stay 7,609 and configured gates stay 61;
+fallbacks fall 1,724 to 1,605. Dispatcher admissions rise 253 to 372 and replaced
+instructions 456,364 to 458,330. This owns one connected contact transition,
+not every contact object or the surrounding update loop.
+
+Evidence: `artifacts/contact-activation-frontier/{census,prototype}.json` and
+`artifacts/contact-activation-full/comparison.json`. The shared oracle now
+returns named `ExecutionResult` fields and exposes the existing entry/return
+runner as `execute_region`; qualification strength is unchanged.
+
 ## Whole spawn-strip setup parents
 
 The four recorded setup entries `1AE3FC`, `1AE406`, `1AE47E`, and `1AE488`
