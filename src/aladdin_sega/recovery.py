@@ -118,17 +118,19 @@ class Candidate:
         return False
 
     def _run_sound_seam(self, machine, target, *, sp, resume, return_slot, suffix,
+                        saved_frame=24, frame_size=28, return_delta=28,
                         suffix_transform=lambda plan: plan, on_complete=lambda: None):
         """Run one admitted synchronous sound call and prove its local return.
 
-        Collection and contact both save a 28-byte frame below the caller's
-        stack pointer.  The native sound routine may run arbitrary original
-        code, so the resumed local suffix is admitted only when its PC, stack
-        pointer, saved frame, and preceding JSR return slot still identify the
-        activation that constructed it.
+        The native sound routine may run arbitrary original code, so the
+        resumed local suffix is admitted only when its PC, stack pointer,
+        saved frame, and preceding JSR return slot still identify the
+        activation that constructed it.  The ordinary request/flush ABI uses
+        a 24-byte saved frame plus argument; type-13's fixed helper saves the
+        five registers alone in a measured 20-byte frame.
         """
-        frame_base = (sp - 24) & 0xFFFF
-        frame = machine.peek_ram(frame_base, 28)
+        frame_base = (sp - saved_frame) & 0xFFFF
+        frame = machine.peek_ram(frame_base, frame_size)
         self.stats['legacy_entries'] += 1
         machine.in_sound_call = True
         try:
@@ -136,12 +138,12 @@ class Candidate:
             while machine.run(target=target) == 'gate':
                 self.stats['gates'] += 1
                 returned = machine.registers()
-                if returned['a7'] != sp - 24:
+                if returned['a7'] != sp - saved_frame:
                     self.stats['foreign_returns'] += 1
                     machine.gate(resume, bypass_once=True)
                     continue
-                if (returned['pc'] != resume or machine.peek_ram(frame_base, 28) != frame
-                        or int.from_bytes(machine.peek_ram((sp - 28) & 0xFFFF, 4), 'big') != return_slot):
+                if (returned['pc'] != resume or machine.peek_ram(frame_base, frame_size) != frame
+                        or int.from_bytes(machine.peek_ram((sp - return_delta) & 0xFFFF, 4), 'big') != return_slot):
                     raise ValueError('Object sound return/frame mismatch')
                 self.stats['legacy_returns'] += 1
                 reason = 'scheduler admission'
@@ -248,15 +250,20 @@ class Candidate:
                 except UnsupportedCandidate:
                     return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
                 decrement_sound = sound.last_pc == 0x1AEC46
+                type13_fixed = sound.last_pc == 0x1AF1F0
                 return self._run_sound_seam(
-                    machine, target, sp=dispatch_registers['a7'] - 8,
-                    resume=0x1AEC52 if decrement_sound else 0x1AE5B6,
-                    return_slot=0x1AEC52 if decrement_sound else 0x1AE5B6,
+                    machine, target, sp=(dispatch_registers['a7'] - 12 if type13_fixed
+                                         else dispatch_registers['a7'] - 8),
+                    resume=0x1AF1F6 if type13_fixed else 0x1AEC52 if decrement_sound else 0x1AE5B6,
+                    return_slot=0x1AF1F6 if type13_fixed else 0x1AEC52 if decrement_sound else 0x1AE5B6,
                     suffix=lambda returned: finish_contact_sibling_wrapper_sound(machine, returned),
+                    saved_frame=20 if type13_fixed else 24,
+                    frame_size=20 if type13_fixed else 28,
+                    return_delta=24 if type13_fixed else 28,
                     suffix_transform=self._mutate,
                     on_complete=(lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
                                           self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1)))
-                    if decrement_sound else
+                    if decrement_sound or type13_fixed else
                     (lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
                               self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1),
                               self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1))),
@@ -336,16 +343,22 @@ class Candidate:
                 except UnsupportedCandidate:
                     return self._fallback(machine, entry, f'unsupported domain: {error}')
                 decrement_sound = sound.last_pc == 0x1AEC46
+                type13_fixed = sound.last_pc == 0x1AF1F0
                 return self._run_sound_seam(
-                    machine, target, sp=registers['a7'] if entry == CONTACT_SIBLING_ENTRY else registers['a7'] - 4,
-                    resume=0x1AEC52 if decrement_sound else 0x1AE5B6,
-                    return_slot=0x1AEC52 if decrement_sound else 0x1AE5B6,
+                    machine, target,
+                    sp=(registers['a7'] - (4 if entry == CONTACT_SIBLING_ENTRY else 8)
+                        if type13_fixed else registers['a7'] if entry == CONTACT_SIBLING_ENTRY else registers['a7'] - 4),
+                    resume=0x1AF1F6 if type13_fixed else 0x1AEC52 if decrement_sound else 0x1AE5B6,
+                    return_slot=0x1AF1F6 if type13_fixed else 0x1AEC52 if decrement_sound else 0x1AE5B6,
                     suffix=(lambda returned: finish_contact_sibling_sound(machine, returned))
                     if entry == CONTACT_SIBLING_ENTRY else
                     (lambda returned: finish_contact_sibling_wrapper_sound(machine, returned)),
+                    saved_frame=20 if type13_fixed else 24,
+                    frame_size=20 if type13_fixed else 28,
+                    return_delta=24 if type13_fixed else 28,
                     suffix_transform=self._mutate,
                     on_complete=(lambda: self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1))
-                    if decrement_sound else
+                    if decrement_sound or type13_fixed else
                     (lambda: (self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1),
                               self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1))),
                 )

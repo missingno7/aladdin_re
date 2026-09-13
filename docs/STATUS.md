@@ -6,13 +6,29 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Type-13 allocation retirement
+
+The lifecycle candidate now composes type-`0x13` zero-counter retirement through
+the existing `1AEC00` entry, C6/DA wrappers and dispatcher. It reuses cleanup
+and initialization plus a reverse 24-slot allocator, and runs stateful fixed
+helper `1E58F4` through the synchronous seam with its measured 20-byte saved
+frame. The optional command-`0x14` suffix remains local original execution
+after that verified helper return. Type-13 has zero recorded hits across the
+six user recordings, so its proof is synthetic; the allocator has 118 original
+caller hits. See [contact-type13.md](contact-type13.md).
+
+The frozen suite has **1,021 passing tests**. All six explicit replay receipts
+pass with matching 19-module recursive source receipts; the type-13 edit loop
+passes without rebuilding and rejects a reverse-allocator mutation.
+
 ## Contact decrement and selector
 
 The `lifecycle` candidate now composes `1AEC00`'s non-`0x13` decrement branch
 with the finite `1AD150` script selector, command `8`, wrappers `1AE9C6` /
 `1AE9DA`, and the existing dispatcher. The selector remains internal because
-later recordings show other callers. Type `0x13`, counter wrap, and command
-`0x6A` remain whole-entry original fallbacks.
+later recordings show other callers. Counter wrap and command `0x6A` remain
+whole-entry original fallbacks; the separate zero-counter type-`0x13` retirement
+is now documented above.
 
 All **988 tests** pass. The explicit current old-225 and new-244 recordings,
 plus all four later recordings, pass terminal state/frame/PCM comparison with

@@ -367,3 +367,34 @@ plus handwritten branch timing/CCR/stack recipes. Existing planning views,
 AtomicPlans, wrappers/dispatcher, and the synchronous sound seam were reused.
 The next adjacent task should map external selector callers or type-`0x13`
 retirement separately; these results do not turn either into recovered scope.
+
+## Type-13 allocation retirement
+
+The next bounded expansion owns type-`0x13`, zero-counter retirement beneath
+`1AEC00`, C6/DA and the dispatcher. It reuses buffer release and initializer
+effects, then models `1AE292` as a measured 24-slot reverse scan from `FF8470`
+to `FF7E82`. An exact source-slot overlap is permitted because the first
+initializer makes it active before scanning; partial pool, frame, global or
+buffer aliases refuse admission. Exhaustion returns with `A5=FF7E40` and no
+allocation-side writes.
+
+Free allocation enters native `1E58F4` through the synchronous runner with the
+actual five-register, 20-byte `S-20` frame and `S-24=1AF1F6` identity slot. Its
+`FFF57F == 0` suffix restores and returns through `1AECEE`; a nonzero flag keeps
+the fixed helper but lets original code execute the distinct command-`0x14`
+local suffix. No gate, continuation, native API or persistent state was added.
+
+`1AF1AC` has zero hits in all six current recordings. Synthetic old/new
+original-ROM fixtures cover both flags, first/second/exhausted allocation,
+directions, wrappers, dispatcher, strict outer snapshot/frame/PCM and 150
+native future instructions. The allocator has 118 recorded original calls at
+other callers, indices 0..7. The detailed contract and coverage are in
+`artifacts/grinding/luna/allocator-census/allocator-contract.md`; the bounded
+report is [contact-type13.md](contact-type13.md).
+
+Frozen evidence: `artifacts/grinding/terra/type13-final-suite.xml` has **1,021
+passing tests** in 46.573 seconds. The six receipts and recursive current-source
+audit are `type13-final-{old,new244,late1,late2,late3,late4}` and
+`type13-final-replay-audit.json` under that directory. The disposable strict
+edit loop reports a 1.199-second pass and 1.239-second rejected allocator
+mutation without touching the build DLL at `type13-edit-loop-strict/result.json`.

@@ -33,6 +33,9 @@ CONTACT_SIBLING_DIRECT = 0x1AE9DA
 CONTACT_SIBLING_ENTRY = 0x1AEC00
 CONTACT_SIBLING_RETIREMENT = 0x1AECD8
 CONTACT_SIBLING_TAIL = 0x1AED0C
+CONTACT_TYPE13_ENTRY = 0x1AF1AC
+CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
+CONTACT_TYPE13_RETURN = 0x1AECEE
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -476,6 +479,183 @@ CONTACT_SIBLING_GLOBALS = (
     ('contact sibling state', 0xFF7E02, 2), ('contact sibling state', 0xFF7E49, 1),
 )
 
+# 1AF1AC allocates from the same 24-record primary pool that can also hold
+# its source.  The source may overlap one *whole* slot (the first template
+# makes it active before the reverse scan); partial overlap has no measured
+# meaning and is refused.
+CONTACT_TYPE13_GLOBALS = (
+    ('type13 transition', 0xFFF124, 1), ('type13 sound flag', 0xFFF57F, 1),
+    ('type13 total', 0xFFF14E, 2),
+)
+_TYPE13_POOL_START = 0xFF7E82
+_TYPE13_POOL_HIGH = 0xFF8470
+_TYPE13_POOL_COUNT = 24
+_TYPE13_POOL_SIZE = _TYPE13_POOL_COUNT * 66
+
+
+def _contact_type13_guard(machine, registers):
+    """Validate the concrete record/pool/frame ownership for 1AF1AC."""
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type13 record or stack')
+    pool_end = _TYPE13_POOL_START + _TYPE13_POOL_SIZE
+    overlaps_pool = record < pool_end and record + 66 > _TYPE13_POOL_START
+    if overlaps_pool and (record < _TYPE13_POOL_START or record + 66 > pool_end or
+                          (record - _TYPE13_POOL_START) % 66):
+        raise UnsupportedCandidate('type13 source partially overlaps allocator pool')
+    spans = [('type13 allocator pool', _TYPE13_POOL_START, _TYPE13_POOL_SIZE),
+             ('type13 frame', sp - 24, 28), *CONTACT_TYPE13_GLOBALS]
+    if not overlaps_pool:
+        spans.append(('type13 source record', record, 66))
+    pointer = _read(machine, record + 42, 4)
+    if pointer:
+        spans.append(('type13 source buffer', pointer, _read(machine, record + 41, 1) + 1))
+    _spans_disjoint(spans)
+    _read(machine, sp, 4)
+    return lambda address, size: _read(machine, address, size)
+
+
+def _contact_type13(machine, registers):
+    """Plan 1AF1AC up to its fixed native helper, or its exhausted RTS.
+
+    The shared release and template semantics are reused directly here.  The
+    helper's device effects stay native; its return is admitted separately.
+    """
+    record, sp, sr = (registers[name] for name in ('a1', 'a7', 'sr'))
+    read = _contact_type13_guard(machine, registers)
+    if read(record, 1) != 0x13 or read(record + 1, 1):
+        raise UnsupportedCandidate('type13 callee record state')
+
+    # CLR.B + BSR 1AE372.  The callee writes transient save slots below the
+    # caller frame; later MOVEM overwrites them on the free-slot arm.
+    clear_registers = dict(registers, a7=sp - 4)
+    clear_cycles, clear_instructions, clear_writes, _ = _clear_objects(
+        machine, clear_registers, sp=sp - 4,
+        extra_spans=(('type13 return', sp, 4),))
+    first = _initialize_object_effects(machine, record=record, template=0x1B7CC4,
+                                       entry_sp=sp - 4)
+    prefix_writes = [
+        (record, 0), *_bytes(sp - 4, 0x1AF1B2, 4), *clear_writes,
+        *_bytes(sp - 4, 0x1AF1BE, 4), *first,
+    ]
+    after_first = AtomicPlan(30 + clear_cycles + 34 + 476,
+                             2 + clear_instructions + 3 + 27,
+                             tuple(dict(prefix_writes).items()),
+                             {**registers, 'a5': record, 'a6': 0x1B7CD7,
+                              'a7': sp, 'sr': _logic_sr(sr, 0, 4)},
+                             0x1AF1BE, direct_calls=2)
+    planner = dispatch_plan_view(machine, after_first)
+    plan_read = lambda address, size: _read(planner, address, size)
+    destination, index = game.free_object_reverse(plan_read, _TYPE13_POOL_HIGH,
+                                                   _TYPE13_POOL_COUNT)
+    # BSR plus 1AE292's LEA/MOVE/DBRA/RTS scan.  A found slot leaves D0 as
+    # 23-index; exhaustion leaves the DBRA low word at FFFF and A5 just below
+    # the pool.  TST.B supplies NZVC on both arms.
+    scan_cycles = 54 + 40 * index if destination is not None else 1000
+    scan_instructions = 5 + 4 * index if destination is not None else 99
+    d0 = (registers['d0'] & 0xFFFF0000) | (23 - index if destination is not None else 0xFFFF)
+    selected = destination if destination is not None else _TYPE13_POOL_START - 66
+    selected_type = 0 if destination is not None else plan_read(_TYPE13_POOL_START, 1)
+    scanned_sr = _logic_sr(after_first.registers['sr'], selected_type, 1)
+    scan_writes = (*after_first.writes, *_bytes(sp - 4, 0x1AF1C2, 4))
+    if destination is None:
+        return AtomicPlan(after_first.cycles + 18 + scan_cycles + 26,
+                          after_first.instructions + 1 + scan_instructions + 2,
+                          tuple(dict(scan_writes).items()),
+                          {**registers, 'd0': d0, 'a5': selected, 'a6': 0x1B7CD7,
+                           'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF, 'sr': scanned_sr},
+                          0x1AF21C, direct_calls=after_first.direct_calls + 1), False
+
+    second = _initialize_object_effects(planner, record=destination, template=0x1B8368,
+                                        entry_sp=sp - 4)
+    staged_writes = [*scan_writes, *_bytes(sp - 4, 0x1AF1CE, 4), *second]
+    staged = AtomicPlan(after_first.cycles + 18 + scan_cycles + 8 + 30 + 476,
+                        after_first.instructions + 1 + scan_instructions + 1 + 2 + 27,
+                        tuple(dict(staged_writes).items()),
+                        {**registers, 'd0': d0, 'a5': destination, 'a6': 0x1B837B,
+                         'a7': sp, 'sr': scanned_sr},
+                        0x1AF1CE, direct_calls=after_first.direct_calls + 2)
+    staged_machine = dispatch_plan_view(machine, staged)
+    position_x = _read(staged_machine, record + 2, 2)
+    position_y = _read(staged_machine, record + 4, 2)
+    saves = []
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        saves.extend(_bytes(sp - index * 4, staged.registers[name], 4))
+    writes = (*staged.writes, *_bytes(destination + 2, position_x, 2),
+              *_bytes(destination + 4, (position_y - 0x20) & 0xFFFF, 2),
+              (destination + 9, 0xFF), (0xFFF124, 8), *saves,
+              *_bytes(sp - 24, CONTACT_TYPE13_FIXED_RETURN, 4))
+    return AtomicPlan(staged.cycles + 164, staged.instructions + 7,
+                      tuple(dict(writes).items()),
+                      {**staged.registers, 'a7': sp - 24, 'pc': 0x1E58F4,
+                       'sr': _logic_sr(scanned_sr, 8, 1)},
+                      0x1AF1F0, direct_calls=staged.direct_calls), True
+
+
+def _finish_contact_type13(machine, registers):
+    """Restore 1E58F4's fixed 20-byte frame and return through 1AECEE."""
+    if registers.get('pc') != CONTACT_TYPE13_FIXED_RETURN or registers['a7'] & 1:
+        raise UnsupportedCandidate('foreign type13 fixed-helper return')
+    sp = registers['a7'] + 20
+    restored = dict(registers, a7=sp)
+    for index, name in enumerate(('d0', 'd1', 'a0', 'a1', 'a6')):
+        restored[name] = _read(machine, registers['a7'] + index * 4, 4)
+    _contact_type13_guard(machine, restored)
+    if _read(machine, 0xFFF57F, 1):
+        # The 0x14 request has a distinct second synchronous call.  The fixed
+        # helper is already committed and original code owns that local tail.
+        raise UnsupportedCandidate('type13 optional command14 suffix')
+    return AtomicPlan(94, 4, (),
+                      {**restored, 'a7': sp + 4, 'pc': _read(machine, sp, 4) & 0xFFFFFF,
+                       'sr': _logic_sr(restored['sr'], 0, 1)},
+                      0x1AF21C)
+
+
+def _contact_type13_outer(machine, registers, *, require_fixed):
+    """Compose 1AEC00's direction/counter prefix with the 1AF1AC callee."""
+    record, sp, sr = (registers[name] for name in ('a1', 'a7', 'sr'))
+    read = lambda address, size: _read(machine, address, size)
+    direction, distance, value = read(0xFF7E49, 1), read(0xFF7E02, 2), read(record + 8, 1)
+    total = read(0xFFF14E, 2) + value
+    outer_cycles, outer_instructions = (124, 10) if direction else (116, 9)
+    enter = AtomicPlan(outer_cycles + 74, outer_instructions + 6,
+                       (*_bytes(0xFFF14E, total, 2), *_bytes(sp - 4, CONTACT_TYPE13_RETURN, 4)),
+                       {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | value,
+                        'a7': sp - 4, 'pc': CONTACT_TYPE13_ENTRY,
+                        'sr': _add_sr(sr, read(0xFFF14E, 2), value, 2)},
+                       CONTACT_SIBLING_RETIREMENT, direct_calls=1)
+    inner, needs_fixed = _contact_type13(dispatch_plan_view(machine, enter), enter.registers)
+    if require_fixed:
+        if not needs_fixed:
+            raise UnsupportedCandidate('type13 allocator exhausted without fixed helper')
+        final = dict(enter.registers); final.update(inner.registers)
+        return AtomicPlan(enter.cycles + inner.cycles, enter.instructions + inner.instructions,
+                          tuple(dict((*enter.writes, *inner.writes)).items()), final,
+                          inner.last_pc, enter.direct_calls + inner.direct_calls)
+    if needs_fixed:
+        raise UnsupportedCandidate('type13 requires fixed native helper')
+    # 1AF1AC returns to 1AECEE, whose RTS returns the surrounding callback.
+    final = dict(inner.registers)
+    final.update(a7=sp + 4, pc=read(sp, 4) & 0xFFFFFF)
+    return AtomicPlan(enter.cycles + inner.cycles + 16, enter.instructions + inner.instructions + 1,
+                      tuple(dict((*enter.writes, *inner.writes)).items()), final,
+                      CONTACT_TYPE13_RETURN, enter.direct_calls + inner.direct_calls)
+
+
+def begin_contact_sibling_type13_sound(machine, registers):
+    """Enter 1AEC00's free-slot type-13 fixed-helper seam."""
+    return _contact_type13_outer(machine, registers, require_fixed=True)
+
+
+def finish_contact_sibling_type13_sound(machine, registers):
+    """Finish the fixed helper then the caller RTS at 1AECEE."""
+    inner = _finish_contact_type13(machine, registers)
+    sp = inner.registers['a7']
+    final = dict(inner.registers)
+    final.update(a7=sp + 4, pc=_read(machine, sp, 4) & 0xFFFFFF)
+    return AtomicPlan(inner.cycles + 16, inner.instructions + 1, inner.writes, final,
+                      CONTACT_TYPE13_RETURN, inner.direct_calls)
+
 # 1AD150's priority inputs are live RAM.  The sole table arm reads immutable
 # cartridge data at 121828; the boundary reads that data only after this guard
 # has admitted the full mutable selector domain.
@@ -647,7 +827,7 @@ def _contact_sibling_decrement_sound(machine, registers):
 
 
 def begin_contact_sibling_sound(machine, registers):
-    """1AEC00's non-13 decrement arm through its existing command-8 seam."""
+    """1AEC00's admitted decrement or type-13 native helper seam."""
     record, sp = registers['a1'], registers['a7']
     if (record | sp) & 1:
         raise UnsupportedCandidate('unaligned contact sibling sound record/stack')
@@ -656,7 +836,10 @@ def begin_contact_sibling_sound(machine, registers):
                      *CONTACT_SELECTOR_GLOBALS, ('contact sibling sound state', 0xFFF57D, 1),
                      ('contact sibling script', 0xFF7E60, 4)])
     read = lambda address, size: _read(machine, address, size)
-    if game.contact_sibling_route(read, record)[0] != 'decrement':
+    route = game.contact_sibling_route(read, record)[0]
+    if route == 'type13':
+        return begin_contact_sibling_type13_sound(machine, registers)
+    if route != 'decrement':
         raise UnsupportedCandidate('contact sibling is not on its decrement arm')
     direction, distance = read(0xFF7E49, 1), read(0xFF7E02, 2)
     outer_cycles, outer_instructions = (126, 10) if direction else (118, 9)
@@ -670,7 +853,9 @@ def begin_contact_sibling_sound(machine, registers):
 
 
 def finish_contact_sibling_sound(machine, registers):
-    """Resume command 8 at 1AEC52 and finish the selected non-13 script arm."""
+    """Resume command 8 or the type-13 fixed helper at its local return."""
+    if registers.get('pc') == CONTACT_TYPE13_FIXED_RETURN:
+        return finish_contact_sibling_type13_sound(machine, registers)
     if registers['pc'] != 0x1AEC52 or registers['a7'] & 1:
         raise UnsupportedCandidate('foreign contact sibling command8 return')
     sp = registers['a7'] + 24
@@ -723,7 +908,7 @@ def begin_contact_sibling_tail(machine, registers):
 
 
 def begin_contact_sibling_retirement(machine, registers):
-    """1AECD8: type-13-free counter retirement through the existing finish tail."""
+    """1AECD8 retirement; type-13's exhausted allocator arm is oracle-only."""
     record, sp = registers['a1'], registers['a7']
     if (record | sp) & 1:
         raise UnsupportedCandidate('unaligned contact sibling record/stack')
@@ -734,7 +919,24 @@ def begin_contact_sibling_retirement(machine, registers):
     read = lambda address, size: _read(machine, address, size)
     kind = read(record, 1)
     if kind == 0x13:
-        raise UnsupportedCandidate('contact sibling type13 is not recovered')
+        value = read(record + 8, 1)
+        total = read(0xFFF14E, 2) + value
+        enter = AtomicPlan(74, 6,
+                           (*_bytes(0xFFF14E, total, 2),
+                            *_bytes(sp - 4, CONTACT_TYPE13_RETURN, 4)),
+                           {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | value,
+                            'a7': sp - 4, 'pc': CONTACT_TYPE13_ENTRY,
+                            'sr': _add_sr(registers['sr'], read(0xFFF14E, 2), value, 2)},
+                           CONTACT_SIBLING_RETIREMENT, direct_calls=1)
+        inner, needs_fixed = _contact_type13(dispatch_plan_view(machine, enter), enter.registers)
+        if needs_fixed:
+            raise UnsupportedCandidate('type13 direct retirement requires fixed helper seam')
+        final = dict(inner.registers)
+        final.update(a7=sp + 4, pc=read(sp, 4) & 0xFFFFFF)
+        return AtomicPlan(enter.cycles + inner.cycles + 16,
+                          enter.instructions + inner.instructions + 1,
+                          tuple(dict((*enter.writes, *inner.writes)).items()), final,
+                          CONTACT_TYPE13_RETURN, enter.direct_calls + inner.direct_calls)
     route = 'retire18' if kind == 0x18 else 'retire10' if kind == 0x10 else \
             'retire11' if kind == 0x11 else 'retire'
     cycles, instructions, extra_writes = _CONTACT_SIBLING_RETIRE[route]
@@ -776,6 +978,8 @@ def begin_contact_sibling(machine, registers):
                           prefix.instructions + decrement.instructions,
                           tuple(dict((*prefix.writes, *decrement.writes)).items()), final,
                           decrement.last_pc, prefix.direct_calls + decrement.direct_calls)
+    if route == 'type13':
+        return _contact_type13_outer(machine, registers, require_fixed=False)
     if route in _CONTACT_SIBLING_RETIRE:
         # The outer route reads all sibling inputs before entering the tail.
         kind = read(record, 1)
@@ -893,7 +1097,7 @@ def begin_contact_sibling_wrapper_sound(machine, registers, entry):
                      *CONTACT_SIBLING_GLOBALS])
     read = lambda address, size: _read(machine, address, size)
     route = game.contact_sibling_route(read, registers['a1'])[0]
-    if route == 'decrement':
+    if route in ('decrement', 'type13'):
         sibling_return = 0x1AE9CA if entry == CONTACT_SIBLING_WRAPPER else 0x1AE9DE
         callback = AtomicPlan(18, 1, _bytes(sp - 4, sibling_return, 4),
                               {**registers, 'a7': sp - 4, 'pc': CONTACT_SIBLING_ENTRY},
@@ -919,7 +1123,7 @@ def begin_contact_sibling_wrapper_sound(machine, registers, entry):
 
 def finish_contact_sibling_wrapper_sound(machine, registers):
     """Finish C6/DA's admitted contact or decrement sound suffix and RTS."""
-    if registers['pc'] == 0x1AEC52:
+    if registers['pc'] in (0x1AEC52, CONTACT_TYPE13_FIXED_RETURN):
         sibling = finish_contact_sibling_sound(machine, registers)
         local_sp, local_pc = sibling.registers['a7'], sibling.registers['pc']
         if local_pc == 0x1AE9CA:

@@ -54,6 +54,21 @@ def free_object(read, start, count, stride=66, *, occupied=None):
     return None, count
 
 
+def free_object_reverse(read, start, count, stride=66, *, occupied=None):
+    """Find the first inactive record while walking an original pool downwards.
+
+    ``1AE292`` starts at the high address and tests exactly ``count`` record
+    type bytes before its DBRA exhaustion result.  ``occupied`` is retained
+    for callers whose source record lives in the same pool after they have
+    made that source active.
+    """
+    for index in range(count):
+        address = start - index * stride
+        if address != occupied and read(address, 1) == 0:
+            return address, index
+    return None, count
+
+
 def relocate_object(read, record, destination):
     """Move a 66-byte object to the secondary pool, installing its new script."""
     data = [read(record + offset, 1) for offset in range(66)]
