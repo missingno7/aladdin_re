@@ -89,3 +89,21 @@ def spawn_collection(read, record, destination, template):
     """Initialize a companion at the collected object's current position."""
     return [*initialize(destination, template),
             *[(destination + offset, read(record + offset, 1)) for offset in range(2, 6)]]
+
+
+def spawn_region(destination, template, d2, d3, x, y, clear_address):
+    """Install one allocator-selected object and its caller-supplied placement.
+
+    This is the pure residue of the common ``1B526C`` tail.  Selection,
+    template source ownership, and the indexed clear's alias domain remain at
+    the machine boundary.
+    """
+    return [*initialize(destination, template),
+            *((destination + 0x32 + offset, (d2 >> (8 * (1 - offset))) & 0xff)
+              for offset in range(2)),
+            (destination + 0x34, d3 & 0xff),
+            *((destination + 2 + offset, (x >> (8 * (1 - offset))) & 0xff)
+              for offset in range(2)),
+            *((destination + 4 + offset, (y >> (8 * (1 - offset))) & 0xff)
+              for offset in range(2)),
+            (clear_address, 0)]

@@ -20,6 +20,7 @@ from .game.objects.lifecycle import (
     release_buffer,
     retire_collected_object,
     spawn_collection,
+    spawn_region,
     unlink,
 )
 
@@ -43,5 +44,6 @@ __all__ = [
     "release_buffer",
     "retire_collected_object",
     "spawn_collection",
+    "spawn_region",
     "unlink",
 ]

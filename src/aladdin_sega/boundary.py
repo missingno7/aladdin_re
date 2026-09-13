@@ -36,6 +36,13 @@ CONTACT_SIBLING_TAIL = 0x1AED0C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
 CONTACT_TYPE13_RETURN = 0x1AECEE
+SPAWN_REGION_ENTRY = 0x1B524E
+SPAWN_REGION_REVERSE_ENTRY = 0x1B5256
+SPAWN_REGION_LOWER_ENTRY = 0x1B525E
+SPAWN_REGION_UPPER_ENTRY = 0x1B5266
+SPAWN_REGION_ENTRIES = (SPAWN_REGION_ENTRY, SPAWN_REGION_REVERSE_ENTRY,
+                        SPAWN_REGION_LOWER_ENTRY, SPAWN_REGION_UPPER_ENTRY)
+SPAWN_REGION_LAST_PC = 0x1B529E
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -190,6 +197,82 @@ def initialize_object(machine, registers: dict[str, int]) -> AtomicPlan:
     return AtomicPlan(476, 27, writes,
                       {"a6": a6 + 19, "a7": a7 + 4, "pc": return_pc & 0xFFFFFF,
                        "sr": _logic_sr(sr, 0, 4)}, INIT_LAST_PC)
+
+
+# Four adjacent entry arms select traversals of overlapping object-pool ranges
+# then join at 1B526C.  The old 1AFD12 label was an interior address of an
+# unrelated instruction; 1B5266 actually calls the measured 1AE262 selector.
+_SPAWN_REGION_ARMS = {
+    SPAWN_REGION_ENTRY: (0xFF7E82, 24, 1, 0xFF84B2, 680, 42, 44, 3, 0x1B5252),
+    SPAWN_REGION_REVERSE_ENTRY: (0xFF8470, 24, -1, 0xFF7E40, 680, 42, 44, 3, 0x1B525A),
+    SPAWN_REGION_LOWER_ENTRY: (0xFF8368, 20, -1, 0xFF7E40, 680, 42, 44, 3, 0x1B5262),
+    SPAWN_REGION_UPPER_ENTRY: (0xFF7F06, 20, 1, 0xFF842E, 670, 41, 44, 3, 0x1B526A),
+}
+SPAWN_REGION_GLOBALS = (
+    ('spawn position x', 0xFFF150, 2), ('spawn position x offset', 0xFF7DB0, 2),
+    ('spawn position y', 0xFFF152, 2), ('spawn position y offset', 0xFF7DB2, 2),
+)
+
+
+def _signed_word(value: int) -> int:
+    value &= 0xFFFF
+    return value - 0x10000 if value & 0x8000 else value
+
+
+def spawn_region(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
+    """Recover one allocation-backed ``1B524E..1B529E`` entry arm.
+
+    All three observed allocation arms share the initializer and coordinate
+    tail.  The selected pool remains live RAM; only the final residue is
+    staged after the full pool, frame, template, globals, and indexed-clear
+    spans are proved disjoint.
+    """
+    if entry not in _SPAWN_REGION_ARMS:
+        raise UnsupportedCandidate('unknown spawn region entry')
+    a2, a6, sp, d0, d2, d3, sr = (registers[name] for name in
+                                  ('a2', 'a6', 'a7', 'd0', 'd2', 'd3', 'sr'))
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned spawn region stack')
+    base, count, direction, exhausted, free_fixed_cycles, free_fixed_instructions, \
+        exhausted_fixed_cycles, exhausted_fixed_instructions, selector_return = _SPAWN_REGION_ARMS[entry]
+    clear_address = (a2 + _signed_word(d2)) & 0xFFFFFF
+    _address(clear_address, 1)
+    spans = [('spawn allocator pool', 0xFF7E82, 24 * 66),
+             ('spawn region frame', sp - 4, 8), ('spawn indexed clear', clear_address, 1),
+             *SPAWN_REGION_GLOBALS]
+    if 0xFF0000 <= a6 <= 0xFFFFFF:
+        spans.append(('spawn template', a6, 19))
+    _spans_disjoint(spans)
+    return_pc = _read(machine, sp, 4)
+    read = lambda address, size: _read(machine, address, size)
+    addresses = tuple(base + direction * 66 * index for index in range(count))
+    destination, index = (game.free_object(read, base, count) if direction > 0 else
+                          game.free_object_reverse(read, base, count))
+    if destination is None:
+        selected_type = read(addresses[-1], 1)
+        scan_cycles, scan_instructions = ((1000, 99) if count == 24 else (840, 83))
+        return AtomicPlan(scan_cycles + exhausted_fixed_cycles,
+                          scan_instructions + exhausted_fixed_instructions,
+                          _bytes(sp - 4, selector_return, 4),
+                          {**registers, 'd0': (d0 & 0xFFFF0000) | 0xFFFF,
+                           'a5': exhausted, 'a7': sp + 4, 'pc': return_pc & 0xFFFFFF,
+                           'sr': _logic_sr(sr, selected_type, 1)},
+                          SPAWN_REGION_LAST_PC,
+                          direct_calls=1)
+    template = _object_template(machine, record=destination, template=a6, entry_sp=sp - 4)
+    # The full shared pool was guarded above; this exact selection is only for
+    # the initializer's template/record contract and the semantic writes.
+    x = (read(0xFFF150, 2) + read(0xFF7DB0, 2)) & 0xFFFF
+    y = (read(0xFFF152, 2) + read(0xFF7DB2, 2)) & 0xFFFF
+    writes = (*_bytes(sp - 4, 0x1B5270, 4),
+              *game.spawn_region(destination, template, d2, d3, x, y, clear_address))
+    scan_cycles, scan_instructions = 54 + 40 * index, 5 + 4 * index
+    return AtomicPlan(scan_cycles + free_fixed_cycles, scan_instructions + free_fixed_instructions,
+                      tuple(dict(writes).items()),
+                      {**registers, 'd0': (d0 & 0xFFFF0000) | (y & 0xFF00),
+                       'a5': destination, 'a6': a6 + 19, 'a7': sp + 4,
+                       'pc': return_pc & 0xFFFFFF, 'sr': _logic_sr(sr, 0, 1)},
+                      SPAWN_REGION_LAST_PC, direct_calls=2)
 
 
 def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,

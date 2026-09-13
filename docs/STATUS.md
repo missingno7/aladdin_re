@@ -6,6 +6,22 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Four-arm spawn-region allocation
+
+The lifecycle candidate now owns `1B524E`, `1B5256`, `1B525E`, and `1B5266`
+through their shared allocation, initialization, placement, and indexed-clear
+tail.  The fourth arm uses the corrected `1AE262` selector; `1AFD12` is an
+interior address, not a callable entry.  Pool, template, frame, global, and
+indexed-clear aliases reject before candidate writes.  See
+[spawn-region.md](spawn-region.md) for the measured domain and coverage.
+
+The frozen suite has **1,063 passing tests**.  The current old-225, new-244,
+and four later user recordings all pass terminal state/frame/PCM comparison;
+both original and lifecycle receipts match the current 19-module source tree.
+Recorded B5256/B5266 witnesses pass strict outer state, 150 native future,
+safe/fresh restore, and result/return/timing controls.  The disposable edit
+loop rejects an indexed-clear mutation with the build DLL unchanged.
+
 ## Type-13 allocation retirement
 
 The lifecycle candidate now composes type-`0x13` zero-counter retirement through
