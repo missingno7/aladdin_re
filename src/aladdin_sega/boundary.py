@@ -60,6 +60,25 @@ class AtomicPlan:
     direct_calls: int = 0
 
 
+@dataclass(frozen=True)
+class SoundSeam:
+    """One admitted sound-prefix plan and its measured local return contract.
+
+    Construction binds the concrete suffix with the stack/frame facts for the
+    surrounding wrapper, so the runner never infers a route from the prefix's
+    final instruction.
+    """
+    prefix: AtomicPlan
+    stack_basis: int
+    resume_pc: int
+    return_slot: int
+    saved_frame: int
+    frame_size: int
+    return_delta: int
+    counts_contact: bool = False
+    suffix: object | None = None
+
+
 def _logic_sr(sr: int, value: int, width: int) -> int:
     """68000 MOVE/CLR logic flags, preserving X and the non-CCR bits."""
     mask = (1 << (width * 8)) - 1
@@ -909,8 +928,8 @@ def _contact_sibling_decrement_sound(machine, registers):
                       0x1AEC46, direct_calls=1)
 
 
-def begin_contact_sibling_sound(machine, registers):
-    """1AEC00's admitted decrement or type-13 native helper seam."""
+def begin_contact_sibling_sound_seam(machine, registers):
+    """Construct 1AEC00's measured decrement or type-13 sound seam."""
     record, sp = registers['a1'], registers['a7']
     if (record | sp) & 1:
         raise UnsupportedCandidate('unaligned contact sibling sound record/stack')
@@ -921,7 +940,9 @@ def begin_contact_sibling_sound(machine, registers):
     read = lambda address, size: _read(machine, address, size)
     route = game.contact_sibling_route(read, record)[0]
     if route == 'type13':
-        return begin_contact_sibling_type13_sound(machine, registers)
+        return SoundSeam(begin_contact_sibling_type13_sound(machine, registers), sp - 4,
+                         CONTACT_TYPE13_FIXED_RETURN, CONTACT_TYPE13_FIXED_RETURN,
+                         20, 20, 24, suffix=finish_contact_sibling_sound)
     if route != 'decrement':
         raise UnsupportedCandidate('contact sibling is not on its decrement arm')
     direction, distance = read(0xFF7E49, 1), read(0xFF7E02, 2)
@@ -930,10 +951,16 @@ def begin_contact_sibling_sound(machine, registers):
                        {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | distance,
                         'pc': 0x1AEC32}, 0x1AEC2E)
     sound = _contact_sibling_decrement_sound(dispatch_plan_view(machine, outer), outer.registers)
-    return AtomicPlan(outer.cycles + sound.cycles, outer.instructions + sound.instructions,
-                      tuple(dict((*outer.writes, *sound.writes)).items()), sound.registers,
-                      sound.last_pc, outer.direct_calls + sound.direct_calls)
+    prefix = AtomicPlan(outer.cycles + sound.cycles, outer.instructions + sound.instructions,
+                        tuple(dict((*outer.writes, *sound.writes)).items()), sound.registers,
+                        sound.last_pc, outer.direct_calls + sound.direct_calls)
+    return SoundSeam(prefix, sp, 0x1AEC52, 0x1AEC52, 24, 28, 28,
+                     suffix=finish_contact_sibling_sound)
 
+
+def begin_contact_sibling_sound(machine, registers):
+    """1AEC00's admitted decrement or type-13 native helper prefix."""
+    return begin_contact_sibling_sound_seam(machine, registers).prefix
 
 def finish_contact_sibling_sound(machine, registers):
     """Resume command 8 or the type-13 fixed helper at its local return."""
@@ -1168,8 +1195,8 @@ def begin_contact_sibling_dispatch(machine, registers, dispatch, entry):
                       wrapper.last_pc, dispatch.direct_calls + wrapper.direct_calls)
 
 
-def begin_contact_sibling_wrapper_sound(machine, registers, entry):
-    """Enter a sibling wrapper's admitted command-31 or command-8 sound arm."""
+def begin_contact_sibling_wrapper_sound_seam(machine, registers, entry):
+    """Construct a wrapper sound prefix with its exact local return facts."""
     if entry not in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate('unknown contact sibling sound wrapper')
     sp = registers['a7']
@@ -1185,11 +1212,15 @@ def begin_contact_sibling_wrapper_sound(machine, registers, entry):
         callback = AtomicPlan(18, 1, _bytes(sp - 4, sibling_return, 4),
                               {**registers, 'a7': sp - 4, 'pc': CONTACT_SIBLING_ENTRY},
                               entry, direct_calls=1)
-        sound = begin_contact_sibling_sound(dispatch_plan_view(machine, callback), callback.registers)
-        return AtomicPlan(callback.cycles + sound.cycles,
-                          callback.instructions + sound.instructions,
-                          tuple(dict((*callback.writes, *sound.writes)).items()), sound.registers,
-                          sound.last_pc, callback.direct_calls + sound.direct_calls)
+        sound = begin_contact_sibling_sound_seam(dispatch_plan_view(machine, callback), callback.registers)
+        prefix = AtomicPlan(callback.cycles + sound.prefix.cycles,
+                            callback.instructions + sound.prefix.instructions,
+                            tuple(dict((*callback.writes, *sound.prefix.writes)).items()),
+                            sound.prefix.registers, sound.prefix.last_pc,
+                            callback.direct_calls + sound.prefix.direct_calls)
+        return SoundSeam(prefix, sound.stack_basis, sound.resume_pc, sound.return_slot,
+                         sound.saved_frame, sound.frame_size, sound.return_delta, sound.counts_contact,
+                         finish_contact_sibling_wrapper_sound)
     if entry != CONTACT_SIBLING_WRAPPER or route != 'contact':
         raise UnsupportedCandidate('contact sibling wrapper is not on its contact arm')
     # BSR sibling + D8-zero return + TST/BNE + BSR contact.  The contact BSR
@@ -1198,11 +1229,17 @@ def begin_contact_sibling_wrapper_sound(machine, registers, entry):
                                   {**registers, 'a7': sp - 4, 'pc': CONTACT_ENTRY},
                                   CONTACT_SIBLING_WRAPPER, direct_calls=2)
     sound = begin_contact_sound(dispatch_plan_view(machine, contact_callback), contact_callback.registers)
-    return AtomicPlan(contact_callback.cycles + sound.cycles,
-                      contact_callback.instructions + sound.instructions,
-                      tuple(dict((*contact_callback.writes, *sound.writes)).items()), sound.registers,
-                      sound.last_pc, contact_callback.direct_calls + sound.direct_calls)
+    prefix = AtomicPlan(contact_callback.cycles + sound.cycles,
+                        contact_callback.instructions + sound.instructions,
+                        tuple(dict((*contact_callback.writes, *sound.writes)).items()), sound.registers,
+                        sound.last_pc, contact_callback.direct_calls + sound.direct_calls)
+    return SoundSeam(prefix, sp - 4, 0x1AE5B6, 0x1AE5B6, 24, 28, 28, True,
+                     finish_contact_sibling_wrapper_sound)
 
+
+def begin_contact_sibling_wrapper_sound(machine, registers, entry):
+    """Enter a sibling wrapper's admitted command-31 or command-8 sound arm."""
+    return begin_contact_sibling_wrapper_sound_seam(machine, registers, entry).prefix
 
 def finish_contact_sibling_wrapper_sound(machine, registers):
     """Finish C6/DA's admitted contact or decrement sound suffix and RTS."""
@@ -1233,20 +1270,30 @@ def finish_contact_sibling_wrapper_sound(machine, registers):
                       CONTACT_DISPATCH_LOCAL_RETURN, contact.direct_calls)
 
 
-def begin_contact_sibling_dispatch_sound(machine, registers, dispatch, entry):
-    """Compose the table prefix with an admitted sibling sound seam."""
+def begin_contact_sibling_dispatch_sound_seam(machine, registers, dispatch, entry):
+    """Construct the table prefix and its measured sibling sound seam."""
     sp = registers['a7']
     if entry not in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate('unknown dispatched sibling sound wrapper')
     if dispatch.registers.get('pc') != entry or dispatch.registers.get('a7') != sp - 4:
         raise UnsupportedCandidate('contact sibling dispatch sound prefix identity')
     callback_registers = {**registers, **dispatch.registers}
-    sound = begin_contact_sibling_wrapper_sound(dispatch_plan_view(machine, dispatch), callback_registers, entry)
+    sound = begin_contact_sibling_wrapper_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                      callback_registers, entry)
     final = dict(dispatch.registers)
-    final.update(sound.registers)
-    return AtomicPlan(dispatch.cycles + sound.cycles, dispatch.instructions + sound.instructions,
-                      tuple(dict((*dispatch.writes, *sound.writes)).items()), final,
-                      sound.last_pc, dispatch.direct_calls + sound.direct_calls)
+    final.update(sound.prefix.registers)
+    prefix = AtomicPlan(dispatch.cycles + sound.prefix.cycles,
+                        dispatch.instructions + sound.prefix.instructions,
+                        tuple(dict((*dispatch.writes, *sound.prefix.writes)).items()), final,
+                        sound.prefix.last_pc, dispatch.direct_calls + sound.prefix.direct_calls)
+    return SoundSeam(prefix, sound.stack_basis, sound.resume_pc, sound.return_slot,
+                     sound.saved_frame, sound.frame_size, sound.return_delta, sound.counts_contact,
+                     sound.suffix)
+
+
+def begin_contact_sibling_dispatch_sound(machine, registers, dispatch, entry):
+    """Compose the table prefix with an admitted sibling sound prefix."""
+    return begin_contact_sibling_dispatch_sound_seam(machine, registers, dispatch, entry).prefix
 
 _CONTACT_RESET_BASE = {
     'be': (470, 33), 'd0': (526, 37), 'd7': (554, 39),

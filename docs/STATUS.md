@@ -6,6 +6,23 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Explicit sound-seam invocation facts
+
+The synchronous runner now receives one immutable `SoundSeam` built by the
+accepted collection, contact, decrement, or type-13 prefix.  It carries the
+committed prefix plan, caller stack basis, resume/return slot, saved-frame
+shape, return delta, and concrete suffix.  The old recovery dispatch guessed
+those facts twice from a sibling prefix's `last_pc`; that route inference is
+gone.  Admission, original sound execution, return/frame identity checks,
+fallbacks, timings, snapshots, and completion counters retain their existing
+contracts.
+
+`tests/test_sound_seam_review.py` checks direct command-8 and type-13 seams,
+C6 command-31 versus command-8 wrappers, and their dispatcher composition;
+it also checks the concrete suffix identity.  The focused contact/collection
+suite, recorded witnesses, synthetic type-13 paths, and six replay receipts
+remain required before this consolidation is published.
+
 ## Four-arm spawn-region allocation
 
 The lifecycle candidate now owns `1B524E`, `1B5256`, `1B525E`, and `1B5266`

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
-from .boundary import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY, CALLER_ENTRY,
+from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY, CALLER_ENTRY,
                         INIT_ENTRY, FINISH_ENTRY, ROM_SHA256, clear_auxiliary_buffer,
                         COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, clear_object_pair, detach_object,
                         initialize_object, finish_object, replace_object, TRANSITION_ENTRY,
@@ -14,9 +14,9 @@ from .boundary import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY,
                         finish_collection, relocate_collection, CONTACT_SIBLING_ENTRY,
                         CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT,
                         begin_contact_sibling, begin_contact_sibling_wrapper,
-                        begin_contact_sibling_dispatch, begin_contact_sibling_wrapper_sound,
-                        finish_contact_sibling_wrapper_sound, begin_contact_sibling_dispatch_sound,
-                        begin_contact_sibling_sound, finish_contact_sibling_sound,
+                        begin_contact_sibling_dispatch, begin_contact_sibling_wrapper_sound_seam,
+                        finish_contact_sibling_wrapper_sound, begin_contact_sibling_dispatch_sound_seam,
+                        begin_contact_sibling_sound_seam, finish_contact_sibling_sound,
                         SPAWN_REGION_ENTRIES, spawn_region)
 
 
@@ -119,8 +119,7 @@ class Candidate:
             machine.run(instructions=1)
         return False
 
-    def _run_sound_seam(self, machine, target, *, sp, resume, return_slot, suffix,
-                        saved_frame=24, frame_size=28, return_delta=28,
+    def _run_sound_seam(self, machine, target, seam: SoundSeam, *,
                         suffix_transform=lambda plan: plan, on_complete=lambda: None):
         """Run one admitted synchronous sound call and prove its local return.
 
@@ -131,6 +130,9 @@ class Candidate:
         a 24-byte saved frame plus argument; type-13's fixed helper saves the
         five registers alone in a measured 20-byte frame.
         """
+        sp, resume, return_slot = seam.stack_basis, seam.resume_pc, seam.return_slot
+        saved_frame, frame_size, return_delta = (seam.saved_frame, seam.frame_size,
+                                                  seam.return_delta)
         frame_base = (sp - saved_frame) & 0xFFFF
         frame = machine.peek_ram(frame_base, frame_size)
         self.stats['legacy_entries'] += 1
@@ -150,7 +152,9 @@ class Candidate:
                 self.stats['legacy_returns'] += 1
                 reason = 'scheduler admission'
                 try:
-                    plan = suffix(returned)
+                    if seam.suffix is None:
+                        raise ValueError('sound seam has no concrete suffix')
+                    plan = seam.suffix(machine, returned)
                     if self._apply(machine, suffix_transform(plan), target):
                         on_complete()
                         return True
@@ -201,12 +205,25 @@ class Candidate:
         if not legacy:
             self.stats["carrier_completed"] += 1
             return True
+        seam = SoundSeam(
+            plan, regs['a7'], resume, resume, 24, 28, 28,
+            suffix=(lambda live, returned: finish_collection(live, returned, entry)) if collection
+            else finish_object_transition,
+        )
         return self._run_sound_seam(
-            machine, target, sp=regs['a7'], resume=resume, return_slot=resume,
-            suffix=(lambda returned: finish_collection(machine, returned, entry)) if collection
-            else (lambda returned: finish_object_transition(machine, returned)),
+            machine, target, seam,
             on_complete=lambda: self.stats.__setitem__('carrier_completed', self.stats['carrier_completed'] + 1),
         )
+
+    def _complete_sibling_sound(self, seam: SoundSeam, *, dispatched: bool):
+        """Bind the caller-owned counters to an explicit constructed seam."""
+        def complete():
+            if dispatched:
+                self.stats['collection_dispatch_hits'] += 1
+            self.stats['contact_sibling_hits'] += 1
+            if seam.counts_contact:
+                self.stats['contact_hits'] += 1
+        return complete
 
     def _collection_dispatch(self, machine, target):
         """Admit 1ABC82 and its known callback in one native atomic region."""
@@ -228,10 +245,11 @@ class Candidate:
                         return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
                 except UnsupportedCandidate:
                     return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+                seam = SoundSeam(sound, dispatch_registers['a7'] - 8,
+                                 0x1AE5B6, 0x1AE5B6, 24, 28, 28, True,
+                                 finish_contact_dispatch_sound)
                 return self._run_sound_seam(
-                    machine, target, sp=dispatch_registers['a7'] - 8,
-                    resume=0x1AE5B6, return_slot=0x1AE5B6,
-                    suffix=lambda returned: finish_contact_dispatch_sound(machine, returned),
+                    machine, target, seam,
                     suffix_transform=self._mutate,
                     on_complete=lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
                                          self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1)),
@@ -246,29 +264,15 @@ class Candidate:
                     return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
             except UnsupportedCandidate as error:
                 try:
-                    sound = begin_contact_sibling_dispatch_sound(machine, dispatch_registers, prefix, entry)
-                    if not self._apply(machine, self._mutate(sound), target):
+                    seam = begin_contact_sibling_dispatch_sound_seam(machine, dispatch_registers, prefix, entry)
+                    if not self._apply(machine, self._mutate(seam.prefix), target):
                         return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
                 except UnsupportedCandidate:
                     return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
-                decrement_sound = sound.last_pc == 0x1AEC46
-                type13_fixed = sound.last_pc == 0x1AF1F0
                 return self._run_sound_seam(
-                    machine, target, sp=(dispatch_registers['a7'] - 12 if type13_fixed
-                                         else dispatch_registers['a7'] - 8),
-                    resume=0x1AF1F6 if type13_fixed else 0x1AEC52 if decrement_sound else 0x1AE5B6,
-                    return_slot=0x1AF1F6 if type13_fixed else 0x1AEC52 if decrement_sound else 0x1AE5B6,
-                    suffix=lambda returned: finish_contact_sibling_wrapper_sound(machine, returned),
-                    saved_frame=20 if type13_fixed else 24,
-                    frame_size=20 if type13_fixed else 28,
-                    return_delta=24 if type13_fixed else 28,
+                    machine, target, seam,
                     suffix_transform=self._mutate,
-                    on_complete=(lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
-                                          self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1)))
-                    if decrement_sound or type13_fixed else
-                    (lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
-                              self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1),
-                              self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1))),
+                    on_complete=self._complete_sibling_sound(seam, dispatched=True),
                 )
             self.stats['collection_dispatch_hits'] += 1
             self.stats['contact_sibling_hits'] += 1
@@ -298,10 +302,10 @@ class Candidate:
                     return self._fallback(machine, CONTACT_ENTRY, 'scheduler admission')
             except UnsupportedCandidate:
                 return self._fallback(machine, CONTACT_ENTRY, f'unsupported domain: {error}')
+            seam = SoundSeam(prefix, registers['a7'], 0x1AE5B6, 0x1AE5B6, 24, 28, 28, True,
+                             finish_contact_sound)
             return self._run_sound_seam(
-                machine, target, sp=registers['a7'], resume=0x1AE5B6,
-                return_slot=0x1AE5B6,
-                suffix=lambda returned: finish_contact_sound(machine, returned),
+                machine, target, seam,
                 suffix_transform=self._mutate,
                 on_complete=lambda: self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1),
             )
@@ -337,32 +341,17 @@ class Candidate:
                     return self._fallback(machine, entry, 'scheduler admission')
             except UnsupportedCandidate as error:
                 try:
-                    sound = (begin_contact_sibling_sound(machine, registers)
-                             if entry == CONTACT_SIBLING_ENTRY else
-                             begin_contact_sibling_wrapper_sound(machine, registers, entry))
-                    if not self._apply(machine, self._mutate(sound), target):
+                    seam = (begin_contact_sibling_sound_seam(machine, registers)
+                            if entry == CONTACT_SIBLING_ENTRY else
+                            begin_contact_sibling_wrapper_sound_seam(machine, registers, entry))
+                    if not self._apply(machine, self._mutate(seam.prefix), target):
                         return self._fallback(machine, entry, 'scheduler admission')
                 except UnsupportedCandidate:
                     return self._fallback(machine, entry, f'unsupported domain: {error}')
-                decrement_sound = sound.last_pc == 0x1AEC46
-                type13_fixed = sound.last_pc == 0x1AF1F0
                 return self._run_sound_seam(
-                    machine, target,
-                    sp=(registers['a7'] - (4 if entry == CONTACT_SIBLING_ENTRY else 8)
-                        if type13_fixed else registers['a7'] if entry == CONTACT_SIBLING_ENTRY else registers['a7'] - 4),
-                    resume=0x1AF1F6 if type13_fixed else 0x1AEC52 if decrement_sound else 0x1AE5B6,
-                    return_slot=0x1AF1F6 if type13_fixed else 0x1AEC52 if decrement_sound else 0x1AE5B6,
-                    suffix=(lambda returned: finish_contact_sibling_sound(machine, returned))
-                    if entry == CONTACT_SIBLING_ENTRY else
-                    (lambda returned: finish_contact_sibling_wrapper_sound(machine, returned)),
-                    saved_frame=20 if type13_fixed else 24,
-                    frame_size=20 if type13_fixed else 28,
-                    return_delta=24 if type13_fixed else 28,
+                    machine, target, seam,
                     suffix_transform=self._mutate,
-                    on_complete=(lambda: self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1))
-                    if decrement_sound or type13_fixed else
-                    (lambda: (self.stats.__setitem__('contact_sibling_hits', self.stats['contact_sibling_hits'] + 1),
-                              self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1))),
+                    on_complete=self._complete_sibling_sound(seam, dispatched=False),
                 )
             self.stats['contact_sibling_hits'] += 1
             return True
