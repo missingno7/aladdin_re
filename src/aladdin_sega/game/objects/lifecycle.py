@@ -116,3 +116,10 @@ def finish_reverse_spawn(read, record):
               for offset in range(2)),
             *((record + 4 + offset, (y >> (8 * (1 - offset))) & 0xff)
               for offset in range(2))]
+
+
+def finish_upper_spawn(record):
+    """Apply 1B7376's type, script, and mode residue to an upper-pool slot."""
+    return [(record, 0x40), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00122c12'))),
+            (record + 0x29, 0)]

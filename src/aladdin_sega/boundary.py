@@ -45,6 +45,8 @@ SPAWN_REGION_ENTRIES = (SPAWN_REGION_ENTRY, SPAWN_REGION_REVERSE_ENTRY,
 SPAWN_REGION_LAST_PC = 0x1B529E
 SPAWN_REVERSE_CALLER_ENTRY = 0x1B6802
 SPAWN_REVERSE_CALLER_LAST_PC = 0x1B681A
+SPAWN_UPPER_CALLER_ENTRY = 0x1B735E
+SPAWN_UPPER_CALLER_LAST_PC = 0x1B7388
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -283,8 +285,13 @@ def spawn_region(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
     template = _object_template(machine, record=destination, template=a6, entry_sp=sp - 4)
     # The full shared pool was guarded above; this exact selection is only for
     # the initializer's template/record contract and the semantic writes.
-    x = (read(0xFFF150, 2) + read(0xFF7DB0, 2)) & 0xFFFF
-    y = (read(0xFFF152, 2) + read(0xFF7DB2, 2)) & 0xFFFF
+    x_base, x_offset = read(0xFFF150, 2), read(0xFF7DB0, 2)
+    y_base, y_offset = read(0xFFF152, 2), read(0xFF7DB2, 2)
+    x = (x_base + x_offset) & 0xFFFF
+    y = (y_base + y_offset) & 0xFFFF
+    # The final coordinate ADD.W is the last X-writing instruction.  The
+    # indexed CLR.B sets Z but preserves that arithmetic X residue.
+    coordinate_sr = _logic_sr(_add_sr(sr, y_base, y_offset, 2), 0, 1)
     writes = (*_bytes(sp - 4, 0x1B5270, 4),
               *game.spawn_region(destination, template, d2, d3, x, y, clear_address))
     scan_cycles, scan_instructions = 54 + 40 * index, 5 + 4 * index
@@ -292,7 +299,7 @@ def spawn_region(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
                       tuple(dict(writes).items()),
                       {**registers, 'd0': (d0 & 0xFFFF0000) | (y & 0xFF00),
                        'a5': destination, 'a6': a6 + 19, 'a7': sp + 4,
-                       'pc': return_pc & 0xFFFFFF, 'sr': _logic_sr(sr, 0, 1)},
+                       'pc': return_pc & 0xFFFFFF, 'sr': coordinate_sr},
                       SPAWN_REGION_LAST_PC, direct_calls=2)
 
 
@@ -348,6 +355,43 @@ def spawn_reverse_caller(machine, registers: dict[str, int]) -> AtomicPlan:
                       tuple(dict((*writes, *correction)).items()), final,
                       SPAWN_REVERSE_CALLER_LAST_PC,
                       prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover table callback 1B735E through its upper-pool creation suffix."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper spawn caller stack')
+    _spans_disjoint([('upper spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('upper spawn caller frame', sp - 8, 12),
+                     *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    cap = _read(machine, 0xFFEFE0, 2)
+    compare_sr = (_sub_sr(registers['sr'], cap, 0x3939, 2) & ~0x10) | (registers['sr'] & 0x10)
+    if compare_sr & 4:
+        return AtomicPlan(46, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer & 0xFFFFFF, 'sr': compare_sr},
+                          SPAWN_UPPER_CALLER_LAST_PC)
+    prefix = AtomicPlan(66, 4, _bytes(sp - 4, 0x1B7374, 4),
+                        {**registers, 'a6': 0x1B79B8, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, 0x1B7370, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 22,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_CALLER_LAST_PC, prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_upper_spawn(final['a5']))
+    # MOVE/CLR suffixes preserve the allocator tail's coordinate ADD.W X.
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 0, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 72,
+                      prefix.instructions + selected.instructions + 5,
+                      tuple(dict((*writes, *suffix)).items()), final, SPAWN_UPPER_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
 
 def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,
                         return_site, last_pc, extra_writes=(), extra_spans=(),

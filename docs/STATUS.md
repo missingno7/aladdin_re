@@ -682,3 +682,12 @@ seam. No generic resume registry, Linux build or speculative machine rewrite
 is justified. The present investigation changed no game region or domain.
 Public combined source/binary distribution remains unresolved; ROMs and user
 artifacts stay local.
+
+## Upper spawn dispatcher callback
+
+`1B735E..1B7388` now composes the measured upper allocator/initializer/placement
+path and its type-`0x40`/script-`0x122C12` suffix. It retains the actual saved
+outer return (`1AE46E` and late `1AE4EA`), cap, exhaustion, alias, deadline and
+native-future contracts. The shared coordinate tail preserves X from its final
+Y `ADD.W`; cap and exhaustion preserve incoming X. Recorded direct coverage is
+763 calls (538 allocation, 225 cap); exhaustion remains synthetic oracle coverage.

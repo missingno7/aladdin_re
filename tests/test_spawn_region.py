@@ -182,3 +182,48 @@ def test_spawn_region_mutants_do_not_match_recorded_outer(mutant):
     except Exception:
         return
     assert actual_future != expected_future
+
+
+_COORDINATE_FIXTURES = (*ENTRY_FIXTURES,
+    ('lower', SPAWN_REGION_LOWER_ENTRY,
+     LUNA / 'allocator-arms-1b524e/old-225/1AE2AA-1B5262.alsnap', 0xFF8368, 20, -1),)
+
+
+def _coordinate_x_run(path, entry, base, count, direction, *, y_base, y_offset,
+                      incoming_x, candidate):
+    """Compare the common tail's final ADD.W/CLR.B X residue at its true outer."""
+    with Machine(read_rom(DEFAULT_ROM)) as machine:
+        _prepare(machine, path, entry)
+        _occupy(machine, base, count, direction, 0)
+        native_write(machine, 0xFFF152, y_base.to_bytes(2, 'big'))
+        native_write(machine, 0xFF7DB2, y_offset.to_bytes(2, 'big'))
+        registers = machine.registers()
+        outer = _outer_return(machine)
+        registers.update(pc=entry, sr=(registers['sr'] & ~0x1F) | (0x10 if incoming_x else 0))
+        machine.gates([entry])
+        assert machine.run(instructions=1) == 'gate'
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000, cycles=1,
+                              instructions=1, writes=[], registers=registers, last_pc=entry)
+        if candidate:
+            recovery = Candidate('lifecycle'); recovery.arm(machine)
+            assert machine.run(instructions=1) == 'gate'
+            assert recovery.on_gate(machine, machine.info['tick'] + 1_000_000)
+        machine.gates([outer])
+        assert machine.run(instructions=20_000) == 'gate'
+        result = _observable(machine)
+        machine.gates([])
+        assert machine.run(instructions=150) == 'limit'
+        return result, _observable(machine)
+
+
+@pytest.mark.parametrize('name,entry,path,base,count,direction', _COORDINATE_FIXTURES)
+@pytest.mark.parametrize('y_base,y_offset', ((1, 1), (0xFFFF, 1)), ids=('y-no-carry', 'y-carry'))
+@pytest.mark.parametrize('incoming_x', (False, True))
+def test_common_spawn_tail_preserves_final_coordinate_add_x(name, entry, path, base, count,
+                                                             direction, y_base, y_offset, incoming_x):
+    expected, expected_future = _coordinate_x_run(path, entry, base, count, direction,
+        y_base=y_base, y_offset=y_offset, incoming_x=incoming_x, candidate=False)
+    actual, actual_future = _coordinate_x_run(path, entry, base, count, direction,
+        y_base=y_base, y_offset=y_offset, incoming_x=incoming_x, candidate=True)
+    assert actual == expected
+    assert actual_future == expected_future

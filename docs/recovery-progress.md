@@ -402,3 +402,13 @@ audit are `type13-final-{old,new244,late1,late2,late3,late4}` and
 `type13-final-replay-audit.json` under that directory. The disposable strict
 edit loop reports a 1.199-second pass and 1.239-second rejected allocator
 mutation without touching the build DLL at `type13-edit-loop-strict/result.json`.
+
+## Upper spawn dispatcher callback `1B735E`
+
+The direct callback now owns the `FFEFE0 == 0x3939` cap and otherwise composes
+`1B5266` upper allocation with the `0x40` / `0x122C12` / `A5+0x29=0` suffix.
+The manual boundary facts are the saved BSR frame, 22-cycle exhausted BNE/RTS,
+and CCR: CMP retains incoming X while the common tail retains X from the final
+`FFF152 + FF7DB2` `ADD.W`. Existing allocator planning, RAM guards and semantic
+initializer/placement are reused. `1B7354` remains outside scope because its
+recorded path is only the `FFF171 == 0` guard into an RTS.
