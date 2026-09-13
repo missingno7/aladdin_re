@@ -39,6 +39,7 @@ CONTACT_FAMILY_66_ENTRY = 0x1AFBF4
 CONTACT_FAMILY_MOTION_ENTRY = 0x1AF978
 CONTACT_FAMILY_SECONDARY_MOTION_ENTRY = 0x1AF9F6
 CONTACT_FAMILY_SOUND_ENTRY = 0x1AFC4E
+CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
 CONTACT_TYPE13_RETURN = 0x1AECEE
@@ -1547,6 +1548,7 @@ def begin_collection_dispatch(machine, registers):
     if target not in (*COLLECTION_ROUTES, CONTACT_DISPATCH_ENTRY, CONTACT_ACTIVATION_ENTRY,
                       CONTACT_FAMILY_66_ENTRY, CONTACT_FAMILY_MOTION_ENTRY,
                       CONTACT_FAMILY_SECONDARY_MOTION_ENTRY, CONTACT_FAMILY_SOUND_ENTRY,
+                      CONTACT_TYPE7E_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
     dispatch_sr = sr & ~0x1F
@@ -2024,6 +2026,45 @@ def finish_contact_family_sound(machine, registers):
                     sr=_logic_sr(registers['sr'], 0, 1))
     return AtomicPlan(128, 6, tuple(game.finish_contact_launch(record)), restored,
                       0x1AFCD0, direct_calls=1)
+
+
+CONTACT_TYPE7E_GLOBALS = (
+    ('type7E blocked', 0xFFF0E7, 1), ('type7E ready', 0xFFF07E, 1),
+    ('type7E armed', 0xFFF114, 1), ('type7E motion', 0xFF7DFE, 2),
+    ('type7E motion limit', 0xFF7E00, 2),
+)
+
+
+def begin_contact_type7e(machine, registers):
+    """Own only `1AFE1C`'s finite no-callee exits.
+
+    Ready, unarmed records enter the decimal/sound/stream handoff and are
+    intentionally declined as one untouched dispatcher callback.
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type7E record/stack')
+    _spans_disjoint([('type7E record', record, 66), ('type7E return', sp, 4),
+                     *CONTACT_TYPE7E_GLOBALS])
+    read = lambda address, size: _read(machine, address, size)
+    ret = read(sp, 4) & 0xFFFFFF
+    blocked = read(0xFFF0E7, 1)
+    if blocked:
+        cycles, instructions, clear = 82, 5, False
+    elif not read(0xFFF07E, 1):
+        cycles, instructions, clear = 130, 8, True
+    elif read(0xFFF114, 1):
+        cycles, instructions, clear = 138, 9, False
+    else:
+        raise UnsupportedCandidate('type7E progress/stream handoff')
+    return AtomicPlan(cycles, instructions, tuple(game.finish_contact_type7e(clear_armed=clear)),
+                      {'a7': sp + 4, 'pc': ret, 'sr': _logic_sr(sr, 0x180, 2)},
+                      0x1AFF3E, direct_calls=1)
+
+
+def begin_contact_type7e_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_TYPE7E_ENTRY, begin_contact_type7e)
 
 
 CONTACT_GLOBALS = tuple(('contact state', address, 1) for address in (

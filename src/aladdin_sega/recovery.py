@@ -16,6 +16,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         CONTACT_FAMILY_MOTION_ENTRY, begin_contact_family_motion_dispatch,
                         CONTACT_FAMILY_SOUND_ENTRY, begin_contact_family_sound_dispatch,
                         CONTACT_FAMILY_SECONDARY_MOTION_ENTRY, begin_contact_family_secondary_dispatch,
+                        CONTACT_TYPE7E_ENTRY, begin_contact_type7e_dispatch,
                         finish_collection, relocate_collection, CONTACT_SIBLING_ENTRY,
                         CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT,
                         begin_contact_sibling, begin_contact_sibling_wrapper,
@@ -285,6 +286,7 @@ class Candidate:
             CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
             CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
             CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
+            CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
         }.get(entry)
         if family_planner is not None:
             try:

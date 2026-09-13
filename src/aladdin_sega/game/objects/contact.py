@@ -218,6 +218,16 @@ def finish_contact_launch(record):
             (record + 0x22, 0x4B), (record + 0x23, 0x3E), (record + 0x37, 0)]
 
 
+def finish_contact_type7e(*, clear_armed):
+    """The finite `1AFE1C` exits before its progress/stream handoff."""
+    writes = []
+    if clear_armed:
+        writes.append((0xFFF114, 0))
+    writes.extend(((0xFF7DFE, 0), (0xFF7DFF, 0xB0),
+                   (0xFF7E00, 1), (0xFF7E01, 0x80)))
+    return writes
+
+
 def _overlay(read, writes, address, size):
     values = {at: value for at, value in writes}
     if size == 1:

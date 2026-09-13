@@ -1,10 +1,49 @@
-# Status — 14 September 2026
+# Status â€” 14 September 2026
 
 The project now has an immutable cold-start input-history model for player
 sessions and verification.  It replaces the current play/replay/snapshot
 workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
+
+## Contact scan frontier and type-7E readiness exits
+
+The dispatcher now also owns `1AFE1C`'s blocked, not-ready and already-armed
+exits. The type-7E semantic helper publishes motion parameters and conditionally
+clears its armed flag. Ready/unarmed progress stays original: both recorded
+progress paths enter the unresolved `1B2238` command-stream subsystem.
+This is bounded callback ownership, not recovery of that engine.
+
+Canonical census finds 161 not-ready, six already-armed and two progress visits.
+The production batch passes **1,342 tests in 95.44 s** and the full **26,378-frame**
+cold strict comparison with zero restores and matching current source hashes.
+It admits 163 of the 167 eligible visits; four scheduler refusals stay original.
+Gate hits remain 7,609. Dispatcher admissions rise 432 to 595, fallbacks fall
+1,545 to 1,382, direct calls rise 52,194 to 52,520 and replaced instructions rise
+459,462 to 462,239. Fresh-interpreter edit-to-verdict median is 0.274 s across
+five original/candidate outer-plus-150-instruction checks; no native rebuild.
+Six retained eligible callback states also qualify after an explicitly constructed
+rewind to their dispatcher entry. Standalone constructed cases cover guard priority,
+register/stack variation, fresh restore, aliases, deadlines and all three mutants.
+Evidence: `artifacts/contact-type7e-full/{comparison,latency}.json` and
+`artifacts/contact-next-frontier/`.
+
+Upward discovery now maps the 24-object contact scan (`1ABBE0` loop head,
+`1ABD74` advance, `1ABD7C` RTS), with dispatcher `1ABC82..1ABCA0` inside it.
+The original census completes 22,335 passes: 21,596 without callbacks, 437 with
+then-supported targets and 302 with an unsupported target; type-7E alone accounts
+for 169 of the latter. These are structural counts before this batch, not whole-scan
+admission. Shared completion `1ABCA0..1ABD74` has 748 visits including 13 landing
+paths. Collision predicates pass 387 recorded-derived and 544 constructed
+original branch-edge checks, but exact scan effects are not yet production-owned.
+
+Next composition work targets that collision prefix and shared completion.
+The other frequent callback `1AE796` has 67 recorded visits and unresolved VDP,
+controller/Z80 and buffer-processing dependencies. Those boundaries are explicit;
+no new legacy runner is introduced merely to increase callback coverage.
+Discovery evidence: `artifacts/contact-parent-frontier/` and
+`artifacts/contact-remaining-frontier/`. All canonical census terminal fields
+match the completed original reference.
 
 ## Dispatcher-owned contact family
 
@@ -266,7 +305,7 @@ execution concept** was introduced. The three callback/allocator boundaries are
 internal on admitted parent paths; independent adapters remain for original callers.
 This is another bounded composition step, not evidence of a CPU-free subsystem.
 
-The full current user history (`4b153763…`, 26,378 frames) passes original versus
+The full current user history (`4b153763â€¦`, 26,378 frames) passes original versus
 lifecycle with zero restores and strict equality at every canonical frame. The
 new original observations also exactly match the prior optimization baseline.
 

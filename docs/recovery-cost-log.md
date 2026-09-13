@@ -280,3 +280,29 @@ constructed-only coverage. Dispatcher admissions +60, fallbacks -60, direct
 Python calls +84, replaced instructions +1,132; gate hits unchanged at 7,609.
 Existing standalone adapters remain necessary for unrecovered callers; this batch
 does not claim a CPU-free contact subsystem or that manual cost has disappeared.
+
+
+## Type-7E finite readiness exits and enclosing scan discovery
+
+New semantic work: readiness/armed priority and shared motion parameters before
+progress handoff. Reused mechanics: the preceding batch's RAM-only dispatcher
+adapter, AtomicPlan, alias/CCR helpers and original qualification harness.
+Production adds 10 semantic and41 boundary lines, plus minimal export/routing.
+New machine protocols:zero. The medium worker completed map, canonical census,
+prototype and production/test batch without repeated root resumptions. Root added
+six actual register/stack/guard-priority variations where fixture options alone
+had not exercised them. This is improved bounded handoff behavior, not a measured
+claim about total token cost.
+
+Full1,342-test suite and26,378-frame cold replayPASS;163additional dispatcher
+admissions,163fewer fallbacks,326additional direct calls,2,777additional replaced
+instructions, unchanged gate hits. Four eligible visits refused scheduler admission;
+two progress paths remain original. Fast witness fresh-interpreter median0.274s.
+No native rebuild, new snapshot state, child gate or seam.
+
+Discovery now moves upward into the24-object collision scan. Its geometry and
+shared suffix offer connected ownership; callback1AE796 exposes real VDP/wait/
+buffer-service dependencies, while1AFE1C exposes a command-stream engine.
+Neither is hidden by adopting new protocols or counting unobserved branches.
+Predicate control-flow evidence is explicitly weaker than exact machine candidate
+qualification; it will guide, not replace, that qualification.
