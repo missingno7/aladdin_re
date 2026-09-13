@@ -6,7 +6,7 @@ import json
 from aladdin_sega import artifacts
 from aladdin_sega.machine import Machine
 from aladdin_sega.profile import DEFAULT_ROM, FRAME_TICKS, read_rom
-from aladdin_sega.recovered import TRANSITION_ENTRY
+from aladdin_sega.recovery import TRANSITION_ENTRY
 from aladdin_sega.recovery import Candidate
 from aladdin_sega.verification import compare_replay
 from recovery_witness import reach_gate

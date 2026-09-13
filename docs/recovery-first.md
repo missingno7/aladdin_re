@@ -1,8 +1,9 @@
 # Recovered object cleanup and initialization
 
-The current [synchronous seam](synchronous-seam.md) keeps these game-source
-effects unchanged while removing persistent continuation machinery from normal
-recovery. The 0.6 experiment below remains frozen capability evidence.
+The current [0.8 semantic migration](semantic-migration.md) shares game bodies in
+`recovered.py` and retains exact exposed entry/seam effects in `boundary.py`.
+The [0.7 synchronous seam](synchronous-seam.md) is unchanged. The original-machine
+contracts below still apply; 0.6 remains frozen capability evidence.
 
 The 0.6.0 [connected carrier experiment](carrier-convergence.md) expands this
 cluster through the counter and original sound calls, with a snapshot-safe
@@ -62,10 +63,12 @@ direct Python calls within each admitted composition, replaced M68000
 instructions, and charged M68000 cycles.  A refused plan is counted as a
 fallback and the original resumes at its stopped opcode.
 
-The implementation lives in `src/aladdin_sega/recovered.py` as
+The exact entry adapters live in `src/aladdin_sega/boundary.py` as
 `clear_auxiliary_buffer()`, `clear_object_pair()`, `detach_object()`,
 `initialize_object()` and `finish_object()`.
 `replace_object()` adds the shared replacement tail and its incrementing entry.
+All adapters use shared semantic bodies in `recovered.py`; internal buffer/pair
+calls no longer construct nested helper plans or intermediate register contracts.
 Unsupported operands, aliases and scheduler refusal still fall back from the
 unchanged entry. The previous `LegacyExit` marker is removed because its only
 dependency is now recovered. No suspended Python stack or second machine is

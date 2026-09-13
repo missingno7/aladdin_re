@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
-from .recovered import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY, CALLER_ENTRY,
+from .boundary import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY, CALLER_ENTRY,
                         INIT_ENTRY, FINISH_ENTRY, ROM_SHA256, clear_auxiliary_buffer,
                         COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, clear_object_pair, detach_object,
                         initialize_object, finish_object, replace_object, TRANSITION_ENTRY,

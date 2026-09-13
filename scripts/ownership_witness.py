@@ -35,7 +35,8 @@ def run():
         def profile(frame, event, arg):
             module = frame.f_globals.get("__name__", "")
             if event == "call" and module in {
-                    "aladdin_sega.recovered", "aladdin_sega.ownership_boundary", "aladdin_sega.ownership_semantics"}:
+                    "aladdin_sega.recovered", "aladdin_sega.boundary",
+                    "aladdin_sega.ownership_boundary", "aladdin_sega.ownership_semantics"}:
                 calls[f"{module.rsplit('.', 1)[-1]}.{frame.f_code.co_name}"] += 1
             if event == "return" and frame.f_code.co_name == "replace_object":
                 plans.append({"write_bytes": len(arg.writes), "unique_write_bytes": len(dict(arg.writes)),

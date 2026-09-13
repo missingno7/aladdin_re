@@ -18,6 +18,7 @@ def main():
     parser.add_argument("witness", type=Path)
     parser.add_argument("--rom", type=Path, default=ROOT / "assets/Aladdin (USA).md")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/review/edit-loop")
+    parser.add_argument("--candidate", default="leaf", choices=("leaf", "carrier"))
     args = parser.parse_args()
     native = ROOT / "build/libaladdin_native.dll"
     native_hash = hashlib.sha256(native.read_bytes()).hexdigest()
@@ -30,7 +31,7 @@ def main():
         env = dict(os.environ, PYTHONPATH=temporary, ALADDIN_NATIVE_LIBRARY=str(native))
         def compare(label):
             command = [sys.executable, "-m", "aladdin_sega", "compare", str(args.witness.resolve()),
-                       "--rom", str(args.rom.resolve()), "--candidate", "leaf", "--diagnostics", "--output", str((args.output / label).resolve())]
+                       "--rom", str(args.rom.resolve()), "--candidate", args.candidate, "--diagnostics", "--output", str((args.output / label).resolve())]
             started = time.perf_counter()
             result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
             payload = json.loads(result.stdout)
@@ -39,10 +40,10 @@ def main():
         before = compare("before")
         function = source / "recovered.py"
         code = function.read_text()
-        expression = "writes.extend((pointer + offset, 0) for offset in range(length))"
+        expression = "(pointer + offset, 0)"
         if code.count(expression) != 1:
             raise RuntimeError("Recovery edit witness no longer identifies exactly one clear loop")
-        function.write_text(code.replace(expression, "writes.extend((pointer + offset, 1) for offset in range(length))"))
+        function.write_text(code.replace(expression, "(pointer + offset, 1)"))
         # No stale timestamp/size bytecode cache may hide a same-length edit.
         for cached in (source / "__pycache__").glob("recovered.*.pyc"):
             cached.unlink()

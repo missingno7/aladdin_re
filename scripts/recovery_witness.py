@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from aladdin_sega import artifacts
-from aladdin_sega.recovered import (CALLER_ENTRY, PAIR_ENTRY, LEAF_ENTRY,
+from aladdin_sega.recovery import (CALLER_ENTRY, PAIR_ENTRY, LEAF_ENTRY,
                                     INIT_ENTRY, FINISH_ENTRY, clear_auxiliary_buffer,
                                     COUNTED_REPLACE_ENTRY, clear_object_pair, detach_object,
                                     initialize_object, finish_object, replace_object)

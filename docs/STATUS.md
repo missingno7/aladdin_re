@@ -6,6 +6,32 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Shared semantic helpers in production (0.8.0)
+
+**CONVERGING for the existing cluster.** The previous experiment's duplicate
+helper implementation has been eliminated. `recovered.py` now contains 47 lines
+of shared semantic behavior; `boundary.py` contains 305 lines of exposed-entry
+and sound-seam effects. Together they replace the old 389-line mixed module:
+**37 production lines removed**, with dispatch/native support unchanged.
+There are no parallel strict/semantic production modes and no new game region.
+
+All existing buffer, pair, initializer, replacement, cleanup and detach callers
+share these bodies. Internal pair AtomicPlans, intermediate pair registers/CCR
+and overwritten BSR/save history are gone. Final stack residue and every exposed
+machine contract remain exact. The short carrier constructs three plans rather
+than four and emits 63 rather than 77 replacement byte writes.
+
+All **253 tests**, the strict short witness, 150 native continuation instructions,
+fresh safe-snapshot restore and result/return/timing controls pass. The full user
+replay passes all **225 observations** with the same 58,652 replaced instructions,
+four fallbacks, 35,248 execution crossings and 247,180 measured API crossings.
+A semantic Python edit is rejected in **0.599 s**, without building/installing.
+The frozen 0.6 tests and earlier ownership experiment still reproduce.
+
+See [semantic-migration.md](semantic-migration.md) for actual deletions, production
+LOC accounting, direct-call count changes, unchanged verification contracts and
+reproduction. The prior investigation below remains historical evidence.
+
 ## Machine-semantics ownership investigation (after 0.7.0)
 
 Recommendation: **HYBRID CARRIER + SEMANTIC ISLANDS**, with a measured prototype

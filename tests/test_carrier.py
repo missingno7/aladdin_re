@@ -3,7 +3,7 @@ import pytest
 
 from aladdin_sega import artifacts
 from aladdin_sega.machine import Machine
-from aladdin_sega.recovered import TRANSITION_ENTRY, SOUND_RETURN, begin_object_transition
+from aladdin_sega.recovery import TRANSITION_ENTRY, SOUND_RETURN, begin_object_transition
 from aladdin_sega.recovery import Candidate
 from test_recovery import leaf_machine, native_replace_rom, native_write, put
 

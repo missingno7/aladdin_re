@@ -23,7 +23,7 @@ BASELINE = "a72ed9e00fa8f24000e4df9fe4e3a29d4c7a68cc"
 
 def prepare(folder, variant):
     archive = subprocess.check_output(["git", "-c", f"safe.directory={ROOT.as_posix()}",
-        "archive", "--format=zip", BASELINE, "src/aladdin_sega"], cwd=ROOT)
+        "archive", "--format=zip", BASELINE, "src/aladdin_sega", "tests"], cwd=ROOT)
     with zipfile.ZipFile(io.BytesIO(archive)) as saved:
         saved.extractall(folder)
     package = folder / "src/aladdin_sega"
@@ -77,8 +77,10 @@ def run(output, full):
             effects = json.loads(result.stdout)
             assert effects["exit_state_equal"] == (variant != "no-residue"), effects
             if variant == "hybrid":
-                result, elapsed = invoke("tests", ["-m", "pytest", "-q", "tests/test_recovery.py", "tests/test_carrier.py",
-                    "tests/test_atomic.py", "tests/test_atomic_sound_guard.py"])
+                frozen = package.parents[1]
+                result, elapsed = invoke("tests", ["-m", "pytest", "-q", "--rootdir", str(frozen),
+                    "--confcutdir", str(frozen), *[str(frozen / "tests" / name) for name in
+                    ("test_recovery.py", "test_carrier.py", "test_atomic.py", "test_atomic_sound_guard.py")]])
                 assert result.returncode == 0, result.stdout + result.stderr
                 report["hybrid_tests"] = {"output": result.stdout, "seconds": elapsed}
                 result, _ = invoke("safe-boundaries", [str(ROOT / "scripts/synchronous_witness.py"),

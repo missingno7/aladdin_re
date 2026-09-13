@@ -15,4 +15,6 @@ def test_accidental_framework_leak_is_detected():
     assert guard.violations("from port_forge.replay import verdict_record", filename="recovery.py")
     assert guard.violations("codec = b'PFGENS02'", filename="artifacts.py")
     assert guard.violations("from .verification import Observer", filename="recovered.py")
+    assert guard.violations("from .boundary import AtomicPlan", filename="recovered.py")
+    assert guard.violations("plan = AtomicPlan()", filename="recovered.py")
     assert not guard.violations("from .machine import Machine", filename="recovery.py")

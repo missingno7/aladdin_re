@@ -4,7 +4,7 @@ from __future__ import annotations
 import ctypes as C
 
 import pytest
-from aladdin_sega.recovered import (clear_auxiliary_buffer, clear_object_pair, detach_object, PAIR_ENTRY,
+from aladdin_sega.recovery import (clear_auxiliary_buffer, clear_object_pair, detach_object, PAIR_ENTRY,
                                     INIT_ENTRY, FINISH_ENTRY, COUNTED_REPLACE_ENTRY, REPLACE_ENTRY,
                                     initialize_object, finish_object, replace_object)
 
@@ -459,7 +459,7 @@ def test_finish_counter_alias_falls_back_before_writing(which):
 
 
 @pytest.mark.parametrize("name,entry,stat,direct", [("init", INIT_ENTRY, "initializer_hits", 0),
-                                                   ("finish", FINISH_ENTRY, "finish_hits", 4)])
+                                                   ("finish", FINISH_ENTRY, "finish_hits", 3)])
 def test_initializer_and_finish_dispatch_count_calls_and_preserve_deadlines(name, entry, stat, direct):
     machine = leaf_machine()
     machine.info["pc"] = entry

@@ -1,4 +1,4 @@
-"""Measure frozen 0.6 versus synchronous carrier on the same short/full replays."""
+"""Measure a frozen carrier baseline versus current source on the same replays."""
 import argparse
 import io
 import json
@@ -13,17 +13,17 @@ import zipfile
 from carrier_v060 import BASELINE, ROOT
 
 
-def run(output, witness, replay):
+def run(output, witness, replay, baseline=BASELINE):
     output.mkdir(parents=True, exist_ok=True)
     archive = subprocess.check_output(["git", "-c", f"safe.directory={ROOT.as_posix()}",
-        "archive", "--format=zip", BASELINE, "src/aladdin_sega"], cwd=ROOT)
-    report = {"baseline_commit": BASELINE, "method": "Serial fresh processes; source extraction excluded; identical DLL, empty bytecode cache, diagnostics and observation settings. Single timing samples, not a speedup claim.",
+        "archive", "--format=zip", baseline, "src/aladdin_sega"], cwd=ROOT)
+    report = {"baseline_commit": baseline, "method": "Serial fresh processes; source extraction excluded; identical DLL, empty bytecode cache, diagnostics and observation settings. Single timing samples, not a speedup claim.",
               "runs": {}, "loc": {}}
     with tempfile.TemporaryDirectory(prefix="aladdin-seam-cost-") as folder:
         frozen = Path(folder)
         with zipfile.ZipFile(io.BytesIO(archive)) as saved:
             saved.extractall(frozen)
-        sources = {"v060": frozen / "src", "synchronous": ROOT / "src"}
+        sources = {"baseline": frozen / "src", "current": ROOT / "src"}
         for scope, artifact in (("short", witness), ("full", replay)):
             for name, source in sources.items():
                 label = f"{scope}-{name}"
@@ -49,9 +49,9 @@ def run(output, witness, replay):
                     "all_api_crossings": 2 * sum(calls.values()),
                     "native_sha256": receipt["receipt"]["native_binary_sha256"]}
                 print(json.dumps({"run": label, "status": "PASS", "seconds": elapsed}), flush=True)
-        for file in ("recovery.py", "machine.py", "artifacts.py", "cli.py", "frontend.py", "recovered.py"):
-            report["loc"][file] = {name: len((source / "aladdin_sega" / file).read_text().splitlines())
-                                   for name, source in sources.items()}
+        for file in ("recovery.py", "machine.py", "artifacts.py", "cli.py", "frontend.py", "recovered.py", "boundary.py"):
+            report["loc"][file] = {name: len(path.read_text().splitlines()) if path.exists() else 0
+                                   for name, source in sources.items() for path in [source / "aladdin_sega" / file]}
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
@@ -60,5 +60,6 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/synchronous/economics")
     parser.add_argument("--witness", type=Path, default=ROOT / "artifacts/carrier/witness-v060/witness.alreplay")
     parser.add_argument("--replay", type=Path, default=ROOT / "recordings/current/20260912T210640.729016Z.alreplay")
+    parser.add_argument("--baseline", default=BASELINE, help="Frozen git commit/ref; defaults to the 0.6 evidence")
     args = parser.parse_args()
-    run(args.output.resolve(), args.witness.resolve(), args.replay.resolve())
+    run(args.output.resolve(), args.witness.resolve(), args.replay.resolve(), args.baseline)

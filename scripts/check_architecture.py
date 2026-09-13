@@ -26,13 +26,15 @@ def violations(source, *, filename):
             if isinstance(node, ast.ImportFrom):
                 values.append(node.module or "")
             if filename == "recovered.py" and any(
-                    value.split(".")[0] in {"ctypes", "machine", "recovery", "verification", "diagnostics", "artifacts", "frontend"}
+                    value.split(".")[0] in {"ctypes", "machine", "boundary", "recovery", "verification", "diagnostics", "artifacts", "frontend"}
                     for value in values):
                 findings.append(f"{filename}:{node.lineno}: recovered behavior imports policy/backend machinery")
         elif isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
             values = [node.value.decode(errors="replace") if isinstance(node.value, bytes) else node.value]
         elif isinstance(node, ast.Name):
             values = [node.id]
+            if filename == "recovered.py" and node.id in {"AtomicPlan", "_logic_sr"}:
+                findings.append(f"{filename}:{node.lineno}: semantic behavior constructs machine effects")
         elif isinstance(node, ast.Attribute):
             values = [node.attr]
         else:

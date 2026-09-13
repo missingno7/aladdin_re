@@ -137,7 +137,9 @@ The [machine-semantics ownership investigation](docs/ownership-boundary.md)
 compares that baseline with semantic helper/outer-adapter prototypes on the same
 region. Run `scripts/ownership_experiment.py --quick` for the focused experiment,
 or omit `--quick` for full replay comparisons. It changes only disposable source
-copies; production remains 0.7.0.
+copies of the frozen 0.7 baseline. The [0.8 migration](docs/semantic-migration.md)
+shares those semantic bodies across the existing production entries and removes
+the duplicate internal adapters.
 
 The [0.6 report](docs/carrier-convergence.md), its negative verdict, implementation
 and inside-callee snapshot proof remain frozen at `evidence/carrier-v0.6.0`.
@@ -169,12 +171,11 @@ capabilities, iteration cost and deletion opportunities. The
 [component ledger](docs/component-migration.md) records the actual compiler
 closure, remaining donor edges, migration classes and removal triggers.
 
-Edit `src/aladdin_sega/recovered.py` for the buffer clear at `0x1AE372`, object-pair
-clear at `0x1ABE6E`, detach region at `0x1AD0FC`, object initializer at `0x1AE30A`,
-cleanup/template path at `0x1AE954`, and shared replacement tail at `0x1AF4C6`
-(with its incrementing entry at `0x1AF4C2`). These paths compose pair clearing
-and initialization directly. Gate policy and mutants live separately
-in `recovery.py`. See [recovery-first.md](docs/recovery-first.md) for domains,
+Edit `src/aladdin_sega/recovered.py` for shared buffer release, pair clearing,
+template initialization, decimal-counter and unlink behavior. These semantic
+helpers have no guest stack, register, cycle or AtomicPlan contract. Existing
+ROM entry and sound-seam effects live in `boundary.py`; gate policy and mutants
+live in `recovery.py`. See [recovery-first.md](docs/recovery-first.md) for domains,
 timing, continuation and reproducible short witnesses.
 
 ## Inspect a failing short witness
