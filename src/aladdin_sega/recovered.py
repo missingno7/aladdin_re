@@ -7,9 +7,11 @@ organized by object family.
 """
 
 from .game.objects.collection import collection_state, increment_counter
-from .game.objects.contact import (activate_contact, contact_decay, contact_path, contact_reaction, contact_reset,
+from .game.objects.contact import (activate_contact, begin_contact_launch, finish_contact_launch,
+                                   contact_decay, contact_path, contact_reaction, contact_reset,
                                    contact_route, contact_repeated_decay, contact_sibling_route,
-                                   contact_script_selector)
+                                   contact_script_selector, transition_contact_66, transition_contact_6b,
+                                   publish_contact_record, transition_contact_77)
 from .game.objects.lifecycle import (
     activate_collection,
     clear_pair,
@@ -46,6 +48,12 @@ from .game.objects.lifecycle import (
 __all__ = [
     "activate_collection",
     "activate_contact",
+    "begin_contact_launch",
+    "finish_contact_launch",
+    "transition_contact_66",
+    "transition_contact_6b",
+    "publish_contact_record",
+    "transition_contact_77",
     "clear_pair",
     "collection_state",
     "contact_decay",

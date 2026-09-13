@@ -242,3 +242,41 @@ include empty, single, multiple and unresolved callback passes. In particular,
 frame 1725 directly connects `1B72D4` and `1B6802` within one original pass.
 The capture files are raw discovery oracle states with history/frame provenance;
 they are not portable gameplay histories or a new snapshot contract.
+
+
+## Contact family: four adjacent dispatcher children (14 September)
+
+Durable source: type-66 transition, motion/publication and type-6B selection,
+signed motion/type-77 directional selection, launch and sound-request suffix.
+The existing parent directly composes all four; no child gates are introduced.
+Reused: AtomicPlan, staged RAM, alias guards, CCR helpers, synchronous sound,
+strict region oracle, future/fresh restore, mutants and canonical history.
+New execution protocols, snapshot state and mutable authorities: **zero**.
+Production diff before this report: semantic contact source +54 lines,
+boundary +306, recovery +33, exports about +12. These are handwritten changes,
+not generated source. Three RAM-only dispatcher adapters share one local helper.
+
+Manual reasoning remained substantial: signed/unsigned proximity branches,
+publication-index aliases, sound saved-frame layout, final CCR/X and branch costs.
+Review found fixture-specific A3/D1/publication constants in an unfinished draft;
+varied-state qualification forced all operands back to live RAM/registers.
+Repeated original instruction tracing corrected timing and register residue.
+The medium-effort implementation worker required repeated resumption and root
+completion; lower effort has not demonstrated lower total cost for this batch.
+Independent review is retained, but future workers should receive compact fresh
+context and bounded completion criteria rather than frequent status coordination.
+
+Mechanical consolidation: the existing region oracle restores its observation
+gates after every recovery callback, including the shared synchronous sound
+runner. No new per-region verifier was needed. Canonical census eliminated an
+ad-hoc shifted-input extraction bug. Next justified tooling target is a narrow
+original-ROM trace/fact checker for repeated cycle/register/stack accounting,
+not a new IR, scheduler or continuation framework.
+
+Evidence: 53 family tests, 1,322 complete-suite tests (93.91 s), 12 recorded
+strict/future/fresh witnesses, 160 seeded varied-state cases, and full 26,378-frame
+cold PASS with zero restores/current source hashes. Two of four callbacks remain
+constructed-only coverage. Dispatcher admissions +60, fallbacks -60, direct
+Python calls +84, replaced instructions +1,132; gate hits unchanged at 7,609.
+Existing standalone adapters remain necessary for unrecovered callers; this batch
+does not claim a CPU-free contact subsystem or that manual cost has disappeared.

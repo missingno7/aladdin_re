@@ -6,6 +6,40 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Dispatcher-owned contact family
+
+Four adjacent callbacks now compose inside `1ABC82` through `1ABCA0`:
+`1AFBF4` type-66 transition, `1AF978` motion/type-6B publication,
+`1AF9F6` signed motion/type-77 directional transition, and `1AFC4E` launch
+with optional original sound command `4B`. Game writes remain in
+`game/objects/contact.py`; exact outer effects remain in `boundary.py`.
+The sound path reuses the existing synchronous runner and safe-boundary rule.
+No child gate, native API, snapshot metadata or execution protocol was added.
+
+The canonical history observes 37 visits to `1AFBF4` and 25 to `1AF978`;
+the other two callbacks are **constructed adjacent coverage**, not recorded
+hits. Twelve recorded states pass strict outer equality, 150 native instructions
+and fresh-process restore. The family has 53 tests including varied live
+registers/stack, alias fallback, deadlines and result/return/timing mutants;
+a separate seeded 160-case original-ROM variation check passes. The complete
+suite passes **1,322 tests in 93.91 s**.
+
+Full cold history passes **26,378 frames**, zero restores, strict state/frame/PCM
+comparison and matching current production hashes. Relative to contact activation,
+dispatcher admissions rise 372 to 432, fallbacks fall 1,605 to 1,545, direct
+Python calls rise 52,110 to 52,194, and replaced instructions rise 458,330 to
+459,462. Gate hits remain 7,609; configured gates remain 61.
+
+Qualification caught fixture-specific register/publication constants and incorrect
+branch timing/CCR recipes before integration. Unique execution mechanisms stayed
+at zero, but manual exact accounting and review cost remain significant.
+The oracle also now reinstates its observation gates after synchronous sound
+restores production gates. This changes qualification plumbing, not game policy.
+Evidence: `artifacts/contact-family-frontier/current-canonical/report.json`,
+`recorded-qualified.json`, `varied_state_check.json`, and
+`artifacts/contact-family-full/comparison.json`. The older `current/` capture
+used shifted input timing and is invalid as canonical evidence.
+
 ## Dispatcher-owned contact activation
 
 The existing `1ABC82` dispatcher now composes type `01`'s `1AFD84` contact

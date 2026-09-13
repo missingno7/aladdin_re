@@ -35,6 +35,10 @@ CONTACT_SIBLING_RETIREMENT = 0x1AECD8
 CONTACT_SIBLING_TAIL = 0x1AED0C
 CONTACT_ACTIVATION_ENTRY = 0x1AFD84
 CONTACT_ACTIVATION_TAIL = 0x1AE6B4
+CONTACT_FAMILY_66_ENTRY = 0x1AFBF4
+CONTACT_FAMILY_MOTION_ENTRY = 0x1AF978
+CONTACT_FAMILY_SECONDARY_MOTION_ENTRY = 0x1AF9F6
+CONTACT_FAMILY_SOUND_ENTRY = 0x1AFC4E
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
 CONTACT_TYPE13_RETURN = 0x1AECEE
@@ -1541,6 +1545,8 @@ def begin_collection_dispatch(machine, registers):
     kind = _read(machine, record, 1)
     target = int.from_bytes(machine.peek_rom(COLLECTION_DISPATCH_TABLE + 4 * kind, 4), 'big') & 0xFFFFFF
     if target not in (*COLLECTION_ROUTES, CONTACT_DISPATCH_ENTRY, CONTACT_ACTIVATION_ENTRY,
+                      CONTACT_FAMILY_66_ENTRY, CONTACT_FAMILY_MOTION_ENTRY,
+                      CONTACT_FAMILY_SECONDARY_MOTION_ENTRY, CONTACT_FAMILY_SOUND_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
     dispatch_sr = sr & ~0x1F
@@ -1718,6 +1724,306 @@ def begin_contact_activation_dispatch(machine, registers, dispatch):
                       dispatch.instructions + activation.instructions,
                       tuple(dict((*dispatch.writes, *activation.writes)).items()), final,
                       activation.last_pc, dispatch.direct_calls + activation.direct_calls)
+
+
+CONTACT_FAMILY_66_GLOBALS = (
+    ('contact family vertical', 0xFF7E5A, 2),
+    ('contact family blocked', 0xFFF0E7, 1),
+    ('contact family script', 0xFF7E60, 4),
+    ('contact family script mode', 0xFF7E77, 1),
+    ('contact family state', 0xFFF0BE, 1),
+    ('contact family state mode', 0xFFF0C0, 1),
+    ('contact family clear', 0xFFF0CC, 1),
+)
+
+
+def begin_contact_family_66(machine, registers):
+    """Recover `1AFBF4`'s timer-gated type-66 transition."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact family-66 record/stack')
+    _spans_disjoint([('contact family-66 record', record, 56),
+                     ('contact family-66 return', sp, 4), *CONTACT_FAMILY_66_GLOBALS])
+    read = lambda address, size: _read(machine, address, size)
+    ret, vertical = read(sp, 4) & 0xFFFFFF, read(0xFF7E5A, 2)
+    if vertical & 0x8000:
+        return AtomicPlan(42, 3, (), {'a7': sp + 4, 'pc': ret,
+                                       'sr': _logic_sr(sr, vertical, 2)}, 0x1AFC4C)
+    if vertical == 0:
+        return AtomicPlan(66, 5, (), {'a7': sp + 4, 'pc': ret,
+                                       'sr': _logic_sr(sr, vertical, 2)}, 0x1AFC4C)
+    kind = read(record, 1)
+    if kind == 0x66:
+        return AtomicPlan(86, 7, (), {'a7': sp + 4, 'pc': ret,
+                                       'sr': _cmp_sr(sr, kind, 0x66, 1)}, 0x1AFC4C)
+    blocked = read(0xFFF0E7, 1)
+    writes = game.transition_contact_66(record, publish=not blocked)
+    # The blocked arm ends after TST.B; the published arm ends after CLR.B.
+    return AtomicPlan(162 if blocked else 288, 12 if blocked else 18, tuple(writes),
+                      {'a7': sp + 4, 'pc': ret, 'sr': _logic_sr(sr, blocked, 1)},
+                      0x1AFC4C, direct_calls=1)
+
+
+def _contact_family_dispatch(machine, registers, dispatch, entry, planner):
+    """The shared JSR frame and atomic composition for three RAM-only callbacks."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != entry
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact family dispatch identity')
+    callback = planner(dispatch_plan_view(machine, dispatch), callback_registers)
+    return AtomicPlan(dispatch.cycles + callback.cycles, dispatch.instructions + callback.instructions,
+                      (*dispatch.writes, *callback.writes), {**callback_registers, **callback.registers},
+                      callback.last_pc, dispatch.direct_calls + callback.direct_calls)
+
+
+def begin_contact_family_66_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_66_ENTRY, begin_contact_family_66)
+
+
+CONTACT_FAMILY_MOTION_GLOBALS = (
+    ('contact family gate', 0xFFF0BE, 1), ('contact family gate mode', 0xFFF0C0, 1),
+    ('contact family motion', 0xFF7DFC, 2), ('contact family origin', 0xFF7DF8, 2),
+    ('contact family dispatch flag', 0xFFF0F5, 1),
+)
+
+
+def begin_contact_family_motion(machine, registers):
+    """Recover `1AF978`, including its bounded `1AE6DE` publication call."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact family-motion record/stack')
+    _spans_disjoint([('contact family-motion record', record, 56),
+                     ('contact family-motion return', sp - 10, 14),
+                     *CONTACT_FAMILY_MOTION_GLOBALS])
+    read = lambda address, size: _read(machine, address, size)
+    ret = read(sp, 4) & 0xFFFFFF
+    be = read(0xFFF0BE, 1)
+    prefix_cycles = 26 if not be else 52
+    prefix_instructions = 2 if not be else 4
+    if be and not read(0xFFF0C0, 1):
+        return AtomicPlan(86, 6, ((0xFFF0F5, 0xFF),),
+                          {'a7': sp + 4, 'pc': ret, 'sr': _logic_sr(sr, 0, 1)}, 0x1AE6BA)
+    flags = read(record + 6, 1)
+    if not flags & 0x10:
+        return AtomicPlan(prefix_cycles + 68, prefix_instructions + 5, ((0xFFF0F5, 0xFF),),
+                          {'d0': (registers['d0'] & 0xFFFFFF00) | flags,
+                           'a7': sp + 4, 'pc': ret, 'sr': _logic_sr(sr, flags, 1) | 4}, 0x1AE6BA)
+    delta = (read(record + 4, 2) - read(0xFF7DF8, 2) - 8) & 0xFFFF
+    distance = (read(0xFF7DFC, 2) - delta) & 0xFFFF
+    distance_sr = _sub_sr(sr, read(0xFF7DFC, 2), delta, 2)
+    borrowed = bool(distance_sr & 1)
+    if borrowed:
+        before = distance; distance = (-distance) & 0xFFFF
+        distance_sr = _sub_sr(distance_sr, 0, before, 2)
+    if distance >= 12:
+        # Tail is ST.B FFF0F5; RTS after the CMP/BCC branch.
+        cycles = prefix_cycles + (156 if borrowed else 154)
+        instructions = prefix_instructions + (14 if borrowed else 13)
+        return AtomicPlan(cycles, instructions, ((0xFFF0F5, 0xFF),),
+                          {'d0': (registers['d0'] & 0xFFFFFF00) | flags,
+                           'd2': (registers['d2'] & 0xFFFF0000) | delta,
+                           'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                           'a7': sp + 4, 'pc': ret, 'sr': _cmp_sr(distance_sr, distance, 12, 2)},
+                          0x1AE6BA)
+    kind = read(record, 1)
+    if kind not in (0x6A, 0x69):
+        return AtomicPlan(prefix_cycles + (198 if borrowed else 196),
+                          prefix_instructions + (18 if borrowed else 17),
+                          tuple(game.transition_contact_6b(record, delta, 0x408E)[:2]),
+                          {'d0': (registers['d0'] & 0xFFFFFF00) | flags,
+                           'd2': (registers['d2'] & 0xFFFF0000) | delta,
+                           'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                           'a7': sp + 4, 'pc': ret, 'sr': _cmp_sr(distance_sr, kind, 0x69, 1)},
+                          0x1AF9F4, direct_calls=1)
+    script, return_pc, extra = ((0x408E, 0x1AF9D8, 0) if kind == 0x6A else
+                                (0x404E, 0x1AF9F4, 22))
+    publication = read(record + 0x34, 1)
+    writes = [*game.transition_contact_6b(record, delta, script),
+              *_bytes(sp - 4, return_pc, 4)]
+    d0 = (registers['d0'] & 0xFFFFFF00) | flags
+    final_sr = _logic_sr(distance_sr, 0, 1)
+    if publication:
+        index = read(record + 0x32, 2)
+        publication_address = 0xFFAE87 + _signed_word(index)
+        _spans_disjoint([('contact family-motion publication', publication_address, 1),
+                         ('contact family-motion record', record, 56),
+                         ('contact family-motion return', sp - 10, 14), *CONTACT_FAMILY_MOTION_GLOBALS])
+        writes.extend((*_bytes(sp - 8, registers['a3'], 4),
+                       *_bytes(sp - 10, registers['d1'], 2),
+                       *game.publish_contact_record(record, _signed_word(index), publication)))
+        d0 = (registers['d0'] & 0xFFFF0000) | index
+        final_sr = _logic_sr(distance_sr, registers['d1'], 2)
+    return AtomicPlan(prefix_cycles + 280 + extra + 2 * borrowed + 88 * bool(publication),
+                      prefix_instructions + 22 + (2 if kind == 0x69 else 0) + borrowed + 8 * bool(publication),
+                      tuple(writes),
+                      {'d0': d0,
+                       'd2': (registers['d2'] & 0xFFFF0000) | delta,
+                       'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                       'a7': sp + 4, 'pc': ret, 'sr': final_sr},
+                      return_pc, direct_calls=1 + bool(publication))
+
+
+def begin_contact_family_motion_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_MOTION_ENTRY, begin_contact_family_motion)
+
+
+def begin_contact_family_secondary(machine, registers):
+    """1AF9F6: contact proximity, signed-byte motion and directional scripts."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned secondary contact record/stack')
+    _spans_disjoint([('secondary record', record, 56), ('secondary return', sp, 4),
+                     *CONTACT_FAMILY_MOTION_GLOBALS,
+                     ('secondary player', 0xFF7E02, 2), ('secondary motion', 0xFF7DFA, 2)])
+    read = lambda address, size: _read(machine, address, size)
+    final = {'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF}
+    be = read(0xFFF0BE, 1)
+    cycles, instructions = (26, 2) if not be else (52, 4)
+    tail = ((0xFFF0F5, 0xFF),)
+    if be and not read(0xFFF0C0, 1):
+        return AtomicPlan(86, 6, tail, {**final, 'sr': _logic_sr(sr, 0, 1)}, 0x1AE6BA)
+    flags = read(record + 6, 1)
+    final['d0'] = (registers['d0'] & 0xFFFFFF00) | flags
+    if not flags & 0x10:
+        return AtomicPlan(cycles + 68, instructions + 5, tail,
+                          {**final, 'sr': _logic_sr(sr, flags, 1) | 4}, 0x1AE6BA)
+    player = read(0xFF7E02, 2)
+    final['d0'] = (registers['d0'] & 0xFFFF0000) | player
+    delta = (read(record + 4, 2) - read(0xFF7DF8, 2) - 11) & 0xFFFF
+    previous = read(0xFF7DFC, 2)
+    distance = (previous - delta) & 0xFFFF
+    sr = _sub_sr(sr, previous, delta, 2)
+    borrowed = bool(sr & 1)
+    if borrowed:
+        sr = _sub_sr(sr, 0, distance, 2)
+        distance = (-distance) & 0xFFFF
+        cycles += 2
+        instructions += 1
+    final.update(d2=(registers['d2'] & 0xFFFF0000) | delta,
+                 d7=(registers['d7'] & 0xFFFF0000) | distance)
+    if distance >= 6:
+        return AtomicPlan(cycles + 170, instructions + 14, tail,
+                          {**final, 'sr': _cmp_sr(sr, distance, 6, 2)}, 0x1AE6BA)
+    byte = read(record + 0x1C, 1)
+    signed = byte - 256 if byte & 0x80 else byte
+    motion = read(0xFF7DFA, 2)
+    secondary = (motion + signed) & 0xFFFF
+    sr = _add_sr(sr, motion, signed & 0xFFFF, 2)
+    final['d2'] = (registers['d2'] & 0xFFFF0000) | (signed & 0xFFFF)
+    kind = read(record, 1)
+    sr = _cmp_sr(sr, kind, 0x76, 1)
+    script, last = None, 0x1AFA82
+    if kind != 0x76:
+        cycles += 226
+        instructions += 19
+    else:
+        position = read(record + 2, 2)
+        upper = (position + 8) & 0xFFFF
+        sr = _cmp_sr(_add_sr(sr, position, 8, 2), player, upper, 2)
+        final['d2'] = (registers['d2'] & 0xFFFF0000) | upper
+        if player >= upper:
+            script = 0x41C8
+            cycles += 294
+            instructions += 25
+        else:
+            lower = (upper - 16) & 0xFFFF
+            sr = _cmp_sr(_sub_sr(sr, upper, 16, 2), player, lower, 2)
+            final['d2'] = (registers['d2'] & 0xFFFF0000) | lower
+            if player >= lower:
+                cycles += 278
+                instructions += 26
+            else:
+                script, last = 0x4198, 0x1AFA74
+                cycles += 312
+                instructions += 28
+        if script is not None:
+            sr = _logic_sr(sr, 0x77, 1)
+    final['sr'] = sr
+    return AtomicPlan(cycles, instructions,
+                      tuple(game.transition_contact_77(record, delta, secondary, script)),
+                      final, last, direct_calls=1)
+
+
+def begin_contact_family_secondary_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_SECONDARY_MOTION_ENTRY, begin_contact_family_secondary)
+
+
+def begin_contact_family_sound_dispatch(machine, registers, dispatch):
+    """Compose 1AFC4E; its ordinary request/flush uses the existing sound seam."""
+    callback = {**registers, **dispatch.registers}
+    record, sp, sr = (callback[key] for key in ('a1', 'a7', 'sr'))
+    if callback['pc'] != CONTACT_FAMILY_SOUND_ENTRY or sp != registers['a7'] - 4:
+        raise UnsupportedCandidate('contact launch dispatch identity')
+    view = dispatch_plan_view(machine, dispatch)
+    read = lambda address, size: _read(view, address, size)
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact launch record/stack')
+    _spans_disjoint([('launch record', record, 56), ('launch frame', sp - 28, 32),
+                     ('launch vertical', 0xFF7E5A, 2), ('launch blocked', 0xFFF0E7, 1),
+                     ('launch player', 0xFF7E02, 2), ('launch script', 0xFF7E60, 4),
+                     ('launch mode', 0xFF7E77, 1), ('launch contact', 0xFFF0BE, 1),
+                     ('launch contact mode', 0xFFF0C0, 1), ('launch sound', 0xFFF57D, 1)])
+    final = {**callback, 'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF}
+    vertical = read(0xFF7E5A, 2)
+    writes, calls, sound = [], 0, False
+    if vertical & 0x8000:
+        cycles, instructions = 42, 3
+        final['sr'] = _logic_sr(sr, vertical, 2)
+    elif read(0xFFF0E7, 1):
+        cycles, instructions = 66, 5
+        final['sr'] = _logic_sr(sr, read(0xFFF0E7, 1), 1)
+    else:
+        position, player = read(record + 2, 2), read(0xFF7E02, 2)
+        upper = (position + 24) & 0xFFFF
+        sr = _cmp_sr(_add_sr(sr, position, 24, 2), upper, player, 2)
+        final['d2'] = (callback['d2'] & 0xFFFF0000) | upper
+        if upper < player:
+            cycles, instructions = 110, 9
+            final['sr'] = sr
+        else:
+            lower = (upper - 48) & 0xFFFF
+            sr = _cmp_sr(_sub_sr(sr, upper, 48, 2), lower, player, 2)
+            final['d2'] = (callback['d2'] & 0xFFFF0000) | lower
+            if lower >= player:
+                cycles, instructions = 142, 12
+                final['sr'] = sr
+            else:
+                writes = game.begin_contact_launch()
+                sound = bool(read(0xFFF57D, 1))
+                calls = 1
+                if sound:
+                    cycles, instructions = 340, 21
+                    for index, name in enumerate(('d0', 'd1', 'a0', 'a1', 'a6')):
+                        writes.extend(_bytes(sp - 20 + index * 4, callback[name], 4))
+                    writes.extend((*_bytes(sp - 24, 0x4B, 4), *_bytes(sp - 28, 0x1AFCB4, 4)))
+                    final.update(a7=sp - 28, pc=0x1E58B8,
+                                 sr=_logic_sr(sr, read(0xFFF57D, 1), 1))
+                else:
+                    cycles, instructions = 326, 22
+                    writes.extend(game.finish_contact_launch(record))
+                    calls += 1
+                    final['sr'] = _logic_sr(sr, 0, 1)
+    plan = AtomicPlan(dispatch.cycles + cycles, dispatch.instructions + instructions,
+                      (*dispatch.writes, *writes), final,
+                      0x1AFCAE if sound else 0x1AFCD0, dispatch.direct_calls + calls)
+    return (SoundSeam(plan, sp, 0x1AFCBA, 0x1AFCBA, 24, 28, 28,
+                      suffix=finish_contact_family_sound) if sound else plan)
+
+
+def finish_contact_family_sound(machine, registers):
+    """Restore the concrete contact sound frame, then publish the object suffix."""
+    sp = registers['a7']
+    restored = {name: _read(machine, sp + 4 + index * 4, 4)
+                for index, name in enumerate(('d0', 'd1', 'a0', 'a1', 'a6'))}
+    record = restored['a1']
+    _spans_disjoint([('launch suffix record', record, 56), ('launch suffix frame', sp, 28)])
+    restored.update(a7=sp + 28, pc=_read(machine, sp + 24, 4) & 0xFFFFFF,
+                    sr=_logic_sr(registers['sr'], 0, 1))
+    return AtomicPlan(128, 6, tuple(game.finish_contact_launch(record)), restored,
+                      0x1AFCD0, direct_calls=1)
 
 
 CONTACT_GLOBALS = tuple(('contact state', address, 1) for address in (

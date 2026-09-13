@@ -164,6 +164,60 @@ def activate_contact(record, motion_delta, horizontal_impulse):
     ]
 
 
+def transition_contact_66(record, *, publish):
+    """Accepted `1AFBF4` object transition and its optional player publish."""
+    writes = [(record, 0x66),
+              (record + 0x20, 0), (record + 0x21, 0x12),
+              (record + 0x22, 0x44), (record + 0x23, 0xB0),
+              (record + 0x37, 0)]
+    if publish:
+        writes.extend(((0xFF7E5A, 0xFB), (0xFF7E5B, 0),
+                       (0xFF7E60, 0), (0xFF7E61, 0x12),
+                       (0xFF7E62, 0x21), (0xFF7E63, 0xB8),
+                       (0xFF7E77, 0), (0xFFF0BE, 0xFF),
+                       (0xFFF0C0, 0), (0xFFF0CC, 0)))
+    return writes
+
+
+def transition_contact_6b(record, motion, script):
+    """Accepted `1AF978` object motion and the selected type-6B script."""
+    return [(0xFF7DFC, (motion >> 8) & 0xFF), (0xFF7DFD, motion & 0xFF),
+            (record, 0x6B),
+            (record + 0x20, 0), (record + 0x21, 0x12),
+            (record + 0x22, (script >> 8) & 0xFF), (record + 0x23, script & 0xFF),
+            (record + 0x37, 0)]
+
+
+def publish_contact_record(record, index, value):
+    """The `1AE6DE` publication byte after its caller has accepted it."""
+    return [(0xFFAE87 + index, value)] if value else []
+
+
+def transition_contact_77(record, motion, secondary_motion, script):
+    """Accepted `1AF9F6` motion publication and optional type-77 script."""
+    writes = [(0xFF7DFC, (motion >> 8) & 0xFF), (0xFF7DFD, motion & 0xFF),
+              (0xFF7DFA, (secondary_motion >> 8) & 0xFF),
+              (0xFF7DFB, secondary_motion & 0xFF)]
+    if script is not None:
+        writes.extend(((record + 0x20, 0), (record + 0x21, 0x12),
+                       (record + 0x22, (script >> 8) & 0xFF), (record + 0x23, script & 0xFF),
+                       (record, 0x77)))
+    return writes
+
+
+def begin_contact_launch():
+    """Publish the motion/script state before the optional contact sound."""
+    return [(0xFF7E5A, 0xF8), (0xFF7E5B, 0),
+            (0xFF7E60, 0), (0xFF7E61, 0x12), (0xFF7E62, 0x1C), (0xFF7E63, 0x62),
+            (0xFF7E77, 0), (0xFFF0BE, 0xFF), (0xFFF0C0, 0)]
+
+
+def finish_contact_launch(record):
+    """Advance the contact object after its optional sound request."""
+    return [(record, 0x84), (record + 0x20, 0), (record + 0x21, 0x12),
+            (record + 0x22, 0x4B), (record + 0x23, 0x3E), (record + 0x37, 0)]
+
+
 def _overlay(read, writes, address, size):
     values = {at: value for at, value in writes}
     if size == 1:

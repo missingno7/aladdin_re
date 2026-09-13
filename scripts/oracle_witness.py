@@ -504,11 +504,10 @@ def execute_region(fixture: str | Path | bytes, *, entry: int,
                         raise AssertionError("setup negative witness did not admit its first plan")
                     return ExecutionResult(observable(machine), None, recovery.stats,
                                            machine.snapshot() if include_raw else None)
-                if not handled:
-                    # _fallback has already retired the one native instruction;
-                    # retain the complete production gate set for a local seam
-                    # or a later retry at the walker head.
-                    machine.gates(list(dict.fromkeys((*recovery.gate_pcs, entry, outer))))
+                # A synchronous legacy seam reinstalls production gates when
+                # it returns. Reattach this witness's outer observation gate
+                # after either admission or fallback, retaining every normal gate.
+                machine.gates(list(dict.fromkeys((*recovery.gate_pcs, entry, outer))))
             else:
                 raise RuntimeError("setup candidate exceeded gate budget")
         else:
