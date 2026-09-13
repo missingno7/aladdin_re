@@ -33,6 +33,28 @@ The existing full suite passed 1,226 tests in 81.77 s before gameplay integratio
 
 ### Contact activation review
 
+The next-family census exposed a tooling correctness issue: an ad-hoc replay
+loop selected event `frame` while running frame `frame-1`, shifting input by one
+frame and omitting frame-zero input. That scan is not canonical evidence.
+`scripts/recovery_census.py` now owns bounded entry capture through the existing
+`GenesisRun.advance`; callers supply only game-specific classification facts.
+It retains per-class fixtures with history/frame/source provenance and a full
+terminal observable for comparison with the original receipt. Its status is
+CAPTURED, not a qualification PASS. A literal-ROM regression compares both the
+frame-zero entry snapshot (including input) and final machine/frame/PCM state
+with uninstrumented canonical execution; mixed artifact directories are refused.
+
+This is a justified mechanization of repeated capture loops, not a new replay
+engine. Classifier semantics still require original control-flow review: flag
+branches that skip another check are not necessarily early exits, and unsigned
+borrow-conditioned negation is not signed absolute distance. Current-family
+labels were corrected before being treated as coverage.
+The corrected 26,378-frame census endpoint matches every original receipt
+field exactly. It records `1AFBF4`: ten accepted, 24 negative and three zero
+motion exits; `1AF978`: three type-6A transitions, ten accepted other-type paths
+and twelve C0 exits. `1AFC4E` and `1AF9F6` have no current-history hits and must
+remain explicitly constructed qualification if included as adjacent closure.
+
 Semantic source gained the reusable accepted motion/script/object publication.
 Branch classification and exact arithmetic residues are still machine-shaped;
 this is a qualified intermediate representation, not a detached contact system.
