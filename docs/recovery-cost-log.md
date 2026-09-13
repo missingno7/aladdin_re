@@ -13,6 +13,22 @@ rules, not handwritten lines.
 
 ## Bounded whole column walker
 
+### Qualification result consolidation (14 September)
+
+The spawn oracle had three-, four-, five- and six-element result shapes whose
+positions changed when raw state capture was requested. This caused concrete
+review failures when comparisons selected a snapshot or statistics instead of
+the intended outer/future observation. All checked-in callers now use one
+`ExecutionResult` with named outer/future/stats/raw-state/iteration fields.
+Raw states remain opt-in; gate retention, native execution and equality are
+unchanged. The existing setup runner is exposed as `execute_region`, allowing
+the next contact qualification to reuse entry/return, future and mutant handling
+without another execution loop. Historical local scripts may need named-field
+migration; they are evidence, not maintained production APIs.
+
+This is tooling consolidation, not recovered gameplay or a new execution
+protocol. Standalone strict witnesses remain; no comparison field was dropped.
+
 ### Whole setup-parent retrospective (14 September)
 
 Four strip setup entries now compose preparation, the existing walker and its

@@ -44,14 +44,12 @@ def _outer_record_bytes(state: bytes, fields):
 @pytest.mark.parametrize("free", (0, 1, None), ids=("first-free", "second-free", "exhausted"))
 @pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
 def test_four_spawn_arms_match_original_full_outer_and_future(entry, free, incoming_x):
-    expected, expected_future, _ = oracle.execute(
-        entry, free=free, candidate=None, incoming_x=incoming_x)
-    actual, actual_future, stats = oracle.execute(
-        entry, free=free, candidate="lifecycle", incoming_x=incoming_x)
-    assert actual == expected
-    assert actual_future == expected_future
-    assert stats["spawn_region_hits"] == 1
-    assert stats["fallbacks"] == 0
+    expected = oracle.execute(entry, free=free, candidate=None, incoming_x=incoming_x)
+    actual = oracle.execute(entry, free=free, candidate="lifecycle", incoming_x=incoming_x)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_region_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 @pytest.mark.parametrize("entry", tuple(oracle.ENTRY_BASES))
@@ -84,40 +82,36 @@ def test_spawn_alias_at_saved_return_frame_falls_back_without_effects(entry):
 @pytest.mark.parametrize("entry", tuple(oracle.ENTRY_BASES))
 @pytest.mark.parametrize("mutant", ("lifecycle-mutant-result", "lifecycle-mutant-timing"))
 def test_spawn_mutants_cannot_match_original_outer_or_future(entry, mutant):
-    expected, expected_future, _ = oracle.execute(
-        entry, free=0, candidate=None, incoming_x=False)
-    actual, actual_future, _ = oracle.execute(
-        entry, free=0, candidate=mutant, incoming_x=False)
-    assert (actual, actual_future) != (expected, expected_future)
+    expected = oracle.execute(entry, free=0, candidate=None, incoming_x=False)
+    actual = oracle.execute(entry, free=0, candidate=mutant, incoming_x=False)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
 
 
 @pytest.mark.parametrize("target", tuple(oracle.DISPATCH_CALLBACKS))
 def test_dispatch_callbacks_match_original_outer_and_future(target):
-    expected, expected_future, _ = oracle.execute_dispatch(
-        target, free=0, candidate=None, incoming_x=False)
-    actual, actual_future, stats = oracle.execute_dispatch(
-        target, free=0, candidate="lifecycle", incoming_x=False)
-    assert actual == expected
-    assert actual_future == expected_future
-    assert stats["spawn_caller_hits"] == 1
-    assert stats["fallbacks"] == 0
+    expected = oracle.execute_dispatch(target, free=0, candidate=None, incoming_x=False)
+    actual = oracle.execute_dispatch(target, free=0, candidate="lifecycle", incoming_x=False)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 def test_dispatch_candidate_future_matches_from_raw_state_in_fresh_process():
-    _, outer_state, expected_future, _, _ = oracle.execute_dispatch(
+    result = oracle.execute_dispatch(
         oracle.SPAWN_UPPER_CALLER_ENTRY, free=0, candidate="lifecycle",
         incoming_x=False, include_raw=True)
-    assert oracle.fresh_process_future(outer_state) == expected_future
+    assert oracle.fresh_process_future(result.outer_state) == result.future
 
 
 def test_dispatch_wrong_continuation_mutant_cannot_match_outer_or_future():
     """A continuation mutation is observable at the composed caller boundary."""
-    expected, expected_future, _ = oracle.execute_dispatch(
+    expected = oracle.execute_dispatch(
         oracle.SPAWN_UPPER_CALLER_ENTRY, free=0, candidate=None, incoming_x=False)
-    actual, actual_future, _ = oracle.execute_dispatch(
+    actual = oracle.execute_dispatch(
         oracle.SPAWN_UPPER_CALLER_ENTRY, free=0,
         candidate="lifecycle-mutant-continuation", incoming_x=False)
-    assert (actual, actual_future) != (expected, expected_future)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
 
 
 def test_dispatch_indexed_clear_alias_falls_back_before_movem_effects():
@@ -176,8 +170,9 @@ def test_dispatch_unknown_callback_is_rejected_before_saved_frame_write():
 def _assert_spawn_neighbor(execute, target, free, incoming_x):
     expected = execute(target, free=free, candidate=None, incoming_x=incoming_x)
     actual = execute(target, free=free, candidate="lifecycle", incoming_x=incoming_x)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["fallbacks"] == 0
 
 
 @pytest.mark.parametrize("target", tuple(oracle.DIRECT_CALLER_POOLS))
@@ -196,9 +191,9 @@ def test_spawn_neighbors_dispatch_outer_and_future(target, free, incoming_x):
 
 @pytest.mark.parametrize("target", tuple(oracle.CALLER_POOLS))
 def test_spawn_neighbors_fresh_process(target):
-    _, state, future, _, _ = oracle.execute_dispatch(
+    result = oracle.execute_dispatch(
         target, free=0, candidate="lifecycle", incoming_x=False, include_raw=True)
-    assert oracle.fresh_process_future(state) == future
+    assert oracle.fresh_process_future(result.outer_state) == result.future
 
 
 @pytest.mark.parametrize("target", tuple(oracle.CALLER_POOLS))
@@ -206,7 +201,7 @@ def test_spawn_neighbors_fresh_process(target):
 def test_spawn_neighbors_negative_controls(target, mutant):
     expected = oracle.execute_dispatch(target, free=0, candidate=None, incoming_x=False)
     actual = oracle.execute_dispatch(target, free=0, candidate="lifecycle-mutant-" + mutant, incoming_x=False)
-    assert actual[:2] != expected[:2]
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
 
 
 @pytest.mark.parametrize("target", oracle.GUARD_TARGETS)
@@ -221,17 +216,18 @@ def test_recorded_dispatch_guards_match_original_outer_and_future(
                        guard_value=guard_value)
     actual = execute(target, free=free, candidate="lifecycle", incoming_x=False,
                      guard_value=guard_value)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["fallbacks"] == 0
 
 
 @pytest.mark.parametrize("target", oracle.GUARD_TARGETS)
 @pytest.mark.parametrize("guard_value", (0, 1), ids=("guard-clear", "guard-set"))
 def test_recorded_dispatch_guards_survive_fresh_process(target, guard_value):
-    _, state, future, _, _ = oracle.execute_dispatch(
+    result = oracle.execute_dispatch(
         target, free=0, candidate="lifecycle", incoming_x=False,
         guard_value=guard_value, include_raw=True)
-    assert oracle.fresh_process_future(state) == future
+    assert oracle.fresh_process_future(result.outer_state) == result.future
 
 
 @pytest.mark.parametrize("target", oracle.GUARD_TARGETS)
@@ -241,8 +237,9 @@ def test_guard_reads_see_parent_planned_frame_writes(target):
                   stack=0xFFF1AC, initial_d0=0x00010100)
     expected = oracle.execute_dispatch(target, candidate=None, **kwargs)
     actual = oracle.execute_dispatch(target, candidate="lifecycle", **kwargs)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["fallbacks"] == 0
 
 
 def test_lower_reset_cannot_alias_parent_saved_registers():
@@ -277,24 +274,25 @@ def test_constructed_whole_walker_matches_outer_and_future(name, callbacks):
     state = oracle.constructed_walker_state(callbacks=callbacks)
     expected = oracle.execute_walker(state, candidate=None)
     actual = oracle.execute_walker(state, candidate="lifecycle")
-    assert expected[3] == 16
-    assert actual[2]["spawn_walker_hits"] == 1
-    assert actual[:2] == expected[:2]
-    assert actual[2]["candidate_hits"] > 0
+    assert expected.iterations == 16
+    assert actual.stats["spawn_walker_hits"] == 1
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["candidate_hits"] > 0
     if name != "unresolved":
-        assert actual[3] == 1
-        assert actual[2]["spawn_caller_hits"] == 0
+        assert actual.iterations == 1
+        assert actual.stats["spawn_caller_hits"] == 0
 
 
 @pytest.mark.parametrize("name,callbacks", WALKER_CASES,
                          ids=[case[0] for case in WALKER_CASES])
 def test_constructed_whole_walker_candidate_survives_fresh_process(name, callbacks):
     state = oracle.constructed_walker_state(callbacks=callbacks)
-    _, outer_state, future, _, stats, iterations = oracle.execute_walker(
+    result = oracle.execute_walker(
         state, candidate="lifecycle", include_raw=True)
-    assert iterations <= 16
-    assert stats["candidate_hits"] > 0
-    assert oracle.fresh_process_future(outer_state) == future
+    assert result.iterations <= 16
+    assert result.stats["candidate_hits"] > 0
+    assert oracle.fresh_process_future(result.outer_state) == result.future
 
 
 @pytest.mark.parametrize("count", (1, 2, 16))
@@ -302,9 +300,10 @@ def test_walker_counts_match_original(count):
     state = oracle.constructed_walker_state(count=count)
     expected = oracle.execute_walker(state, candidate=None)
     actual = oracle.execute_walker(state, candidate="lifecycle")
-    assert expected[3] == count
-    assert actual[2]["spawn_walker_hits"] == 1
-    assert actual[:2] == expected[:2]
+    assert expected.iterations == count
+    assert actual.stats["spawn_walker_hits"] == 1
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
 
 
 @pytest.mark.parametrize("d5,count", ((2, 2), (0xFFFF_FFFE, 2),
@@ -313,7 +312,8 @@ def test_walker_signed_stride_and_high_word_match(d5, count):
     state = oracle.constructed_walker_state(count=count, stride=d5)
     expected = oracle.execute_walker(state, candidate=None)
     actual = oracle.execute_walker(state, candidate="lifecycle")
-    assert actual[:2] == expected[:2]
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
 
 
 def test_walker_last_cursor_crossing_24bit_ram_preserves_32bit_register():
@@ -326,17 +326,19 @@ def test_walker_last_cursor_crossing_24bit_ram_preserves_32bit_register():
     actual = oracle.execute_walker(state, candidate="lifecycle",
                                    register_overrides={"a0": 0x00FF_FFFE},
                                    writes=oracle.write_word(0x00FF_FFFE, 0x200))
-    assert actual[:2] == expected[:2]
-    assert actual[0]["registers"]["a0"] == 0x0100_0000
-    assert actual[2]["spawn_walker_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.outer["registers"]["a0"] == 0x0100_0000
+    assert actual.stats["spawn_walker_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 def test_walker_incoming_x_matches_original():
     state = oracle.constructed_walker_state(count=2, incoming_x=True)
     expected = oracle.execute_walker(state, candidate=None)
     actual = oracle.execute_walker(state, candidate="lifecycle")
-    assert actual[:2] == expected[:2]
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
 
 
 def test_walker_planned_register_frame_may_alias_cursor():
@@ -350,12 +352,13 @@ def test_walker_planned_register_frame_may_alias_cursor():
     writes = ((0xFFAE89, oracle._callback_flag(KNOWN_WALKER_B)),)
     expected = oracle.execute_walker(state, candidate=None, writes=writes)
     actual = oracle.execute_walker(state, candidate="lifecycle", writes=writes)
-    assert actual[:2] == expected[:2]
-    assert actual[0]["registers"]["d2"] & 0xFFFF == 2
-    assert actual[0]["registers"]["a4"] == KNOWN_WALKER_B
-    assert actual[2]["candidate_hits"] > 0
-    assert actual[2]["spawn_walker_hits"] == 1
-    assert actual[2]["spawn_caller_hits"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.outer["registers"]["d2"] & 0xFFFF == 2
+    assert actual.outer["registers"]["a4"] == KNOWN_WALKER_B
+    assert actual.stats["candidate_hits"] > 0
+    assert actual.stats["spawn_walker_hits"] == 1
+    assert actual.stats["spawn_caller_hits"] == 0
 
 
 @pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
@@ -364,7 +367,7 @@ def test_whole_walker_negative_controls(mutant):
     expected = oracle.execute_walker(state, candidate=None)
     actual = oracle.execute_walker(state, candidate="lifecycle-mutant-" + mutant,
                                    stop_after_first=True)
-    assert actual[0] != expected[0]
+    assert actual.outer != expected.outer
 
 
 ROW_KNOWN_A = 0x1B72D4
@@ -384,13 +387,14 @@ def test_constructed_row_walker_matches_outer_and_future(name, callbacks):
     state = oracle.constructed_row_walker_state(callbacks=callbacks)
     expected = oracle.execute_walker(state, candidate=None, row=True)
     actual = oracle.execute_walker(state, candidate="lifecycle", row=True)
-    assert expected[3] == 23
-    assert actual[:2] == expected[:2]
-    assert actual[2]["fallbacks"] == (2 if name == "unknown" else 0)
-    assert actual[2]["spawn_row_walker_hits"] == 1
+    assert expected.iterations == 23
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["fallbacks"] == (2 if name == "unknown" else 0)
+    assert actual.stats["spawn_row_walker_hits"] == 1
     # The first two plans encounter the unknown second slot; after original
     # execution passes it, the remaining empty suffix is admitted in Python.
-    assert actual[3] == (3 if name == "unknown" else 1)
+    assert actual.iterations == (3 if name == "unknown" else 1)
 
 
 @pytest.mark.parametrize("count", (1, 2, 23))
@@ -398,10 +402,11 @@ def test_constructed_row_walker_counts_match_original(count):
     state = oracle.constructed_row_walker_state(count=count)
     expected = oracle.execute_walker(state, candidate=None, row=True)
     actual = oracle.execute_walker(state, candidate="lifecycle", row=True)
-    assert expected[3] == count
-    assert actual[:2] == expected[:2]
-    assert actual[2]["spawn_row_walker_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert expected.iterations == count
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_row_walker_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 def test_row_walker_postincrement_crossing_24bit_ram_preserves_32bit_a0():
@@ -409,10 +414,11 @@ def test_row_walker_postincrement_crossing_24bit_ram_preserves_32bit_a0():
                                                 slot_indices=(0x100,))
     expected = oracle.execute_walker(state, candidate=None, row=True)
     actual = oracle.execute_walker(state, candidate="lifecycle", row=True)
-    assert actual[:2] == expected[:2]
-    assert actual[0]["registers"]["a0"] == 0x0100_0000
-    assert actual[2]["spawn_row_walker_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.outer["registers"]["a0"] == 0x0100_0000
+    assert actual.stats["spawn_row_walker_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 def test_row_walker_a0_advance_alias_is_visible_to_planned_movem():
@@ -424,12 +430,13 @@ def test_row_walker_a0_advance_alias_is_visible_to_planned_movem():
     writes = ((0xFFAE89, oracle._callback_flag(ROW_KNOWN_B)),)
     expected = oracle.execute_walker(state, candidate=None, row=True, writes=writes)
     actual = oracle.execute_walker(state, candidate="lifecycle", row=True, writes=writes)
-    assert actual[:2] == expected[:2]
-    assert actual[0]["registers"]["d2"] & 0xFFFF == 2
-    assert actual[0]["registers"]["a0"] == oracle.STACK - 56
-    assert actual[0]["registers"]["a4"] == ROW_KNOWN_B
-    assert actual[2]["spawn_row_walker_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.outer["registers"]["d2"] & 0xFFFF == 2
+    assert actual.outer["registers"]["a0"] == oracle.STACK - 56
+    assert actual.outer["registers"]["a4"] == ROW_KNOWN_B
+    assert actual.stats["spawn_row_walker_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 def test_row_deadline_refusal_preserves_only_the_original_first_instruction():
@@ -458,11 +465,11 @@ def test_row_deadline_refusal_preserves_only_the_original_first_instruction():
                          ids=[case[0] for case in ROW_CASES[:3]])
 def test_constructed_row_walker_survives_fresh_process(name, callbacks):
     state = oracle.constructed_row_walker_state(callbacks=callbacks)
-    _, outer_state, future, _, stats, iterations = oracle.execute_walker(
+    result = oracle.execute_walker(
         state, candidate="lifecycle", row=True, include_raw=True)
-    assert stats["spawn_row_walker_hits"] == 1
-    assert iterations == 1
-    assert oracle.fresh_process_future(outer_state) == future
+    assert result.stats["spawn_row_walker_hits"] == 1
+    assert result.iterations == 1
+    assert oracle.fresh_process_future(result.outer_state) == result.future
 
 
 @pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
@@ -471,17 +478,18 @@ def test_row_walker_negative_controls_reject_outer_boundary(mutant):
     expected = oracle.execute_walker(state, candidate=None, row=True)
     actual = oracle.execute_walker(state, candidate="lifecycle-mutant-" + mutant,
                                    row=True, stop_after_first=True)
-    assert actual[0] != expected[0]
-    assert actual[2]["spawn_row_walker_hits"] == 1
+    assert actual.outer != expected.outer
+    assert actual.stats["spawn_row_walker_hits"] == 1
 
 
 def test_row_walker_unknown_callback_falls_back_to_native_row_execution():
     state = oracle.constructed_row_walker_state(count=1, callbacks=(ROW_UNKNOWN,))
     expected = oracle.execute_walker(state, candidate=None, row=True)
     actual = oracle.execute_walker(state, candidate="lifecycle", row=True)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["spawn_row_walker_hits"] == 0
-    assert actual[2]["fallbacks"] == 1
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_row_walker_hits"] == 0
+    assert actual.stats["fallbacks"] == 1
 
 
 @pytest.mark.parametrize("entry", tuple(oracle.PLAIN_WRAPPERS))
@@ -492,9 +500,10 @@ def test_plain_wrapper_direct_plan_matches_original(entry, free, incoming_x):
                                       incoming_x=incoming_x)
     actual = oracle.execute_wrapper(entry, free=free, candidate="lifecycle",
                                     incoming_x=incoming_x)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["candidate_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["candidate_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 @pytest.mark.parametrize("entry", tuple(oracle.OFFSET_WRAPPERS))
@@ -515,17 +524,18 @@ def test_offset_wrapper_direct_plan_matches_original(entry, free, incoming_x, wr
                                       incoming_x=incoming_x, setup_writes=setup)
     actual = oracle.execute_wrapper(entry, free=free, candidate="lifecycle",
                                     incoming_x=incoming_x, setup_writes=setup)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["candidate_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["candidate_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 @pytest.mark.parametrize("entry", tuple((*oracle.PLAIN_WRAPPERS, *oracle.OFFSET_WRAPPERS)))
 def test_new_wrapper_direct_plan_survives_fresh_process(entry):
-    _, outer_state, future, _, stats = oracle.execute_wrapper(
+    result = oracle.execute_wrapper(
         entry, free=0, candidate="lifecycle", incoming_x=False, include_raw=True)
-    assert stats["candidate_hits"] == 1
-    assert oracle.fresh_process_future(outer_state) == future
+    assert result.stats["candidate_hits"] == 1
+    assert oracle.fresh_process_future(result.outer_state) == result.future
 
 
 @pytest.mark.parametrize("entry", tuple(oracle.CLOSURE_WRAPPERS))
@@ -536,19 +546,19 @@ def test_remaining_recorded_closures_direct_outer_future_and_fresh(entry, free, 
                                       incoming_x=incoming_x)
     actual = oracle.execute_wrapper(entry, free=free, candidate="lifecycle",
                                     incoming_x=incoming_x, include_raw=True)
-    assert actual[0] == expected[0]
-    assert actual[2] == expected[1]
-    assert actual[4]["candidate_hits"] == 1
-    assert actual[4]["fallbacks"] == 0
-    assert oracle.fresh_process_future(actual[1]) == actual[2]
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["candidate_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
 
 
 @pytest.mark.parametrize("entry,fields", tuple(CLOSURE_OUTPUTS.items()))
 def test_remaining_closure_semantic_suffix_writes_are_present(entry, fields):
-    _, outer_state, _, _, stats = oracle.execute_wrapper(
+    result = oracle.execute_wrapper(
         entry, free=0, candidate="lifecycle", incoming_x=False, include_raw=True)
-    assert stats["candidate_hits"] == 1
-    observed = _outer_record_bytes(outer_state, fields)
+    assert result.stats["candidate_hits"] == 1
+    observed = _outer_record_bytes(result.outer_state, fields)
     assert observed == {offset: expected for offset, expected in fields}
 
 
@@ -560,9 +570,10 @@ def test_remaining_guarded_closure_direct_skip_taken_and_exhausted(guard_value, 
                                       incoming_x=False, setup_writes=setup)
     actual = oracle.execute_wrapper(0x1B71A0, free=free, candidate="lifecycle",
                                     incoming_x=False, setup_writes=setup)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["candidate_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["candidate_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 @pytest.mark.parametrize("target", (*oracle.CLOSURE_WRAPPERS, oracle.SAFE_RETURN))
@@ -573,14 +584,15 @@ def test_remaining_callbacks_dispatcher_outer_future_and_fresh(target, free, inc
                                        incoming_x=incoming_x)
     actual = oracle.execute_dispatch(target, free=free, candidate="lifecycle",
                                      incoming_x=incoming_x)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["spawn_caller_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
-    _, outer_state, future, _, stats = oracle.execute_dispatch(
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
+    result = oracle.execute_dispatch(
         target, free=free, candidate="lifecycle", incoming_x=incoming_x,
         include_raw=True)
-    assert stats["spawn_caller_hits"] == 1
-    assert oracle.fresh_process_future(outer_state) == future
+    assert result.stats["spawn_caller_hits"] == 1
+    assert oracle.fresh_process_future(result.outer_state) == result.future
 
 
 @pytest.mark.parametrize("guard_value", (0, 1), ids=("guard-clear", "guard-set"))
@@ -590,9 +602,10 @@ def test_remaining_guarded_closure_dispatcher_skip_taken_and_exhausted(guard_val
                                        incoming_x=False, guard_value=guard_value)
     actual = oracle.execute_dispatch(0x1B71A0, free=free, candidate="lifecycle",
                                      incoming_x=False, guard_value=guard_value)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["spawn_caller_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 def test_safe_return_callback_is_handled_only_as_dispatcher_child():
@@ -602,19 +615,20 @@ def test_safe_return_callback_is_handled_only_as_dispatcher_child():
                                        incoming_x=False)
     actual = oracle.execute_dispatch(oracle.SAFE_RETURN, free=0,
                                      candidate="lifecycle", incoming_x=False)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["spawn_caller_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
-    assert actual[2]["direct_python_calls"] == 1
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
+    assert actual.stats["direct_python_calls"] == 1
 
 
 @pytest.mark.parametrize("free", (0, 19))
 def test_guarded_spawn_success_installs_its_script(free):
-    _, state, _, _, stats = oracle.execute_wrapper(
+    result = oracle.execute_wrapper(
         0x1B71A0, free=free, candidate="lifecycle", incoming_x=False,
         setup_writes=((0xFFF12A, 1),), include_raw=True)
-    assert stats["candidate_hits"] == 1
-    assert _outer_record_bytes(state, ((0x20, 0x124318),)) == {0x20: 0x124318}
+    assert result.stats["candidate_hits"] == 1
+    assert _outer_record_bytes(result.outer_state, ((0x20, 0x124318),)) == {0x20: 0x124318}
 
 
 SETUP_KNOWN_A = 0x1B72D4
@@ -644,16 +658,17 @@ def test_constructed_full_setup_matches_original_outer_and_future(entry, case):
         position=0x1237, varying=0x245F)
     expected = oracle.execute_setup(state, entry=entry, candidate=None)
     actual = oracle.execute_setup(state, entry=entry, candidate="lifecycle")
-    assert actual[:2] == expected[:2]
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
     if case == "unknown":
         # The aggregate setup plan is correctly declined before writing. The
         # remaining native loop may still admit an empty suffix after the
         # unresolved callback has returned.
-        assert actual[2]["spawn_setup_hits"] == 0
-        assert actual[2]["fallbacks"] >= 1
+        assert actual.stats["spawn_setup_hits"] == 0
+        assert actual.stats["fallbacks"] >= 1
     else:
-        assert actual[2]["spawn_setup_hits"] == 1
-        assert actual[2]["fallbacks"] == 0
+        assert actual.stats["spawn_setup_hits"] == 1
+        assert actual.stats["fallbacks"] == 0
 
 
 @pytest.mark.parametrize("entry", oracle.SETUP_ENTRIES)
@@ -669,19 +684,20 @@ def test_full_setup_preserves_register_words_stride_and_coordinate_masks(entry):
         initial_d5=0x2468A002, initial_d6=0xFACE0004)
     expected = oracle.execute_setup(state, entry=entry, candidate=None)
     actual = oracle.execute_setup(state, entry=entry, candidate="lifecycle")
-    assert actual[:2] == expected[:2]
-    assert actual[2]["spawn_setup_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_setup_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 @pytest.mark.parametrize("entry", oracle.SETUP_ENTRIES)
 def test_full_setup_candidate_outer_state_survives_fresh_process(entry):
     state = oracle.constructed_setup_state(
         entry, callbacks=_setup_callbacks(entry, "multiple"))
-    _, outer_state, future, _, stats = oracle.execute_setup(
+    result = oracle.execute_setup(
         state, entry=entry, candidate="lifecycle", include_raw=True)
-    assert stats["spawn_setup_hits"] == 1
-    assert oracle.fresh_process_future(outer_state) == future
+    assert result.stats["spawn_setup_hits"] == 1
+    assert oracle.fresh_process_future(result.outer_state) == result.future
 
 
 @pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
@@ -693,8 +709,8 @@ def test_full_setup_negative_controls_reject_outer_boundary(mutant):
     actual = oracle.execute_setup(
         state, entry=entry, candidate="lifecycle-mutant-" + mutant,
         stop_after_first=True)
-    assert actual[0] != expected[0]
-    assert actual[4]["spawn_setup_hits"] == 1
+    assert actual.outer != expected.outer
+    assert actual.stats["spawn_setup_hits"] == 1
 
 
 def test_setup_gate_set_stays_within_native_capacity_and_is_unique():
@@ -718,9 +734,10 @@ def test_setup_rts_reads_return_slot_overwritten_by_allocated_object():
     actual = oracle.execute_setup(
         state, entry=entry, candidate="lifecycle",
         expected_return=0x010200, future_instructions=4)
-    assert actual[:2] == expected[:2]
-    assert actual[2]["spawn_setup_hits"] == 1
-    assert actual[2]["fallbacks"] == 0
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_setup_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
 def test_setup_odd_stack_is_refused_before_candidate_writes():

@@ -1,12 +1,15 @@
-"""Construct raw original-ROM spawn fixtures without legacy archives.
+"""Construct original-ROM fixtures and qualify bounded recovered regions.
 
 The fixture is deliberately small: cold boot, ten logical frame steps, then
 one native atomic setup at a selected spawn entry.  It is an oracle aid for
 strict qualification, not a replay/history format or execution framework.
+The same entry-to-return runner serves setup parents and contact callbacks;
+game-specific fixture construction remains explicit.
 """
 from __future__ import annotations
 
 import argparse
+from collections import namedtuple
 import json
 from pathlib import Path
 import subprocess
@@ -365,6 +368,22 @@ def observable(machine):
             "frame": artifacts.digest(machine.frame()[2]), "pcm": artifacts.digest(machine.audio())}
 
 
+class ExecutionResult(namedtuple("ExecutionResultBase", (
+        "outer", "future", "stats", "outer_state", "future_state", "iterations"))):
+    """Named result shared by every oracle execution shape.
+
+    Raw states and walker iteration counts are opt-in evidence fields; normal
+    qualification only consumes the outer state, future state, and stats.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, outer, future, stats, outer_state=None,
+                future_state=None, iterations=None):
+        return super().__new__(cls, outer, future, stats, outer_state,
+                               future_state, iterations)
+
+
 def fresh_process_future(state: bytes) -> dict:
     """Restore one raw post-outer state in a new Python/native process."""
     with tempfile.TemporaryDirectory(prefix="aladdin-oracle-") as directory:
@@ -400,7 +419,8 @@ def execute(entry: int, *, free: int | None, candidate: str | None, incoming_x: 
         at_outer = observable(machine)
         machine.gates([])
         assert machine.run(instructions=150) == "limit"
-        return at_outer, observable(machine), recovery.stats if recovery else None
+        return ExecutionResult(at_outer, observable(machine),
+                                recovery.stats if recovery else None)
     finally:
         machine.close()
 
@@ -428,10 +448,9 @@ def execute_dispatch(target: int, *, free: int | None, candidate: str | None, in
         assert machine.run(instructions=150) == "limit"
         future_state = machine.snapshot()
         future = observable(machine)
-        result = (at_outer, future, recovery.stats if recovery else None)
-        if include_raw:
-            return at_outer, outer_state, future, future_state, recovery.stats if recovery else None
-        return result
+        return ExecutionResult(at_outer, future, recovery.stats if recovery else None,
+                               outer_state if include_raw else None,
+                               future_state if include_raw else None)
     finally:
         machine.close()
 
@@ -441,15 +460,15 @@ SETUP_ENTRIES = (SPAWN_SETUP_LEFT_ENTRY, SPAWN_SETUP_RIGHT_ENTRY,
 
 
 def setup_fixture(fixture: str | Path | bytes, entry: int):
-    """Restore a captured setup entry parked before its first instruction."""
+    """Restore a captured region entry parked before its first instruction."""
     return walker_fixture(fixture, entry=entry)
 
 
-def execute_setup(fixture: str | Path | bytes, *, entry: int,
-                  candidate: str | None, register_overrides: dict[str, int] | None = None,
-                  future_instructions: int = 150, include_raw: bool = False,
-                  stop_after_first: bool = False, expected_return: int | None = None):
-    """Qualify one setup prefix plus its selected walker and outer RTS."""
+def execute_region(fixture: str | Path | bytes, *, entry: int,
+                   candidate: str | None, register_overrides: dict[str, int] | None = None,
+                   future_instructions: int = 150, include_raw: bool = False,
+                   stop_after_first: bool = False, expected_return: int | None = None):
+    """Qualify an entry fixture through its explicit outer return boundary."""
     machine = setup_fixture(fixture, entry)
     try:
         if register_overrides:
@@ -483,7 +502,8 @@ def execute_setup(fixture: str | Path | bytes, *, entry: int,
                 if stop_after_first:
                     if not handled:
                         raise AssertionError("setup negative witness did not admit its first plan")
-                    return observable(machine), machine.snapshot(), None, None, recovery.stats
+                    return ExecutionResult(observable(machine), None, recovery.stats,
+                                           machine.snapshot() if include_raw else None)
                 if not handled:
                     # _fallback has already retired the one native instruction;
                     # retain the complete production gate set for a local seam
@@ -506,10 +526,23 @@ def execute_setup(fixture: str | Path | bytes, *, entry: int,
         future = observable(machine)
         stats = recovery.stats if recovery else None
         if include_raw:
-            return at_outer, outer_state, future, future_state, stats
-        return at_outer, future, stats
+            return ExecutionResult(at_outer, future, stats, outer_state, future_state)
+        return ExecutionResult(at_outer, future, stats)
     finally:
         machine.close()
+
+
+def execute_setup(fixture: str | Path | bytes, *, entry: int,
+                  candidate: str | None, register_overrides: dict[str, int] | None = None,
+                  future_instructions: int = 150, include_raw: bool = False,
+                  stop_after_first: bool = False, expected_return: int | None = None):
+    """Compatibility name for the original setup-to-walker region witness."""
+    return execute_region(fixture, entry=entry, candidate=candidate,
+                          register_overrides=register_overrides,
+                          future_instructions=future_instructions,
+                          include_raw=include_raw,
+                          stop_after_first=stop_after_first,
+                          expected_return=expected_return)
 
 
 def execute_wrapper(entry: int, *, free: int | None, candidate: str | None,
@@ -564,8 +597,8 @@ def execute_wrapper(entry: int, *, free: int | None, candidate: str | None,
         future_state = machine.snapshot()
         future = observable(machine)
         if include_raw:
-            return at_outer, outer_state, future, future_state, stats
-        return at_outer, future, stats
+            return ExecutionResult(at_outer, future, stats, outer_state, future_state)
+        return ExecutionResult(at_outer, future, stats)
     finally:
         machine.close()
 
@@ -620,9 +653,9 @@ def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
                     at_outer = observable(machine)
                     outer_state = machine.snapshot()
                     stats = recovery.stats
-                    if include_raw:
-                        return at_outer, outer_state, None, None, stats, iterations
-                    return at_outer, None, stats, iterations
+                    return ExecutionResult(at_outer, None, stats,
+                                           outer_state if include_raw else None,
+                                           iterations=iterations)
                 if not handled:
                     # Keep the actual production gates: after one native
                     # fallback instruction, later loop heads may retry.
@@ -646,9 +679,10 @@ def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
             future_state = None
             future = None
         stats = recovery.stats if recovery else None
-        if include_raw:
-            return at_outer, outer_state, future, future_state, stats, iterations
-        return at_outer, future, stats, iterations
+        return ExecutionResult(at_outer, future, stats,
+                               outer_state if include_raw else None,
+                               future_state if include_raw else None,
+                               iterations)
     finally:
         machine.close()
 
@@ -664,18 +698,18 @@ def recorded_walker_rows(directory: str | Path, *, row: bool = False) -> list[di
         metadata = json.loads(path.with_suffix(".json").read_text())
         expected = execute_walker(path, candidate=None, row=row)
         actual = execute_walker(path, candidate="lifecycle", include_raw=True, row=row)
-        outer, outer_state, future, _, stats, iterations = actual
         rows.append({"fixture": path.name, "provenance": "recorded walker state",
                      "state_sha256": artifacts.digest(path.read_bytes()),
                      "history_id": metadata.get("history_id"),
                      "frame": metadata.get("frame"),
                      "callbacks": metadata.get("callbacks"),
                      "entry": metadata.get("entry"), "exit": metadata.get("exit"),
-                     "native_iterations": expected[3], "candidate_iterations": iterations,
-                     "equal_outer": outer == expected[0],
-                     "equal_future": future == expected[1],
-                     "fresh_process_150": fresh_process_future(outer_state) == future,
-                     "stats": stats})
+                     "native_iterations": expected.iterations,
+                     "candidate_iterations": actual.iterations,
+                     "equal_outer": actual.outer == expected.outer,
+                     "equal_future": actual.future == expected.future,
+                     "fresh_process_150": fresh_process_future(actual.outer_state) == actual.future,
+                     "stats": actual.stats})
     return rows
 
 
@@ -699,16 +733,15 @@ def recorded_setup_rows(directory: str | Path) -> list[dict]:
         expected = execute_setup(path, entry=entry, candidate=None)
         actual = execute_setup(path, entry=entry, candidate="lifecycle",
                                include_raw=True)
-        outer, outer_state, future, _, stats = actual
         rows.append({"fixture": path.name, "provenance": "recorded full setup state",
                      "state_sha256": artifacts.digest(path.read_bytes()),
                      "history_id": metadata.get("history_id"),
                      "frame": metadata.get("frame"), "entry": entry,
                      "walker_exit": metadata.get("exit"),
-                     "equal_outer": outer == expected[0],
-                     "equal_future": future == expected[1],
-                     "fresh_process_150": fresh_process_future(outer_state) == future,
-                     "stats": stats})
+                     "equal_outer": actual.outer == expected.outer,
+                     "equal_future": actual.future == expected.future,
+                     "fresh_process_150": fresh_process_future(actual.outer_state) == actual.future,
+                     "stats": actual.stats})
     return rows
 
 
@@ -743,26 +776,29 @@ def main(argv=None):
     free = None if args.exhausted else args.free
     rows = []
     for entry in (list(SPAWN_REGION_ENTRIES) if args.entry is None else args.entry):
-        expected, expected_future, _ = execute(entry, free=free, candidate=None, incoming_x=args.incoming_x)
-        actual, actual_future, stats = execute(entry, free=free, candidate="lifecycle", incoming_x=args.incoming_x)
+        expected = execute(entry, free=free, candidate=None, incoming_x=args.incoming_x)
+        actual = execute(entry, free=free, candidate="lifecycle", incoming_x=args.incoming_x)
         rows.append({"entry": f"{entry:06X}", "provenance": "constructed original-ROM cold-root fixture",
-                     "free": free, "incoming_x": args.incoming_x, "equal_outer": actual == expected,
-                     "equal_future": actual_future == expected_future, "stats": stats})
+                     "free": free, "incoming_x": args.incoming_x,
+                     "equal_outer": actual.outer == expected.outer,
+                     "equal_future": actual.future == expected.future,
+                     "stats": actual.stats})
     callbacks = list(DISPATCH_CALLBACKS) if args.all_callbacks else args.callback
     for target in callbacks:
-        expected, expected_future, _ = execute_dispatch(target, free=free, candidate=None,
-                                                        incoming_x=args.incoming_x)
-        actual, actual_future, stats = execute_dispatch(target, free=free, candidate="lifecycle",
-                                                        incoming_x=args.incoming_x)
+        expected = execute_dispatch(target, free=free, candidate=None,
+                                    incoming_x=args.incoming_x)
+        actual = execute_dispatch(target, free=free, candidate="lifecycle",
+                                  incoming_x=args.incoming_x)
         fresh = None
         if args.fresh_process:
-            _, outer_state, _, _, _ = execute_dispatch(target, free=free, candidate="lifecycle",
-                                                       incoming_x=args.incoming_x, include_raw=True)
-            fresh = fresh_process_future(outer_state) == actual_future
+            raw = execute_dispatch(target, free=free, candidate="lifecycle",
+                                   incoming_x=args.incoming_x, include_raw=True)
+            fresh = fresh_process_future(raw.outer_state) == actual.future
         rows.append({"callback": f"{target:06X}", "provenance": "constructed original-ROM dispatcher fixture",
-                     "free": free, "incoming_x": args.incoming_x, "equal_outer": actual == expected,
-                     "equal_future": actual_future == expected_future, "fresh_process_150": fresh,
-                     "stats": stats})
+                     "free": free, "incoming_x": args.incoming_x,
+                     "equal_outer": actual.outer == expected.outer,
+                     "equal_future": actual.future == expected.future, "fresh_process_150": fresh,
+                     "stats": actual.stats})
     if args.walker_directory is not None:
         rows.extend(recorded_walker_rows(args.walker_directory, row=args.row))
     if args.setup_directory is not None:
