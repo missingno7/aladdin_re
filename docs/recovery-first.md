@@ -1,5 +1,11 @@
 # Recovered object cleanup and initialization
 
+The 0.6.0 [connected carrier experiment](carrier-convergence.md) expands this
+cluster through the counter and original sound calls, with a snapshot-safe
+Python continuation. That report contains the current region map, contract,
+qualification and scaffolding verdict; this document retains the underlying
+per-region effect domains.
+
 The first semantic candidate is the shared clear routine at `0x1AE372` through
 `0x1AE39E` in the USA ROM with SHA-256
 `a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3`.

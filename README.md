@@ -31,6 +31,8 @@ host FIFO diagnostics on exit.
 Snapshots capture machine/device state at completed native-operation boundaries.
 Host PCM queues are presentation state and are deliberately cut at a snapshot:
 restoring does not repeat sound already delivered to the host queue.
+Snapshots saved during the recovered sound continuation also retain its small
+explicit return record. `--snapshot` resumes that carrier automatically.
 
 ## Development from the source tree
 
@@ -50,7 +52,8 @@ binary hash, and execution/build receipts. Use it before interpreting a replay
 result so a stale installed package is not mistaken for source-tree code.
 
 Original play remains the default. Recovery candidates are explicit replay
-choices; they are not enabled by `play.cmd`.
+choices; a snapshot with a pending carrier return also enables its continuation
+when resumed through `play.cmd`.
 
 ## Build on Windows
 
@@ -105,8 +108,9 @@ equivalence verdict.
 
 `compare` runs original and candidate workers in separate fresh processes. It
 writes their ordered 60-frame state/frame/PCM observations and a compact report
-with the last matching checkpoint and first failing interval. `leaf` and
-`composed` are the recovery candidates; mutation modes are reserved for tests.
+with the last matching checkpoint and first failing interval. `composed` retains
+the prior recovery cluster; `carrier` extends it through the original sound
+callees and back into Python. Mutation modes are reserved for tests.
 A candidate with zero executed hits is `NOT_EXERCISED`, not a pass.
 
 For a fast, local edit-to-verdict check, first create a real recording witness:
@@ -121,13 +125,24 @@ $env:ALADDIN_NATIVE_LIBRARY = "$PWD/build/libaladdin_native.dll"
 The second command edits a disposable Python source copy, verifies that the
 production comparison rejects it, and checks that the native DLL stayed intact.
 
+For the connected carrier, `scripts/carrier_witness.py` captures a real entry,
+saves inside the original sound callee, qualifies fresh-process resumption and
+runs result/return/timing negative controls. Then use `scripts/dev.py compare`
+on its `witness.alreplay` with `--candidate carrier` for ordinary Python edits.
+The [carrier experiment report](docs/carrier-convergence.md) gives the region
+map, exact continuation contract, measured overhead and scope limits. Its
+verdict is **NOT CONVERGING**: the continuation works, but this expansion adds
+more recovery machinery than it removes.
+
 The comparison contract is `full-machine-frame-pcm-60frames-v1`: complete
 machine snapshots, frame hashes, PCM chunks, and terminal state/frame/full-PCM
 hashes are compared on the available scenario. This is integrated same-model
 evidence. It does not establish independent console or hardware accuracy.
 
-Archives now use version 2 and machine-state contract 1. ROM and behavioral
-profile must match; source/build hashes remain provenance. Unsupported earlier
+Ordinary archives use version 2 and machine-state contract 1. A snapshot with
+a pending carrier return uses version 3 for its additional recovery metadata;
+replays remain version 2. ROM and behavioral profile must match; source/build
+hashes remain provenance. Unsupported earlier
 formats fail clearly instead of entering a compatibility migration chain.
 The supplied user replay and two saves were regenerated from their input stream
 under `recordings/current/`, with parent hashes in `provenance.json`. The original

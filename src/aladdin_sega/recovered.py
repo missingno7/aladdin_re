@@ -20,6 +20,8 @@ FINISH_LAST_PC = 0x1AE976
 COUNTED_REPLACE_ENTRY = 0x1AF4C2
 REPLACE_ENTRY = 0x1AF4C6
 REPLACE_LAST_PC = 0x1AF4D6
+TRANSITION_ENTRY = 0x1AF468
+SOUND_RETURN = 0x1AF498
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -238,11 +240,11 @@ def finish_object(machine, registers: dict[str, int]) -> AtomicPlan:
                       FINISH_LAST_PC, direct_calls=3 + pair.direct_calls)
 
 
-def replace_object(machine, registers: dict[str, int], *, increment_total=False) -> AtomicPlan:
+def replace_object(machine, registers: dict[str, int], *, increment_total=False, extra_spans=()) -> AtomicPlan:
     """1AF4C6 cleanup/template tail, optionally including the 1AF4C2 +15 call."""
     a1, a7, sr = (registers[key] for key in ("a1", "a7", "sr"))
     return_pc = _read(machine, a7, 4)
-    spans = [("outer return", a7, 4)]
+    spans = [("outer return", a7, 4), *extra_spans]
     writes = []
     if increment_total:
         total = _read(machine, 0xFFF14E, 2) + 15
@@ -263,6 +265,62 @@ def replace_object(machine, registers: dict[str, int], *, increment_total=False)
                       {"a5": a1, "a6": 0x1B7ACF, "a7": a7 + 4,
                        "pc": return_pc & 0xFFFFFF, "sr": _logic_sr(sr, 0, 4)},
                       REPLACE_LAST_PC, direct_calls=2 + pair.direct_calls + int(increment_total))
+
+
+def increment_decimal_counter(machine):
+    """1B0336: advance the two ASCII digits, within the caller's uncapped domain."""
+    digits = _read(machine, 0xFFEFE0, 2)
+    tens, ones = digits >> 8, digits & 255
+    if not (0x30 <= tens <= 0x39 and 0x30 <= ones <= 0x39) or digits == 0x3939:
+        raise UnsupportedCandidate("decimal counter outside 00..98; capped branch remains original")
+    if ones == 0x39:
+        return list(_bytes(0xFFEFE0, (tens + 1) << 8 | 0x30, 2)), 132, 8
+    return [(0xFFEFE1, ones + 1)], 94, 6
+
+
+def begin_object_transition(machine, registers: dict[str, int]) -> tuple[AtomicPlan, bool]:
+    """Increment the displayed decimal counter, optionally play sound 11, then replace.
+
+    The boolean requests the original sound request/flush operation. The two
+    adjacent legacy calls share one guest save frame and one Python resume.
+    """
+    sp, sr = registers["a7"], registers["sr"]
+    writes, counter_cycles, counter_instructions = increment_decimal_counter(machine)
+    sound = _read(machine, 0xFFF57D, 1)
+    _read(machine, sp, 4)
+    _spans_disjoint([("sound stack", sp - 28, 32), ("decimal counter", 0xFFEFE0, 2),
+                     ("sound flag", 0xFFF57D, 1)])
+    sr = _logic_sr(sr & ~0x10, sound, 1)  # ASCII ADDQ clears X; TST supplies NZVC.
+    if not sound:
+        tail = replace_object(machine, {**registers, "sr": sr},
+                              extra_spans=(("decimal counter", 0xFFEFE0, 2),))
+        return AtomicPlan(84 + counter_cycles + tail.cycles, 6 + counter_instructions + tail.instructions,
+                          (*writes, *tail.writes), tail.registers, tail.last_pc,
+                          direct_calls=2 + tail.direct_calls), False
+    # MOVEM.L D0/D1/A0/A1/A6,-(SP), PEA 11, JSR 1E58B8.
+    # The earlier counter-call return slot is overwritten by MOVEM: no need
+    # to reconstruct that intermediate frame or the transient ASCII ':'.
+    for index, name in enumerate(("a6", "a1", "a0", "d1", "d0"), 1):
+        writes.extend(_bytes(sp - index * 4, registers[name], 4))
+    writes.extend(_bytes(sp - 24, 11, 4))
+    writes.extend(_bytes(sp - 28, 0x1AF492, 4))
+    return AtomicPlan(156 + counter_cycles, 8 + counter_instructions, tuple(writes),
+                      {"a7": sp - 28, "pc": 0x1E58B8, "sr": sr}, 0x1AF48C,
+                      direct_calls=1), True
+
+
+def finish_object_transition(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Resume after original sound request/flush, restore its frame, and replace."""
+    sp = registers["a7"] + 24
+    restored = dict(registers, a7=sp)
+    for index, name in enumerate(("a6", "a1", "a0", "d1", "d0"), 1):
+        restored[name] = _read(machine, sp - index * 4, 4)
+    tail = replace_object(machine, restored)
+    # ADDQ SP, MOVEM restoration and BRA are absorbed into the owned suffix.
+    final = {name: restored[name] for name in ("d0", "d1", "a0", "a1")}
+    final.update(tail.registers)
+    return AtomicPlan(70 + tail.cycles, 3 + tail.instructions, tail.writes, final,
+                      tail.last_pc, direct_calls=1 + tail.direct_calls)
 
 
 def detach_object(machine, registers: dict[str, int]) -> AtomicPlan:

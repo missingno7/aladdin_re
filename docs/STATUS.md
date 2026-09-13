@@ -3,7 +3,51 @@
 The architecture continuation is implemented on Windows x64. Python owns editable
 Aladdin source, dispatch, artifacts and verification; a small machine API hides
 retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
-Original play remains the default; recovery is opt-in for replay.
+Original play remains the default; recovery is opt-in for replay or carried by
+a snapshot with a pending recovered continuation.
+
+## Connected counter/sound/replacement carrier (0.6.0)
+
+The larger-region experiment is implemented and qualified. The uncapped path
+from `0x1AF468` increments the live ASCII counter in Python, materializes the
+original sound call frame, executes original `0x1E58B8` and `0x1E589A`, then
+resumes Python at `0x1AF498` and directly composes the recovered replacement,
+pair clear, buffer clear and initializer. The capped branch and enclosing
+routine remain original. There is one concrete continuation contract, with
+stack position, return slot, saved-frame digest and entry tick identifying the
+activation. No native or generic continuation framework changes were needed.
+
+A version 3 snapshot adds only the pending recovery record and its native-state
+binding. Ordinary snapshots/replays remain version 2; existing recordings are
+unchanged. Saving inside the original nested callee at `0x1E57AC` and restoring
+in a fresh process preserves the correct Python return. Full native state,
+frame, PCM and timing match uninterrupted execution, including 150 further
+original instructions. Result, return and timing mutants are rejected. The
+Python-only edit-to-verdict check rejects a wrong counter increment in 0.619 s
+with no build/install. **249 Python tests** and the architecture check pass.
+
+Original tracing finds 78 entries, all sound-enabled, including ten decimal
+rollovers. Both source-tree and installed carrier comparisons pass all **225
+observations**, terminal state/frame and whole-run PCM. There are 77 admitted
+prefixes and 77 recognized legacy returns: 71 Python suffixes complete, while
+six suffixes fall back locally without undoing the recovered prefix. Total
+fallbacks remain 34, all scheduler-related.
+
+**Architecture verdict: NOT CONVERGING for this expansion.** Gates stay at
+seven outside the sound span, but stops rise from 2,025 to 2,103. Direct semantic
+Python calls rise from 871 to 1,017 and replaced instructions from 56,796 to
+58,102. Dispatch/support grows by 167 lines against 58 added to the mixed
+game/effect source. The old internal tail gate disappears from carrier mode,
+but entry/resume admission and exact machine-effect bookkeeping outweigh the
+small amount of deleted machinery. The seam works; scaffolding shrinkage has
+not been demonstrated. Further mechanical expansion is stopped at this finding.
+
+See [carrier-convergence.md](carrier-convergence.md) for the region map,
+continuation contract, before/after metrics, scope limits and reproduction
+commands. Evidence is under `artifacts/carrier/`, including `witness-v060/`,
+`full-{baseline,carrier}/`, `installed-{inside,full}/`, `economics.json` and
+`edit-loop/result.json`. Bounded original/carrier player smoke checks pass;
+one earlier audio shutdown stall remains noted in the report.
 
 ## Shared replacement composition (0.5.0)
 
@@ -268,9 +312,9 @@ Python clearing loop changes PASS to DIVERGENCE in about 0.6 seconds, with zero
 native builds or installs. Atomic guard, gate, Z80/PCM overflow and restore tests
 remain in place. [recovery-first.md](recovery-first.md) gives the exact domains.
 
-## Validation and local reports
+## Initial architecture validation and local reports (historical)
 
-The current suite passes **71 Python tests** and **seven native CTest groups**.
+That milestone passed **71 Python tests** and **seven native CTest groups**.
 Windows toolchain: Python 3.12.14, MinGW 12.2, CMake 4.4.3, Ninja 1.13.2.
 Cold boot and snapshot round trip pass for 300 frames. The installed package's
 snapshot-resumed player passes 60 frames with dummy SDL devices, and both
@@ -302,15 +346,14 @@ convergence. Its former `LegacyExit` was whole-entry fallback, not a Python/lega
 continuation; 0.3.0 removes it after recovering that dependency. The failing-witness register/RAM diagnostic follow-up above implements that
 review priority; a new engine, emitter or generic continuation registry is not justified.
 
-## Next bounded milestone
+## Next investigation after the convergence experiment
 
-Inspect the dependency at `0x1B0336`, called from `0x1AF478` on 78 recorded
-paths leading to the newly recovered replacement tail. Establish its effects
-and bounded domain before moving recovery further into the preceding gameplay
-and sound branches. The common tail returning from the pair at `0x1AF4CA`
-and its +15 prefix are now recovered. Preserve the
-distinction between recorded paths and synthetic branch tests. Use focused
-witnesses during editing and the full replay as the integration gate. Absorb
-additional board/scheduler/sound glue only when recovery exposes concrete
-friction. No Linux build or speculative CPU rewrite is required. Public combined
-source/binary distribution remains unresolved; ROMs and user artifacts stay local.
+Do not add another leaf or continuation case mechanically. Use the current
+counter/sound/replacement witness to identify whether any retained exact-effect
+adapters can disappear under larger ownership while preserving the same
+comparison contract. The present split into separately admitted prefix/suffix
+plans is the measured source of extra machinery. If the adapters remain
+externally observable, state that limitation before expanding further. No
+generic resume registry, Linux build or speculative machine rewrite is justified.
+Public combined source/binary distribution remains unresolved; ROMs and user
+artifacts stay local.

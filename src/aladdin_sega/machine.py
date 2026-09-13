@@ -64,6 +64,8 @@ class Machine:
     def __init__(self, rom: bytes):
         self._rom = bytes(rom)  # Immutable cartridge diagnostics; no mutable shadow state.
         self.candidate_identity = "original"
+        self.pending_transition = None
+        self.calls = {}  # Diagnostic API counts, not emulated or persisted state.
         self.lib = load_library()
         self.handle = C.c_void_p()
         self.rom_sha256 = hashlib.sha256(rom).hexdigest()
@@ -80,6 +82,7 @@ class Machine:
     def _call(self, name, *args):
         if not self.handle:
             raise NativeError("Machine is closed")
+        self.calls[name] = self.calls.get(name, 0) + 1
         self._check(getattr(self.lib, "al_" + name)(self.handle, *args))
 
     def close(self):
@@ -186,6 +189,7 @@ class Machine:
     def restore(self, data):
         buf = (U8 * len(data)).from_buffer_copy(data)
         self._call("import", buf, len(buf))
+        self.pending_transition = None  # Raw native state has no Python ownership metadata.
 
     def snapshot_tick(self, data):
         buf = (U8 * len(data)).from_buffer_copy(data)
