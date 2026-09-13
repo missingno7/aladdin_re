@@ -8,7 +8,9 @@ from .boundary import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY,
                         initialize_object, finish_object, replace_object, TRANSITION_ENTRY,
                         SOUND_RETURN, begin_object_transition, finish_object_transition,
                         COLLECTION_ROUTES, COLLECTION_DISPATCH_ENTRY, begin_collection_dispatch,
-                        dispatch_plan_view, begin_collection, finish_collection, relocate_collection)
+                        dispatch_plan_view, CONTACT_ENTRY, begin_contact, begin_contact_sound,
+                        finish_contact_sound, begin_collection,
+                        finish_collection, relocate_collection)
 
 
 @dataclass
@@ -26,6 +28,7 @@ class Candidate:
         "initializer_hits": 0, "finish_hits": 0,
         "collection_hits": 0, "collection_entries": {}, "relocation_hits": 0,
         "collection_dispatch_hits": 0,
+        "contact_hits": 0,
         "replace_hits": 0, "counted_replace_hits": 0,
         "carrier_entries": 0, "carrier_completed": 0, "legacy_entries": 0, "legacy_returns": 0,
         "local_fallbacks": 0, "foreign_returns": 0, "legacy_deadline_fallbacks": 0,
@@ -68,7 +71,7 @@ class Candidate:
             # The 1AF4C6 tail is owned inside this region; the other ten paths
             # still enter via the counted replacement boundary.
             base = (TRANSITION_ENTRY, COUNTED_REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
-            return tuple(dict.fromkeys((COLLECTION_DISPATCH_ENTRY, *COLLECTION_ROUTES, 0x1AF516, *base))) if self.is_lifecycle else base
+            return tuple(dict.fromkeys((COLLECTION_DISPATCH_ENTRY, CONTACT_ENTRY, *COLLECTION_ROUTES, 0x1AF516, *base))) if self.is_lifecycle else base
         if self.is_composed:
             return (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
         if self.name == "replace":
@@ -104,6 +107,54 @@ class Candidate:
             machine.run(instructions=1)
         return False
 
+    def _run_sound_seam(self, machine, target, *, sp, resume, return_slot, suffix,
+                        suffix_transform=lambda plan: plan, on_complete=lambda: None):
+        """Run one admitted synchronous sound call and prove its local return.
+
+        Collection and contact both save a 28-byte frame below the caller's
+        stack pointer.  The native sound routine may run arbitrary original
+        code, so the resumed local suffix is admitted only when its PC, stack
+        pointer, saved frame, and preceding JSR return slot still identify the
+        activation that constructed it.
+        """
+        frame_base = (sp - 24) & 0xFFFF
+        frame = machine.peek_ram(frame_base, 28)
+        self.stats['legacy_entries'] += 1
+        machine.in_sound_call = True
+        try:
+            machine.gates([resume])
+            while machine.run(target=target) == 'gate':
+                self.stats['gates'] += 1
+                returned = machine.registers()
+                if returned['a7'] != sp - 24:
+                    self.stats['foreign_returns'] += 1
+                    machine.gate(resume, bypass_once=True)
+                    continue
+                if (returned['pc'] != resume or machine.peek_ram(frame_base, 28) != frame
+                        or int.from_bytes(machine.peek_ram((sp - 28) & 0xFFFF, 4), 'big') != return_slot):
+                    raise ValueError('Object sound return/frame mismatch')
+                self.stats['legacy_returns'] += 1
+                reason = 'scheduler admission'
+                try:
+                    plan = suffix(returned)
+                    if self._apply(machine, suffix_transform(plan), target):
+                        on_complete()
+                        return True
+                except UnsupportedCandidate as error:
+                    reason = f'unsupported domain: {error}'
+                self.stats['local_fallbacks'] += 1
+                self._fallback(machine, resume, reason)
+                return True
+            # The prefix remains committed.  Let original code own the rest
+            # once the caller's scheduling deadline is reached.
+            self.stats['local_fallbacks'] += 1
+            self.stats['legacy_deadline_fallbacks'] += 1
+            self._fallback(machine, None, 'legacy deadline')
+            return True
+        finally:
+            machine.in_sound_call = False
+            machine.gates(list(self.gate_pcs))
+
     def _transition(self, machine, target, entry=TRANSITION_ENTRY, *, count_gate=True,
                     registers=None, planner=None, prefix=None, fallback_entry=None):
         if count_gate:
@@ -136,43 +187,12 @@ class Candidate:
         if not legacy:
             self.stats["carrier_completed"] += 1
             return True
-        sp = regs["a7"]
-        frame = machine.peek_ram((sp - 24) & 65535, 28)
-        self.stats["legacy_entries"] += 1
-        machine.in_sound_call = True
-        try:
-            machine.gates([resume])
-            while machine.run(target=target) == "gate":
-                self.stats["gates"] += 1
-                returned = machine.registers()
-                if returned["a7"] != sp - 24:
-                    self.stats["foreign_returns"] += 1
-                    machine.gate(resume, bypass_once=True)
-                    continue
-                if (returned["pc"] != resume or machine.peek_ram((sp - 24) & 65535, 28) != frame
-                        or int.from_bytes(machine.peek_ram((sp - 28) & 65535, 4), "big") != resume):
-                    raise ValueError("Object sound return/frame mismatch")
-                self.stats["legacy_returns"] += 1
-                reason = "scheduler admission"
-                try:
-                    suffix = finish_collection(machine, returned, entry) if collection else finish_object_transition(machine, returned)
-                    if self._apply(machine, suffix, target):
-                        self.stats["carrier_completed"] += 1
-                        return True
-                except UnsupportedCandidate as error:
-                    reason = f"unsupported domain: {error}"
-                self.stats["local_fallbacks"] += 1
-                self._fallback(machine, resume, reason)
-                return True
-            # Never cross the caller's input/frame deadline to preserve Python
-            # ownership. The prefix stays committed; original code owns the rest.
-            self.stats["local_fallbacks"] += 1
-            self.stats["legacy_deadline_fallbacks"] += 1
-            self._fallback(machine, None, "legacy deadline")
-            return True
-        finally:
-            machine.in_sound_call = False
-            machine.gates(list(self.gate_pcs))
+        return self._run_sound_seam(
+            machine, target, sp=regs['a7'], resume=resume, return_slot=resume,
+            suffix=(lambda returned: finish_collection(machine, returned, entry)) if collection
+            else (lambda returned: finish_object_transition(machine, returned)),
+            on_complete=lambda: self.stats.__setitem__('carrier_completed', self.stats['carrier_completed'] + 1),
+        )
 
     def _collection_dispatch(self, machine, target):
         """Admit 1ABC82 and its known callback in one native atomic region."""
@@ -194,6 +214,29 @@ class Candidate:
             self.stats['collection_dispatch_hits'] += 1
         return accepted
 
+    def _contact(self, machine, target):
+        self.stats['gates'] += 1
+        try:
+            plan = begin_contact(machine, machine.registers())
+            if not self._apply(machine, self._mutate(plan), target):
+                return self._fallback(machine, CONTACT_ENTRY, 'scheduler admission')
+        except UnsupportedCandidate as error:
+            try:
+                registers = machine.registers(); prefix = begin_contact_sound(machine, registers)
+                if not self._apply(machine, self._mutate(prefix), target):
+                    return self._fallback(machine, CONTACT_ENTRY, 'scheduler admission')
+            except UnsupportedCandidate:
+                return self._fallback(machine, CONTACT_ENTRY, f'unsupported domain: {error}')
+            return self._run_sound_seam(
+                machine, target, sp=registers['a7'], resume=0x1AE5B6,
+                return_slot=0x1AE5B6,
+                suffix=lambda returned: finish_contact_sound(machine, returned),
+                suffix_transform=self._mutate,
+                on_complete=lambda: self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1),
+            )
+        self.stats['contact_hits'] += 1
+        return True
+
     def on_gate(self, machine, target: int) -> bool:
         """Try a candidate at the current gate; otherwise retire one original instruction.
 
@@ -208,6 +251,8 @@ class Candidate:
             return self._transition(machine, target)
         if self.is_lifecycle and entry == COLLECTION_DISPATCH_ENTRY:
             return self._collection_dispatch(machine, target)
+        if self.is_lifecycle and entry == CONTACT_ENTRY:
+            return self._contact(machine, target)
         if self.is_lifecycle and entry in COLLECTION_ROUTES:
             return self._transition(machine, target, entry)
         if entry not in self.gate_pcs:

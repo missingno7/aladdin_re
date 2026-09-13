@@ -25,6 +25,7 @@ SOUND_RETURN = 0x1AF498
 COLLECTION_DISPATCH_ENTRY = 0x1ABC82
 COLLECTION_DISPATCH_RETURN = 0x1ABCA0
 COLLECTION_DISPATCH_TABLE = 0x1CBE
+CONTACT_ENTRY = 0x1AE4F8
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -394,6 +395,100 @@ class _DispatchPlanView:
 def dispatch_plan_view(machine, prefix):
     """Expose planned prefix bytes needed by the immediate callback plan."""
     return _DispatchPlanView(machine, prefix.writes)
+
+
+CONTACT_GLOBALS = tuple(('contact state', address, 1) for address in (
+    0xFFF0E7, 0xFFF0E6, 0xFFF0E9, 0xFFF0F2, 0xFFF0BE, 0xFFF0C1,
+    0xFFF0D0, 0xFFF0D7, 0xFFF0CD, 0xFFF0D4, 0xFFF173, 0xFFF0CC,
+    0xFFEFFF, 0xFFF11F, 0xFFF0D8, 0xFFF57D, 0xFF7E21,
+    0xFF7E20, 0xFFEFFA, 0xFF7E77)) + (
+    ('contact state', 0xFFF0B0, 2), ('contact state', 0xFF7E60, 4))
+
+
+def _contact_guard(machine, registers, *, sound_frame=False):
+    """Validate the caller frame before reading the contact live-RAM domain."""
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned contact stack')
+    frame = ('contact sound frame', sp - 28, 32) if sound_frame else ('contact return', sp, 4)
+    _spans_disjoint([frame, *CONTACT_GLOBALS])
+    return lambda address, size: _read(machine, address, size)
+
+
+def begin_contact(machine, registers):
+    """Recover direct, non-sound 1AE4F8 contact gates through their RTS."""
+    sp, sr = registers['a7'], registers['sr']
+    read = _contact_guard(machine, registers)
+    path, gate = game.contact_path(read)
+    if path == 'early':
+        if gate not in (0xFFF0E6, 0xFFF0F2):
+            raise UnsupportedCandidate(f'contact early gate {gate:06X} is not qualified')
+        index = (0xFFF0E7, 0xFFF0E6, 0xFFF0E9, 0xFFF0F2).index(gate)
+        return AtomicPlan(42 + 28 * index, 3 + 2 * index, (),
+                          {'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
+                           'sr': _logic_sr(sr, read(gate, 1), 1)},
+                          CONTACT_ENTRY + 6 * index)
+    if path == 'reaction':
+        if not read(0xFFF0BE, 1) or read(0xFFF0D8, 1):
+            raise UnsupportedCandidate('contact reaction domain')
+        writes = game.contact_reaction(read)
+        d8 = read(0xFFF0D8, 1)
+        return AtomicPlan(310 if not d8 else 292,
+                          20 if not d8 else 19, tuple(writes),
+                          {'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
+                           'sr': _logic_sr(sr, 1 if not d8 else d8, 1)}, 0x1AE618)
+    raise UnsupportedCandidate(f'contact {path} requires the synchronous reset seam')
+
+
+def begin_contact_sound(machine, registers):
+    """The recorded reset path through its existing command ``0x31`` seam."""
+    sp, sr = registers['a7'], registers['sr']
+    # This path constructs a full MOVEM/argument/JSR frame.  It must be safe
+    # on its own because begin_contact deliberately declines this reset path.
+    read = _contact_guard(machine, registers, sound_frame=True)
+    if game.contact_path(read)[0] != 'reset' or not read(0xFFF57D, 1):
+        raise UnsupportedCandidate('contact reset is outside the recorded sound seam')
+    # With C1 set, any one of these earlier gates jumps to 1AE5E2 and has a
+    # distinct prefix cost.  Keep those routes original until each has its own
+    # measured plan; C1 clear is the separately measured short route.
+    if read(0xFFF0C1, 1) and any(read(address, 1) for address in
+                                  (0xFFF0BE, 0xFFF0D0, 0xFFF0D7, 0xFFF0CD, 0xFFF0D4)):
+        raise UnsupportedCandidate('contact reset enters through an unqualified earlier gate')
+    if (read(0xFFF0CC, 1) or read(0xFFEFFF, 1) or not read(0xFFF11F, 1)
+            or read(0xFF7E21, 1) or not read(0xFFEFFA, 1) or read(0xFFF0F2, 1)):
+        raise UnsupportedCandidate('contact reset decay domain')
+    writes = list(game.contact_reset(read, decay=False))
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index * 4, registers[name], 4))
+    writes.extend((*_bytes(sp - 24, 0x31, 4), *_bytes(sp - 28, 0x1AE5B0, 4)))
+    # C1's early branch reaches the same reset/sound sequence but bypasses
+    # eight later state tests.  The recorded C1=1 route is the longer one.
+    cycles, instructions = (340, 21) if not read(0xFFF0C1, 1) else (556, 37)
+    return AtomicPlan(cycles, instructions, tuple(writes),
+                      {'a7': sp - 28, 'pc': 0x1E58B8, 'sr': sr & ~0x1F}, 0x1AE5AA, direct_calls=1)
+
+
+def finish_contact_sound(machine, registers):
+    """1AE5B6: restore the command-31 frame, decay once, and return."""
+    sp = registers['a7'] + 24
+    if registers['pc'] != 0x1AE5B6:
+        raise UnsupportedCandidate('foreign contact sound return')
+    restored_frame = dict(registers, a7=sp)
+    read = _contact_guard(machine, restored_frame, sound_frame=True)
+    if read(sp - 28, 4) != 0x1AE5B6:
+        raise UnsupportedCandidate('contact sound return slot')
+    if (read(0xFFF0E9, 1) or read(0xFFF0E6, 1) or read(0xFF7E20, 1)
+            or read(0xFFF0F2, 1) or read(0xFF7E21, 1) or not read(0xFFEFFA, 1)):
+        raise UnsupportedCandidate('contact sound return domain')
+    restored = dict(registers, a7=sp)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        restored[name] = read(sp - index * 4, 4)
+    writes = (*game.contact_decay(read), *_bytes(sp - 4, 0x1AE5C0, 4))
+    return AtomicPlan(300, 19, tuple(writes),
+                      {**{name: restored[name] for name in ('d0', 'd1', 'a0', 'a1', 'a6')},
+                       'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
+                       'sr': _logic_sr(restored['sr'], read(0xFFF0F2, 1), 1)}, 0x1AE5DC,
+                      direct_calls=1)
 
 
 def _add_sr(sr, left, right, width):

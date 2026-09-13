@@ -156,3 +156,67 @@ $env:ALADDIN_NATIVE_LIBRARY="$PWD/build/libaladdin_native.dll"
 The user also supplied `recordings/20260913T094506.477102Z.alsnap` during a camel
 jump. Original play restores it and runs 150 headless frames successfully; this
 is a continuation smoke check, not candidate equivalence evidence.
+
+## Contact family milestone
+
+**PASS.** The bounded `1AE4F8` contact family now composes its pure live-RAM
+semantics with the existing synchronous command-`0x31` (49 decimal) sound seam. The independent
+review covers every early gate classification, counters `0/1/2/255`, staged
+read-after-write decay, reaction writes, canonical stack/frame alias rejection,
+foreign local-return rejection, the second-JSR return-slot identity
+(`1AE5B6`), post-sound decay guards, and explicit rejection of unmeasured
+earlier reset gates. The focused review, contact tests and recursive receipt
+regression are **36 passed**.
+
+Original-only contact provenance is under
+`artifacts/grinding/luna/contact-review/original/`. The two recordings yielded
+109 and 1,933 real `1AE4F8` entries respectively. They include early, reset,
+pointer-reset and reaction paths; only the new recording contains the three
+real `reset-sound1` entries used for the sound seam. All eight first fixtures
+return through the original ROM and continue 150 native instructions with safe
+snapshots; see `original-fixture-probe.json`. This recorded coverage is kept
+separate from the synthetic counter/domain matrix.
+
+The current-source candidate witness is
+`artifacts/grinding/luna/contact-review/candidate/report.json`. The three
+accepted fixtures (two early paths and the real sound31 path) have strict
+observable exit equality (RAM, registers, CCR/time, frame and PCM), 150-native
+future equality and safe-restore future equality. The other five recorded
+branches compare PASS through explicit original fallback. An input delivered
+one native tick inside the sound callee produces PASS with exactly one legacy
+deadline fallback; result, continuation and timing mutants are rejected as
+DIVERGENCE, CANDIDATE_ERROR and CANDIDATE_ERROR. Fresh-process comparisons
+cover each synthetic witness replay from its entry fixture; the safe restored
+exit snapshot is separately continued in a fresh machine.
+
+The final full current-source corpus receipts are:
+
+- `artifacts/grinding/terra/contact-full-old-final4/comparison.json`: retained
+  225-observation replay **PASS**, equal terminal state/frame/PCM, 86 contact
+  hits.
+- `artifacts/grinding/terra/contact-full-new-final/comparison.json`: new
+  244-observation replay **PASS**, equal terminal state/frame/PCM, 1,878 contact
+  hits including the real sound31 route.
+
+Both receipts carry the same current native source identity
+`f3d02987b7a269fa79a292a3192853720751bf2a8965f0f25fdb6919e661fb07`. Remaining
+unsupported contact and adjacent callback targets are explicit original
+fallbacks, so this milestone does not claim recovery of those unmeasured
+branches.
+
+Final parent checks: `artifacts/grinding/parent/contact-final-pytest.log` has
+**465 passed in 22.50 s**, including the four frontend tests (pygame is available
+in the parent development environment). Earlier core-only logs remain partial
+evidence. Both final corpus receipts match all 19 current Python module hashes.
+`artifacts/grinding/parent/contact-edit-loop/result.json` passes in 0.773 s and
+rejects the semantic mutation in 0.720 s with unchanged native DLL and no
+build/install.
+
+Manual-cost note: this step required new game-path and numeric timing reasoning,
+including the distinct C1 prefixes. It did not require a new return protocol,
+snapshot member, scheduler exception or native API. Extracting the existing
+sound runner allowed the second real family to share its activation checks.
+The contact gate is still a separate production boundary; no claim is made that
+the type-7B dispatcher wrapper has already become a direct Python call. Remaining
+original paths provide the next test of reuse rather than grounds for a final
+subsystem convergence verdict.

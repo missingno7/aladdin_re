@@ -18,6 +18,7 @@ FORBIDDEN = re.compile(
 def violations(source, *, filename):
     if filename in BOUNDARY_OWNERS:
         return []
+    semantic_file = filename == "recovered.py" or filename.startswith("game/")
     tree = ast.parse(source, filename=filename)
     findings = []
     for node in ast.walk(tree):
@@ -25,7 +26,7 @@ def violations(source, *, filename):
             values = [alias.name for alias in node.names]
             if isinstance(node, ast.ImportFrom):
                 values.append(node.module or "")
-            if filename == "recovered.py" and any(
+            if semantic_file and any(
                     value.split(".")[0] in {"ctypes", "machine", "boundary", "recovery", "verification", "diagnostics", "artifacts", "frontend"}
                     for value in values):
                 findings.append(f"{filename}:{node.lineno}: recovered behavior imports policy/backend machinery")
@@ -33,7 +34,7 @@ def violations(source, *, filename):
             values = [node.value.decode(errors="replace") if isinstance(node.value, bytes) else node.value]
         elif isinstance(node, ast.Name):
             values = [node.id]
-            if filename == "recovered.py" and node.id in {"AtomicPlan", "_logic_sr"}:
+            if semantic_file and node.id in {"AtomicPlan", "_logic_sr"}:
                 findings.append(f"{filename}:{node.lineno}: semantic behavior constructs machine effects")
         elif isinstance(node, ast.Attribute):
             values = [node.attr]
@@ -45,8 +46,9 @@ def violations(source, *, filename):
 
 
 def check(root=ROOT / "src/aladdin_sega"):
-    return [finding for path in sorted(root.glob("*.py"))
-            for finding in violations(path.read_text(encoding="utf-8"), filename=path.name)]
+    return [finding for path in sorted(root.rglob("*.py"))
+            for finding in violations(path.read_text(encoding="utf-8"),
+                                      filename=path.relative_to(root).as_posix())]
 
 
 if __name__ == "__main__":

@@ -25,9 +25,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="aladdin-python-edit-") as temporary:
         source = Path(temporary) / "aladdin_sega"
-        source.mkdir()
-        for path in (ROOT / "src/aladdin_sega").glob("*.py"):
-            shutil.copyfile(path, source / path.name)
+        shutil.copytree(ROOT / "src/aladdin_sega", source,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         env = dict(os.environ, PYTHONPATH=temporary, ALADDIN_NATIVE_LIBRARY=str(native))
         def compare(label):
             command = [sys.executable, "-m", "aladdin_sega", "compare", str(args.witness.resolve()),
@@ -38,20 +37,20 @@ def main():
             return {"returncode": result.returncode, "wall_seconds": time.perf_counter() - started,
                     "status": payload["status"], "report": str((args.output / label / "comparison.json").resolve())}
         before = compare("before")
-        function = source / "recovered.py"
+        function = source / "game/objects/lifecycle.py"
         code = function.read_text()
         expression = "(pointer + offset, 0)"
         if code.count(expression) != 1:
-            raise RuntimeError("Recovery edit witness no longer identifies exactly one clear loop")
+            raise RuntimeError("Recovery edit witness no longer identifies exactly one lifecycle clear loop")
         function.write_text(code.replace(expression, "(pointer + offset, 1)"))
         # No stale timestamp/size bytecode cache may hide a same-length edit.
-        for cached in (source / "__pycache__").glob("recovered.*.pyc"):
+        for cached in source.rglob("*.pyc"):
             cached.unlink()
         after = compare("after")
     same_native = hashlib.sha256(native.read_bytes()).hexdigest() == native_hash
     passed = before["status"] == "PASS" and after["status"] in {"DIVERGENCE", "CANDIDATE_ERROR"} and same_native
     report = {"status": "PASS" if passed else "FAIL", "before": before, "after": after,
-              "edit": "Python buffer clear value 0 -> 1 in a disposable source copy", "native_sha256": native_hash,
+              "edit": "Python lifecycle buffer clear value 0 -> 1 in a disposable source copy", "native_sha256": native_hash,
               "native_unchanged": same_native, "native_builds": 0, "package_installs": 0}
     (args.output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report))

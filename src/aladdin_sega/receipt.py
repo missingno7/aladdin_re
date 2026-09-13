@@ -13,7 +13,10 @@ from .profile import PROFILE_SHA256
 def execution_receipt(*, artifact_sha256=None, capture_source=None, candidate="original"):
     lib = load_library()
     root = Path(__file__).parent
-    modules = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.glob("*.py"))}
+    modules = {
+        p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(root.rglob("*.py"))
+    }
     return {"native_source_id": lib.al_source_id().decode(),
             "native_binary_sha256": hashlib.sha256(library_path().read_bytes()).hexdigest(),
             "native_build": json.loads(lib.al_build_info().decode()),

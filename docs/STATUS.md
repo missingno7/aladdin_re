@@ -6,6 +6,31 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Packaged game source and bounded contact recovery
+
+Recovered semantics now grow in `game/objects/lifecycle.py`, `collection.py`
+and `contact.py`; `recovered.py` remains an import-compatible facade. The eleven
+existing semantic function bodies were moved unchanged. Recursive source
+receipts and the edit-loop check include the new package. See
+[source-guide.md](source-guide.md) for the source/adapter boundary.
+
+The `lifecycle` candidate additionally admits two early contact guards, a bounded
+reaction case and two reset prefixes through original sound command `0x31`
+(49 decimal). Collection and contact share the same synchronous sound runner,
+including stack/frame/return-slot identity and deadline fallback. This does not
+yet own the whole contact family or its dispatcher wrapper; the remaining
+reset, pointer and reaction cases explicitly fall back. The original control
+flow is mapped in [contact-region-map.md](contact-region-map.md).
+
+All **465 Python tests** pass. Both full user recordings pass **225 + 244**
+observations with current recursive source receipts. Three admitted recorded
+fixtures pass strict exit, 150-native-instruction continuation and safe restore;
+five other fixtures demonstrate fallback. Result/return/timing mutants are
+rejected and an input deadline inside original sound is preserved. The Python
+edit loop passes in 0.773 s and rejects a mutation in 0.720 s, unchanged DLL,
+zero builds/installs. Further contact ownership and direct wrapper composition
+are the next recovery work, not completed scope.
+
 ## Collection callback dispatch (after 0.9.0)
 
 The `lifecycle` candidate now owns `1ABC82` table selection and direct calls to
