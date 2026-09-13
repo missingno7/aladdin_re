@@ -6,6 +6,37 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Machine-semantics ownership investigation (after 0.7.0)
+
+Recommendation: **HYBRID CARRIER + SEMANTIC ISLANDS**, with a measured prototype
+and a same-cluster migration gate before further recovery. Production remains
+0.7.0; the persistent 0.6 evidence is unchanged.
+
+The existing replacement tail now has an experimental semantic implementation
+with no helper-level guest stack, registers, CCR, timing or AtomicPlans. One outer
+adapter supplies final residue/registers and aggregate cost. Its replacement
+closure is 70 function-body lines versus 117 mixed lines, constructs one fewer
+plan, and emits 63 rather than 77 byte writes on the short witness. Full machine
+equality, 150 native continuation instructions, fresh safe restore, all 202
+selected existing checks and all 225 full replay observations pass. A semantic
+Python edit is rejected in 0.678 s without building or installing anything.
+
+There is an important limit: adding this representation alongside the other
+current helper entry paths would grow source by 70 physical lines. Gates and
+crossings do not fall. It is therefore a disposable-source experiment, not a
+second production mode or a claim of global convergence. The next deletion task
+is sharing these semantic bodies across the **existing** external entries.
+
+A control omitting final stack residue fails the focused witness: ten bytes still
+differ after 150 native instructions. It nevertheless passes later full replay
+observations. That distinction rules out using full replay alone as permission
+to weaken the outer state contract. No equality mask was introduced.
+
+See [ownership-boundary.md](ownership-boundary.md) for the ownership/observability
+maps, external design references, three candidate designs, exact economics,
+verification evidence and incremental migration decision. Reproduce with
+`scripts/ownership_experiment.py`; results are in `artifacts/ownership/final/`.
+
 ## Synchronous seam cost investigation (0.7.0)
 
 **CONVERGING WITH SYNCHRONOUS LEGACY SEAM.** The same 0.6 counter/sound/replacement

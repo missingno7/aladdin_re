@@ -133,6 +133,12 @@ on its source `witness.alreplay` with `--candidate carrier` for ordinary
 Python edits. [The synchronous seam report](docs/synchronous-seam.md) documents
 the production simplification and measurements.
 
+The [machine-semantics ownership investigation](docs/ownership-boundary.md)
+compares that baseline with semantic helper/outer-adapter prototypes on the same
+region. Run `scripts/ownership_experiment.py --quick` for the focused experiment,
+or omit `--quick` for full replay comparisons. It changes only disposable source
+copies; production remains 0.7.0.
+
 The [0.6 report](docs/carrier-convergence.md), its negative verdict, implementation
 and inside-callee snapshot proof remain frozen at `evidence/carrier-v0.6.0`.
 `scripts/carrier_v060.py witness` runs that exact implementation without changing
