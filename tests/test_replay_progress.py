@@ -48,9 +48,37 @@ def test_recognized_gate_bypasses_once_then_replays():
             candidate.gate()
 
         artifacts.play_events(machine, [], terminal, on_gate=on_gate)
-        assert observed_deadlines == [FRAME_TICKS]
+        assert observed_deadlines == [terminal]
         assert machine.peek_ram(0x10, 2) == b"\x12\x34"
         assert machine.info["tick"] == terminal
+
+
+def test_carrier_budget_stops_at_observation_then_applies_input_exactly():
+    input_tick = reachable_terminal(FRAME_TICKS * 61)
+    terminal = reachable_terminal(FRAME_TICKS * 90)
+    streams, deadlines = [], []
+    for recovered in (False, True):
+        with Machine(synthetic_rom()) as machine:
+            # This store-loop ROM does not initialize a drawable VDP mode.
+            # Compare native/device state and PCM; real-ROM witnesses cover RGB.
+            pcm, observations = bytearray(), []
+            def checkpoint(candidate, key, requested):
+                observations.append((key, requested, candidate.info["tick"], candidate.snapshot(), bytes(pcm)))
+                pcm.clear()
+            def on_gate(candidate, deadline):
+                deadlines.append(deadline)
+                candidate.gates([])
+                # This spans many host PCM batches but cannot pass checkpoint 60.
+                candidate.run(target=deadline)
+            if recovered:
+                machine.gate(0x200)
+            artifacts.play_events(machine, [event(input_tick, 8)], terminal,
+                                  on_gate=on_gate if recovered else None,
+                                  audio_sink=pcm.extend, on_checkpoint=checkpoint)
+            checkpoint(machine, "terminal", terminal)
+            streams.append(observations)
+    assert deadlines == [FRAME_TICKS * 60]
+    assert streams[0] == streams[1]
 
 
 def test_replay_allows_same_tick_input_changes():

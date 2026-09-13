@@ -55,11 +55,6 @@ def play(rom, *, frames=0, mute=False, origin="user", record_from_start=False, s
                 if snapshot is not None:
                     artifacts.restore_snapshot(machine, artifacts.read_bounded(snapshot))
                     message = f"Resumed {Path(snapshot).name}"
-                candidate = None
-                if getattr(machine, "pending_transition", None):
-                    from .recovery import Candidate
-                    candidate = Candidate("carrier")
-                    candidate.arm(machine)
                 last_completed_tick = machine.info["tick"]
                 if record_from_start:
                     recording = artifacts.Recorder(machine, origin=origin, reset_provenance="snapshot-resume" if snapshot is not None else "cold-boot")
@@ -125,12 +120,7 @@ def play(rom, *, frames=0, mute=False, origin="user", record_from_start=False, s
                         break
                     if not paused or step:
                         target = (machine.info["tick"] // FRAME_TICKS + 1) * FRAME_TICKS
-                        if candidate is None:
-                            machine.run(target=target)
-                        else:
-                            while machine.info["tick"] < target:
-                                if machine.run(target=target) == "gate":
-                                    candidate.on_gate(machine, target)
+                        machine.run(target=target)
                         last_completed_tick = machine.info["tick"]
                         pcm = machine.audio()
                         if audio and not paused:

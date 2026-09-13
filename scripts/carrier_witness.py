@@ -130,9 +130,7 @@ def run(output, recording, rom_path):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "artifacts/carrier/witness")
-    parser.add_argument("--rom", type=Path, default=DEFAULT_ROM)
-    parser.add_argument("--recording", type=Path, default=ROOT / "recordings/current/20260912T210640.729016Z.alreplay")
-    args = parser.parse_args()
-    print(json.dumps(run(args.output.resolve(), args.recording.resolve(), args.rom.resolve())))
+    # Keep the original experiment reproducible after the production seam changes.
+    import sys
+    from carrier_v060 import main
+    raise SystemExit(main(["witness", *sys.argv[1:]]))

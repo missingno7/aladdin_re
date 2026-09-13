@@ -1,12 +1,10 @@
 """Concrete sound-frame continuation, original-ROM branches, and save integrity."""
-import copy
-
 import pytest
 
 from aladdin_sega import artifacts
 from aladdin_sega.machine import Machine
 from aladdin_sega.recovered import TRANSITION_ENTRY, SOUND_RETURN, begin_object_transition
-from aladdin_sega.recovery import Candidate, transition_frame, validate_transition
+from aladdin_sega.recovery import Candidate
 from test_recovery import leaf_machine, native_replace_rom, native_write, put
 
 
@@ -18,51 +16,101 @@ COUNTER_BYTES = bytes.fromhex(
     "13fc003000ffefe14e75")
 
 
-def continuation_machine():
+def sound_machine(monkeypatch, *, foreign=False, corrupt=None, deadline=False, suffix_refusal=False):
     machine = leaf_machine()
-    machine.info["pc"] = SOUND_RETURN
-    machine._registers.update(pc=SOUND_RETURN, a7=0xff7fe8)
-    put(machine, 0xff7fe4, SOUND_RETURN, 4)
-    for i, name in enumerate(("a6", "a1", "a0", "d1", "d0"), 1):
-        put(machine, 0xff8000 - i * 4, machine._registers[name], 4)
-    machine.pending_transition = {"contract": "object-sound-v1", "entry_tick": 1,
-                                  "outer_sp": 0xff8000, "frame_sha256": transition_frame(machine, 0xff8000)}
+    machine._registers["pc"] = machine.info["pc"] = TRANSITION_ENTRY
+    put(machine, 0xffefe0, 0x3030, 2)
+    put(machine, 0xfff57d, 1, 1)
+    machine.in_sound_call = False
+    machine.atomic_calls = 0
+    def atomic(**plan):
+        machine.atomic_calls += 1
+        if suffix_refusal and machine.atomic_calls == 2:
+            return False
+        for address, value in plan["writes"]:
+            put(machine, address, value, 1)
+        machine._registers.update(plan["registers"])
+        machine.info.update(pc=machine._registers["pc"], tick=machine.info["tick"] + 7 * plan["cycles"])
+        return True
+    def run(*, target=0, instructions=0):
+        nonlocal foreign
+        if instructions:
+            machine.run_call = instructions
+            return "limit"
+        assert machine.in_sound_call
+        with pytest.raises(ValueError, match="synchronous sound"):
+            artifacts.snapshot_bytes(machine)
+        if deadline:
+            machine.info.update(pc=0x1e57ac, tick=target)
+            machine._registers["pc"] = 0x1e57ac
+            return "limit"
+        machine._registers.update(pc=SOUND_RETURN, a7=0xff7fc8 if foreign else 0xff7fe8)
+        machine.info["pc"] = SOUND_RETURN
+        put(machine, 0xff7fe4, SOUND_RETURN, 4)
+        if corrupt is not None:
+            put(machine, corrupt, 0x12345678, 4)
+        foreign = False
+        return "gate"
+    monkeypatch.setattr(machine, "atomic", atomic)
+    monkeypatch.setattr(machine, "run", run)
     return machine
 
 
-def test_same_pc_at_another_stack_depth_does_not_resume_python():
-    machine = continuation_machine()
-    machine._registers["a7"] -= 32
-    pending = copy.deepcopy(machine.pending_transition)
+def test_foreign_return_does_not_resume_and_snapshot_is_forbidden_in_call(monkeypatch):
+    machine = sound_machine(monkeypatch, foreign=True)
     candidate = Candidate("carrier")
-    assert not candidate.on_gate(machine, 10000)
-    assert machine.atomic_call is None
-    assert machine.pending_transition == pending
-    assert machine.gate_call == (SOUND_RETURN, True)
+    assert candidate.on_gate(machine, 100000)
     assert candidate.stats["foreign_returns"] == 1
+    assert candidate.stats["legacy_returns"] == candidate.stats["carrier_completed"] == 1
+    assert not machine.in_sound_call
+    assert machine.armed == candidate.gate_pcs
 
 
-@pytest.mark.parametrize("address,reason", [(0xff8000, "frame"), (0xff7ffc, "frame"), (0xff7fe4, "return slot")])
-def test_same_pc_and_sp_with_wrong_activation_is_rejected(address, reason):
-    machine = continuation_machine()
-    put(machine, address, 0x12345678, 4)
-    with pytest.raises(ValueError, match=reason):
-        Candidate("carrier").on_gate(machine, 10000)
-    assert machine.atomic_call is None
+@pytest.mark.parametrize("address", [0xff8000, 0xff7ffc, 0xff7fe4])
+def test_wrong_outer_return_saved_frame_or_return_slot_is_rejected(monkeypatch, address):
+    machine = sound_machine(monkeypatch, corrupt=address)
+    with pytest.raises(ValueError, match="return/frame"):
+        Candidate("carrier").on_gate(machine, 100000)
+    assert machine.atomic_calls == 1
+    assert not machine.in_sound_call
 
 
-def test_suffix_refusal_keeps_prefix_and_delegates_only_suffix():
-    machine = continuation_machine()
-    machine.atomic_result = False
-    before = bytes(machine.ram)
+def test_deadline_relinquishes_original_suffix_without_advancing_again(monkeypatch):
+    machine = sound_machine(monkeypatch, deadline=True)
     candidate = Candidate("carrier")
-    assert not candidate.on_gate(machine, 10000)
-    assert machine.pending_transition is None
+    assert candidate.on_gate(machine, 100000)
+    assert machine.info["tick"] == 100000 and machine.run_call is None
+    assert machine.peek_ram(0xefe0, 2) == b"01"
+    assert candidate.stats["legacy_deadline_fallbacks"] == 1
+    assert candidate.stats["legacy_returns"] == 0
+    assert not machine.in_sound_call
+
+
+def test_suffix_refusal_keeps_prefix_and_delegates_only_suffix(monkeypatch):
+    machine = sound_machine(monkeypatch, suffix_refusal=True)
+    candidate = Candidate("carrier")
+    assert candidate.on_gate(machine, 100000)
+    assert machine.peek_ram(0xefe0, 2) == b"01"
     assert machine.gate_call == (SOUND_RETURN, True)
-    assert machine.run_call == 1
-    assert bytes(machine.ram) == before
-    assert candidate.stats["local_fallbacks"] == 1
-    assert candidate.stats["legacy_returns"] == 1
+    assert machine.run_call == 1 and not machine.in_sound_call
+    assert candidate.stats["local_fallbacks"] == candidate.stats["legacy_returns"] == 1
+
+
+def test_prefix_refusal_does_not_enter_sound_or_commit_counter(monkeypatch):
+    machine = sound_machine(monkeypatch)
+    monkeypatch.setattr(machine, "atomic", lambda **_: False)
+    candidate = Candidate("carrier")
+    assert not candidate.on_gate(machine, 100000)
+    assert machine.peek_ram(0xefe0, 2) == b"00"
+    assert machine.gate_call == (TRANSITION_ENTRY, True)
+    assert not machine.in_sound_call and candidate.stats["legacy_entries"] == 0
+
+
+def test_persistent_evidence_archives_are_not_silently_loaded_by_synchronous_runtime():
+    old = artifacts.pack({"manifest.json": artifacts.json_bytes({"format": "alsnap", "version": 3}),
+                          "machine.bin": b"opaque", "object-transition.json": b"{}"})
+    with pytest.raises(ValueError, match="archive member"):
+        artifacts.load_snapshot(old, rom_sha256="0" * 64, state_version=1)
 
 
 @pytest.mark.parametrize("digits", [0x3939, 0x2930, 0x3040])
@@ -84,16 +132,21 @@ def test_silent_counter_alias_is_refused_before_composing_live_reads():
     assert bytes(machine.ram) == before
 
 
-@pytest.mark.parametrize("digits", [0x3030, 0x3039, 0x3938])
-@pytest.mark.parametrize("sound", [0, 1, 0x80])
-def test_native_connected_region_branches_match_original(monkeypatch, digits, sound):
+@pytest.mark.parametrize("digits,sound,reentrant", [
+    (digits, sound, False) for digits in (0x3030, 0x3039, 0x3938) for sound in (0, 1, 0x80)
+] + [pytest.param(0x3030, 1, True, id="nested-original-return")])
+def test_native_connected_region_branches_match_original(monkeypatch, digits, sound, reentrant):
     # Prefix/counter/pair/initializer are verbatim ROM bytes. The two sound
     # callees below are synthetic clobbering stubs; real sound is qualified by
-    # carrier_witness.py and the full corpus, not claimed by this fixture.
+    # synchronous_witness.py and the full corpus, not claimed by this fixture.
     rom = bytearray(native_replace_rom(TRANSITION_ENTRY, 0x201f))
     rom[TRANSITION_ENTRY:TRANSITION_ENTRY + len(TRANSITION_BYTES)] = TRANSITION_BYTES
     rom[0x1b0336:0x1b0336 + len(COUNTER_BYTES)] = COUNTER_BYTES
     request = bytes.fromhex("4eb9001e57ac203c12345678227c00ff43212c7c00ff67894e75")
+    if reentrant:
+        # One nested original caller reaches the same sound return at another
+        # stack depth. A RAM latch prevents recursive sound requests forever.
+        request = bytes.fromhex("4a3900fff580660e13fc000100fff5804eb9001af4684e75")
     rom[0x1e58b8:0x1e58b8 + len(request)] = request
     rom[0x1e57ac:0x1e57ae] = bytes.fromhex("4e75")
     rom[0x1e589a:0x1e58a0] = bytes.fromhex("003c00104e75")  # Set X in legacy code.
@@ -121,51 +174,7 @@ def test_native_connected_region_branches_match_original(monkeypatch, digits, so
         policy.arm(candidate)
         assert candidate.run(instructions=1) == "gate"
         assert policy.on_gate(candidate, candidate.info["tick"] + 1_000_000)
-        prefix_pcm = b""
-        if sound:
-            assert candidate.run(instructions=1) == "limit"
-            assert candidate.info["pc"] == 0x1e57ac
-            prefix_pcm = candidate.audio()
-            saved = artifacts.snapshot_bytes(candidate)
-            check_snapshot_envelope(candidate, saved)
-            artifacts.restore_snapshot(candidate, saved)
-            policy.arm(candidate)
-            assert candidate.run(instructions=10000) == "gate"
-            assert policy.on_gate(candidate, candidate.info["tick"] + 1_000_000)
-            assert policy.stats["legacy_returns"] == 1
-        assert candidate.pending_transition is None
-        assert (candidate.snapshot(), prefix_pcm + candidate.audio()) == expected
-
-
-def check_snapshot_envelope(machine, saved):
-    members = {"manifest.json", "machine.bin", "object-transition.json"}
-    parts = artifacts.unpack(saved, members, members)
-    meta, _ = artifacts.load_snapshot(saved, rom_sha256=machine.rom_sha256, state_version=machine.state_version)
-    assert meta["version"] == 3
-    injected = artifacts.decode_json(parts["manifest.json"])
-    injected["version"] = 2
-    injected["sections"].pop("object-transition.json")
-    injected["object_transition"] = meta["object_transition"]
-    with pytest.raises(ValueError, match="snapshot member"):
-        artifacts.restore_snapshot(machine, artifacts.pack({"manifest.json": artifacts.json_bytes(injected),
-                                                           "machine.bin": parts["machine.bin"]}))
-    broken = dict(parts)
-    broken["object-transition.json"] += b" "
-    with pytest.raises(ValueError, match="integrity"):
-        artifacts.restore_snapshot(machine, artifacts.pack(broken))
-    saved_context = artifacts.decode_json(parts["object-transition.json"])
-    saved_context["machine_sha256"] = "0" * 64
-    broken["object-transition.json"] = artifacts.json_bytes(saved_context)
-    manifest = artifacts.decode_json(parts["manifest.json"])
-    manifest["sections"]["object-transition.json"] = {
-        "size": len(broken["object-transition.json"]), "sha256": artifacts.digest(broken["object-transition.json"])}
-    broken["manifest.json"] = artifacts.json_bytes(manifest)
-    with pytest.raises(ValueError, match="binding"):
-        artifacts.restore_snapshot(machine, artifacts.pack(broken))
-
-
-def test_metadata_cannot_select_an_arbitrary_resume_case():
-    pending = continuation_machine().pending_transition
-    pending["return_pc"] = 0x123456
-    with pytest.raises(ValueError, match="metadata"):
-        validate_transition(pending)
+        assert not candidate.in_sound_call
+        assert policy.stats["legacy_returns"] == bool(sound)
+        assert policy.stats["foreign_returns"] == int(reentrant)
+        assert (candidate.snapshot(), candidate.audio()) == expected

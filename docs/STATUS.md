@@ -3,8 +3,48 @@
 The architecture continuation is implemented on Windows x64. Python owns editable
 Aladdin source, dispatch, artifacts and verification; a small machine API hides
 retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
-Original play remains the default; recovery is opt-in for replay or carried by
-a snapshot with a pending recovered continuation.
+Original play remains the default; recovery is opt-in for replay. The production
+legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
+
+## Synchronous seam cost investigation (0.7.0)
+
+**CONVERGING WITH SYNCHRONOUS LEGACY SEAM.** The same 0.6 counter/sound/replacement
+region now executes Python → original sound → Python in one active call.
+`recovered.py` is unchanged. Production dispatch/support shrinks from 1,165 to
+1,079 physical lines: 86 lines removed, or 51.5% of the previous experiment's
+167-line increment. There is one concrete live sound-call contract, no persisted
+activation, no continuation snapshot member and no resume restoration path.
+The temporary native return gate and exact guest frame remain.
+
+The first trial passed equality but relinquished 12 spans at per-frame PCM-drain
+limits. The final driver uses existing input, 60-frame comparison and terminal
+boundaries as carrier deadlines. It preserves every observation and input tick;
+native scheduling and the verification contract are unchanged. Full-replay
+fallbacks fall from 34 to four (two scheduler refusals and two deadline handoffs).
+It admits all 78 prefixes and completes 76 Python suffixes, versus 77/71 in 0.6.
+Gate stops fall from 2,103 to 2,085, execution crossings from 35,448 to 35,248,
+and all measured API crossings from 250,194 to 247,180. Direct semantic calls
+increase from 1,017 to 1,041 because fewer existing plans are refused.
+
+The same full replay passes all **225 observations**, terminal state/frame and
+whole-run PCM. The focused witness passes strict outer equality, 150 further
+native instructions, fresh restore from a safe exit, and an input deadline
+inside original sound. Active-call snapshots are explicitly rejected. Wrong
+result, return and timing controls are rejected. **253 production tests** and
+the architecture check pass. A real Python edit produces DIVERGENCE in 0.611 s,
+without rebuilding or reinstalling. Forced-cold short comparisons measured
+1.112 s / 1.056 s, and full comparisons 65.497 s / 66.012 s; no speedup is claimed.
+
+The 0.6 experiment is frozen at `evidence/carrier-v0.6.0` / `fc66041`, including
+its original negative verdict and persistent inside-callee snapshot capability.
+Its witness and 19 continuation tests still pass through `scripts/carrier_v060.py`.
+Old version 3 snapshots use that reference launcher; production uses ordinary
+version 2 archives. Existing recordings and evidence were not rewritten.
+
+See [synchronous-seam.md](synchronous-seam.md) for the call/snapshot/fallback rules,
+deletion inventory and direct economics table. Both trial results are retained
+under `artifacts/synchronous/`. Experiment B was not needed: no coarser equality
+mask or dead-stack assumption was introduced, and no new game region was recovered.
 
 ## Connected counter/sound/replacement carrier (0.6.0)
 
@@ -348,12 +388,12 @@ review priority; a new engine, emitter or generic continuation registry is not j
 
 ## Next investigation after the convergence experiment
 
-Do not add another leaf or continuation case mechanically. Use the current
-counter/sound/replacement witness to identify whether any retained exact-effect
-adapters can disappear under larger ownership while preserving the same
-comparison contract. The present split into separately admitted prefix/suffix
-plans is the measured source of extra machinery. If the adapters remain
-externally observable, state that limitation before expanding further. No
-generic resume registry, Linux build or speculative machine rewrite is justified.
+Use the synchronous sound seam as the near-term production pattern. A future
+connected expansion must demonstrate its actual dependencies before adding a
+second case or generalizing this one. Preserve strict discovery witnesses and
+outer/future equality; do not assume retained stack/CCR/timing effects are dead.
+Persistent continuation is now capability evidence, not a requirement at every
+seam. No generic resume registry, Linux build or speculative machine rewrite
+is justified. The present investigation changed no game region or domain.
 Public combined source/binary distribution remains unresolved; ROMs and user
 artifacts stay local.

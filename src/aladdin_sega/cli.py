@@ -135,10 +135,6 @@ def main(argv=None):
                         from .recovery import Candidate
                         candidate = Candidate(args.candidate)
                         candidate.arm(machine)
-                    else:
-                        # Reference mode deliberately continues original guest
-                        # code, including the suffix, without Python ownership.
-                        machine.pending_transition = None
                     if args.observations:
                         from .verification import Observer
                         observer = Observer()
@@ -170,20 +166,15 @@ def main(argv=None):
                         observer.write(args.observations)
                 else:
                     artifacts.restore_snapshot(machine, data)
-                    if machine.pending_transition:
-                        from .recovery import Candidate
-                        candidate = Candidate("carrier")
-                        candidate.arm(machine)
-                    artifacts.play_events(machine, [], args.target, audio_sink=audio_sink,
-                                          on_gate=candidate.on_gate if candidate else None)
+                    artifacts.play_events(machine, [], args.target, audio_sink=audio_sink)
                 receipt = execution_receipt(artifact_sha256=artifacts.digest(data),
                            capture_source=meta["source_id"] if args.command == "replay" else None,
-                           candidate=args.candidate if args.command == "replay" else (candidate.name if candidate else "original"))
+                           candidate=args.candidate if args.command == "replay" else "original")
                 if any(start_receipt[key] != receipt[key] for key in ("python_modules_sha256", "native_binary_sha256")):
                     raise RuntimeError("Implementation files changed during execution; rerun in a fresh process for a valid receipt")
                 emit({"status": "COMPLETED", "compared": False, "scope": "successful execution; no equivalence verdict", **machine.info,
                       "candidate_stats": candidate.stats if candidate else {}, "machine_api_calls": dict(machine.calls),
-                      "pending_transition": machine.pending_transition, "pcm_bytes": pcm_bytes,
+                      "recovery_snapshot_safe": not machine.in_sound_call, "pcm_bytes": pcm_bytes,
                       "interpreted_m68k_instructions": machine.info["m68k_instructions"] - (candidate.stats.get("replaced_m68k_instructions", 0) if candidate else 0),
                       "receipt": receipt,
                       "state_sha256": artifacts.digest(machine.snapshot()), "source_id": machine.source_id,

@@ -1,5 +1,9 @@
 # Recovered object cleanup and initialization
 
+The current [synchronous seam](synchronous-seam.md) keeps these game-source
+effects unchanged while removing persistent continuation machinery from normal
+recovery. The 0.6 experiment below remains frozen capability evidence.
+
 The 0.6.0 [connected carrier experiment](carrier-convergence.md) expands this
 cluster through the counter and original sound calls, with a snapshot-safe
 Python continuation. That report contains the current region map, contract,

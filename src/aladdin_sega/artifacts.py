@@ -81,32 +81,24 @@ def read_bounded(path):
 
 
 def snapshot_bytes(machine):
+    if getattr(machine, "in_sound_call", False):
+        raise ValueError("Recovery snapshot unavailable during the synchronous sound call")
     state = machine.snapshot()
-    parts = {"machine.bin": state}
-    pending = getattr(machine, "pending_transition", None)
-    if pending:
-        from .recovery import check_transition
-        check_transition(machine, pending)
-        parts["object-transition.json"] = json_bytes({"activation": pending, "machine_sha256": digest(state)})
     manifest = {
-        "format": "alsnap", "version": 3 if pending else 2, "rom_sha256": machine.rom_sha256,
+        "format": "alsnap", "version": 2, "rom_sha256": machine.rom_sha256,
         "profile_sha256": PROFILE_SHA256, "source_id": machine.source_id,
         "machine_state_version": machine.state_version, "project_version": PROJECT_VERSION,
         "boundary": "completed-native-operation", "tick": machine.info["tick"],
-        "sections": {name: {"size": len(value), "sha256": digest(value)} for name, value in parts.items()},
+        "sections": {"machine.bin": {"size": len(state), "sha256": digest(state)}},
     }
-    return pack({"manifest.json": json_bytes(manifest), **parts})
+    return pack({"manifest.json": json_bytes(manifest), "machine.bin": state})
 
 
 def load_snapshot(data, *, rom_sha256, state_version):
-    parts = unpack(data, {"manifest.json", "machine.bin", "object-transition.json"}, {"manifest.json", "machine.bin"})
+    parts = unpack(data, {"manifest.json", "machine.bin"}, {"manifest.json", "machine.bin"})
     meta = decode_json(parts["manifest.json"])
-    if "object_transition" in meta:
-        raise ValueError("Transition metadata must be an integrity-checked snapshot member")
-    if meta.get("format") != "alsnap" or type(meta.get("version")) is not int or meta["version"] not in (2, 3):
-        raise ValueError("Unsupported snapshot format; expected version 2 or object-transition version 3, regenerate the snapshot")
-    if (meta["version"] == 3) != ("object-transition.json" in parts):
-        raise ValueError("Snapshot transition/version mismatch")
+    if meta.get("format") != "alsnap" or type(meta.get("version")) is not int or meta["version"] != 2:
+        raise ValueError("Unsupported snapshot format; current version is 2, regenerate the snapshot")
     if (meta.get("rom_sha256"), meta.get("profile_sha256")) != (rom_sha256, PROFILE_SHA256):
         raise ValueError("Snapshot ROM/profile identity mismatch")
     if meta.get("machine_state_version") != state_version or type(meta.get("machine_state_version")) is not int:
@@ -117,15 +109,8 @@ def load_snapshot(data, *, rom_sha256, state_version):
         raise ValueError("Unsupported snapshot boundary")
     uint(meta["tick"])
     state = parts["machine.bin"]
-    if meta.get("sections") != {name: {"size": len(value), "sha256": digest(value)}
-                                for name, value in parts.items() if name != "manifest.json"}:
+    if meta.get("sections") != {"machine.bin": {"size": len(state), "sha256": digest(state)}}:
         raise ValueError("Snapshot section integrity mismatch")
-    if meta["version"] == 3:
-        from .recovery import validate_transition
-        saved = decode_json(parts["object-transition.json"])
-        if not isinstance(saved, dict) or set(saved) != {"activation", "machine_sha256"} or saved["machine_sha256"] != digest(state):
-            raise ValueError("Transition/native snapshot binding mismatch")
-        meta["object_transition"] = validate_transition(saved["activation"])
     return meta, state
 
 
@@ -134,10 +119,6 @@ def restore_snapshot(machine, data):
     if machine.snapshot_tick(state) != meta["tick"]:
         raise ValueError("Snapshot timestamp disagrees with native state")
     machine.restore(state)
-    if "object_transition" in meta:
-        from .recovery import check_transition
-        check_transition(machine, meta["object_transition"])
-        machine.pending_transition = meta["object_transition"]
 
 
 class Recorder:
@@ -222,11 +203,6 @@ def load_replay(data, *, rom_sha256, state_version):
 
 
 def play_events(machine, events, terminal, *, audio_sink=None, on_gate=None, on_checkpoint=None):
-    if on_gate is None and getattr(machine, "pending_transition", None):
-        from .recovery import Candidate
-        candidate = Candidate("carrier")
-        candidate.arm(machine)
-        on_gate = candidate.on_gate
     checkpoint_period = FRAME_TICKS * 60
     next_checkpoint = (machine.info["tick"] // checkpoint_period + 1) * checkpoint_period
     def advance(target):
@@ -243,7 +219,9 @@ def play_events(machine, events, terminal, *, audio_sink=None, on_gate=None, on_
                 if on_gate is None:
                     raise RuntimeError("Unexpected replay gate: " + json.dumps(diagnostic))
                 before = (info["tick"], info.get("pc"))
-                on_gate(machine, deadline)
+                # The frame limit only batches PCM drains. A carrier may own
+                # that interval, but must stop for input, observation or terminal.
+                on_gate(machine, min(target, next_checkpoint))
                 after = machine.info
                 parked = parked + 1 if after["tick"] <= current else 0
                 if (after["tick"], after.get("pc")) == before or parked > 8:
