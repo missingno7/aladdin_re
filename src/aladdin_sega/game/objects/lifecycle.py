@@ -216,6 +216,17 @@ def offset_spawn_position(read, record, x_delta, y_delta):
               for index in range(2))]
 
 
+def prepare_spawn_strip(read, *, row, x_offset, y_offset):
+    """Derive one observed spawn-strip setup's placement and table inputs."""
+    position_source, varying_source = ((0xFF7E08, 0xFF7E06) if row else
+                                       (0xFF7E06, 0xFF7E08))
+    return {'x_offset': x_offset & 0xFFFF, 'y_offset': y_offset & 0xFFFF,
+            'position': read(position_source, 2) & 0xFFF0,
+            'varying': read(varying_source, 2) & 0xFFF0,
+            'cursor': read(0xFF7DAC, 4),
+            'stride': None if row else read(0xFF7DB4, 2)}
+
+
 def finish_upper_dispatch_spawn(record):
     """Apply 1B745E's type, script, and enabled-flag residue."""
     return [(record, 0x44), *((record + 0x20 + offset, byte)

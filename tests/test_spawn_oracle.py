@@ -615,3 +615,162 @@ def test_guarded_spawn_success_installs_its_script(free):
         setup_writes=((0xFFF12A, 1),), include_raw=True)
     assert stats["candidate_hits"] == 1
     assert _outer_record_bytes(state, ((0x20, 0x124318),)) == {0x20: 0x124318}
+
+
+SETUP_KNOWN_A = 0x1B72D4
+SETUP_KNOWN_B = 0x1B6802
+SETUP_UNKNOWN = 0x1B6F34
+
+
+def _setup_callbacks(entry, case):
+    count = 23 if entry in (oracle.SPAWN_SETUP_ROW_LOW_ENTRY,
+                            oracle.SPAWN_SETUP_ROW_HIGH_ENTRY) else 16
+    if case == "empty":
+        values = ()
+    elif case == "multiple":
+        values = (SETUP_KNOWN_A, SETUP_KNOWN_B)
+    elif case == "unknown":
+        values = (SETUP_KNOWN_A, SETUP_UNKNOWN)
+    else:
+        raise ValueError(case)
+    return values + (None,) * (count - len(values))
+
+
+@pytest.mark.parametrize("entry", oracle.SETUP_ENTRIES)
+@pytest.mark.parametrize("case", ("empty", "multiple", "unknown"))
+def test_constructed_full_setup_matches_original_outer_and_future(entry, case):
+    state = oracle.constructed_setup_state(
+        entry, callbacks=_setup_callbacks(entry, case),
+        position=0x1237, varying=0x245F)
+    expected = oracle.execute_setup(state, entry=entry, candidate=None)
+    actual = oracle.execute_setup(state, entry=entry, candidate="lifecycle")
+    assert actual[:2] == expected[:2]
+    if case == "unknown":
+        # The aggregate setup plan is correctly declined before writing. The
+        # remaining native loop may still admit an empty suffix after the
+        # unresolved callback has returned.
+        assert actual[2]["spawn_setup_hits"] == 0
+        assert actual[2]["fallbacks"] >= 1
+    else:
+        assert actual[2]["spawn_setup_hits"] == 1
+        assert actual[2]["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("entry", oracle.SETUP_ENTRIES)
+def test_full_setup_preserves_register_words_stride_and_coordinate_masks(entry):
+    row = entry in (oracle.SPAWN_SETUP_ROW_LOW_ENTRY,
+                    oracle.SPAWN_SETUP_ROW_HIGH_ENTRY)
+    state = oracle.constructed_setup_state(
+        entry, callbacks=_setup_callbacks(entry, "empty"),
+        incoming_x=True, cursor=(0x00FF_F000 if row else 0x00FF_FFFE),
+        stride=(0xFFFE if not row else 0x7FFF),
+        position=0x1237, varying=0x245F,
+        initial_d0=0xABCD0001, initial_d4=0x13570003,
+        initial_d5=0x2468A002, initial_d6=0xFACE0004)
+    expected = oracle.execute_setup(state, entry=entry, candidate=None)
+    actual = oracle.execute_setup(state, entry=entry, candidate="lifecycle")
+    assert actual[:2] == expected[:2]
+    assert actual[2]["spawn_setup_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("entry", oracle.SETUP_ENTRIES)
+def test_full_setup_candidate_outer_state_survives_fresh_process(entry):
+    state = oracle.constructed_setup_state(
+        entry, callbacks=_setup_callbacks(entry, "multiple"))
+    _, outer_state, future, _, stats = oracle.execute_setup(
+        state, entry=entry, candidate="lifecycle", include_raw=True)
+    assert stats["spawn_setup_hits"] == 1
+    assert oracle.fresh_process_future(outer_state) == future
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_full_setup_negative_controls_reject_outer_boundary(mutant):
+    entry = oracle.SPAWN_SETUP_LEFT_ENTRY
+    state = oracle.constructed_setup_state(
+        entry, callbacks=_setup_callbacks(entry, "empty"))
+    expected = oracle.execute_setup(state, entry=entry, candidate=None)
+    actual = oracle.execute_setup(
+        state, entry=entry, candidate="lifecycle-mutant-" + mutant,
+        stop_after_first=True)
+    assert actual[0] != expected[0]
+    assert actual[4]["spawn_setup_hits"] == 1
+
+
+def test_setup_gate_set_stays_within_native_capacity_and_is_unique():
+    gates = oracle.Candidate("lifecycle").gate_pcs
+    assert len(gates) <= 64
+    assert len(gates) == len(set(gates))
+
+
+def test_setup_rts_reads_return_slot_overwritten_by_allocated_object():
+    entry = oracle.SPAWN_SETUP_LEFT_ENTRY
+    # A free primary object aliases the caller's return slot. Initialization
+    # installs template byte 1 = 1 and X = 0x200, changing RTS to 0x010200.
+    # This deliberately constructed return enters ROM data: qualify four
+    # native instructions there; ordinary setup fixtures cover 150 and restore.
+    state = oracle.constructed_setup_state(
+        entry, callbacks=(0x1B6C4E,) + (None,) * 15,
+        stack=0xFF7E82, position=0x210)
+    expected = oracle.execute_setup(
+        state, entry=entry, candidate=None,
+        expected_return=0x010200, future_instructions=4)
+    actual = oracle.execute_setup(
+        state, entry=entry, candidate="lifecycle",
+        expected_return=0x010200, future_instructions=4)
+    assert actual[:2] == expected[:2]
+    assert actual[2]["spawn_setup_hits"] == 1
+    assert actual[2]["fallbacks"] == 0
+
+
+def test_setup_odd_stack_is_refused_before_candidate_writes():
+    from aladdin_sega.recovery import Candidate
+
+    entry = oracle.SPAWN_SETUP_LEFT_ENTRY
+    state = oracle.constructed_setup_state(
+        entry, callbacks=_setup_callbacks(entry, "empty"), stack=oracle.STACK + 1)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([entry])
+        assert machine.run(instructions=1) == "gate"
+        recovery = Candidate("lifecycle")
+        recovery.arm(machine)
+        assert machine.run(instructions=1) == "gate"
+        assert recovery.on_gate(machine, machine.info["tick"] + 1_000_000) is False
+        assert recovery.stats["spawn_setup_hits"] == 0
+        assert recovery.stats["fallbacks"] == 1
+        assert recovery.stats["candidate_hits"] == 0
+    finally:
+        machine.close()
+
+
+def test_setup_deadline_refusal_preserves_only_original_first_instruction():
+    entry = oracle.SPAWN_SETUP_LEFT_ENTRY
+    state = oracle.constructed_setup_state(
+        entry, callbacks=_setup_callbacks(entry, "empty"))
+    from aladdin_sega.recovery import Candidate
+
+    original = oracle.Machine(oracle.read_rom())
+    try:
+        original.restore(state)
+        original.gates([entry])
+        assert original.run(instructions=1) == "gate"
+        original.gate(entry, bypass_once=True)
+        assert original.run(instructions=1) == "limit"
+        expected = oracle.observable(original)
+    finally:
+        original.close()
+
+    actual = oracle.Machine(oracle.read_rom())
+    try:
+        actual.restore(state)
+        recovery = Candidate("lifecycle")
+        recovery.arm(actual)
+        assert actual.run(instructions=1) == "gate"
+        assert recovery.on_gate(actual, actual.info["tick"] + 1) is False
+        assert recovery.stats["fallback_reasons"] == {"scheduler admission": 1}
+        assert recovery.stats["candidate_hits"] == 0
+        assert oracle.observable(actual) == expected
+    finally:
+        actual.close()

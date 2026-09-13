@@ -39,6 +39,7 @@ from .game.objects.lifecycle import (
     spawn_region,
     select_spawn_dispatch_slot,
     offset_spawn_position,
+    prepare_spawn_strip,
     unlink,
 )
 
@@ -81,5 +82,6 @@ __all__ = [
     "spawn_region",
     "select_spawn_dispatch_slot",
     "offset_spawn_position",
+    "prepare_spawn_strip",
     "unlink",
 ]

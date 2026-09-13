@@ -53,6 +53,10 @@ SPAWN_DISPATCH_WALKER_ENTRY = 0x1AE44A
 SPAWN_DISPATCH_WALKER_LAST_PC = 0x1AE47C
 SPAWN_ROW_DISPATCH_WALKER_ENTRY = 0x1AE4C6
 SPAWN_ROW_DISPATCH_WALKER_LAST_PC = 0x1AE4F6
+SPAWN_SETUP_LEFT_ENTRY = 0x1AE3FC
+SPAWN_SETUP_RIGHT_ENTRY = 0x1AE406
+SPAWN_SETUP_ROW_LOW_ENTRY = 0x1AE47E
+SPAWN_SETUP_ROW_HIGH_ENTRY = 0x1AE488
 SPAWN_UPPER_VARIANT_CALLER_ENTRY = 0x1B7262
 SPAWN_UPPER_VARIANT_CALLER_LAST_PC = 0x1B728C
 SPAWN_UPPER_SCRIPTED_CALLER_ENTRY = 0x1B72D4
@@ -1293,6 +1297,57 @@ def spawn_dispatch_walker(machine, registers: dict[str, int], *, row=False) -> A
 def spawn_row_dispatch_walker(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover the bounded 23-slot row dispatcher through the shared carrier."""
     return spawn_dispatch_walker(machine, registers, row=True)
+
+
+# Each setup fixes placement inputs then enters one established bounded walker.
+SPAWN_SETUP_FACTS = {
+    SPAWN_SETUP_LEFT_ENTRY: (False, -16, 0xF0, 178, 13, 0x1AE446,
+        bytes.fromhex('33fcfff000fff150600833fc015000fff15033fc00f000fff152303900ff7e06020000f033c000ff7db0207900ff7dac43f841543c3900ff7e08020600f03a3900ff7db445f900ffae87383c000f')),
+    SPAWN_SETUP_RIGHT_ENTRY: (False, 0x150, 0xF0, 168, 12, 0x1AE446,
+        bytes.fromhex('33fc015000fff15033fc00f000fff152303900ff7e06020000f033c000ff7db0207900ff7dac43f841543c3900ff7e08020600f03a3900ff7db445f900ffae87383c000f')),
+    SPAWN_SETUP_ROW_LOW_ENTRY: (True, -16, 0xF0, 162, 12, 0x1AE4C2,
+        bytes.fromhex('33fc00f000fff152600833fc01e000fff15233fcfff000fff150303900ff7e08020000f033c000ff7db2207900ff7dac43f841543c3900ff7e06020600f045f900ffae87383c0016')),
+    SPAWN_SETUP_ROW_HIGH_ENTRY: (True, -16, 0x1E0, 152, 11, 0x1AE4C2,
+        bytes.fromhex('33fc01e000fff15233fcfff000fff150303900ff7e08020000f033c000ff7db2207900ff7dac43f841543c3900ff7e06020600f045f900ffae87383c0016')),
+}
+
+
+def spawn_setup_dispatch(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
+    """Recover one setup prefix, its selected bounded walker, and outer RTS."""
+    try:
+        row, x_offset, y_offset, cycles, instructions, prefix_last_pc, shape = SPAWN_SETUP_FACTS[entry]
+    except KeyError as error:
+        raise UnsupportedCandidate('unknown spawn setup entry') from error
+    if machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('spawn setup ROM shape')
+    inputs = game.prepare_spawn_strip(lambda address, size: _read(machine, address, size),
+                                      row=row, x_offset=x_offset, y_offset=y_offset)
+    writes = (*_bytes(0xFFF150, inputs['x_offset'], 2),
+              *_bytes(0xFFF152, inputs['y_offset'], 2),
+              *_bytes(0xFF7DB2 if row else 0xFF7DB0, inputs['position'], 2))
+    prefix_registers = {**registers,
+                        'd0': (registers['d0'] & 0xFFFF0000) | inputs['position'],
+                        'd6': (registers['d6'] & 0xFFFF0000) | inputs['varying'],
+                        'd4': (registers['d4'] & 0xFFFF0000) | (22 if row else 15),
+                        'a0': inputs['cursor'], 'a1': 0x4154, 'a2': 0xFFAE87,
+                        'sr': _logic_sr(registers['sr'], 22 if row else 15, 2),
+                        'pc': SPAWN_ROW_DISPATCH_WALKER_ENTRY if row else SPAWN_DISPATCH_WALKER_ENTRY}
+    if not row:
+        prefix_registers['d5'] = (registers['d5'] & 0xFFFF0000) | inputs['stride']
+    prefix = AtomicPlan(cycles, instructions, writes, prefix_registers, prefix_last_pc,
+                        direct_calls=1)
+    walker = (spawn_row_dispatch_walker if row else spawn_dispatch_walker)(
+        dispatch_plan_view(machine, prefix), prefix.registers)
+    combined = AtomicPlan(prefix.cycles + walker.cycles, prefix.instructions + walker.instructions,
+                          tuple(dict((*prefix.writes, *walker.writes)).items()), walker.registers,
+                          walker.last_pc, prefix.direct_calls + walker.direct_calls)
+    final = dict(walker.registers)
+    planned = dispatch_plan_view(machine, combined)
+    outer = _read(planned, final['a7'], 4)
+    final.update(a7=final['a7'] + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(combined.cycles + 16, combined.instructions + 1, combined.writes, final,
+                      SPAWN_ROW_DISPATCH_WALKER_LAST_PC if row else SPAWN_DISPATCH_WALKER_LAST_PC,
+                      combined.direct_calls)
 
 def _finish_object_plan(machine, registers, *, static_cycles, static_instructions,
                         return_site, last_pc, extra_writes=(), extra_spans=(),

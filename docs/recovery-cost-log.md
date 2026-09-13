@@ -13,6 +13,43 @@ rules, not handwritten lines.
 
 ## Bounded whole column walker
 
+### Whole setup-parent retrospective (14 September)
+
+Four strip setup entries now compose preparation, the existing walker and its
+outer RTS. Semantic work: identify camera-word masking, X/Y strip offsets and
+row/column coordinate roles. Mechanical work: four ROM-validated prefix facts,
+known register/CCR residues, existing plan assembly and final planned-RAM return
+read. New execution/snapshot/state-authority concepts: **zero**. Production adds
+11 semantic lines, 55 boundary lines and shared policy routing; handwritten
+machine accounting remains, but no per-callback protocol was invented.
+
+Full history admits 2,441 whole parents, leaving 90 standalone walker plans.
+Callbacks, allocation and initialization remain direct within these parents.
+Old gates still serve native callers/fallback and independent qualification;
+they are not globally oracle-only or deleted. The additional 96 gate/fallback
+events are scheduler refusals, so reduced internal boundaries do not imply
+reduced total crossings. Strict 26,378-frame equality remains current.
+
+Across callback families, column/row walkers and these setup parents, the
+integration mechanisms were reused while semantic ownership expanded. The
+remaining repeated burden is increasingly qualification plumbing: raw-result
+tuple shapes, gate retention after fallback and constructing meaningful alias
+fixtures needed review corrections. The final suite has 1,226 passing tests
+(81.54 s); eight recorded parent outer/future/fresh witnesses pass. Review added
+a real allocated-object/outer-return alias rather than counting odd-stack
+refusal as alias coverage. No production change was needed for that case.
+
+Working conclusion: **CONTINUE + MECHANIZE**. Preserve the substrate and seek a
+meaningful enclosing semantic region; do not spend gate capacity on thin
+BSR/RTS wrappers alone. The next narrow tooling candidate is a common named
+qualification result and shared gate-retention workflow across existing
+oracles, justified by actual repeated mistakes. Do not generate arbitrary
+M68000 behavior or relax equality. The original CPU still owns surrounding
+control flow and VDP/device work; this subsystem is not yet independently
+CPU-free. No claim is made that all future integration costs are solved.
+
+### Column walker milestone
+
 `1AE44A` through the boundary before RTS `1AE47C` now composes slot selection,
 empty slots and supported callbacks. Reused AtomicPlan, staged RAM reads,
 callback/allocator adapters, scheduler admission, strict oracle and restore

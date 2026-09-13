@@ -1,10 +1,39 @@
-# Status — 13 September 2026
+# Status — 14 September 2026
 
 The project now has an immutable cold-start input-history model for player
 sessions and verification.  It replaces the current play/replay/snapshot
 workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
+
+## Whole spawn-strip setup parents
+
+The four recorded setup entries `1AE3FC`, `1AE406`, `1AE47E`, and `1AE488`
+now own coordinate masking, strip offsets, their column/row walker, and the
+outer RTS. `game.objects.lifecycle.prepare_spawn_strip` holds the semantic
+preparation; existing planned RAM reads compose callbacks and exact outer
+effects. No new native API, snapshot state or continuation protocol was added.
+
+**1,226 tests pass** in 81.54 seconds. Eight recorded parent fixtures pass
+strict outer equality, 150-instruction native continuation and fresh-process
+restore. Portable cases cover unknown callbacks, register words, signed stride,
+deadlines and result/timing/continuation mutants. A constructed allocation that
+overwrites the caller return slot also matches the original updated RTS target;
+its deliberately data-directed return is checked for four further instructions.
+
+Full **26,378-frame** cold history passes strict state/frame/PCM and terminal
+comparison with zero restores; receipt source hashes match current production.
+Compared with the row milestone, 2,441 setup plans absorb their walker entry,
+leaving 90 standalone walker admissions. Combined walker admissions remain
+2,531. Gates/fallbacks increase by 96, entirely scheduler admission refusals;
+candidate activations remain 5,904. Direct semantic calls rise 49,543 to 51,984,
+replaced instructions 424,317 to 456,364. There are 61 configured gates of 64.
+These are bounded recorded-path results, not ownership of the surrounding
+scrolling/render coordinators or all ROM callback identities.
+
+Evidence: `artifacts/spawn-setup/full/comparison.json` and
+`artifacts/spawn-setup-frontier/setup-report.json`. Historical receipts remain
+separate; the executable fixtures do not require local capture artifacts.
 
 ## Shared column and row spawn walkers
 
@@ -264,9 +293,9 @@ is the cleaner speedup measurement. Evidence:
 
 ## Recovery remains in progress
 
-The working tree contains mixed uncommitted recovery work around spawn dispatch
-and known callback composition.  Its previous replay receipts are source-version
-specific and must be regenerated after a source freeze.  Existing fallback,
+The committed spawn milestones are described above; subsequent work is qualified
+and published in separate batches. Replay receipts are source-version specific
+and are regenerated after a production source freeze. Existing fallback,
 strict state/PCM/future, fresh-process, alias, and mutation requirements remain
 the acceptance bar for any admitted region.
 

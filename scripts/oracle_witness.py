@@ -21,6 +21,8 @@ from aladdin_sega.receipt import execution_receipt
 from aladdin_sega.boundary import (SPAWN_REGION_ENTRIES, SPAWN_DISPATCH_ITERATION_ENTRY,
                                    SPAWN_ROW_DISPATCH_WALKER_ENTRY,
                                    SPAWN_ROW_DISPATCH_WALKER_LAST_PC,
+                                   SPAWN_SETUP_LEFT_ENTRY, SPAWN_SETUP_RIGHT_ENTRY,
+                                   SPAWN_SETUP_ROW_LOW_ENTRY, SPAWN_SETUP_ROW_HIGH_ENTRY,
                                    SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
                                    SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY,
                                    SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY,
@@ -285,6 +287,78 @@ def constructed_row_walker_state(*, count: int = 23,
                                     initial_d0=initial_d0, row=True)
 
 
+def constructed_setup_state(entry: int, *, callbacks: tuple[int | None, ...] | None = None,
+                            incoming_x: bool = False, exhausted: bool = False,
+                            cursor: int = 0xFF6000, stride: int = 0x258,
+                            position: int = 0x1237, varying: int = 0x245F,
+                            slot_indices: tuple[int, ...] | None = None,
+                            initial_d0: int = 0xABCD0000,
+                            initial_d4: int = 0x13570000,
+                            initial_d5: int = 0x24680000,
+                            initial_d6: int = 0xFACE0000,
+                            stack: int = STACK) -> bytes:
+    """Build a portable full setup-to-RTS fixture.
+
+    The setup prefix is real ROM input: it masks the two coordinate words,
+    installs its offsets, then enters the existing column or row walker.  All
+    walker slots and callback flags are explicit, so this fixture is suitable
+    for default tests without relying on ignored captured states.
+    """
+    if entry not in SETUP_ENTRIES:
+        raise ValueError(f"unsupported spawn setup entry {entry:06X}")
+    row = entry in (SPAWN_SETUP_ROW_LOW_ENTRY, SPAWN_SETUP_ROW_HIGH_ENTRY)
+    count = 23 if row else 16
+    if callbacks is None:
+        callbacks = (None,) * count
+    if len(callbacks) < count:
+        raise ValueError("callback sequence is shorter than setup walker count")
+    if slot_indices is None:
+        slot_indices = tuple(0x100 + index for index in range(count))
+    if len(slot_indices) < count:
+        raise ValueError("slot index sequence is shorter than setup walker count")
+    machine = cold_fixture(0x1B5266, free=0, incoming_x=incoming_x,
+                           pc_entry=entry, stack=stack,
+                           initial_d0=initial_d0)
+    try:
+        machine.gates([entry])
+        if machine.run(instructions=1) != "gate":
+            raise RuntimeError("could not park constructed setup")
+        registers = machine.registers()
+        registers.update({"d0": initial_d0 & 0xFFFFFFFF,
+                          "d4": initial_d4 & 0xFFFFFFFF,
+                          "d5": initial_d5 & 0xFFFFFFFF,
+                          "d6": initial_d6 & 0xFFFFFFFF,
+                          "a0": cursor & 0xFFFFFFFF,
+                          "sr": (registers["sr"] & ~0x1F) |
+                                (0x10 if incoming_x else 0)})
+        writes_list = [*write_word(0xFF7E06, position),
+                       *write_word(0xFF7E08, varying),
+                       *write_long(0xFF7DAC, cursor),
+                       *write_word(0xFF7DB4, stride)]
+        stride_word = stride & 0xFFFF
+        signed_stride = stride_word if stride_word < 0x8000 else stride_word - 0x10000
+        step = 2 if row else signed_stride
+        for index in range(count):
+            slot_address = (cursor + step * index) & 0xFFFFFFFF
+            slot_index = slot_indices[index]
+            writes_list.extend(write_word(slot_address, slot_index << 1))
+            callback = callbacks[index]
+            flag = 0 if callback is None else _callback_flag(callback)
+            writes_list.append((0xFFAE87 + slot_index, flag))
+        for base, pool_count, direction in ENTRY_BASES.values():
+            for index in range(pool_count):
+                writes_list.append(((base + direction * 0x42 * index) & 0xFFFFFF,
+                                    1 if exhausted else 0))
+        if not machine.atomic(target=machine.info["tick"] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=entry, writes=writes_list,
+                              registers=registers):
+            raise RuntimeError("constructed setup was not accepted")
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
 def observable(machine):
     return {"state": artifacts.digest(machine.snapshot()), "info": machine.info,
             "registers": machine.registers(), "ram": artifacts.digest(machine.peek_ram(0, 65536)),
@@ -358,6 +432,82 @@ def execute_dispatch(target: int, *, free: int | None, candidate: str | None, in
         if include_raw:
             return at_outer, outer_state, future, future_state, recovery.stats if recovery else None
         return result
+    finally:
+        machine.close()
+
+
+SETUP_ENTRIES = (SPAWN_SETUP_LEFT_ENTRY, SPAWN_SETUP_RIGHT_ENTRY,
+                 SPAWN_SETUP_ROW_LOW_ENTRY, SPAWN_SETUP_ROW_HIGH_ENTRY)
+
+
+def setup_fixture(fixture: str | Path | bytes, entry: int):
+    """Restore a captured setup entry parked before its first instruction."""
+    return walker_fixture(fixture, entry=entry)
+
+
+def execute_setup(fixture: str | Path | bytes, *, entry: int,
+                  candidate: str | None, register_overrides: dict[str, int] | None = None,
+                  future_instructions: int = 150, include_raw: bool = False,
+                  stop_after_first: bool = False, expected_return: int | None = None):
+    """Qualify one setup prefix plus its selected walker and outer RTS."""
+    machine = setup_fixture(fixture, entry)
+    try:
+        if register_overrides:
+            machine.gates([entry])
+            assert machine.run(instructions=1) == "gate"
+            registers = machine.registers()
+            registers.update(register_overrides)
+            assert machine.atomic(target=machine.info["tick"] + 1_000_000,
+                                  cycles=1, instructions=1, last_pc=entry,
+                                  writes=[], registers=registers)
+        outer = int.from_bytes(machine.peek_ram(machine.registers()["a7"] & 0xFFFF, 4), "big") & 0xFFFFFF
+        if expected_return is not None:
+            # Explicit oracle boundary for fixtures whose callback overwrites
+            # the caller's return slot. Both executions must actually reach it.
+            outer = expected_return
+        machine.gates([entry, outer])
+        assert machine.run(instructions=1) == "gate"
+        recovery = Candidate(candidate) if candidate else None
+        if recovery:
+            recovery.arm(machine)
+            machine.gates(list(dict.fromkeys((*recovery.gate_pcs, entry, outer))))
+            handled = None
+            for _ in range(32):
+                if machine.run(instructions=100_000) != "gate":
+                    raise RuntimeError("setup candidate did not reach its outer return")
+                if machine.info["pc"] == outer:
+                    break
+                if machine.info["pc"] not in recovery.gate_pcs and machine.info["pc"] != entry:
+                    raise RuntimeError(f"setup stopped at unexpected PC {machine.info['pc']:06X}")
+                handled = recovery.on_gate(machine, machine.info["tick"] + 1_000_000)
+                if stop_after_first:
+                    if not handled:
+                        raise AssertionError("setup negative witness did not admit its first plan")
+                    return observable(machine), machine.snapshot(), None, None, recovery.stats
+                if not handled:
+                    # _fallback has already retired the one native instruction;
+                    # retain the complete production gate set for a local seam
+                    # or a later retry at the walker head.
+                    machine.gates(list(dict.fromkeys((*recovery.gate_pcs, entry, outer))))
+            else:
+                raise RuntimeError("setup candidate exceeded gate budget")
+        else:
+            machine.gate(entry, bypass_once=True)
+            if machine.run(instructions=100_000) != "gate":
+                raise RuntimeError("setup original did not reach its outer return")
+        if machine.info["pc"] != outer:
+            raise RuntimeError(f"setup did not return to {outer:06X}")
+        outer_state = machine.snapshot()
+        at_outer = observable(machine)
+        machine.gates([])
+        if machine.run(instructions=future_instructions) != "limit":
+            raise RuntimeError("setup future did not reach instruction limit")
+        future_state = machine.snapshot()
+        future = observable(machine)
+        stats = recovery.stats if recovery else None
+        if include_raw:
+            return at_outer, outer_state, future, future_state, stats
+        return at_outer, future, stats
     finally:
         machine.close()
 
@@ -529,6 +679,39 @@ def recorded_walker_rows(directory: str | Path, *, row: bool = False) -> list[di
     return rows
 
 
+def recorded_setup_rows(directory: str | Path) -> list[dict]:
+    """Qualify explicitly supplied full setup-to-RTS captures.
+
+    These captures are evidence rows, not default fixtures: callers must opt
+    into the directory so ordinary qualification remains portable.
+    """
+    directory = Path(directory)
+    paths = tuple(sorted(path for path in directory.glob("setup-*.state")
+                         if not path.stem.endswith("-outer")))
+    if not paths:
+        raise ValueError(f"setup directory has no setup-*.state files: {directory}")
+    rows = []
+    for path in paths:
+        metadata = json.loads(path.with_suffix(".json").read_text())
+        entry = int(metadata["entry"])
+        if entry not in SETUP_ENTRIES:
+            raise ValueError(f"setup fixture has an unexpected entry: {entry:06X}")
+        expected = execute_setup(path, entry=entry, candidate=None)
+        actual = execute_setup(path, entry=entry, candidate="lifecycle",
+                               include_raw=True)
+        outer, outer_state, future, _, stats = actual
+        rows.append({"fixture": path.name, "provenance": "recorded full setup state",
+                     "state_sha256": artifacts.digest(path.read_bytes()),
+                     "history_id": metadata.get("history_id"),
+                     "frame": metadata.get("frame"), "entry": entry,
+                     "walker_exit": metadata.get("exit"),
+                     "equal_outer": outer == expected[0],
+                     "equal_future": future == expected[1],
+                     "fresh_process_150": fresh_process_future(outer_state) == future,
+                     "stats": stats})
+    return rows
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--entry", action="append", type=lambda value: int(value, 0), default=None)
@@ -542,6 +725,8 @@ def main(argv=None):
     parser.add_argument("--incoming-x", action="store_true")
     parser.add_argument("--walker-directory", type=Path,
                         help="explicit directory of captured walker .state/.json evidence")
+    parser.add_argument("--setup-directory", type=Path,
+                        help="explicit directory of captured full setup .state/.json evidence")
     parser.add_argument("--row", action="store_true",
                         help="use the recorded 23-slot row walker boundary")
     parser.add_argument("--output", type=Path)
@@ -580,6 +765,8 @@ def main(argv=None):
                      "stats": stats})
     if args.walker_directory is not None:
         rows.extend(recorded_walker_rows(args.walker_directory, row=args.row))
+    if args.setup_directory is not None:
+        rows.extend(recorded_setup_rows(args.setup_directory))
     result = {"status": "PASS" if all(row["equal_outer"] and row["equal_future"]
                                         and row.get("fresh_process_150") is not False for row in rows) else "FAIL",
               "native_library": str(library_path()), "frame_ticks": FRAME_TICKS,
