@@ -220,3 +220,37 @@ The contact gate is still a separate production boundary; no claim is made that
 the type-7B dispatcher wrapper has already become a direct Python call. Remaining
 original paths provide the next test of reuse rather than grounds for a final
 subsystem convergence verdict.
+
+### Fixed baseline for the next contact expansion
+
+The following counters come from the final receipts named above and the final
+dispatcher receipts. They measure complete candidate replay runs, not isolated
+contact execution. `gates` counts stops, not registered addresses; total API
+calls include observation/audio/info calls as well as execution calls.
+
+| Commit / corpus | Gate stops | Direct Python calls | Sound spans entered | Fallbacks | Replaced instructions | All measured API calls |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `88f12d1` / old | 2,666 | 1,821 | 83 | 582 | 59,730 | 131,105 |
+| `ed2a5e7` / old | 2,775 | 1,821 | 83 | 605 | 60,456 | 132,459 |
+| `88f12d1` / new | 2,894 | 616 | 19 | 2,011 | 24,735 | 143,772 |
+| `ed2a5e7` / new | 4,830 | 622 | 22 | 2,066 | 41,462 | 166,872 |
+
+This checkpoint adds an independently callable contact island. It has not yet
+removed the original type-7B wrapper or its dispatcher fallback: the new replay
+still records 1,715 unsupported `1AE9D4` targets. Of 1,878 recovered contact
+activations in that replay, three cross the original sound span. The other
+activations should not be mistaken for substantial additional semantic work.
+The next comparison should measure actual state-changing domain growth and
+direct wrapper composition, alongside the number of new manual machine
+mechanisms needed. The local extracted baseline is
+`artifacts/grinding/parent/contact-baseline.json`.
+
+## Expanded contact ownership and direct wrapper
+
+The next completed step is documented in [contact-expansion.md](contact-expansion.md).
+It qualifies the larger state-changing contact family and composes the type-7B
+wrapper beneath the existing dispatcher, including original sound and resumed
+Python. Final evidence includes 646 tests, both full corpora, a tracked-script
+recapture and strict witness with fresh-process exit restore, plus all three
+negative controls. The report retains the baseline counter definitions and
+records actual manual work, reuse and remaining unsupported domains.

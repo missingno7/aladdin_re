@@ -7,7 +7,7 @@ organized by object family.
 """
 
 from .game.objects.collection import collection_state, increment_counter
-from .game.objects.contact import contact_decay, contact_path, contact_reaction, contact_reset
+from .game.objects.contact import contact_decay, contact_path, contact_reaction, contact_reset, contact_route, contact_repeated_decay
 from .game.objects.lifecycle import (
     activate_collection,
     clear_pair,
@@ -28,6 +28,8 @@ __all__ = [
     "contact_path",
     "contact_reaction",
     "contact_reset",
+    "contact_route",
+    "contact_repeated_decay",
     "free_object",
     "increment_counter",
     "initialize",

@@ -26,6 +26,8 @@ COLLECTION_DISPATCH_ENTRY = 0x1ABC82
 COLLECTION_DISPATCH_RETURN = 0x1ABCA0
 COLLECTION_DISPATCH_TABLE = 0x1CBE
 CONTACT_ENTRY = 0x1AE4F8
+CONTACT_DISPATCH_ENTRY = 0x1AE9D4
+CONTACT_DISPATCH_LOCAL_RETURN = 0x1AE9D8
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -361,7 +363,7 @@ def begin_collection_dispatch(machine, registers):
                      ('collection dispatch globals', 0xFFF0F5, 2)])
     kind = _read(machine, record, 1)
     target = int.from_bytes(machine.peek_rom(COLLECTION_DISPATCH_TABLE + 4 * kind, 4), 'big') & 0xFFFFFF
-    if target not in COLLECTION_ROUTES:
+    if target not in (*COLLECTION_ROUTES, CONTACT_DISPATCH_ENTRY):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
     dispatch_sr = sr & ~0x1F
     if kind == 0:
@@ -397,6 +399,55 @@ def dispatch_plan_view(machine, prefix):
     return _DispatchPlanView(machine, prefix.writes)
 
 
+def begin_contact_dispatch(machine, registers, dispatch):
+    """Compose dispatcher type 7B's BSR/RTS around a direct contact plan."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_DISPATCH_ENTRY or dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('contact dispatch prefix identity')
+    callback_writes = (*dispatch.writes, *_bytes(sp - 8, CONTACT_DISPATCH_LOCAL_RETURN, 4))
+    callback = AtomicPlan(dispatch.cycles + 18, dispatch.instructions + 1, callback_writes,
+                          {**registers, **dispatch.registers, 'a7': sp - 8, 'pc': CONTACT_ENTRY},
+                          CONTACT_DISPATCH_ENTRY, dispatch.direct_calls + 1)
+    contact = begin_contact(dispatch_plan_view(machine, callback), callback.registers)
+    final = dict(dispatch.registers)
+    final.update(contact.registers)
+    final.update(a7=sp, pc=COLLECTION_DISPATCH_RETURN)
+    return AtomicPlan(callback.cycles + contact.cycles + 16,
+                      callback.instructions + contact.instructions + 1,
+                      tuple(dict((*callback.writes, *contact.writes)).items()), final,
+                      CONTACT_DISPATCH_LOCAL_RETURN, callback.direct_calls + contact.direct_calls)
+
+
+def begin_contact_dispatch_sound(machine, registers, dispatch):
+    """Enter type 7B's contact callback through the existing command-31 seam."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_DISPATCH_ENTRY or dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('contact dispatch prefix identity')
+    callback_writes = (*dispatch.writes, *_bytes(sp - 8, CONTACT_DISPATCH_LOCAL_RETURN, 4))
+    callback = AtomicPlan(dispatch.cycles + 18, dispatch.instructions + 1, callback_writes,
+                          {**registers, **dispatch.registers, 'a7': sp - 8, 'pc': CONTACT_ENTRY},
+                          CONTACT_DISPATCH_ENTRY, dispatch.direct_calls + 1)
+    sound = begin_contact_sound(dispatch_plan_view(machine, callback), callback.registers)
+    final = dict(callback.registers)
+    final.update(sound.registers)
+    return AtomicPlan(callback.cycles + sound.cycles, callback.instructions + sound.instructions,
+                      tuple(dict((*callback.writes, *sound.writes)).items()), final,
+                      sound.last_pc, callback.direct_calls + sound.direct_calls)
+
+
+def finish_contact_dispatch_sound(machine, registers):
+    """Complete the contact suffix, then type 7B's local RTS to 1ABCA0."""
+    contact = finish_contact_sound(machine, registers)
+    local_sp = contact.registers['a7']
+    if (contact.registers.get('pc') != CONTACT_DISPATCH_LOCAL_RETURN
+            or _read(machine, local_sp, 4) != COLLECTION_DISPATCH_RETURN):
+        raise UnsupportedCandidate('contact dispatch local return identity')
+    final = dict(contact.registers)
+    final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
+    return AtomicPlan(contact.cycles + 16, contact.instructions + 1, contact.writes, final,
+                      CONTACT_DISPATCH_LOCAL_RETURN, contact.direct_calls)
+
+
 CONTACT_GLOBALS = tuple(('contact state', address, 1) for address in (
     0xFFF0E7, 0xFFF0E6, 0xFFF0E9, 0xFFF0F2, 0xFFF0BE, 0xFFF0C1,
     0xFFF0D0, 0xFFF0D7, 0xFFF0CD, 0xFFF0D4, 0xFFF173, 0xFFF0CC,
@@ -404,13 +455,33 @@ CONTACT_GLOBALS = tuple(('contact state', address, 1) for address in (
     0xFF7E20, 0xFFEFFA, 0xFF7E77)) + (
     ('contact state', 0xFFF0B0, 2), ('contact state', 0xFF7E60, 4))
 
+_CONTACT_RESET_BASE = {
+    'be': (470, 33), 'd0': (526, 37), 'd7': (554, 39),
+    'cd': (582, 41), 'd4': (610, 43), 'c1zero': (498, 35),
+    'cc': (640, 45), 'efff': (690, 49), 'f11f': (714, 51),
+    'pointer': (734, 51),
+}
+_CONTACT_REACTION_BASE = {
+    'be': (310, 20), 'd0': (366, 24), 'd7': (394, 26),
+    'cd': (422, 28), 'd4': (450, 30), 'c1zero': (338, 22),
+    'direct': (454, 30),
+}
+_CONTACT_SOUND_PREFIX = {
+    'be': (312, 19), 'd0': (368, 23), 'd7': (396, 25),
+    'cd': (424, 27), 'd4': (452, 29), 'c1zero': (340, 21),
+    'cc': (482, 31), 'efff': (532, 35), 'f11f': (556, 37),
+    'pointer': (576, 37),
+}
+
 
 def _contact_guard(machine, registers, *, sound_frame=False):
     """Validate the caller frame before reading the contact live-RAM domain."""
     sp = registers['a7']
     if sp & 1:
         raise UnsupportedCandidate('unaligned contact stack')
-    frame = ('contact sound frame', sp - 28, 32) if sound_frame else ('contact return', sp, 4)
+    # A direct reset leaves a BSR return residue at SP-4 before its final RTS.
+    # Guard it with the caller return rather than accepting a live-RAM alias.
+    frame = ('contact sound frame', sp - 28, 32) if sound_frame else ('contact direct frame', sp - 4, 8)
     _spans_disjoint([frame, *CONTACT_GLOBALS])
     return lambda address, size: _read(machine, address, size)
 
@@ -419,24 +490,56 @@ def begin_contact(machine, registers):
     """Recover direct, non-sound 1AE4F8 contact gates through their RTS."""
     sp, sr = registers['a7'], registers['sr']
     read = _contact_guard(machine, registers)
-    path, gate = game.contact_path(read)
+    path, route = game.contact_route(read)
     if path == 'early':
-        if gate not in (0xFFF0E6, 0xFFF0F2):
-            raise UnsupportedCandidate(f'contact early gate {gate:06X} is not qualified')
-        index = (0xFFF0E7, 0xFFF0E6, 0xFFF0E9, 0xFFF0F2).index(gate)
+        index = (0xFFF0E7, 0xFFF0E6, 0xFFF0E9, 0xFFF0F2).index(route)
         return AtomicPlan(42 + 28 * index, 3 + 2 * index, (),
                           {'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
-                           'sr': _logic_sr(sr, read(gate, 1), 1)},
+                           'sr': _logic_sr(sr, read(route, 1), 1)},
                           CONTACT_ENTRY + 6 * index)
     if path == 'reaction':
-        if not read(0xFFF0BE, 1) or read(0xFFF0D8, 1):
-            raise UnsupportedCandidate('contact reaction domain')
+        if route not in _CONTACT_REACTION_BASE:
+            raise UnsupportedCandidate('contact reaction route')
         writes = game.contact_reaction(read)
         d8 = read(0xFFF0D8, 1)
-        return AtomicPlan(310 if not d8 else 292,
-                          20 if not d8 else 19, tuple(writes),
+        cycles, instructions = _CONTACT_REACTION_BASE[route]
+        return AtomicPlan(cycles - 18 * bool(d8), instructions - bool(d8), tuple(writes),
                           {'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
-                           'sr': _logic_sr(sr, 1 if not d8 else d8, 1)}, 0x1AE618)
+                           'sr': _logic_sr(sr, 1 if not d8 else d8, 1)},
+                          0x1AE618 if not d8 else 0x1AE616)
+    if path in ('reset', 'pointer_reset') and not read(0xFFF57D, 1):
+        if route not in _CONTACT_RESET_BASE:
+            raise UnsupportedCandidate('contact reset route')
+        if read(0xFF7E20, 1):
+            # 1B03F2 still executes but short-circuits on this live guard;
+            # its different per-call cost remains original until measured.
+            raise UnsupportedCandidate('contact reset decay blocker')
+        count, counter = read(0xFF7E21, 1), read(0xFFEFFA, 1)
+        cycles, instructions = _CONTACT_RESET_BASE[route]
+        if counter == 0:
+            cycles -= 42; instructions -= 3
+        if count:
+            if counter == 0:
+                cycles += 116; instructions += 8
+            elif counter == 1:
+                cycles += 184; instructions += 13
+            else:
+                cycles += 188; instructions += 14
+        if count > 1:
+            if counter == 0:
+                cycles += 86; instructions += 6
+            elif counter == 1:
+                cycles += 86; instructions += 6
+            else:
+                cycles += 158; instructions += 12
+        bsr_return = 0x1AE5C0 if count == 0 else 0x1AE5D0 if count == 1 else 0x1AE5E0
+        writes = (*game.contact_reset(read, pointer_reset=path == 'pointer_reset'),
+                  *_bytes(sp - 4, bsr_return, 4))
+        final_value = 0 if count <= 1 else 10 if counter == 0 else 0x28
+        return AtomicPlan(cycles, instructions, tuple(writes),
+                          {'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
+                           'sr': _logic_sr(sr, final_value, 1)}, 0x1AE5E0,
+                          direct_calls=1 + bool(count) + bool(count > 1))
     raise UnsupportedCandidate(f'contact {path} requires the synchronous reset seam')
 
 
@@ -446,26 +549,19 @@ def begin_contact_sound(machine, registers):
     # This path constructs a full MOVEM/argument/JSR frame.  It must be safe
     # on its own because begin_contact deliberately declines this reset path.
     read = _contact_guard(machine, registers, sound_frame=True)
-    if game.contact_path(read)[0] != 'reset' or not read(0xFFF57D, 1):
+    path, route = game.contact_route(read)
+    if path not in ('reset', 'pointer_reset') or not read(0xFFF57D, 1):
         raise UnsupportedCandidate('contact reset is outside the recorded sound seam')
-    # With C1 set, any one of these earlier gates jumps to 1AE5E2 and has a
-    # distinct prefix cost.  Keep those routes original until each has its own
-    # measured plan; C1 clear is the separately measured short route.
-    if read(0xFFF0C1, 1) and any(read(address, 1) for address in
-                                  (0xFFF0BE, 0xFFF0D0, 0xFFF0D7, 0xFFF0CD, 0xFFF0D4)):
-        raise UnsupportedCandidate('contact reset enters through an unqualified earlier gate')
-    if (read(0xFFF0CC, 1) or read(0xFFEFFF, 1) or not read(0xFFF11F, 1)
-            or read(0xFF7E21, 1) or not read(0xFFEFFA, 1) or read(0xFFF0F2, 1)):
-        raise UnsupportedCandidate('contact reset decay domain')
-    writes = list(game.contact_reset(read, decay=False))
+    if route not in _CONTACT_SOUND_PREFIX:
+        raise UnsupportedCandidate('contact sound route')
+    writes = list(game.contact_reset(read, pointer_reset=path == 'pointer_reset', decay=False))
     for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
         writes.extend(_bytes(sp - index * 4, registers[name], 4))
     writes.extend((*_bytes(sp - 24, 0x31, 4), *_bytes(sp - 28, 0x1AE5B0, 4)))
-    # C1's early branch reaches the same reset/sound sequence but bypasses
-    # eight later state tests.  The recorded C1=1 route is the longer one.
-    cycles, instructions = (340, 21) if not read(0xFFF0C1, 1) else (556, 37)
+    cycles, instructions = _CONTACT_SOUND_PREFIX[route]
     return AtomicPlan(cycles, instructions, tuple(writes),
-                      {'a7': sp - 28, 'pc': 0x1E58B8, 'sr': sr & ~0x1F}, 0x1AE5AA, direct_calls=1)
+                      # The original MOVE-to-CCR clears N/Z/V/C but leaves X.
+                      {'a7': sp - 28, 'pc': 0x1E58B8, 'sr': sr & ~0x0F}, 0x1AE5AA, direct_calls=1)
 
 
 def finish_contact_sound(machine, registers):
@@ -478,17 +574,27 @@ def finish_contact_sound(machine, registers):
     if read(sp - 28, 4) != 0x1AE5B6:
         raise UnsupportedCandidate('contact sound return slot')
     if (read(0xFFF0E9, 1) or read(0xFFF0E6, 1) or read(0xFF7E20, 1)
-            or read(0xFFF0F2, 1) or read(0xFF7E21, 1) or not read(0xFFEFFA, 1)):
+            or read(0xFFF0F2, 1)):
         raise UnsupportedCandidate('contact sound return domain')
     restored = dict(registers, a7=sp)
     for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
         restored[name] = read(sp - index * 4, 4)
-    writes = (*game.contact_decay(read), *_bytes(sp - 4, 0x1AE5C0, 4))
-    return AtomicPlan(300, 19, tuple(writes),
+    count, counter = read(0xFF7E21, 1), read(0xFFEFFA, 1)
+    cycles, instructions = (258, 16) if counter == 0 else (300, 19)
+    if count:
+        cycles += 116 if counter == 0 else 184 if counter == 1 else 188
+        instructions += 8 if counter == 0 else 13 if counter == 1 else 14
+    if count > 1:
+        cycles += 86 if counter < 2 else 158
+        instructions += 6 if counter < 2 else 12
+    bsr_return = 0x1AE5C0 if count == 0 else 0x1AE5D0 if count == 1 else 0x1AE5E0
+    writes = (*game.contact_repeated_decay(read), *_bytes(sp - 4, bsr_return, 4))
+    final_value = 0 if count <= 1 else 10 if counter == 0 else 0x28
+    return AtomicPlan(cycles, instructions, tuple(writes),
                       {**{name: restored[name] for name in ('d0', 'd1', 'a0', 'a1', 'a6')},
                        'a7': sp + 4, 'pc': read(sp, 4) & 0xffffff,
-                       'sr': _logic_sr(restored['sr'], read(0xFFF0F2, 1), 1)}, 0x1AE5DC,
-                      direct_calls=1)
+                       'sr': _logic_sr(restored['sr'], final_value, 1)}, 0x1AE5DC,
+                      direct_calls=1 + bool(count) + bool(count > 1))
 
 
 def _add_sr(sr, left, right, width):

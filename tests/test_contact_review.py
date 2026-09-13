@@ -93,16 +93,17 @@ def test_begin_contact_reaction_plan_matches_both_final_flag_domains():
     assert (plan.cycles, plan.instructions, plan.last_pc) == (310, 20, 0x1AE618)
     assert (0xFFF0E7, 0xFF) in plan.writes and (0xFFF0E9, 0x32) in plan.writes
     assert (0xFFEFFF, 1) in plan.writes
-    with pytest.raises(UnsupportedCandidate, match="reaction domain"):
-        begin_contact(_contact_machine({0xFFF0BE: 1, 0xFFF0C1: 1, 0xFFF173: 1, 0xFFF0D8: 1}),
-                      _contact_machine({0xFFF0BE: 1, 0xFFF0C1: 1, 0xFFF173: 1, 0xFFF0D8: 1}).registers())
+    d8_machine = _contact_machine({0xFFF0BE: 1, 0xFFF0C1: 1, 0xFFF173: 1, 0xFFF0D8: 1})
+    d8_plan = begin_contact(d8_machine, d8_machine.registers())
+    assert (d8_plan.cycles, d8_plan.instructions, d8_plan.last_pc) == (292, 19, 0x1AE616)
+    assert (0xFFEFFF, 1) not in d8_plan.writes
 
 
 def test_sound31_prefix_and_suffix_have_exact_frame_contract():
     machine = _contact_machine({0xFFF0C1: 0, 0xFFF57D: 1, 0xFFF11F: 1, 0xFFEFFA: 1})
     prefix = begin_contact_sound(machine, machine.registers())
     assert (prefix.cycles, prefix.instructions, prefix.last_pc, prefix.direct_calls) == (340, 21, 0x1AE5AA, 1)
-    assert prefix.registers == {"a7": 0xFF7FE4, "pc": 0x1E58B8, "sr": 0x2000}
+    assert prefix.registers == {"a7": 0xFF7FE4, "pc": 0x1E58B8, "sr": 0x2010}
     for address, value in prefix.writes:
         put(machine, address, value, 1)
     # The contact body performs its second JSR after command 31 returns.  Its
@@ -131,6 +132,25 @@ def test_sound31_prefix_rejects_unaligned_or_global_aliasing_stack(stack):
     assert machine.peek_ram(0, 65536) == before
 
 
+@pytest.mark.parametrize("stack", [0xFFF0B4, 0xFF7E64])
+def test_soundoff_reset_rejects_the_bsr_residue_alias_surface(stack):
+    machine = _contact_machine({0xFFF0C1: 0, 0xFFF57D: 0, 0xFFF11F: 1, 0xFFEFFA: 1})
+    machine._registers["a7"] = stack
+    before = machine.peek_ram(0, 65536), machine.registers()
+    with pytest.raises(UnsupportedCandidate, match="aliases"):
+        begin_contact(machine, machine.registers())
+    assert (machine.peek_ram(0, 65536), machine.registers()) == before
+
+
+def test_soundoff_reset_refuses_the_unmeasured_decay_blocker_before_writes():
+    machine = _contact_machine({0xFFF0C1: 0, 0xFFF57D: 0, 0xFFF11F: 1,
+                                0xFFEFFA: 1, 0xFF7E20: 1})
+    before = machine.peek_ram(0, 65536), machine.registers()
+    with pytest.raises(UnsupportedCandidate, match="decay blocker"):
+        begin_contact(machine, machine.registers())
+    assert (machine.peek_ram(0, 65536), machine.registers()) == before
+
+
 def test_sound31_suffix_rejects_a_foreign_local_activation():
     machine = _contact_machine({0xFFF0C1: 0, 0xFFF57D: 1, 0xFFF11F: 1, 0xFFEFFA: 1})
     prefix = begin_contact_sound(machine, machine.registers())
@@ -143,13 +163,16 @@ def test_sound31_suffix_rejects_a_foreign_local_activation():
         finish_contact_sound(machine, restored)
 
 
-@pytest.mark.parametrize("address", [0xFFF0BE, 0xFFF0D0, 0xFFF0D7, 0xFFF0CD, 0xFFF0D4])
-def test_sound31_rejects_each_unmeasured_early_reset_gate(address):
+@pytest.mark.parametrize("address,cycles,instructions", [
+    (0xFFF0BE, 312, 19), (0xFFF0D0, 368, 23), (0xFFF0D7, 396, 25),
+    (0xFFF0CD, 424, 27), (0xFFF0D4, 452, 29),
+])
+def test_sound31_measures_each_early_reset_gate(address, cycles, instructions):
     machine = _contact_machine({0xFFF0C1: 1, 0xFFF57D: 1, 0xFFF11F: 1,
                                 0xFFEFFA: 1, address: 1})
     before = machine.peek_ram(0, 65536)
-    with pytest.raises(UnsupportedCandidate, match="earlier gate"):
-        begin_contact_sound(machine, machine.registers())
+    plan = begin_contact_sound(machine, machine.registers())
+    assert (plan.cycles, plan.instructions) == (cycles, instructions)
     assert machine.peek_ram(0, 65536) == before
 
 
@@ -168,10 +191,19 @@ def test_sound31_suffix_rechecks_each_decay_guard_after_native_sound(address):
 
 
 @pytest.mark.parametrize("address,value", [(0xFFF0CC, 1), (0xFFEFFF, 1), (0xFFF11F, 0),
-                                            (0xFF7E21, 1), (0xFFEFFA, 0), (0xFFF0F2, 1)])
-def test_sound31_rejects_each_unadmitted_domain_before_writes(address, value):
+                                            (0xFF7E21, 1), (0xFFEFFA, 0)])
+def test_sound31_accepts_each_measured_reset_or_decay_domain(address, value):
     machine = _contact_machine({0xFFF0C1: 0, 0xFFF57D: 1, 0xFFF11F: 1, 0xFFEFFA: 1,
                                 address: value})
+    before = machine.peek_ram(0, 65536)
+    plan = begin_contact_sound(machine, machine.registers())
+    assert plan.last_pc == 0x1AE5AA
+    assert machine.peek_ram(0, 65536) == before
+
+
+def test_sound31_still_rejects_an_early_return_gate_before_writes():
+    machine = _contact_machine({0xFFF0C1: 1, 0xFFF57D: 1, 0xFFF11F: 1,
+                                0xFFEFFA: 1, 0xFFF0F2: 1})
     before = machine.peek_ram(0, 65536)
     with pytest.raises(UnsupportedCandidate):
         begin_contact_sound(machine, machine.registers())

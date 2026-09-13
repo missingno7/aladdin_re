@@ -6,6 +6,27 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Expanded contact family and type-7B composition
+
+The `lifecycle` candidate now composes `1ABC82 → 1AE9D4 → 1AE4F8` directly,
+including the original sound span and resumed wrapper return to `1ABCA0`.
+The contact family includes all four early predicates, ordered reaction/reset
+routes, pointer publication and repeated decay, with explicit unsupported
+domains. Sound-disabled `FF7E20 != 0`, unsafe aliases and unsupported post-sound
+states still use original fallback. Other callback families remain unrecovered.
+
+All **646 tests** pass, and both complete user recordings pass **225 + 244**
+observations with current source receipts. The recaptured real sound witness
+passes full native-state/frame/PCM equality, 150 original instructions and
+fresh-process safe-exit restore; all three negative controls are rejected.
+Its composed sound path uses two real gates, with no wrapper/contact gate
+between them. On the new recording, direct Python calls rise 622 → 4,142,
+gate stops fall 4,830 → 3,169 and fallbacks fall 2,066 → 307.
+
+**CONTINUE + MECHANIZE:** machine mechanisms were reused; numeric timing and
+stack recipes remain manual. See [contact-expansion.md](contact-expansion.md)
+for scope, reproducible evidence, cost accounting and the remaining limitations.
+
 ## Packaged game source and bounded contact recovery
 
 Recovered semantics now grow in `game/objects/lifecycle.py`, `collection.py`

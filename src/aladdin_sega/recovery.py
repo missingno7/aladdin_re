@@ -8,8 +8,9 @@ from .boundary import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY,
                         initialize_object, finish_object, replace_object, TRANSITION_ENTRY,
                         SOUND_RETURN, begin_object_transition, finish_object_transition,
                         COLLECTION_ROUTES, COLLECTION_DISPATCH_ENTRY, begin_collection_dispatch,
-                        dispatch_plan_view, CONTACT_ENTRY, begin_contact, begin_contact_sound,
-                        finish_contact_sound, begin_collection,
+                        dispatch_plan_view, CONTACT_ENTRY, CONTACT_DISPATCH_ENTRY, begin_contact_dispatch,
+                        begin_contact_dispatch_sound, finish_contact_dispatch_sound, begin_contact,
+                        begin_contact_sound, finish_contact_sound, begin_collection,
                         finish_collection, relocate_collection)
 
 
@@ -200,9 +201,32 @@ class Candidate:
         try:
             dispatch_registers = machine.registers()
             entry, prefix = begin_collection_dispatch(machine, dispatch_registers)
-            dispatch_registers.update(prefix.registers)
         except UnsupportedCandidate as error:
             return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+        if entry == CONTACT_DISPATCH_ENTRY:
+            try:
+                plan = begin_contact_dispatch(machine, dispatch_registers, prefix)
+                if not self._apply(machine, self._mutate(plan), target):
+                    return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                try:
+                    sound = begin_contact_dispatch_sound(machine, dispatch_registers, prefix)
+                    if not self._apply(machine, self._mutate(sound), target):
+                        return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                except UnsupportedCandidate:
+                    return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+                return self._run_sound_seam(
+                    machine, target, sp=dispatch_registers['a7'] - 8,
+                    resume=0x1AE5B6, return_slot=0x1AE5B6,
+                    suffix=lambda returned: finish_contact_dispatch_sound(machine, returned),
+                    suffix_transform=self._mutate,
+                    on_complete=lambda: (self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
+                                         self.stats.__setitem__('contact_hits', self.stats['contact_hits'] + 1)),
+                )
+            self.stats['collection_dispatch_hits'] += 1
+            self.stats['contact_hits'] += 1
+            return True
+        dispatch_registers.update(prefix.registers)
         # The callback is at the original JSR boundary, but it did not cause a
         # native stop. Its stack return exists in this read-only planning view,
         # then prefix and callback commit together at the real dispatch gate.
