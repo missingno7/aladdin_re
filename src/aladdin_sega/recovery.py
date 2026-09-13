@@ -7,7 +7,8 @@ from .boundary import (AtomicPlan, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY,
                         COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, clear_object_pair, detach_object,
                         initialize_object, finish_object, replace_object, TRANSITION_ENTRY,
                         SOUND_RETURN, begin_object_transition, finish_object_transition,
-                        COLLECTION_ROUTES, begin_collection, finish_collection, relocate_collection)
+                        COLLECTION_ROUTES, COLLECTION_DISPATCH_ENTRY, begin_collection_dispatch,
+                        dispatch_plan_view, begin_collection, finish_collection, relocate_collection)
 
 
 @dataclass
@@ -24,6 +25,7 @@ class Candidate:
         "leaf_hits": 0, "pair_hits": 0, "caller_hits": 0, "direct_python_calls": 0,
         "initializer_hits": 0, "finish_hits": 0,
         "collection_hits": 0, "collection_entries": {}, "relocation_hits": 0,
+        "collection_dispatch_hits": 0,
         "replace_hits": 0, "counted_replace_hits": 0,
         "carrier_entries": 0, "carrier_completed": 0, "legacy_entries": 0, "legacy_returns": 0,
         "local_fallbacks": 0, "foreign_returns": 0, "legacy_deadline_fallbacks": 0,
@@ -66,7 +68,7 @@ class Candidate:
             # The 1AF4C6 tail is owned inside this region; the other ten paths
             # still enter via the counted replacement boundary.
             base = (TRANSITION_ENTRY, COUNTED_REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
-            return tuple(dict.fromkeys((*COLLECTION_ROUTES, 0x1AF516, *base))) if self.is_lifecycle else base
+            return tuple(dict.fromkeys((COLLECTION_DISPATCH_ENTRY, *COLLECTION_ROUTES, 0x1AF516, *base))) if self.is_lifecycle else base
         if self.is_composed:
             return (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, FINISH_ENTRY, CALLER_ENTRY, PAIR_ENTRY, INIT_ENTRY, LEAF_ENTRY)
         if self.name == "replace":
@@ -102,17 +104,29 @@ class Candidate:
             machine.run(instructions=1)
         return False
 
-    def _transition(self, machine, target, entry=TRANSITION_ENTRY):
-        self.stats["gates"] += 1
-        regs = machine.registers()
+    def _transition(self, machine, target, entry=TRANSITION_ENTRY, *, count_gate=True,
+                    registers=None, planner=None, prefix=None, fallback_entry=None):
+        if count_gate:
+            self.stats["gates"] += 1
+        regs = machine.registers() if registers is None else registers
+        planner = machine if planner is None else planner
         collection = self.is_lifecycle and entry in COLLECTION_ROUTES
         resume = COLLECTION_ROUTES[entry][1] if collection else SOUND_RETURN
         try:
-            plan, legacy = begin_collection(machine, regs, entry) if collection else begin_object_transition(machine, regs)
+            plan, legacy = begin_collection(planner, regs, entry) if collection else begin_object_transition(planner, regs)
+            if prefix is not None:
+                # Callback recipes only name registers their own path writes.
+                # Keep dispatcher outputs (notably D1/A4) unless the callback
+                # explicitly replaces them.
+                final_registers = dict(prefix.registers)
+                final_registers.update(plan.registers)
+                plan = AtomicPlan(prefix.cycles + plan.cycles, prefix.instructions + plan.instructions,
+                                  tuple(dict((*prefix.writes, *plan.writes)).items()), final_registers,
+                                  plan.last_pc, prefix.direct_calls + plan.direct_calls)
             if not self._apply(machine, self._mutate(plan), target):
-                return self._fallback(machine, entry, "scheduler admission")
+                return self._fallback(machine, fallback_entry or entry, "scheduler admission")
         except UnsupportedCandidate as error:
-            return self._fallback(machine, entry, f"unsupported domain: {error}")
+            return self._fallback(machine, fallback_entry or entry, f"unsupported domain: {error}")
         self.stats["carrier_entries"] += 1
         if collection:
             self.stats['collection_hits'] += 1
@@ -160,6 +174,26 @@ class Candidate:
             machine.in_sound_call = False
             machine.gates(list(self.gate_pcs))
 
+    def _collection_dispatch(self, machine, target):
+        """Admit 1ABC82 and its known callback in one native atomic region."""
+        self.stats['gates'] += 1
+        try:
+            dispatch_registers = machine.registers()
+            entry, prefix = begin_collection_dispatch(machine, dispatch_registers)
+            dispatch_registers.update(prefix.registers)
+        except UnsupportedCandidate as error:
+            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+        # The callback is at the original JSR boundary, but it did not cause a
+        # native stop. Its stack return exists in this read-only planning view,
+        # then prefix and callback commit together at the real dispatch gate.
+        accepted = self._transition(machine, target, entry, count_gate=False,
+                                    registers=dispatch_registers,
+                                    planner=dispatch_plan_view(machine, prefix), prefix=prefix,
+                                    fallback_entry=COLLECTION_DISPATCH_ENTRY)
+        if accepted:
+            self.stats['collection_dispatch_hits'] += 1
+        return accepted
+
     def on_gate(self, machine, target: int) -> bool:
         """Try a candidate at the current gate; otherwise retire one original instruction.
 
@@ -172,6 +206,8 @@ class Candidate:
             raise ValueError("Recovery dispatch needs the scheduler master-tick deadline")
         if self.is_carrier and entry == TRANSITION_ENTRY:
             return self._transition(machine, target)
+        if self.is_lifecycle and entry == COLLECTION_DISPATCH_ENTRY:
+            return self._collection_dispatch(machine, target)
         if self.is_lifecycle and entry in COLLECTION_ROUTES:
             return self._transition(machine, target, entry)
         if entry not in self.gate_pcs:

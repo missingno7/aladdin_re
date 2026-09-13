@@ -8,7 +8,8 @@ from test_recovery import native_replace_rom, native_write
 from aladdin_sega.recovery import Candidate
 from aladdin_sega.boundary import begin_collection, finish_collection, relocate_collection, ROM_SHA256, UnsupportedCandidate
 
-ROUTES = {0x1AF468: 0x1AF498, 0x1AF21E: 0x1AF258, 0x1AF264: 0x1AF2A6,
+ROUTES = {0x1AF008: 0x1AF02A, 0x1AF034: 0x1AF056, 0x1AF060: 0x1AF082, 0x1AF08C: 0x1AF0AE,
+          0x1AF468: 0x1AF498, 0x1AF21E: 0x1AF258, 0x1AF264: 0x1AF2A6,
           0x1AF2B0: 0x1AF2F2, 0x1AF2FA: 0x1AF33C,
           0x1AF344: 0x1AF378, 0x1AF384: 0x1AF3B0,
           0x1AF3C2: 0x1AF3E4, 0x1AF400: 0x1AF422, 0x1AF4A0: 0x1AF4BC,
@@ -24,7 +25,8 @@ def prepared(entry, *, sound=1, digits=0x3039, count=3, linked=False,
     if not path.exists(): pytest.skip('Original USA ROM required for collection qualification')
     original = path.read_bytes()
     assert hashlib.sha256(original).hexdigest() == ROM_SHA256
-    for start, end in [(0x1AF21E, 0x1AF54A), (0x1AE27A, 0x1AE30A),
+    for start, end in [(0x1CBE, 0x20BE), (0x1ABC82, 0x1ABD7E), (0x1AF008, 0x1AF54A),
+                       (0x1AE27A, 0x1AE30A),
                        (0x1B0156, 0x1B0192), (0x1B0336, 0x1B03BE),
                        (0x1B7ABC, 0x1B7CF0), (0x1A91C4, 0x1A91C6), (0x1AE6DE, 0x1AE700)]:
         rom[start:end] = original[start:end]

@@ -56,6 +56,9 @@ def collection_state(read, record, kind):
     """
     if kind == 'flag25':
         return [(0xFFF176, 255)]
+    if kind in ('flag128', 'flag129', 'flag116', 'flag12a'):
+        return [({'flag128': 0xFFF128, 'flag129': 0xFFF129,
+                  'flag116': 0xFFF116, 'flag12a': 0xFFF12A}[kind], 255)]
     if kind == 'count25':
         return [(0xFFF003, (read(0xFFF003, 1) + 1) & 255)]
     if kind == 'reset15':

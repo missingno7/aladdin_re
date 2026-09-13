@@ -13,13 +13,28 @@ from carrier_witness import original_exit
 from recovery_witness import fresh_short_replay, digest
 
 
-def run(output):
+DEFAULT_ENTRIES = (0x1AF3C2, 0x1AF4D8, 0x1AF516)
+DEFAULT_FIXTURE_DIR = Path('artifacts/lifecycle/census')
+
+
+def parse_entry(value):
+    try:
+        entry = int(value, 16)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f'invalid hexadecimal entry: {value}') from error
+    if not 0 <= entry <= 0xffffff:
+        raise argparse.ArgumentTypeError(f'entry outside 24-bit address space: {value}')
+    return entry
+
+
+def run(output, entries=DEFAULT_ENTRIES, fixture_dir=DEFAULT_FIXTURE_DIR):
     output.mkdir(parents=True, exist_ok=True)
+    entries = tuple(entries)
+    rom = read_rom(DEFAULT_ROM)
     results = {}
-    for pc in (0x1AF3C2, 0x1AF4D8, 0x1AF516):
+    for pc in entries:
         folder = output / f'{pc:06X}'; folder.mkdir(exist_ok=True)
-        entry = Path(f'artifacts/lifecycle/census/{pc:06X}.alsnap').read_bytes()
-        rom = read_rom(DEFAULT_ROM)
+        entry = (fixture_dir / f'{pc:06X}.alsnap').read_bytes()
         with Machine(rom) as m:
             artifacts.restore_snapshot(m, entry)
             regs = m.registers(); sp = regs['a7']
@@ -62,46 +77,49 @@ def run(output):
             'safe_restore': True, 'fresh_process': fresh, 'fresh_exit_restore': fresh_exit, 'stats': candidate.stats,
             'replay_sha256': digest(replay.read_bytes()), 'seconds': time.perf_counter()-start}
     controls = {}
-    focused = output/'1AF3C2'/'witness.alreplay'
-    for mutation in ('result', 'continuation', 'timing'):
-        name = 'lifecycle-mutant-'+mutation
-        result = compare_replay(DEFAULT_ROM, focused, candidate=name,
-            timeout_seconds=30, output=output/name)
-        assert result['status'] in ('DIVERGENCE', 'CANDIDATE_ERROR'), result
-        controls[mutation] = result['status']
-    entry = Path('artifacts/lifecycle/census/1AF3C2.alsnap').read_bytes()
-    with Machine(rom) as m:
-        artifacts.restore_snapshot(m, entry)
-        m.gates([0x1E57AC]); assert m.run(instructions=10000) == 'gate'
-        deadline = m.info['tick']
-    with Machine(rom) as m:
-        artifacts.restore_snapshot(m, entry)
-        inputs = artifacts.Recorder(m, origin='synthetic', reset_provenance='collection-sound-input')
-        m.run(target=deadline); m.audio()
-        inputs.apply_pad(m, m.info['buttons'] ^ 1)
-        m.run(instructions=300); m.audio()
-        input_replay = output/'input-deadline.alreplay'
-        input_replay.write_bytes(inputs.finish(m))
-    result = compare_replay(DEFAULT_ROM, input_replay, candidate='lifecycle',
-        output=output/'input-deadline', diagnostics=True)
-    assert result['status'] == 'PASS', result
-    assert result['candidate_receipt']['candidate_stats']['legacy_deadline_fallbacks'] == 1
-    controls['input_deadline'] = 'PASS'
-    with Machine(rom) as m:
-        artifacts.restore_snapshot(m, entry)
-        candidate = Candidate('lifecycle'); candidate.arm(m); m.run(instructions=1)
-        run_original = m.run
-        def checked_run(**limits):
-            if m.in_sound_call:
-                try: artifacts.snapshot_bytes(m)
-                except ValueError as error:
-                    assert 'synchronous sound' in str(error)
-                    controls['in_call_snapshot_rejected'] = True
-                else: raise AssertionError('active sound snapshot was accepted')
-            return run_original(**limits)
-        m.run = checked_run
-        candidate.on_gate(m, m.info['tick']+FRAME_TICKS)
-    assert controls.get('in_call_snapshot_rejected')
+    if 0x1AF3C2 in entries:
+        focused = output/'1AF3C2'/'witness.alreplay'
+        for mutation in ('result', 'continuation', 'timing'):
+            name = 'lifecycle-mutant-'+mutation
+            result = compare_replay(DEFAULT_ROM, focused, candidate=name,
+                timeout_seconds=30, output=output/name)
+            assert result['status'] in ('DIVERGENCE', 'CANDIDATE_ERROR'), result
+            controls[mutation] = result['status']
+        entry = (fixture_dir / '1AF3C2.alsnap').read_bytes()
+        with Machine(rom) as m:
+            artifacts.restore_snapshot(m, entry)
+            m.gates([0x1E57AC]); assert m.run(instructions=10000) == 'gate'
+            deadline = m.info['tick']
+        with Machine(rom) as m:
+            artifacts.restore_snapshot(m, entry)
+            inputs = artifacts.Recorder(m, origin='synthetic', reset_provenance='collection-sound-input')
+            m.run(target=deadline); m.audio()
+            inputs.apply_pad(m, m.info['buttons'] ^ 1)
+            m.run(instructions=300); m.audio()
+            input_replay = output/'input-deadline.alreplay'
+            input_replay.write_bytes(inputs.finish(m))
+        result = compare_replay(DEFAULT_ROM, input_replay, candidate='lifecycle',
+            output=output/'input-deadline', diagnostics=True)
+        assert result['status'] == 'PASS', result
+        assert result['candidate_receipt']['candidate_stats']['legacy_deadline_fallbacks'] == 1
+        controls['input_deadline'] = 'PASS'
+        with Machine(rom) as m:
+            artifacts.restore_snapshot(m, entry)
+            candidate = Candidate('lifecycle'); candidate.arm(m); m.run(instructions=1)
+            run_original = m.run
+            def checked_run(**limits):
+                if m.in_sound_call:
+                    try: artifacts.snapshot_bytes(m)
+                    except ValueError as error:
+                        assert 'synchronous sound' in str(error)
+                        controls['in_call_snapshot_rejected'] = True
+                    else: raise AssertionError('active sound snapshot was accepted')
+                return run_original(**limits)
+            m.run = checked_run
+            candidate.on_gate(m, m.info['tick']+FRAME_TICKS)
+        assert controls.get('in_call_snapshot_rejected')
+    else:
+        controls = {'skipped': 'controls require the 1AF3C2 fixture; include --entry 1AF3C2 to run them'}
     results['controls'] = controls
     (output/'report.json').write_text(json.dumps(results, indent=2)+'\n')
     print(json.dumps(results))
@@ -110,4 +128,10 @@ def run(output):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, default=Path('artifacts/lifecycle/witnesses'))
-    run(parser.parse_args().output)
+    parser.add_argument('--entry', action='append', type=parse_entry, metavar='HEX',
+                        help='entry fixture address; repeat to select multiple entries')
+    parser.add_argument('--fixture-dir', type=Path, default=DEFAULT_FIXTURE_DIR,
+                        help='directory containing <ENTRY>.alsnap fixtures')
+    args = parser.parse_args()
+    run(args.output, entries=args.entry if args.entry is not None else DEFAULT_ENTRIES,
+        fixture_dir=args.fixture_dir)

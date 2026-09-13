@@ -1,6 +1,7 @@
 """Original-only census and entry fixtures for the adjacent collection family."""
 from pathlib import Path
 import json
+import argparse
 from collections import Counter
 
 from aladdin_sega import artifacts
@@ -12,16 +13,15 @@ ENTRIES = (0x1AF21E, 0x1AF264, 0x1AF2B0, 0x1AF2FA, 0x1AF344,
            0x1AF4D8, 0x1AF516, 0x1AF53E)
 
 
-def run():
-    out = Path('artifacts/lifecycle/census')
+def run(out=Path('artifacts/lifecycle/census'), entries=ENTRIES,
+        recording=Path('recordings/current/20260912T210640.729016Z.alreplay')):
     out.mkdir(parents=True, exist_ok=True)
-    recording = Path('recordings/current/20260912T210640.729016Z.alreplay')
     counts, first = Counter(), {}
     with Machine(read_rom(DEFAULT_ROM)) as m:
         meta, initial, events = artifacts.load_replay(recording.read_bytes(),
             rom_sha256=m.rom_sha256, state_version=m.state_version)
         artifacts.restore_snapshot(m, initial)
-        m.gates(list(ENTRIES))
+        m.gates(list(entries))
         def advance(target):
             while m.info['tick'] < target:
                 reason = m.run(target=min(target, m.info['tick'] + FRAME_TICKS))
@@ -43,4 +43,11 @@ def run():
 
 
 if __name__ == '__main__':
-    run()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=Path('artifacts/lifecycle/census'))
+    parser.add_argument('--entry', type=lambda value: int(value, 16), action='append',
+                        help='Hexadecimal original entry to census; repeat for multiple entries')
+    parser.add_argument('--replay', type=Path,
+                        default=Path('recordings/current/20260912T210640.729016Z.alreplay'))
+    args = parser.parse_args()
+    run(args.output, args.entry or ENTRIES, args.replay)

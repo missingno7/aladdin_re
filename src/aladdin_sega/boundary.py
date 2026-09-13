@@ -22,6 +22,9 @@ REPLACE_ENTRY = 0x1AF4C6
 REPLACE_LAST_PC = 0x1AF4D6
 TRANSITION_ENTRY = 0x1AF468
 SOUND_RETURN = 0x1AF498
+COLLECTION_DISPATCH_ENTRY = 0x1ABC82
+COLLECTION_DISPATCH_RETURN = 0x1ABCA0
+COLLECTION_DISPATCH_TABLE = 0x1CBE
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -317,6 +320,10 @@ def detach_object(machine, registers: dict[str, int]) -> AtomicPlan:
 # not resume IDs: the Python activation retains its entry while sound runs.
 # kind, return after second JSR, final RTS, amount, replacement template
 COLLECTION_ROUTES = {
+    0x1AF008: ('flag128', 0x1AF02A, 0x1AF4D6, 15, 0x1B7ABC),
+    0x1AF034: ('flag129', 0x1AF056, 0x1AF4D6, 15, 0x1B7ABC),
+    0x1AF060: ('flag116', 0x1AF082, 0x1AF4D6, 15, 0x1B7ABC),
+    0x1AF08C: ('flag12a', 0x1AF0AE, 0x1AF4D6, 15, 0x1B7ABC),
     TRANSITION_ENTRY: ('primary', SOUND_RETURN, REPLACE_LAST_PC, 0, 0x1B7ABC),
     0x1AF21E: ('secondary', 0x1AF258, 0x1AF4D6, 15, 0x1B7ABC),
     0x1AF264: ('quarter', 0x1AF2A6, 0x1AF4D6, 15, 0x1B7ABC),
@@ -333,7 +340,60 @@ COLLECTION_ROUTES = {
 COLLECTION_GLOBALS = tuple(('collection input/effect', address, size) for address, size in (
     (0xFFEFE0, 4), (0xFFF003, 1), (0xFFF0A4, 2), (0xFFF0D8, 1),
     (0xFFF0E9, 1), (0xFFF10A, 1), (0xFFF11C, 1), (0xFFF14E, 2), (0xFFF176, 4),
-    (0xFFF57D, 1), (0xFF7DFE, 4)))
+    (0xFFF116, 1), (0xFFF128, 2), (0xFFF12A, 1), (0xFFF57D, 1), (0xFF7DFE, 4)))
+
+
+def begin_collection_dispatch(machine, registers):
+    """1ABC82: dispatch one known collection callback without a native re-entry.
+
+    The original table has 256 immutable four-byte callback slots. This owner
+    accepts only already-qualified collection entries. Its JSR frame becomes
+    the callback's outer return. Planning refusals fall back from the untouched
+    dispatcher; after an admitted prefix, a sound-suffix refusal hands back at
+    the existing callback boundary with that prefix retained.
+    """
+    record, sp, d1, sr = (registers[key] for key in ('a1', 'a7', 'd1', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned collection dispatch record/stack')
+    _spans_disjoint([('collection dispatch record', record, 66),
+                     ('collection dispatch frame', sp - 4, 8),
+                     ('collection dispatch globals', 0xFFF0F5, 2)])
+    kind = _read(machine, record, 1)
+    target = int.from_bytes(machine.peek_rom(COLLECTION_DISPATCH_TABLE + 4 * kind, 4), 'big') & 0xFFFFFF
+    if target not in COLLECTION_ROUTES:
+        raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
+    dispatch_sr = sr & ~0x1F
+    if kind == 0:
+        dispatch_sr |= 0x04
+    writes = ((0xFFF0F5, 0), (0xFFF0F6, kind),
+              *_bytes(sp - 4, COLLECTION_DISPATCH_RETURN, 4))
+    return target, AtomicPlan(98, 9, writes,
+                              {'d1': (d1 & 0xFFFF0000) | (kind * 4), 'a4': target,
+                               'a7': sp - 4, 'pc': target, 'sr': dispatch_sr},
+                              0x1ABC9E, direct_calls=1)
+
+
+class _DispatchPlanView:
+    """Read planned prefix bytes while deriving its direct callback plan."""
+    def __init__(self, machine, writes):
+        self._machine = machine
+        self._writes = {address & 0xFFFF: value for address, value in writes}
+
+    def peek_ram(self, offset, size):
+        data = bytearray(self._machine.peek_ram(offset, size))
+        for index in range(size):
+            value = self._writes.get(offset + index)
+            if value is not None:
+                data[index] = value
+        return bytes(data)
+
+    def peek_rom(self, offset, size):
+        return self._machine.peek_rom(offset, size)
+
+
+def dispatch_plan_view(machine, prefix):
+    """Expose planned prefix bytes needed by the immediate callback plan."""
+    return _DispatchPlanView(machine, prefix.writes)
 
 
 def _add_sr(sr, left, right, width):
@@ -371,7 +431,7 @@ def _collection_suffix(machine, registers, entry):
         return AtomicPlan(16, 1, (), {'a7': sp+4, 'pc': _read(machine, sp, 4) & 0xFFFFFF}, last)
     tail = replace_object(machine, registers, template=template, return_site=last,
                           amount=amount, extra_spans=COLLECTION_GLOBALS)
-    branch = kind in ('primary', 'secondary', 'quarter')
+    branch = kind in ('primary', 'secondary', 'quarter', 'flag128', 'flag129', 'flag116', 'flag12a')
     return AtomicPlan(tail.cycles + 10 * branch, tail.instructions + branch,
                       tail.writes, tail.registers, tail.last_pc, tail.direct_calls)
 
@@ -396,7 +456,8 @@ def begin_collection(machine, registers, entry):
     except ValueError as error:
         raise UnsupportedCandidate(str(error)) from error
     # Before-sound instruction sums; variable decimal path uses its established recipe.
-    cycles, instructions = {'flag25': (20, 1), 'count25': (20, 1), 'plain15': (0, 0),
+    cycles, instructions = {'flag25': (20, 1), 'flag128': (20, 1), 'flag129': (20, 1),
+        'flag116': (20, 1), 'flag12a': (20, 1), 'count25': (20, 1), 'plain15': (0, 0),
         'reset15': (30, 2), 'flag177': (112, 6), 'flag178': (112, 6), 'spawn': (20, 1),
         'timer100': (20, 1), 'flag100': (0, 0), 'secondary': (76, 5),
         'quarter': (82, 5), 'primary': (48, 3)}[kind]
@@ -445,7 +506,8 @@ def begin_collection(machine, registers, entry):
         return AtomicPlan(cycles + suffix.cycles, instructions + suffix.instructions,
             tuple(dict((*writes, *suffix.writes)).items()), final, suffix.last_pc,
             direct + suffix.direct_calls), False
-    sound_id = 13 if kind == 'secondary' else 12 if kind == 'quarter' else (
+    sound_id = 13 if kind == 'secondary' else 12 if kind == 'quarter' else 103 if kind in (
+        'flag128', 'flag129', 'flag116', 'flag12a') else (
         105 if kind in ('count25', 'flag25') else 11 if kind in ('primary', 'plain15', 'reset15') else 93 if kind == 'spawn' else 100)
     for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
         writes.extend(_bytes(sp - index*4, restored[name], 4))

@@ -6,6 +6,35 @@ retained Genesis components. Direct Nuked OPN2/PSG sources are now in this repo.
 Original play remains the default; recovery is opt-in for replay. The production
 legacy sound seam is now synchronous, with snapshots at safe ownership boundaries.
 
+## Collection callback dispatch (after 0.9.0)
+
+The `lifecycle` candidate now owns `1ABC82` table selection and direct calls to
+all sixteen qualified collection callback targets. It merges the caller prefix
+and callback prefix into one admitted operation; original sound still executes
+through the same synchronous seam, and the original outer caller resumes at
+`1ABCA0`. Four adjacent type-specific flag/sound-103 handlers join the shared
+counted-retirement family. They have constructed original-ROM qualification,
+not recorded gameplay hits.
+
+All **427 Python tests** pass, including every admitted callback target,
+sound on/off, conditional counters, planning read-after-write and exact outer
+observers. Three unmodified recorded dispatcher fixtures pass strict outer
+state/frame/PCM, 150 native instructions and fresh-process safe restore. Both
+user recordings pass full comparison: **225 + 244 observations**. The original
+corpus has 83 recovered dispatcher activations; the new menu/sound-test/game-over
+corpus has 19. Unknown table targets still fall back to original code.
+
+One new recovery concept is explicit: a read-only view of pending prefix bytes
+allows callback planning to read its future guest return slot. There is no new
+continuation, snapshot state or native API. Qualification caught a real merged
+register-effect error that narrower recorded coverage did not exercise. The
+Python edit loop remains 0.674 s for PASS and 0.616 s for a rejected mutation,
+with no build/install. Next work continues into adjacent callback ownership;
+this is not the complete contact dispatcher or collision system.
+
+See [recovery-progress.md](recovery-progress.md) for contracts, final evidence,
+manual-cost accounting and reproduction commands.
+
 ## Collection outcomes and object retirement (0.9.0)
 
 **CONTINUE + MECHANIZE.** The `lifecycle` candidate owns a coherent family of
