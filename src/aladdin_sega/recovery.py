@@ -11,6 +11,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         dispatch_plan_view, CONTACT_ENTRY, CONTACT_DISPATCH_ENTRY, begin_contact_dispatch,
                         COLLECTION_DISPATCH_RETURN, extend_contact_completion,
                         CONTACT_SCAN_ENTRY, contact_scan_plan, CONTACT_STEP_ENTRY, contact_step_plan,
+                        begin_contact_step_sound,
                         begin_contact_dispatch_sound, finish_contact_dispatch_sound, begin_contact,
                         begin_contact_sound, finish_contact_sound, begin_collection,
                         CONTACT_ACTIVATION_ENTRY, begin_contact_activation_dispatch,
@@ -18,6 +19,19 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         CONTACT_FAMILY_MOTION_ENTRY, begin_contact_family_motion_dispatch,
                         CONTACT_FAMILY_SOUND_ENTRY, begin_contact_family_sound_dispatch,
                         CONTACT_FAMILY_SECONDARY_MOTION_ENTRY, begin_contact_family_secondary_dispatch,
+                        CONTACT_FAMILY_TYPE79_ENTRY, begin_contact_family_type79_dispatch,
+                        begin_contact_family_type79_dispatch_sound,
+                        finish_contact_family_type79_sound,
+                        CONTACT_FAMILY_TYPE1F_ENTRY, begin_contact_family_type1f_inactive_dispatch,
+                        CONTACT_FAMILY_TYPE15_ENTRY, begin_contact_family_type15_dispatch,
+                        CONTACT_FAMILY_TYPE44_ENTRY, begin_contact_family_type44_dispatch,
+                        begin_contact_family_type1f_contact_dispatch,
+                        begin_contact_family_type1f_contact_dispatch_sound,
+                        finish_contact_family_type1f_contact_sound,
+                        begin_contact_family_type1f_transition_dispatch,
+                        begin_contact_family_type1f_transition_dispatch_sound,
+                        finish_contact_family_type1f_transition_sound,
+                        begin_contact_family_type1f_transition_soundoff_dispatch,
                         CONTACT_TYPE7E_ENTRY, begin_contact_type7e_dispatch,
                         finish_collection, relocate_collection, CONTACT_SIBLING_ENTRY,
                         CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT,
@@ -309,6 +323,10 @@ class Candidate:
             CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
             CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
             CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
+            CONTACT_FAMILY_TYPE79_ENTRY: begin_contact_family_type79_dispatch,
+            CONTACT_FAMILY_TYPE1F_ENTRY: begin_contact_family_type1f_inactive_dispatch,
+            CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
+            CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
             CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
         }.get(entry)
         if family_planner is not None:
@@ -317,6 +335,71 @@ class Candidate:
                 if not self._apply(machine, self._mutate(plan), target):
                     return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
             except UnsupportedCandidate as error:
+                if entry == CONTACT_FAMILY_TYPE1F_ENTRY:
+                    try:
+                        plan = begin_contact_family_type1f_transition_dispatch(
+                            machine, dispatch_registers, prefix)
+                        if not self._apply(machine, self._mutate(plan), target):
+                            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                    except UnsupportedCandidate:
+                        try:
+                            plan = begin_contact_family_type1f_transition_soundoff_dispatch(
+                                machine, dispatch_registers, prefix)
+                            if not self._apply(machine, self._mutate(plan), target):
+                                return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                        except UnsupportedCandidate:
+                            try:
+                                sound = begin_contact_family_type1f_transition_dispatch_sound(
+                                    machine, dispatch_registers, prefix)
+                                if not self._apply(machine, self._mutate(sound), target):
+                                    return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                            except UnsupportedCandidate:
+                                try:
+                                    plan = begin_contact_family_type1f_contact_dispatch(
+                                        machine, dispatch_registers, prefix)
+                                    if not self._apply(machine, self._mutate(plan), target):
+                                        return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                                except UnsupportedCandidate:
+                                    try:
+                                        sound = begin_contact_family_type1f_contact_dispatch_sound(
+                                            machine, dispatch_registers, prefix)
+                                        if not self._apply(machine, self._mutate(sound), target):
+                                            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                                    except UnsupportedCandidate:
+                                        return self._fallback(machine, COLLECTION_DISPATCH_ENTRY,
+                                                              f'unsupported domain: {error}')
+                                    seam = SoundSeam(sound, dispatch_registers['a7'] - 8,
+                                                     0x1AE5B6, 0x1AE5B6, 24, 28, 28, True,
+                                                     finish_contact_family_type1f_contact_sound)
+                                    return self._run_sound_seam(machine, target, seam, suffix_transform=self._mutate,
+                                        on_complete=lambda: self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
+                                self.stats['collection_dispatch_hits'] += 1
+                                return True
+                            seam = SoundSeam(sound, dispatch_registers['a7'] - 4, 0x1AE920, 0x1AE920, 24, 28, 28, True,
+                                             finish_contact_family_type1f_transition_sound)
+                            return self._run_sound_seam(machine, target, seam, suffix_transform=self._mutate,
+                                on_complete=lambda: self.stats.__setitem__('collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
+                        self.stats['collection_dispatch_hits'] += 1
+                        return True
+                    self.stats['collection_dispatch_hits'] += 1
+                    return True
+                if entry == CONTACT_FAMILY_TYPE79_ENTRY:
+                    try:
+                        sound = begin_contact_family_type79_dispatch_sound(
+                            machine, dispatch_registers, prefix)
+                        if not self._apply(machine, self._mutate(sound), target):
+                            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                    except UnsupportedCandidate:
+                        return self._fallback(machine, COLLECTION_DISPATCH_ENTRY,
+                                              f'unsupported domain: {error}')
+                    seam = SoundSeam(sound, dispatch_registers['a7'] - 8,
+                                     0x1AE5B6, 0x1AE5B6, 24, 28, 28, True,
+                                     finish_contact_family_type79_sound)
+                    return self._run_sound_seam(
+                        machine, target, seam,
+                        suffix_transform=self._mutate,
+                        on_complete=lambda: self.stats.__setitem__(
+                            'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
                 return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
             self.stats['collection_dispatch_hits'] += 1
             return True
@@ -421,7 +504,19 @@ class Candidate:
                 if not self._apply(machine, plan, target):
                     return self._fallback(machine, entry, 'scheduler admission')
             except UnsupportedCandidate as error:
-                return self._fallback(machine, entry, f'unsupported domain: {error}')
+                try:
+                    seam = begin_contact_step_sound(machine, machine.registers())
+                    if not self._apply(machine, self._mutate(seam.prefix), target):
+                        return self._fallback(machine, entry, 'scheduler admission')
+                except UnsupportedCandidate:
+                    return self._fallback(machine, entry, f'unsupported domain: {error}')
+                handled = self._run_sound_seam(machine, target, seam, suffix_transform=self._mutate)
+                if handled:
+                    # The parent prefix is committed once its one concrete
+                    # sound seam starts, even if a later callback returns to
+                    # original code through that seam's local fallback.
+                    self.stats['contact_step_hits'] += 1
+                return handled
             self.stats['contact_step_hits'] += 1
             return True
         if self.is_lifecycle and entry == CONTACT_ENTRY:

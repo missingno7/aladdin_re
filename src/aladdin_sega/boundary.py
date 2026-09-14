@@ -43,6 +43,10 @@ CONTACT_FAMILY_66_ENTRY = 0x1AFBF4
 CONTACT_FAMILY_MOTION_ENTRY = 0x1AF978
 CONTACT_FAMILY_SECONDARY_MOTION_ENTRY = 0x1AF9F6
 CONTACT_FAMILY_SOUND_ENTRY = 0x1AFC4E
+CONTACT_FAMILY_TYPE79_ENTRY = 0x1AEB7C
+CONTACT_FAMILY_TYPE1F_ENTRY = 0x1AE796
+CONTACT_FAMILY_TYPE15_ENTRY = 0x1AE978
+CONTACT_FAMILY_TYPE44_ENTRY = 0x1AEF12
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
@@ -1552,6 +1556,10 @@ def begin_collection_dispatch(machine, registers):
     if target not in (*COLLECTION_ROUTES, CONTACT_DISPATCH_ENTRY, CONTACT_ACTIVATION_ENTRY,
                       CONTACT_FAMILY_66_ENTRY, CONTACT_FAMILY_MOTION_ENTRY,
                       CONTACT_FAMILY_SECONDARY_MOTION_ENTRY, CONTACT_FAMILY_SOUND_ENTRY,
+                      CONTACT_FAMILY_TYPE79_ENTRY,
+                      CONTACT_FAMILY_TYPE1F_ENTRY,
+                      CONTACT_FAMILY_TYPE15_ENTRY,
+                      CONTACT_FAMILY_TYPE44_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
@@ -1729,11 +1737,28 @@ def _join_plans(first, second):
                       first.direct_calls + second.direct_calls)
 
 
+def _contact_type1f_ram_dispatch(machine, registers, dispatch):
+    """Reuse the qualified finite type-1F paths inside the contact scan."""
+    for planner in (begin_contact_family_type1f_inactive_dispatch,
+                    begin_contact_family_type1f_transition_dispatch,
+                    begin_contact_family_type1f_transition_soundoff_dispatch,
+                    begin_contact_family_type1f_contact_dispatch):
+        try:
+            return planner(machine, registers, dispatch)
+        except UnsupportedCandidate:
+            pass
+    raise UnsupportedCandidate('contact scan type1f requires original sound/device path')
+
+
 def contact_scan_plan(machine, registers):
     """Exact 1ABBD6 24-record scan through the instruction before its RTS."""
     if registers.get('pc') != CONTACT_SCAN_ENTRY:
         raise UnsupportedCandidate('contact scan entry identity')
     callbacks = {
+        CONTACT_FAMILY_TYPE79_ENTRY: begin_contact_family_type79_dispatch,
+        CONTACT_FAMILY_TYPE1F_ENTRY: _contact_type1f_ram_dispatch,
+        CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
+        CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
         CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
@@ -1771,6 +1796,123 @@ def contact_scan_plan(machine, registers):
                      pc=CONTACT_SCAN_EXIT if slot == 23 else 0x1ABBE0)
         current = _join_plans(aggregate, AtomicPlan(28 if slot == 23 else 24, 2, (), state, 0x1ABD78))
     return current
+
+
+def _contact_scan_resume(machine, registers):
+    """Continue a validated scan at 1ABD74 from live post-callback state."""
+    if registers.get('pc') != CONTACT_COMPLETION_EXIT:
+        raise UnsupportedCandidate('contact scan resume identity')
+    remaining = registers['d4'] & 0xffff
+    if remaining > 23 or registers['a1'] != 0xff7e82 + (23 - remaining) * 66:
+        raise UnsupportedCandidate('contact scan resume cursor')
+    current = AtomicPlan(0, 0, (), dict(registers), CONTACT_COMPLETION_EXIT)
+    # Advancing from 1ABD74 is part of the resumed original loop; each later
+    # iteration reuses the ordinary collision/callback recipes.
+    while True:
+        state = dict(current.registers); remaining = state['d4'] & 0xffff
+        state.update(a1=(state['a1'] + 66) & 0xffffff,
+                     d4=(state['d4'] & 0xffff0000) | ((remaining - 1) & 0xffff),
+                     pc=CONTACT_SCAN_EXIT if remaining == 0 else 0x1ABBE0)
+        current = _join_plans(current, AtomicPlan(28 if remaining == 0 else 24, 2, (), state, 0x1ABD78))
+        if remaining == 0:
+            return current
+        # Re-enter the established whole-scan planner at the live cursor by
+        # borrowing its one-slot body through a bounded synthetic tail.
+        prefix, branch = _contact_scan_prefix(dispatch_plan_view(machine, current), current.registers)
+        if branch == 'contact':
+            view = dispatch_plan_view(machine, _join_plans(current, prefix))
+            target, dispatch = begin_collection_dispatch(view, prefix.registers)
+            planners = {CONTACT_FAMILY_TYPE79_ENTRY: begin_contact_family_type79_dispatch,
+                        CONTACT_FAMILY_TYPE1F_ENTRY: _contact_type1f_ram_dispatch,
+                        CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
+                        CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
+                        CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
+                        CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
+                        CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
+                        CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
+                        CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch}
+            if target in (TRANSITION_ENTRY, 0x1AF4D8):
+                raise UnsupportedCandidate('later collection sound requires local fallback')
+            if target in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+                callback = begin_contact_sibling_dispatch(view, prefix.registers, dispatch, target)
+            else:
+                planner = planners.get(target)
+                if planner is None:
+                    raise UnsupportedCandidate(f'resumed contact scan callback {target:06X} unsupported')
+                callback = planner(view, prefix.registers, dispatch)
+            if callback.registers.get('pc') != COLLECTION_DISPATCH_RETURN:
+                raise UnsupportedCandidate('resumed contact scan noncompletion handoff')
+            overlay = dict(prefix.registers); overlay.update(dispatch.registers); overlay.update(callback.registers)
+            complete = complete_contact_plan(dispatch_plan_view(machine, _join_plans(_join_plans(current, prefix), callback)), overlay)
+            current = _join_plans(current, _join_plans(prefix, _join_plans(callback, complete)))
+        else:
+            current = _join_plans(current, prefix)
+
+
+def begin_contact_step_sound(machine, registers):
+    """Plan the parent prefix through its first supported callback sound call."""
+    prefix = _contact_step_prefix(machine, registers)
+    if prefix.registers.get('pc') != CONTACT_SCAN_ENTRY:
+        raise UnsupportedCandidate('contact tick has no scan sound path')
+    current = AtomicPlan(prefix.cycles + 20, prefix.instructions + 2, prefix.writes,
+        {**prefix.registers, 'a1': 0xff7e82,
+         'd4': (prefix.registers['d4'] & 0xffff0000) | 23,
+         'pc': 0x1ABBE0, 'sr': _logic_sr(prefix.registers['sr'], 23, 2)}, 0x1ABBDC,
+        prefix.direct_calls)
+    for slot in range(24):
+        collision, branch = _contact_scan_prefix(dispatch_plan_view(machine, current), current.registers)
+        if branch == 'contact':
+            view = dispatch_plan_view(machine, _join_plans(current, collision))
+            target, dispatch = begin_collection_dispatch(view, collision.registers)
+            callback_registers = dict(collision.registers); callback_registers.update(dispatch.registers)
+            if target in (TRANSITION_ENTRY, 0x1AF4D8):
+                sound, legacy = begin_collection(dispatch_plan_view(view, dispatch), callback_registers, target)
+                if not legacy or sound.registers.get('pc') != 0x1E58B8:
+                    raise UnsupportedCandidate('contact tick collection sound identity')
+                planned = _join_plans(current, _join_plans(collision, _join_plans(dispatch, sound)))
+                resume = COLLECTION_ROUTES[target][1]
+                return SoundSeam(planned, callback_registers['a7'], resume, resume, 24, 28, 28,
+                                 suffix=lambda live, returned: finish_contact_step_sound(live, returned, target))
+            if target in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+                sound = begin_contact_sibling_dispatch_sound_seam(
+                    view, collision.registers, dispatch, target)
+                planned = _join_plans(current, _join_plans(collision, sound.prefix))
+                return SoundSeam(
+                    planned, sound.stack_basis, sound.resume_pc, sound.return_slot,
+                    sound.saved_frame, sound.frame_size, sound.return_delta,
+                    sound.counts_contact,
+                    suffix=lambda live, returned: finish_contact_step_sound(
+                        live, returned, finisher=sound.suffix))
+            raise UnsupportedCandidate(f'contact tick callback {target:06X} is not a supported sound path')
+        aggregate = _join_plans(current, collision); state = dict(aggregate.registers); remaining = state['d4'] & 0xffff
+        state.update(a1=(state['a1'] + 66) & 0xffffff,
+                     d4=(state['d4'] & 0xffff0000) | ((remaining - 1) & 0xffff), pc=0x1ABBE0)
+        current = _join_plans(aggregate, AtomicPlan(24, 2, (), state, 0x1ABD78))
+    raise UnsupportedCandidate('contact tick sound callback was not reached')
+
+
+def finish_contact_step_sound(machine, registers, entry=None, finisher=None):
+    """Resume a callback sound from live guest state through the parent RTS."""
+    if finisher is None:
+        if entry is None:
+            raise UnsupportedCandidate('contact tick collection sound entry')
+        finish = finish_collection(machine, registers, entry)
+    else:
+        finish = finisher(machine, registers)
+    overlay = dict(machine.registers()); overlay.update(finish.registers)
+    complete = complete_contact_plan(dispatch_plan_view(machine, finish), overlay)
+    combined = _join_plans(finish, complete)
+    remainder = _contact_scan_resume(dispatch_plan_view(machine, combined), combined.registers)
+    combined = _join_plans(combined, remainder)
+    final = dict(combined.registers); sp = final['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned contact tick return stack')
+    outer = _read(dispatch_plan_view(machine, combined), sp, 4) & 0xffffff
+    if outer & 1:
+        raise UnsupportedCandidate('unaligned contact tick return PC')
+    final.update(a7=sp + 4, pc=outer)
+    return AtomicPlan(combined.cycles + 16, combined.instructions + 1, combined.writes,
+                      final, CONTACT_SCAN_EXIT, combined.direct_calls)
 
 
 def _contact_step_prefix(machine, registers):
@@ -2024,6 +2166,392 @@ def _contact_family_dispatch(machine, registers, dispatch, entry, planner):
 def begin_contact_family_66_dispatch(machine, registers, dispatch):
     return _contact_family_dispatch(machine, registers, dispatch,
                                     CONTACT_FAMILY_66_ENTRY, begin_contact_family_66)
+
+
+def begin_contact_family_type79(machine, registers):
+    """Recover 1AEB7C type-79's RAM-only FFF0E7/FFF0D8 return arm."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact type79 record/stack')
+    _spans_disjoint([('contact type79 record', record, 66),
+                     ('contact type79 return', sp, 4),
+                     ('contact type79 gates', 0xFFF0D8, 1),
+                     ('contact type79 gates', 0xFFF0E7, 1),
+                     ('contact type79 gate', 0xFFF0F2, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    if read(0xFFF0E7, 1):
+        raise UnsupportedCandidate('contact type79 non-return arm')
+    active, sound_gate = read(0xFFF0D8, 1), read(0xFFF0F2, 1)
+    if active:
+        cycles, instructions, residue = 70, 5, active
+    elif sound_gate:
+        # The third TST/BNE takes the local RTS, preserving its CCR result.
+        cycles, instructions, residue = 94, 7, sound_gate
+    else:
+        raise UnsupportedCandidate('contact type79 non-return arm')
+    return AtomicPlan(cycles, instructions, (),
+                      {'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF,
+                       'sr': _logic_sr(sr, residue, 1)},
+                      0x1AEBA2)
+
+
+def begin_contact_family_type79_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE79_ENTRY,
+                                    begin_contact_family_type79)
+
+
+def begin_contact_family_type79_sound(machine, registers):
+    """Enter type-79's inactive contact arm through command 31.
+
+    This is the other fall-through from ``1AEB7C``: after both inactive
+    guards and the sound guard pass, it clears the family latch and BSRs the
+    ordinary contact root.  The measured wrapper through the sound-call gate
+    is 118 cycles / 8 instructions before the contact prefix.
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact type79 sound record/stack')
+    _spans_disjoint([('contact type79 sound record', record, 66),
+                     ('contact type79 sound return', sp, 4),
+                     ('contact type79 sound bsr return', sp - 4, 4),
+                     ('contact type79 sound gates', 0xFFF0D8, 1),
+                     ('contact type79 sound gates', 0xFFF0E7, 1),
+                     ('contact type79 sound gate', 0xFFF0F2, 1),
+                     ('contact type79 sound clear', 0xFFF0CC, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    if read(0xFFF0E7, 1) or read(0xFFF0D8, 1) or read(0xFFF0F2, 1):
+        raise UnsupportedCandidate('contact type79 sound guard')
+    callback = AtomicPlan(118, 8,
+                          (*_bytes(0xFFF0CC, 0, 1), *_bytes(sp - 4, 0x1AEBA2, 4)),
+                          {**registers, 'a7': sp - 4, 'pc': CONTACT_ENTRY,
+                           'sr': _logic_sr(sr, 0, 1)},
+                          0x1AEBA0, direct_calls=1)
+    sound = begin_contact_sound(dispatch_plan_view(machine, callback), callback.registers)
+    final = dict(callback.registers)
+    final.update(sound.registers)
+    return AtomicPlan(callback.cycles + sound.cycles,
+                      callback.instructions + sound.instructions,
+                      tuple(dict((*callback.writes, *sound.writes)).items()), final,
+                      sound.last_pc, callback.direct_calls + sound.direct_calls)
+
+
+def begin_contact_family_type79_dispatch_sound(machine, registers, dispatch):
+    """Compose collection dispatch with type-79's concrete sound arm."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE79_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type79 sound dispatch identity')
+    sound = begin_contact_family_type79_sound(dispatch_plan_view(machine, dispatch), callback_registers)
+    final = dict(callback_registers)
+    final.update(sound.registers)
+    return AtomicPlan(dispatch.cycles + sound.cycles,
+                      dispatch.instructions + sound.instructions,
+                      tuple(dict((*dispatch.writes, *sound.writes)).items()), final,
+                      sound.last_pc, dispatch.direct_calls + sound.direct_calls)
+
+
+def finish_contact_family_type79_sound(machine, registers):
+    """Restore command 31, then type-79's BSR/RTS pair to the dispatcher."""
+    contact = finish_contact_sound(machine, registers)
+    local_sp = contact.registers['a7']
+    if (contact.registers.get('pc') != 0x1AEBA2
+            or _read(machine, local_sp, 4) != COLLECTION_DISPATCH_RETURN):
+        raise UnsupportedCandidate('contact type79 sound local return identity')
+    final = dict(contact.registers)
+    final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
+    return AtomicPlan(contact.cycles + 16, contact.instructions + 1,
+                      contact.writes, final, 0x1AEBA2, contact.direct_calls)
+
+
+def begin_contact_family_type1f_inactive(machine, registers):
+    """Recover 1AE796's measured bit-5-clear position/inactive RTS tails.
+
+    Its contact, retirement, and device-helper siblings deliberately remain
+    outside these leaf plans.
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact type1f record/stack')
+    _spans_disjoint([('contact type1f record', record, 66),
+                     ('contact type1f return', sp, 4),
+                     ('contact type1f player', 0xFF7E02, 2),
+                     ('contact type1f direction', 0xFF7E49, 1),
+                     ('contact type1f active', 0xFFF0D8, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    player, threshold, direction = (read(0xFF7E02, 2), read(record + 2, 2),
+                                    read(0xFF7E49, 1))
+    if read(record + 0x3C, 1) & 0x20:
+        raise UnsupportedCandidate('contact type1f non-inactive-tail-rts arm')
+    position_failed = player >= threshold if not direction else player < threshold
+    if position_failed:
+        # CMP.W's N/V/C survive BTST; the clear bit sets Z alone.
+        residue = _cmp_sr(sr, player, threshold, 2)
+        residue = (residue & ~0x04) | 0x04
+        cycles, instructions = (106, 8) if not direction else (104, 8)
+    elif not read(0xFFF0D8, 1):
+        # TST.B FFF0D8 is the immediately preceding flag producer.
+        residue = _logic_sr(sr, 0, 1)
+        cycles, instructions = (134, 10) if not direction else (142, 11)
+    else:
+        raise UnsupportedCandidate('contact type1f non-inactive-tail-rts arm')
+    return AtomicPlan(cycles, instructions, (),
+                      {'d7': (registers['d7'] & 0xFFFF0000) | player,
+                       'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF,
+                       'sr': residue},
+                      0x1AE976)
+
+
+def begin_contact_family_type1f_inactive_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE1F_ENTRY,
+                                    begin_contact_family_type1f_inactive)
+
+
+def begin_contact_family_type1f_contact(machine, registers):
+    """Enter 1AE796's recorded inactive bit-5 contact BSR."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact type1f contact record/stack')
+    _spans_disjoint([('contact type1f contact record', record, 66),
+                     ('contact type1f contact return', sp, 4),
+                     ('contact type1f contact bsr return', sp - 4, 4),
+                     ('contact type1f player', 0xFF7E02, 2),
+                     ('contact type1f direction', 0xFF7E49, 1),
+                     ('contact type1f active', 0xFFF0D8, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    player, threshold = read(0xFF7E02, 2), read(record + 2, 2)
+    if (read(0xFF7E49, 1) != 0 or player >= threshold
+            or read(0xFFF0D8, 1) != 0 or not (read(record + 0x3C, 1) & 0x20)):
+        raise UnsupportedCandidate('contact type1f non-recorded contact arm')
+    return AtomicPlan(138, 10, (*_bytes(sp - 4, 0x1AE870, 4),),
+                      {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | player,
+                       'a7': sp - 4, 'pc': CONTACT_ENTRY, 'sr': sr & ~0x0F},
+                      0x1AE86C, direct_calls=1)
+
+
+def _finish_contact_family_type1f_contact(machine, contact):
+    local_sp = contact.registers['a7']
+    if (contact.registers.get('pc') != 0x1AE870
+            or _read(machine, local_sp, 4) != COLLECTION_DISPATCH_RETURN):
+        raise UnsupportedCandidate('contact type1f contact local return identity')
+    final = dict(contact.registers)
+    final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
+    return AtomicPlan(contact.cycles + 16, contact.instructions + 1, contact.writes,
+                      final, 0x1AE870, contact.direct_calls)
+
+
+def begin_contact_family_type1f_contact_dispatch(machine, registers, dispatch):
+    """Compose collection dispatch and type-1F's finite contact return."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE1F_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type1f contact dispatch identity')
+    callback = begin_contact_family_type1f_contact(dispatch_plan_view(machine, dispatch), callback_registers)
+    contact = begin_contact(dispatch_plan_view(machine, callback), callback.registers)
+    composed = _join_plans(dispatch, _join_plans(callback, contact))
+    finish = _finish_contact_family_type1f_contact(dispatch_plan_view(machine, composed), contact)
+    return _join_plans(dispatch, _join_plans(callback, finish))
+
+
+def begin_contact_family_type1f_contact_dispatch_sound(machine, registers, dispatch):
+    """Compose collection dispatch and type-1F's command-31 contact prefix."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE1F_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type1f contact sound dispatch identity')
+    callback = begin_contact_family_type1f_contact(dispatch_plan_view(machine, dispatch), callback_registers)
+    sound = begin_contact_sound(dispatch_plan_view(machine, callback), callback.registers)
+    return _join_plans(dispatch, _join_plans(callback, sound))
+
+
+def finish_contact_family_type1f_contact_sound(machine, registers):
+    """Restore command 31 then close type-1F's local RTS."""
+    return _finish_contact_family_type1f_contact(machine, finish_contact_sound(machine, registers))
+
+
+def begin_contact_family_type1f_transition(machine, registers):
+    """Recover type-1F's direct no-counter transition to 1AE954."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact type1f transition record/stack')
+    _spans_disjoint([('contact type1f transition record', record, 66),
+                     ('contact type1f transition return', sp, 4),
+                     ('contact type1f player', 0xFF7E02, 2),
+                     ('contact type1f direction', 0xFF7E49, 1),
+                     ('contact type1f active', 0xFFF0D8, 1),
+                     ('contact type1f finish gate', 0xFF7E21, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    player, threshold = read(0xFF7E02, 2), read(record + 2, 2)
+    if (read(0xFF7E49, 1) != 0 or player >= threshold
+            or not read(0xFFF0D8, 1) or read(record + 0x3C, 1) & 0x20):
+        raise UnsupportedCandidate('contact type1f non-direct-finish arm')
+    kind, finish_gate = read(record, 1), read(0xFF7E21, 1)
+    if not finish_gate:
+        try:
+            script, cycles, instructions = {
+                0x1E: (0x1234BE, 272, 19), 0x1F: (0x12384A, 316, 23),
+                0x21: (0x12350C, 294, 21), 0x22: (0x12387A, 328, 24),
+            }[kind]
+        except KeyError as error:
+            raise UnsupportedCandidate('contact type1f direct-finish kind') from error
+    elif kind == 0x1F and not read(record + 1, 1):
+        script, cycles, instructions = 0x12384A, 336, 25
+    else:
+        raise UnsupportedCandidate('contact type1f non-direct-finish arm')
+    writes = (*_bytes(record + 0x20, script, 4), *_bytes(record, 0x84, 1),
+              *_bytes(record + 0x37, 0, 1), *_bytes(record + 0x0A, 0, 4),
+              *_bytes(record + 0x36, 0, 1))
+    return AtomicPlan(cycles, instructions, writes,
+                      {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | player,
+                       'pc': FINISH_ENTRY, 'sr': _logic_sr(sr, 0, 1)},
+                      0x1AE8FE)
+
+
+def begin_contact_family_type1f_transition_dispatch(machine, registers, dispatch):
+    """Compose collection dispatch, direct type-1F state change, and retirement."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE1F_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type1f transition dispatch identity')
+    prefix = begin_contact_family_type1f_transition(dispatch_plan_view(machine, dispatch), callback_registers)
+    composed = _join_plans(dispatch, prefix)
+    finish = finish_object(dispatch_plan_view(machine, composed), prefix.registers)
+    return _join_plans(dispatch, _join_plans(prefix, finish))
+
+
+def begin_contact_family_type1f_transition_sound(machine, registers):
+    """Enter the recorded type-1E/1F counter transition through command 41."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact type1f command41 record/stack')
+    _spans_disjoint([('contact type1f command41 record', record, 66),
+                     ('contact type1f command41 frame', sp - 28, 32),
+                     ('contact type1f player', 0xFF7E02, 2),
+                     ('contact type1f direction', 0xFF7E49, 1),
+                     ('contact type1f active', 0xFFF0D8, 1),
+                     ('contact type1f finish gate', 0xFF7E21, 1),
+                     ('contact type1f sound', 0xFFF57D, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    player, threshold, kind = read(0xFF7E02, 2), read(record + 2, 2), read(record, 1)
+    counter = read(record + 1, 1)
+    if (read(0xFF7E49, 1) != 0 or player >= threshold
+            or not read(0xFFF0D8, 1) or read(record + 0x3C, 1) & 0x20
+            or kind not in (0x1E, 0x1F, 0x21, 0x22) or not read(0xFF7E21, 1)
+            or not counter or not read(0xFFF57D, 1)):
+        raise UnsupportedCandidate('contact type1f non-command41 arm')
+    script, cycles, instructions = ({0x1E: (0x1234BE, 414, 27),
+                                     0x1F: (0x12384A, 458, 31),
+                                     0x21: (0x12350C, 436, 29),
+                                     0x22: (0x12387A, 470, 32)}[kind])
+    writes = [*_bytes(record + 0x20, script, 4), (record, 0x84),
+              (record + 0x37, 0), *_bytes(record + 0x0A, 0, 4),
+              (record + 0x36, 0), (record + 1, counter - 1)]
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index * 4, registers[name], 4))
+    writes.extend((*_bytes(sp - 24, 0x41, 4), *_bytes(sp - 28, 0x1AE91A, 4)))
+    return AtomicPlan(cycles, instructions, tuple(writes),
+                      {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | player,
+                       'a7': sp - 28, 'pc': 0x1E58B8, 'sr': sr & ~0x0F},
+                      0x1AE914, direct_calls=1)
+
+
+def begin_contact_family_type1f_transition_dispatch_sound(machine, registers, dispatch):
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE1F_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type1f command41 dispatch identity')
+    sound = begin_contact_family_type1f_transition_sound(
+        dispatch_plan_view(machine, dispatch), callback_registers)
+    return _join_plans(dispatch, sound)
+
+
+def finish_contact_family_type1f_transition_sound(machine, registers):
+    """Resume command 41 at 1AE920, select the script, and return."""
+    if registers.get('pc') != 0x1AE920 or registers['a7'] & 1:
+        raise UnsupportedCandidate('foreign contact type1f command41 return')
+    sp = registers['a7'] + 24
+    restored = dict(registers, a7=sp)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        restored[name] = _read(machine, sp - index * 4, 4)
+    record = restored['a1']
+    _spans_disjoint([('contact type1f command41 record', record, 66),
+                     ('contact type1f command41 frame', sp - 28, 32),
+                     *CONTACT_SELECTOR_GLOBALS,
+                     ('contact type1f script', 0xFF7E60, 4),
+                     ('contact type1f active', 0xFFF0D8, 1)])
+    local = AtomicPlan(130, 6,
+                       ((0xFFF0CC, 0), *_bytes(0xFFF0B0, 0, 2),
+                        *_bytes(sp - 4, restored['a2'], 4), *_bytes(sp - 8, 0x1AE938, 4)),
+                       {**restored, 'a7': sp - 8, 'pc': 0x1AD150},
+                       0x1AE934, direct_calls=1)
+    selector = _contact_selector(dispatch_plan_view(machine, local), local.registers)
+    planned = _join_plans(local, selector)
+    saved_a2, outer_return = restored['a2'], _read(machine, sp, 4)
+    bits = _read(dispatch_plan_view(machine, planned), record + 0x3C, 1)
+    writes = (*_bytes(0xFF7E60, selector.registers['a2'], 4), (0xFF7E77, 0),
+              (0xFFF0D8, 0), (record + 0x3C, bits & ~0x20))
+    final = dict(restored)
+    final.update(selector.registers, a2=saved_a2, a7=sp + 4,
+                 pc=outer_return & 0xFFFFFF, sr=_logic_sr(selector.registers['sr'], 0, 1))
+    tail = AtomicPlan(108, 6, writes, final, 0x1AE952, direct_calls=1)
+    return _join_plans(planned, tail)
+
+
+def begin_contact_family_type1f_transition_soundoff(machine, registers):
+    """Directly compose the recorded command-41-disabled selector route."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact type1f soundoff record/stack')
+    _spans_disjoint([('contact type1f soundoff record', record, 66),
+                     ('contact type1f soundoff selector frame', sp - 8, 12),
+                     ('contact type1f player', 0xFF7E02, 2),
+                     ('contact type1f direction', 0xFF7E49, 1),
+                     ('contact type1f active', 0xFFF0D8, 1),
+                     ('contact type1f finish gate', 0xFF7E21, 1),
+                     ('contact type1f sound', 0xFFF57D, 1),
+                     *CONTACT_SELECTOR_GLOBALS,
+                     ('contact type1f script', 0xFF7E60, 4)])
+    read = lambda address, size: _read(machine, address, size)
+    player, threshold, kind = read(0xFF7E02, 2), read(record + 2, 2), read(record, 1)
+    counter = read(record + 1, 1)
+    if (read(0xFF7E49, 1) != 0 or player >= threshold or not read(0xFFF0D8, 1)
+            or read(record + 0x3C, 1) & 0x20 or kind not in (0x1E, 0x1F, 0x21, 0x22)
+            or not read(0xFF7E21, 1) or not counter or read(0xFFF57D, 1)):
+        raise UnsupportedCandidate('contact type1f non-soundoff selector arm')
+    script, cycles, instructions = ({0x1E: (0x1234BE, 402, 28),
+                                     0x1F: (0x12384A, 446, 32),
+                                     0x21: (0x12350C, 424, 30),
+                                     0x22: (0x12387A, 458, 33)}[kind])
+    writes = [*_bytes(record + 0x20, script, 4), (record, 0x84),
+              (record + 0x37, 0), *_bytes(record + 0x0A, 0, 4),
+              (record + 0x36, 0), (record + 1, counter - 1),
+              (0xFFF0CC, 0), *_bytes(0xFFF0B0, 0, 2),
+              *_bytes(sp - 4, registers['a2'], 4), *_bytes(sp - 8, 0x1AE938, 4)]
+    local = AtomicPlan(cycles, instructions, tuple(writes),
+                       {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | player,
+                        'a7': sp - 8, 'pc': 0x1AD150, 'sr': _logic_sr(sr, 0, 1)},
+                       0x1AE934, direct_calls=1)
+    selector = _contact_selector(dispatch_plan_view(machine, local), local.registers)
+    planned = _join_plans(local, selector)
+    bits = _read(dispatch_plan_view(machine, planned), record + 0x3C, 1)
+    tail = AtomicPlan(108, 6,
+                      (*_bytes(0xFF7E60, selector.registers['a2'], 4), (0xFF7E77, 0),
+                       (0xFFF0D8, 0), (record + 0x3C, bits & ~0x20)),
+                      {**registers, **selector.registers, 'a2': registers['a2'], 'a7': sp + 4,
+                       'pc': _read(machine, sp, 4) & 0xFFFFFF,
+                       'sr': _logic_sr(selector.registers['sr'], 0, 1)},
+                      0x1AE952, direct_calls=1)
+    return _join_plans(planned, tail)
+
+
+def begin_contact_family_type1f_transition_soundoff_dispatch(machine, registers, dispatch):
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE1F_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type1f soundoff dispatch identity')
+    return _join_plans(dispatch, begin_contact_family_type1f_transition_soundoff(
+        dispatch_plan_view(machine, dispatch), callback_registers))
 
 
 CONTACT_FAMILY_MOTION_GLOBALS = (
@@ -2918,6 +3446,87 @@ def begin_contact_sibling_wrapper(machine, registers, entry):
                       callback.instructions + sibling.instructions + 3,
                       tuple(dict((*callback.writes, *sibling.writes)).items()), final,
                       0x1A91C4, callback.direct_calls + sibling.direct_calls)
+
+
+def begin_contact_family_type15(machine, registers):
+    """1AE978: type-15 sibling call followed by the shared D8/RTS tail."""
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type15 sibling stack')
+    _spans_disjoint([('type15 sibling frame', sp - 10, 14),
+                     ('type15 sibling record', record, 66),
+                     *CONTACT_SIBLING_GLOBALS])
+    # Although this shares 1AE9C6's post-sibling D8 tail, the BSR's durable
+    # stack word is the callback's own 1AE97C return address.
+    callback = AtomicPlan(18, 1, _bytes(sp - 4, 0x1AE97C, 4),
+                          {**registers, 'a7': sp - 4, 'pc': CONTACT_SIBLING_ENTRY},
+                          CONTACT_FAMILY_TYPE15_ENTRY, direct_calls=1)
+    sibling = begin_contact_sibling(dispatch_plan_view(machine, callback),
+                                    callback.registers)
+    if _read(machine, 0xFFF0D8, 1) == 0:
+        raise UnsupportedCandidate('type15 sibling D8 tail does not return')
+    final = dict(sibling.registers)
+    final.update(a7=sp + 4, pc=_read(machine, sp, 4) & 0xFFFFFF,
+                 sr=_logic_sr(sibling.registers['sr'], _read(machine, 0xFFF0D8, 1), 1))
+    return AtomicPlan(callback.cycles + sibling.cycles + 42,
+                      callback.instructions + sibling.instructions + 3,
+                      tuple(dict((*callback.writes, *sibling.writes)).items()), final,
+                      0x1A91C4, callback.direct_calls + sibling.direct_calls)
+
+
+def begin_contact_family_type15_dispatch(machine, registers, dispatch):
+    """Compose the table dispatcher with the 1AE978 type-15 wrapper."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE15_ENTRY or \
+            dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('type15 sibling dispatch prefix identity')
+    callback = begin_contact_family_type15(dispatch_plan_view(machine, dispatch),
+                                           {**registers, **dispatch.registers})
+    final = dict(dispatch.registers); final.update(callback.registers)
+    return AtomicPlan(dispatch.cycles + callback.cycles,
+                      dispatch.instructions + callback.instructions,
+                      tuple(dict((*dispatch.writes, *callback.writes)).items()), final,
+                      callback.last_pc, dispatch.direct_calls + callback.direct_calls)
+
+
+def begin_contact_family_type44(machine, registers):
+    """1AEF12's no-sound counter clamp and counted replacement tail."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type44 record/stack')
+    _spans_disjoint([('type44 record', record, 66),
+                     ('type44 frame', sp - 4, 8),
+                     ('type44 sound', 0xFFF57D, 1),
+                     ('type44 finish gate', 0xFF7E21, 1),
+                     ('type44 counter', 0xFFEFFA, 2)])
+    read = lambda address, size: _read(machine, address, size)
+    if read(0xFFF57D, 1):
+        raise UnsupportedCandidate('type44 requires command98 sound seam')
+    candidate = (3 - read(0xFF7E21, 1) + read(0xFFEFFA, 1)) & 0xff
+    limit = read(0xFFEFFB, 1)
+    value = candidate if candidate < limit else limit
+    # TST/BEQ, arithmetic, compare, optional clamp move, byte store, BRA.
+    prefix = AtomicPlan(118 if candidate < limit else 132,
+                        9 if candidate < limit else 10,
+                        _bytes(0xFFEFFA, value, 1),
+                        {**registers,
+                         'd0': (registers['d0'] & 0xffffff00) | value,
+                         'sr': _logic_sr(sr, value, 1)},
+                        0x1AEF58)
+    tail = replace_object(dispatch_plan_view(machine, prefix), prefix.registers,
+                          increment_total=True,
+                          extra_spans=(('type44 counter', 0xFFEFFA, 2),))
+    final = dict(prefix.registers); final.update(tail.registers)
+    return AtomicPlan(prefix.cycles + tail.cycles,
+                      prefix.instructions + tail.instructions,
+                      tuple(dict((*prefix.writes, *tail.writes)).items()), final,
+                      tail.last_pc, prefix.direct_calls + tail.direct_calls)
+
+
+def begin_contact_family_type44_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE44_ENTRY,
+                                    begin_contact_family_type44)
 
 
 def begin_contact_sibling_dispatch(machine, registers, dispatch, entry):

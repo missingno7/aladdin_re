@@ -19,6 +19,10 @@ TARGET_KINDS = {
     0x1AFC4E: 0x4F,  # synthetic on current main history
     0x1AF978: 0x6A,  # recorded contact motion transition
     0x1AF9F6: 0x76,  # synthetic on current main history
+    0x1AE978: 0x15,  # recorded type-15 sibling wrapper
+    0x1AEF12: 0x44,  # type-44 counter/replacement callback
+    0x1AEB7C: 0x79,  # type-79 guard return
+    0x1AE796: 0x1F,  # recorded inactive position tail
 }
 
 
@@ -30,7 +34,9 @@ def family_fixture(target, *, kind=None, vertical=0x0800, blocked=0,
                    initial_d0=0xABCD1234, initial_d1=0x13572468,
                    initial_a3=0x0012A3B4, stack=0xFFEC00,
                    scratch_seed=0x5A,
-                   incoming_x=False):
+                   incoming_x=False, active_d8=0, gate_e7=None, gate_f2=0,
+                   contact_bit5=0, direction=0, finish_gate=None,
+                   record_counter=None, decimal_current=None, decimal_limit=None):
     """Park a real ROM collection dispatch at one selected callback."""
     if target not in TARGET_KINDS:
         raise ValueError(f"unknown contact-family target {target:06X}")
@@ -61,7 +67,19 @@ def family_fixture(target, *, kind=None, vertical=0x0800, blocked=0,
         writes += [(RECORD, kind), (RECORD + 6, flags),
                    (RECORD + 0x1C, object_delta & 0xFF),
                    (0xFFF0BE, be), (0xFFF0C0, c0), (0xFFF0E7, blocked),
+                   (0xFFF0D8, active_d8), (0xFFF0E7, blocked if gate_e7 is None else gate_e7),
+                   (0xFFF0F2, gate_f2),
+                   (RECORD + 0x3C, contact_bit5),
+                   (0xFF7E49, direction),
                    (0xFFF0F5, 0x35), (0xFFF57D, sound)]
+        if finish_gate is not None:
+            writes.append((0xFF7E21, finish_gate))
+        if record_counter is not None:
+            writes.append((RECORD + 1, record_counter))
+        if decimal_current is not None:
+            writes.append((0xFFEFFA, decimal_current))
+        if decimal_limit is not None:
+            writes.append((0xFFEFFB, decimal_limit))
         for address, value in ((RECORD + 2, object_x), (RECORD + 4, object_y),
                                (0xFF7E5A, vertical), (0xFF7DFC, previous),
                                (0xFF7DFA, motion),
@@ -83,6 +101,28 @@ def qualify(state, candidate, *, future=150, stop_after_first=False):
         state, entry=COLLECTION_DISPATCH_ENTRY, candidate=candidate,
         expected_return=CONTACT_COMPLETION_EXIT, future_instructions=future,
         include_raw=True, stop_after_first=stop_after_first)
+
+
+def type44_fixture(*, sound, finish_gate, decimal_current, decimal_limit):
+    """Construct a valid byte-backed replacement record over the original ROM."""
+    state = family_fixture(0x1AEF12, flags=0)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=[(0xFFF57D, sound), (0xFF7E21, finish_gate),
+                                      (0xFFEFFA, decimal_current),
+                                      (0xFFEFFB, decimal_limit),
+                                      *oracle.write_long(RECORD + 42, 0),
+                                      *oracle.write_long(RECORD + 62, 0)],
+                              registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
 
 
 @pytest.mark.parametrize('target,values', [
@@ -113,6 +153,314 @@ def test_contact_family_dispatch_matches_original_outer_future_and_fresh(
     if values.get('sound', 0):
         assert actual.stats['legacy_entries'] == 1
         assert actual.stats['legacy_returns'] == 1
+
+
+def test_type79_guard_return_matches_original_outer_future_and_fresh():
+    state = family_fixture(0x1AEB7C, active_d8=1, gate_e7=0)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+def test_type79_sound_guard_return_matches_original_outer_future_and_fresh():
+    state = family_fixture(0x1AEB7C, active_d8=0, gate_f2=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('values', [
+    {'direction': 0, 'player_x': 99, 'object_x': 100, 'active_d8': 0},
+    {'direction': 0, 'player_x': 100, 'object_x': 100, 'active_d8': 1},
+    {'direction': 1, 'player_x': 99, 'object_x': 100, 'active_d8': 1},
+    {'direction': 1, 'player_x': 100, 'object_x': 100, 'active_d8': 0},
+])
+def test_type1f_rts_tails_match_original_outer_future_and_fresh(values):
+    state = family_fixture(0x1AE796, contact_bit5=0, **values)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+def test_type1f_inactive_contact_early_return_matches_original_future_and_fresh():
+    state = family_fixture(0x1AE796, active_d8=0, object_x=100, player_x=99,
+                           contact_bit5=0x20, gate_f2=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+def test_type1f_inactive_contact_sound_matches_original_future_and_fresh():
+    state = family_fixture(0x1AE796, active_d8=0, object_x=100, player_x=99,
+                           contact_bit5=0x20, gate_f2=0, sound=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 1
+    assert actual.stats['legacy_returns'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+def test_type1f_direct_finish_transition_matches_original_future_and_fresh():
+    state = family_fixture(0x1AE796, active_d8=1, object_x=100, player_x=99,
+                           contact_bit5=0, finish_gate=1, record_counter=0)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state); machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=(*oracle.write_long(RECORD + 42, 0),
+                                      *oracle.write_long(RECORD + 62, 0)), registers={})
+        state = machine.snapshot()
+    finally:
+        machine.close()
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('kind', (0x1E, 0x1F, 0x21, 0x22))
+def test_type1f_zero_finish_gate_transition_matches_original_future_and_fresh(kind):
+    state = family_fixture(0x1AE796, kind=kind, active_d8=1,
+                           object_x=100, player_x=99, contact_bit5=0,
+                           finish_gate=0, record_counter=1)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state); machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=(*oracle.write_long(RECORD + 42, 0),
+                                      *oracle.write_long(RECORD + 62, 0)), registers={})
+        state = machine.snapshot()
+    finally:
+        machine.close()
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+def test_type1f_direct_command41_transition_matches_original_future_and_fresh():
+    state = family_fixture(0x1AE796, active_d8=1, object_x=100, player_x=99,
+                           contact_bit5=0, finish_gate=1, record_counter=1, sound=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 1
+    assert actual.stats['legacy_returns'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('kind', (0x1E, 0x1F, 0x21, 0x22))
+def test_type1f_direct_soundoff_transition_matches_original_future_and_fresh(kind):
+    state = family_fixture(0x1AE796, kind=kind, active_d8=1, object_x=100, player_x=99,
+                           contact_bit5=0, finish_gate=1, record_counter=1, sound=0)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 0
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+def test_type1e_direct_command41_transition_matches_original_future_and_fresh():
+    state = family_fixture(0x1AE796, kind=0x1E, active_d8=1,
+                           object_x=100, player_x=99, contact_bit5=0,
+                           finish_gate=1, record_counter=1, sound=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 1
+    assert actual.stats['legacy_returns'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('kind', (0x21, 0x22))
+def test_type1f_sibling_direct_command41_transition_matches_original_future_and_fresh(kind):
+    state = family_fixture(0x1AE796, kind=kind, active_d8=1,
+                           object_x=100, player_x=99, contact_bit5=0,
+                           finish_gate=1, record_counter=1, sound=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 1
+    assert actual.stats['legacy_returns'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('values', ({'contact_bit5': 0x20},))
+def test_type1f_non_rts_arms_decline_to_original(values):
+    state = family_fixture(0x1AE796, **values)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 0
+    assert actual.stats['fallbacks'] >= 1
+
+
+def test_type79_sound_arm_matches_original_outer_future_and_fresh():
+    state = family_fixture(0x1AEB7C, active_d8=0, sound=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 1
+    assert actual.stats['legacy_returns'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('values', ({'active_d8': 0, 'sound': 0}, {'gate_e7': 1}))
+def test_type79_nonreturn_arms_decline_to_original(values):
+    state = family_fixture(0x1AEB7C, **values)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 0
+    assert actual.stats['fallbacks'] >= 1
+
+
+@pytest.mark.parametrize('values', [
+    {'direction': 0, 'player_x': 100, 'object_x': 100},
+    {'direction': 1, 'player_x': 99, 'object_x': 100},
+    {'direction': 0, 'player_x': 99, 'object_x': 100, 'record_counter': 1},
+    {'direction': 1, 'player_x': 100, 'object_x': 100, 'record_counter': 1},
+])
+def test_type15_sibling_wrapper_early_and_decrement_paths_match_original(values):
+    expected = qualify(family_fixture(0x1AE978, active_d8=1, sound=0, **values), None)
+    actual = qualify(family_fixture(0x1AE978, active_d8=1, sound=0, **values),
+                     'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+
+
+def test_type15_sibling_wrapper_contact_route_remains_original():
+    state = family_fixture(0x1AE978, active_d8=0, sound=0)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 0
+    assert actual.stats['fallbacks'] >= 1
+
+
+def test_type15_sibling_wrapper_matches_original_outer_future_and_fresh():
+    state = family_fixture(0x1AE978, active_d8=1, sound=0,
+                           player_x=99, object_x=100, record_counter=2)
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150, include_raw=True)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle',
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   future_instructions=150, include_raw=True)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type15_sibling_wrapper_mutants_diverge_at_outer_boundary(mutant):
+    state = family_fixture(0x1AE978, active_d8=1, sound=0,
+                           player_x=99, object_x=100, record_counter=2)
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle-mutant-' + mutant,
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
+
+
+@pytest.mark.parametrize('finish_gate,current,limit', [
+    (0, 1, 9), (2, 7, 9), (0, 8, 9), (3, 0, 0),
+])
+def test_type44_counter_clamp_and_counted_replace_match_original(
+        finish_gate, current, limit):
+    values = {'sound': 0, 'finish_gate': finish_gate,
+              'decimal_current': current, 'decimal_limit': limit}
+    state = type44_fixture(**values)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+
+
+def test_type44_sound_arm_remains_original():
+    state = type44_fixture(sound=1, finish_gate=0, decimal_current=1,
+                           decimal_limit=9)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 0
+    assert actual.stats['fallbacks'] >= 1
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type44_counter_replace_mutants_diverge_at_outer_boundary(mutant):
+    state = type44_fixture(sound=0, finish_gate=0, decimal_current=1,
+                           decimal_limit=9)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle-mutant-' + mutant, stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
+
+
 
 
 @pytest.mark.parametrize('target,values', [

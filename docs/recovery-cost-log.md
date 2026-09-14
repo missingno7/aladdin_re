@@ -470,3 +470,41 @@ and independently checking staged state composition. No new machine concept was
 needed. Remaining recorded collection paths really execute sound callee 1E58B8;
 they require parent composition across the existing synchronous seam, not another
 RAM-only callback adapter.
+
+
+## Contact integration blocker review
+
+Reviewed the actual uncommitted parent sound and type-79/type-1F/type-15/type-44
+batch rather than assuming the earlier worker summary described current main.
+The existing synchronous SoundSeam supports the parent collection/sibling
+prefix, original sound, live-state suffix and final caller RTS. Unsupported
+later calls remain local fallbacks. No continuation persistence, native API,
+scheduler rule or second state authority was introduced.
+
+Concrete review fixes:
+- Bound resumed D4 to the 24-slot scan and require its matching live A1 cursor;
+  reject foreign cursor state before any planned writes.
+- Execute wrong A1/D4/return/timing mutations against full original outer state.
+- Remove ignored snapshot dependencies from new family qualification tests;
+  retain captured examples as historical artifacts, with self-contained
+  original-ROM cases serving as executable tests.
+- Restore blocked-contact fixture coverage accidentally overwritten by a new
+  gate parameter.
+- Select already-qualified family RAM planners inside the owned parent scan;
+  previous direct dispatcher tests did not prove parent ownership.
+
+The last item adds one finite type-1F RAM route selector using existing planners,
+not a new seam or effect model. Four parent-level tests require direct ownership
+and zero child dispatch/fallback. Game semantics and existing exact recipes are
+reused unchanged. This is integration and evidence repair, not qualification of
+all sound/device arms or proof of a fully detached subsystem.
+
+Final validation: 1,533 tests pass in 126.14 s. Full 26,378-frame cold history
+passes with zero restores and matching current source receipts. Compared with
+the incoming batch: parent hits 18,364 -> 18,411; dispatcher hits 202 -> 155;
+gates 29,499 -> 29,452; fallbacks 5,303 -> 5,256. Legacy entries/returns
+206/187 and local fallbacks 49 stay unchanged. Replaced instructions rise
+4,135,632 -> 4,145,755. Evidence: artifacts/blocker-review-qualified/.
+The interrupted earlier-source comparison was rejected on implementation
+identity, not counted as a behavioral pass. Existing strict family adapters
+remain available for original callers while more recorded parent work owns them.

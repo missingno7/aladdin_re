@@ -1,10 +1,130 @@
-# Status Ă˘â‚¬â€ť 14 September 2026
+# Status - 14 September 2026
 
 The project now has an immutable cold-start input-history model for player
 sessions and verification.  It replaces the current play/replay/snapshot
 workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
+
+## Contact integration reviewed and qualified
+
+The reviewed batch combines parent sound composition and the adjacent
+type-79, type-1F, type-15 and type-44 callback domains described below. These
+are bounded supported paths, not complete recovery of those game routines.
+The latest pre-review cold receipt in `artifacts/history-verify-current/`
+matched source and passed with zero restores; the older per-milestone receipts
+are historical and must not be treated as current cold-run evidence.
+
+Review fixes validate the post-sound scan cursor (24-slot bound and matching
+A1/D4 position), execute wrong cursor/return/timing controls, remove ignored
+snapshot dependencies from family tests, and restore the blocked-contact
+fixture parameter that a second gate setting had overwritten. The four new
+family RAM adapters are now selected by the owned scan as well as the standalone
+dispatcher; sound/device branches without a parent contract remain local
+fallbacks.
+
+**1,533 tests pass in 126.14 s.** The final **26,378-frame cold comparison
+passes** with zero restores, exact state/video/PCM equality and current source
+receipts: `artifacts/blocker-review-qualified/comparison.json`.
+Against the incoming worktree's cold receipt, parent admissions rise
+18,364 -> 18,411; dispatcher hits fall 202 -> 155; gates fall 29,499 ->
+29,452; fallbacks fall 5,303 -> 5,256. Legacy entries/returns remain 206/187
+and local fallbacks remain 49. The review added no native API, continuation
+persistence, snapshot format or mutable state authority.
+
+The earlier `blocker-review-full` attempt was rejected because implementation
+changed while it ran; it is not qualification evidence. Remaining unsupported
+sound/device paths are explicit recovery frontiers, not a claim of complete
+routine/subsystem ownership.
+
+## Type-79 collection guard return
+
+The collection dispatcher now admits `1AEB7C` on either measured guard return:
+`FFF0E7 == 0` and `FFF0D8 != 0` (five instructions / 70 cycles), or the
+following `FFF0F2 != 0` tail (seven instructions / 94 cycles).  Neither path
+writes RAM; each returns to `1ABCA0` with its final `TST.B` CCR result.  All
+transition and helper arms remain explicit original fallbacks.
+
+Its separately measured inactive sound arm is now also admitted when
+`FFF0E7`, `FFF0D8`, and `FFF0F2` are all zero and the existing contact reset
+seam is applicable.  The `1AEB7C` wrapper costs 118 cycles / 8 instructions
+before that seam; its command-31 return then proves the local BSR/RTS chain
+back to `1ABCA0`.  Strict state, PCM, timing, 150-instruction continuation,
+and fresh-process restore all match the original fixture.
+
+## Type-1F inactive callback tail
+
+The collection dispatcher admits `1AE796`'s bit-5-clear RTS tails: both
+direction-aware position failures and position-admitted inactive (`FFF0D8 ==
+0`) paths.  Their measured costs are 104–142 cycles / 8–11 instructions.
+Each copies `FF7E02` into `D7.W`, preserves the compare residue where `BTST`
+only changes Z, and returns to `1ABCA0`.  Nested-contact, retirement, and
+device-helper arms remain original execution.
+
+The recorded inactive bit-5 contact arm is also composed through its measured
+`1AE4F8` BSR (138 cycles / 10 instructions): finite early-contact returns
+close directly, while reset cases use the existing command-31 seam and prove
+the local return before the callback RTS.  Strict outer state, PCM, timing,
+continuation, and fresh-process restore match the original fixtures.
+
+## Type-15 sibling callback wrapper
+
+Table callback `1AE978` now composes its `1AEC00` sibling call and the shared
+`FFF0D8`/RTS tail. Its BSR stack word is the callback-specific `1AE97C`, not
+the neighboring wrapper's return. Directional early and counter-decrement
+paths are qualified against the original; the nested contact path remains
+explicitly original-owned.
+
+## Type-44 counter replacement
+
+The sound-disabled `1AEF12` arm now owns its byte counter clamp and composes
+the existing counted-replacement boundary. Clamp and non-clamp cases match the
+original. Its command-98 sound arm remains original-owned pending a dedicated
+local-resume proof.
+
+
+One direct Type-1F transition is now composed as well: the active,
+direction-zero, bit-5-clear `0x1F` record with a zero per-record counter takes
+the 336-cycle / 25-instruction script/state prefix to the existing `1AE954`
+retirement boundary.  Command-41 counter-nonzero transitions and the other
+type-specific/direct-helper cases remain original execution.
+
+The recorded counter-nonzero `0x1E`/`0x1F` variants now cross their measured
+command-41 seam: native sound/flush returns at `1AE920`, then the existing
+priority selector is composed with the 108-cycle publication/RTS suffix. Both
+type-specific prefixes have strict outer-state, audio, continuation, and
+fresh-process qualification.
+
+The matching sound-disabled direct selector route is qualified for all four
+admitted type prefixes (`0x1E`, `0x1F`, `0x21`, and `0x22`); it remains an
+atomic selector/publication/RTS composition with no sound seam.
+
+For `FF7E21 == 0`, the same four direct type prefixes bypass counter and sound
+handling and compose into the existing `1AE954` finish-object boundary.  All
+four have strict outer-state and future qualification; complete canonical
+history verification remains exact.
+
+The captured dispatcher state matches strict outer state and 150 native future
+instructions.  The focused contact suite has **96 passing tests** and the full
+**26,378-frame** checkpoint-assisted history comparison passes with exact state, video, PCM,
+timing, and continuation equality.  Evidence:
+`artifacts/contact-type79-current/`.
+
+## Contact tick composes sibling command-8 sound
+
+The `1ABB40` parent can now cross a selected `1AE9C6`/`1AE9DA` sibling
+decrement through the existing command-8 sound seam, then resume the shared
+completion, the remaining scan, and the caller's real RTS.  This is a bounded
+composition: unsupported callback targets and later sound calls still return
+to original execution locally.
+
+Two synthetic ROM-table cases (`0x05` and `0x06`) qualify strict outer state,
+150 native continuation instructions, and fresh-process restore.  The focused
+parent suite has **43 passing tests**.  The full **26,378-frame** cold-history
+comparison passes with exact state, video, PCM, timing, and continuation
+equality.  The 20 recorded `contact sibling decrement requires command8 seam`
+fallbacks are gone; parent admissions rise **18,338 -> 18,364**.  Evidence:
+`artifacts/contact-step-sibling-sound-current/`.
 
 ## Sibling wrappers compose inside the contact tick
 
