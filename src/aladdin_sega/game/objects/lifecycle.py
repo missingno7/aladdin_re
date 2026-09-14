@@ -257,6 +257,23 @@ def finish_type_6c_spawn(record):
               for offset, byte in enumerate(bytes.fromhex('00124034')))]
 
 
+def finish_guarded_lower_four_spawn(record):
+    """Apply callback 1B712C's successful object script pointer."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('001242ca'))]
+
+
+def finish_guarded_lower_five_spawn(record):
+    """Apply callback 1B70F8's successful object script pointer."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('001242b0'))]
+
+
+def finish_type_1b_flag_spawn(record):
+    """Apply callback 1B6654's object type and record+9 flag byte."""
+    return [(record, 0x1B), (record + 9, 0xFF)]
+
+
 def finish_reverse_script_spawn(record):
     """Apply callback 1B6696's successful object script pointer (no retype)."""
     return [(record + 0x20 + offset, byte)
