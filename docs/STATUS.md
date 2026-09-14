@@ -23,9 +23,9 @@ family RAM adapters are now selected by the owned scan as well as the standalone
 dispatcher; sound/device branches without a parent contract remain local
 fallbacks.
 
-**1,537 tests pass in 133.12 s.** The final **26,378-frame cold comparison
+**1,538 tests pass in 128.08 s.** The final **26,378-frame cold comparison
 passes** with zero restores, exact state/video/PCM equality and current source
-receipts: `artifacts/type03-dispatch-isolated/comparison.json`.
+receipts: `artifacts/type46-dispatch-full/comparison.json`.
 Against the incoming worktree's cold receipt, parent admissions rise
 18,364 -> 18,411; dispatcher hits fall 202 -> 155; gates fall 29,499 ->
 29,452; fallbacks fall 5,303 -> 5,256. Legacy entries/returns remain 206/187
@@ -53,6 +53,13 @@ continuation/timing negative controls.  The captured current-main Type-03
 state separately reaches the same `1ABD74` observable boundary exactly.
 The full 26,378-frame cold comparison remains strict-PASS with zero restores;
 the candidate reports 26 sibling hits and explicit D8-mutation fallbacks only.
+
+## Type-46 command-66 replacement
+
+Recorded callback `1AEF5C` now composes its sound-on counter path through the
+existing native seam and counted replacement.  The saved D0 word and the live
+incremented D0 byte are both preserved; capped and sound-off arms remain
+original-owned.  Strict outer/future/fresh tests and the cold history pass.
 
 ## Type-79 collection guard return
 

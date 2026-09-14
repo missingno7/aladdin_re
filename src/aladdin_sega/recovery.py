@@ -27,6 +27,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         CONTACT_FAMILY_TYPE44_ENTRY, begin_contact_family_type44_dispatch,
                         CONTACT_FAMILY_TYPE03_ENTRY, begin_contact_family_type03_sound_seam,
                         begin_contact_family_type03_dispatch_sound_seam,
+                        CONTACT_FAMILY_TYPE46_ENTRY, begin_contact_family_type46_dispatch_sound_seam,
                         begin_contact_family_type1f_contact_dispatch,
                         begin_contact_family_type1f_contact_dispatch_sound,
                         finish_contact_family_type1f_contact_sound,
@@ -432,6 +433,19 @@ class Candidate:
             return self._run_sound_seam(
                 machine, target, seam, suffix_transform=self._mutate,
                 on_complete=self._complete_sibling_sound(seam, dispatched=True),
+            )
+        if entry == CONTACT_FAMILY_TYPE46_ENTRY:
+            try:
+                seam = begin_contact_family_type46_dispatch_sound_seam(
+                    machine, dispatch_registers, prefix)
+                if not self._apply(machine, self._mutate(seam.prefix), target):
+                    return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+            return self._run_sound_seam(
+                machine, target, seam, suffix_transform=self._mutate,
+                on_complete=lambda: self.stats.__setitem__(
+                    'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
             )
         if entry in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
             try:

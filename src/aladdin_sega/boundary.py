@@ -48,6 +48,7 @@ CONTACT_FAMILY_TYPE1F_ENTRY = 0x1AE796
 CONTACT_FAMILY_TYPE15_ENTRY = 0x1AE978
 CONTACT_FAMILY_TYPE44_ENTRY = 0x1AEF12
 CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
+CONTACT_FAMILY_TYPE46_ENTRY = 0x1AEF5C
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
@@ -1562,6 +1563,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE15_ENTRY,
                       CONTACT_FAMILY_TYPE44_ENTRY,
                       CONTACT_FAMILY_TYPE03_ENTRY,
+                      CONTACT_FAMILY_TYPE46_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
@@ -3543,6 +3545,75 @@ def begin_contact_family_type03_dispatch_sound_seam(machine, registers, dispatch
     return SoundSeam(combined, sound.stack_basis, sound.resume_pc, sound.return_slot,
                      sound.saved_frame, sound.frame_size, sound.return_delta,
                      sound.counts_contact, sound.suffix)
+
+
+def begin_contact_family_type46_sound_seam(machine, registers):
+    """1AEF5C's bounded command-66 prefix and counted-replacement seam."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type46 record/stack')
+    _spans_disjoint([('type46 record', record, 66),
+                     ('type46 sound frame', sp - 34, 38),
+                     ('type46 counter', 0xFF7E3C, 1),
+                     ('type46 sound', 0xFFF57D, 1),
+                     ('type46 total', 0xFFF14E, 2)])
+    read = lambda address, size: _read(machine, address, size)
+    old = read(0xFF7E3C, 1)
+    if old == 0x39:
+        raise UnsupportedCandidate('type46 capped return arm is not recovered')
+    value = min(old + 1, 0x39)
+    sound = read(0xFFF57D, 1)
+    if not sound:
+        raise UnsupportedCandidate('type46 sound-off replacement arm is not recovered')
+    writes = (*_bytes(sp - 4, 0x1AEF6C, 4), *_bytes(sp - 6, registers['d0'], 2),
+              *_bytes(sp - 10, registers['a6'], 4), *_bytes(sp - 14, registers['a1'], 4),
+              *_bytes(sp - 18, registers['a0'], 4), *_bytes(sp - 22, registers['d1'], 4),
+              *_bytes(sp - 26, (registers['d0'] & 0xFFFFFF00) | value, 4), *_bytes(sp - 30, 0x66, 4),
+              *_bytes(sp - 34, 0x1AEFA0, 4), *_bytes(0xFF7E3C, value, 1))
+    prefix = AtomicPlan(220 if old < 0x38 else 238, 14 if old < 0x38 else 15, writes,
+                        {**registers, 'd0': (registers['d0'] & 0xFFFFFF00) | value,
+                         'a7': sp - 34, 'pc': 0x1E58B8,
+                         'sr': _logic_sr(sr, sound, 1)}, 0x1AEF9A, direct_calls=2)
+    return SoundSeam(prefix, sp - 6, 0x1AEFA6, 0x1AEFA6, 24, 28, 28,
+                     suffix=finish_contact_family_type46_sound)
+
+
+def begin_contact_family_type46_dispatch_sound_seam(machine, registers, dispatch):
+    """Compose the table prefix with Type 46's exact command-66 seam."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE46_ENTRY or \
+            dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('type46 dispatch prefix identity')
+    callback_registers = {**registers, **dispatch.registers}
+    sound = begin_contact_family_type46_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                    callback_registers)
+    final = dict(dispatch.registers)
+    final.update(sound.prefix.registers)
+    prefix = AtomicPlan(dispatch.cycles + sound.prefix.cycles,
+                        dispatch.instructions + sound.prefix.instructions,
+                        tuple(dict((*dispatch.writes, *sound.prefix.writes)).items()),
+                        final, sound.prefix.last_pc,
+                        dispatch.direct_calls + sound.prefix.direct_calls)
+    return SoundSeam(prefix, sound.stack_basis, sound.resume_pc, sound.return_slot,
+                     sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, sound.suffix)
+
+
+def finish_contact_family_type46_sound(machine, registers):
+    """Restore Type 46's local word/frame and join 1AF4C2 replacement."""
+    sp = registers['a7'] + 24
+    restored = dict(registers)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        restored[name] = _read(machine, sp - index * 4, 4)
+    restored['d0'] = (restored['d0'] & 0xFFFF0000) | _read(machine, sp, 2)
+    restored.update(a7=sp + 6, pc=_read(machine, sp + 2, 4) & 0xFFFFFF)
+    if restored['pc'] != 0x1AEF6C:
+        raise UnsupportedCandidate('type46 local BSR return identity')
+    tail = replace_object(machine, restored, increment_total=True,
+                          extra_spans=(('type46 counter', 0xFF7E3C, 1),))
+    final = dict(restored); final.update(tail.registers)
+    return AtomicPlan(94 + tail.cycles, 5 + tail.instructions, tail.writes, final,
+                      tail.last_pc, tail.direct_calls)
 
 
 def begin_contact_family_type44(machine, registers):

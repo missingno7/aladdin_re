@@ -16,6 +16,7 @@ RECORD = 0xFF6000
 SAFE_RETURN = 0x1B65BE
 TARGET_KINDS = {
     0x1AED86: 0x03,  # recorded D8-zero contact sound wrapper
+    0x1AEF5C: 0x46,  # recorded command-66 counted replacement
     0x1AFBF4: 0x65,  # recorded type-66 transition
     0x1AFC4E: 0x4F,  # synthetic on current main history
     0x1AF978: 0x6A,  # recorded contact motion transition
@@ -37,7 +38,8 @@ def family_fixture(target, *, kind=None, vertical=0x0800, blocked=0,
                    scratch_seed=0x5A,
                    incoming_x=False, active_d8=0, gate_e7=None, gate_f2=0,
                    contact_bit5=0, direction=0, finish_gate=None,
-                   record_counter=None, decimal_current=None, decimal_limit=None):
+                   record_counter=None, decimal_current=None, decimal_limit=None,
+                   type46_counter=None):
     """Park a real ROM collection dispatch at one selected callback."""
     if target not in TARGET_KINDS:
         raise ValueError(f"unknown contact-family target {target:06X}")
@@ -81,6 +83,8 @@ def family_fixture(target, *, kind=None, vertical=0x0800, blocked=0,
             writes.append((0xFFEFFA, decimal_current))
         if decimal_limit is not None:
             writes.append((0xFFEFFB, decimal_limit))
+        if type46_counter is not None:
+            writes.append((0xFF7E3C, type46_counter))
         for address, value in ((RECORD + 2, object_x), (RECORD + 4, object_y),
                                (0xFF7E5A, vertical), (0xFF7DFC, previous),
                                (0xFF7DFA, motion),
@@ -119,6 +123,25 @@ def type44_fixture(*, sound, finish_gate, decimal_current, decimal_limit):
                                       (0xFFEFFA, decimal_current),
                                       (0xFFEFFB, decimal_limit),
                                       *oracle.write_long(RECORD + 42, 0),
+                                      *oracle.write_long(RECORD + 62, 0)],
+                              registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
+def type46_fixture():
+    """Construct a valid command-66 replacement record over the original ROM."""
+    state = family_fixture(0x1AEF5C, sound=1, type46_counter=0x35)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=[*oracle.write_long(RECORD + 42, 0),
                                       *oracle.write_long(RECORD + 62, 0)],
                               registers=machine.registers())
         return machine.snapshot()
@@ -405,6 +428,23 @@ def test_type03_d8_zero_contact_sound_matches_original_outer_future_and_fresh():
     assert actual.future == expected.future
     assert actual.stats['collection_dispatch_hits'] == 1
     assert actual.stats['contact_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+def test_type46_command66_counted_replacement_matches_original_outer_future_and_fresh():
+    state = type46_fixture()
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150, include_raw=True)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle',
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   future_instructions=150, include_raw=True)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
     assert actual.stats['fallbacks'] == 0
     assert oracle.fresh_process_future(actual.outer_state) == actual.future
 
