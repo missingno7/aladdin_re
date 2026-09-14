@@ -148,6 +148,9 @@ SPAWN_CLOSURE_REVERSE_SCRIPT_B_ENTRY = 0x1B6F34
 SPAWN_CLOSURE_UPPER_TYPE22_ENTRY = 0x1B6EEE
 SPAWN_CLOSURE_REVERSE_SCRIPT_C_ENTRY = 0x1B6F60
 SPAWN_CLOSURE_LOWER_TYPE47_ENTRY = 0x1B7018
+SPAWN_CLOSURE_UPPER_TYPE4B_ENTRY = 0x1B70B0
+SPAWN_CLOSURE_UPPER_TYPE49_ENTRY = 0x1B7060
+SPAWN_CLOSURE_UPPER_TYPE48_ENTRY = 0x1B703C
 SPAWN_REVERSE_GUARD_TYPE_OFFSET_ENTRY = 0x1B6836
 SPAWN_REVERSE_GUARD_TYPE_OFFSET_LAST_PC = 0x1B6862
 SPAWN_REVERSE_GUARD_TYPE_OFFSET_TEMPLATE = 0x1B7D78
@@ -158,6 +161,10 @@ SPAWN_CLOSURE_GUARD_FIVE_LAST_PC = 0x1B712A
 SPAWN_LOWER_TYPE_FLAG_OFFSET_ENTRY = 0x1B6654
 SPAWN_LOWER_TYPE_FLAG_OFFSET_LAST_PC = 0x1B6670
 SPAWN_LOWER_TYPE_FLAG_OFFSET_TEMPLATE = 0x1B7FF8
+SPAWN_LOWER_TYPE_XY_OFFSET_ENTRY = 0x1B6636
+SPAWN_LOWER_TYPE_XY_OFFSET_LAST_PC = 0x1B6652
+SPAWN_UPPER_GUARD_TYPE4A_ENTRY = 0x1B7084
+SPAWN_UPPER_GUARD_TYPE4A_LAST_PC = 0x1B70AE
 SPAWN_CLOSURE_SAFE_RETURN_ENTRY = 0x1B65BE
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
@@ -677,6 +684,15 @@ SPAWN_CLOSURE_CALLER_FACTS = {
     SPAWN_CLOSURE_LOWER_TYPE47_ENTRY: (SPAWN_REGION_LOWER_ENTRY, 0x1B79B8,
         bytes.fromhex('4df9001b79b86100e23e66161abc00472b7c00123e36002042ad000a1b7c000100294e75'),
         game.finish_type_47_spawn, 100, 6, 0x1B703A, (1, 1)),
+    SPAWN_CLOSURE_UPPER_TYPE4B_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B79B8,
+        bytes.fromhex('4df9001b79b86100e1ae66161abc004b2b7c00123e36002042ad000a1b7c000100294e75'),
+        game.finish_type_4b_spawn, 100, 6, 0x1B70D2, (1, 1)),
+    SPAWN_CLOSURE_UPPER_TYPE49_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B79B8,
+        bytes.fromhex('4df9001b79b86100e1fe66161abc00492b7c00123e36002042ad000a1b7c000100294e75'),
+        game.finish_type_49_spawn, 100, 6, 0x1B7082, (1, 1)),
+    SPAWN_CLOSURE_UPPER_TYPE48_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B79B8,
+        bytes.fromhex('4df9001b79b86100e22266161abc00482b7c00123e36002042ad000a1b7c000100294e75'),
+        game.finish_type_48_spawn, 100, 6, 0x1B705E, (1, 1)),
 }
 
 
@@ -1164,6 +1180,91 @@ def spawn_lower_type_flag_offset_caller(machine, registers: dict[str, int]) -> A
                       prefix.instructions + selected.instructions + 5,
                       tuple(dict((*writes, *suffix)).items()), final,
                       SPAWN_LOWER_TYPE_FLAG_OFFSET_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls + 1)
+
+
+def spawn_lower_type_xy_offset_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6636``'s lower-pool creation, type write and XY offset.
+
+    Lower-pool allocation (template ``0x1B7FF8``, the same template as
+    ``1B6654``) then, on success, an object type write plus a +0x10 offset
+    on *both* X and Y -- no flag byte, no script pointer.
+    """
+    entry, sp = SPAWN_LOWER_TYPE_XY_OFFSET_ENTRY, registers['a7']
+    shape = bytes.fromhex('4df9001b7ff86100ec2066101abc001a066d00100002066d00100004' '4e75')
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('lower type/XY-offset spawn caller ROM shape')
+    _spans_disjoint([('lower type/XY-offset spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('lower type/XY-offset spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': SPAWN_LOWER_TYPE_FLAG_OFFSET_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_LOWER_ENTRY}, entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_LOWER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    if not (final['sr'] & 4):
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_LOWER_TYPE_XY_OFFSET_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    view = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    y = _read(view, final['a5'] + 4, 2)
+    suffix = (*game.finish_type_1a_offset_spawn(final['a5']),
+              *game.offset_spawn_position(lambda address, size: _read(view, address, size),
+                                          final['a5'], 0x10, 0x10))
+    final['sr'] = _add_sr(selected.registers['sr'], y, 0x10, 2)
+    return AtomicPlan(prefix.cycles + selected.cycles + 76,
+                      prefix.instructions + selected.instructions + 5,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_LOWER_TYPE_XY_OFFSET_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls + 1)
+
+
+def spawn_upper_guard_type4a_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B7084``'s FFF179 guard and its upper-pool type/script suffix.
+
+    The same guard-then-spawn shape as ``spawn_reverse_guard_type_offset_caller``
+    (``1B6836``), but the tail is the closure-table's own type/script/clear/
+    mode shape (like ``finish_type_4c_spawn``'s family) instead of an XY
+    offset.
+    """
+    entry, sp = SPAWN_UPPER_GUARD_TYPE4A_ENTRY, registers['a7']
+    shape = bytes.fromhex(
+        '4a3900fff17967224df9001b79b86100e1d266161abc004a'
+        '2b7c00123e36002042ad000a1b7c000100294e75')
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('upper guarded type4a spawn caller ROM shape')
+    outer, guard = _read(machine, sp, 4), _read(machine, 0xFFF179, 1)
+    tested_sr = _logic_sr(registers['sr'], guard, 1)
+    if guard == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4, 'pc': outer & 0xFFFFFF,
+                          'sr': tested_sr}, SPAWN_UPPER_GUARD_TYPE4A_LAST_PC)
+    _spans_disjoint([('upper guarded type4a spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('upper guarded type4a spawn caller frame', sp - 8, 12),
+                     ('upper guarded type4a spawn caller flag', 0xFFF179, 1),
+                     *SPAWN_REGION_GLOBALS])
+    prefix = AtomicPlan(54, 4, _bytes(sp - 4, entry + 18, 4),
+                        {**registers, 'a6': 0x1B79B8, 'a7': sp - 4, 'pc': SPAWN_REGION_UPPER_ENTRY,
+                         'sr': tested_sr}, entry + 14, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes, final = tuple(dict((*prefix.writes, *selected.writes)).items()), dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    if not (final['sr'] & 4):
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_GUARD_TYPE4A_LAST_PC, prefix.direct_calls + selected.direct_calls)
+    suffix = tuple(game.finish_type_4a_spawn(final['a5']))
+    final['sr'] = _logic_sr(final['sr'], 1, 1)
+    return AtomicPlan(prefix.cycles + selected.cycles + 100,
+                      prefix.instructions + selected.instructions + 6,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_UPPER_GUARD_TYPE4A_LAST_PC,
                       prefix.direct_calls + selected.direct_calls + 1)
 
 
@@ -1799,6 +1900,8 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_CLOSURE_GUARD_FOUR_ENTRY: spawn_closure_guard_four_caller,
         SPAWN_CLOSURE_GUARD_FIVE_ENTRY: spawn_closure_guard_five_caller,
         SPAWN_LOWER_TYPE_FLAG_OFFSET_ENTRY: spawn_lower_type_flag_offset_caller,
+        SPAWN_LOWER_TYPE_XY_OFFSET_ENTRY: spawn_lower_type_xy_offset_caller,
+        SPAWN_UPPER_GUARD_TYPE4A_ENTRY: spawn_upper_guard_type4a_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \

@@ -274,6 +274,39 @@ def finish_type_1b_flag_spawn(record):
     return [(record, 0x1B), (record + 9, 0xFF)]
 
 
+def finish_type_4b_spawn(record):
+    """Apply callback 1B70B0's object type, script, cleared field, and mode."""
+    return [(record, 0x4B), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00123e36'))),
+            *((record + 0x0A + offset, 0) for offset in range(4)), (record + 0x29, 1)]
+
+
+def finish_type_49_spawn(record):
+    """Apply callback 1B7060's object type, script, cleared field, and mode."""
+    return [(record, 0x49), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00123e36'))),
+            *((record + 0x0A + offset, 0) for offset in range(4)), (record + 0x29, 1)]
+
+
+def finish_type_48_spawn(record):
+    """Apply callback 1B703C's object type, script, cleared field, and mode."""
+    return [(record, 0x48), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00123e36'))),
+            *((record + 0x0A + offset, 0) for offset in range(4)), (record + 0x29, 1)]
+
+
+def finish_type_4a_spawn(record):
+    """Apply callback 1B7084's object type, script, cleared field, and mode."""
+    return [(record, 0x4A), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00123e36'))),
+            *((record + 0x0A + offset, 0) for offset in range(4)), (record + 0x29, 1)]
+
+
+def finish_type_1a_offset_spawn(record):
+    """Apply callback 1B6636's object type (no flag byte, no script)."""
+    return [(record, 0x1A)]
+
+
 def finish_reverse_script_spawn(record):
     """Apply callback 1B6696's successful object script pointer (no retype)."""
     return [(record + 0x20 + offset, byte)
