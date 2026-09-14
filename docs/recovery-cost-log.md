@@ -334,3 +334,39 @@ CCR effects. Its duplicate local original/candidate runners and selected-key
 assertions became unnecessary. The collision prototype is undergoing the same
 migration. Semantic branch interpretation, domain/alias proofs and exact plan
 recipes remain manual; the comparison contract is no longer redefined per script.
+
+
+## Shared completion swallowed by callback ownership
+
+Durable source now includes landing script selection, position calculation and
+paired position publication. Existing callback plans can append the common
+1ABCA0..1ABD74 suffix using the same planned RAM and live register overlay.
+The 1A8E0C BSR becomes a direct semantic call. Unsupported aggregate domains or
+scheduling deadlines retain the shorter callback plan and native suffix.
+New gates, snapshot states, native APIs and execution protocols:zero.
+This batch adds36semantic,82boundary and19policy lines (plus exports), mostly
+exact branch accounting/alias checks. The repeated support remains handwritten.
+
+Parent review still did real work: the initial integration lost unchanged registers
+from partial callback plans, omitted output/return alias exclusion, and missed
+combined BE/C0/E7 and low-kind branch costs. These reused known mechanisms;
+they were not new architecture. A purported type7B routing blocker was an old
+patched-ROM fixture missing the newly owned suffix. Copying the real suffix/helper
+bytes fixed the test; no production route exception was introduced.
+
+The shared full-state qualifier caught prototype accounting errors and now rejects
+state-only final-PC mutants. Production tests moved outward to1ABD74, while direct
+adapter tests remain strict at1ABCA0. 1,407tests/104.99s and full26,378-frame cold
+PASS with zero restores/current source hashes.604completion admissions swallow
+12native position-helper calls. Gates/candidate activations/fallbacks stay unchanged;
+replaced instructions+2,126, direct-call accounting+12. Fast witness median0.279s.
+
+Upward work has actual parent evidence:49original entry states,1,176original
+iteration observations and12strict recorded prefix classes. The whole24-slot
+prototype now qualifies10recorded passes (8contact-bearing) plus a constructed
+2callback pass. Initial contact-bearing divergences were caused by lost staged
+writes and stale reads, not legitimate domain refusals; root rejected their
+classification as declines. Correct staged composition fixed them without a new
+mechanism. Unsupported device/sound callbacks remain explicit. More independent
+completion discipline is still needed from workers; medium effort alone has not
+eliminated root review and resumption cost.

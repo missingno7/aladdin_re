@@ -1,10 +1,48 @@
-# Status â€” 14 September 2026
+# Status Ă˘â‚¬â€ť 14 September 2026
 
 The project now has an immutable cold-start input-history model for player
 sessions and verification.  It replaces the current play/replay/snapshot
 workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
+
+## Callback ownership now includes shared contact completion
+
+Lifecycle callback plans returning to `1ABCA0` can now own the common contact
+completion through `1ABD74`. Landing script selection, position calculation and
+publication are semantic functions in `game/objects/contact.py`; the boundary
+preserves exact guards, CCR, stack residue and timing. The `1A8E0C` position
+helper becomes a direct Python call inside accepted landing paths. No new gate,
+native API, snapshot state or legacy seam was added. If the aggregate cannot be
+admitted, the existing shorter callback plan remains available and original
+execution continues from its old boundary.
+
+**1,407 tests pass in 104.99 s**. The full **26,378-frame** cold comparison passes
+with zero restores and matching production hashes. Completion is absorbed on
+604 activations, including 12 position-publication calls. Gate hits remain 7,609,
+candidate activations 6,246, dispatcher admissions 595 and fallbacks 1,382.
+Direct-call accounting rises 52,520 to 52,532 and replaced instructions rise
+462,239 to 464,365. This is more ownership behind the same entry boundaries,
+not a reduction in measured total gate hits. Fresh-interpreter outer-plus-150
+witness median: 0.279 s (five runs; no rebuild).
+
+Production witnesses now observe `1ABD74`; direct callback adapter witnesses
+retain `1ABCA0`. The shared qualifier enforces complete serialized state, 150
+native continuation instructions and fresh-process restore. New completion tests
+cover all selectors, combined guards, register/stack variation, output/return
+aliases, deadline fallback and result/return/timing/final-PC mutants. Root also
+qualified 64 selector/guard combinations against the production plan.
+Evidence: `artifacts/contact-completion-full/{comparison,latency}.json`,
+`tests/test_contact_completion.py`, and the production completion matrix under
+`artifacts/contact-parent-frontier/`.
+
+Whole-scan recovery remains a prototype. Forty-nine genuine scan-entry states
+were captured across 28 configurations with exact original terminal equality.
+Ten full 24-slot passes qualify, including eight contact-bearing passes through
+four known callback families; a constructed two-callback pass also qualifies.
+Thirty-nine captured cases require unsupported/device/sound paths. These are
+explicit remaining dependencies, not evidence of a complete CPU-free scan.
+See `artifacts/contact-parent-frontier/{scan-qualified,recorded-collision-qualified}.json`.
 
 ## Contact scan frontier and type-7E readiness exits
 
@@ -305,7 +343,7 @@ execution concept** was introduced. The three callback/allocator boundaries are
 internal on admitted parent paths; independent adapters remain for original callers.
 This is another bounded composition step, not evidence of a CPU-free subsystem.
 
-The full current user history (`4b153763â€¦`, 26,378 frames) passes original versus
+The full current user history (`4b153763Ă˘â‚¬Â¦`, 26,378 frames) passes original versus
 lifecycle with zero restores and strict equality at every canonical frame. The
 new original observations also exactly match the prior optimization baseline.
 

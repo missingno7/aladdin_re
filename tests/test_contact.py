@@ -1,5 +1,5 @@
 from aladdin_sega.game.objects.contact import contact_decay, contact_path, contact_reaction, contact_reset
-from aladdin_sega.boundary import CONTACT_ENTRY, COLLECTION_DISPATCH_ENTRY, COLLECTION_DISPATCH_RETURN
+from aladdin_sega.boundary import CONTACT_ENTRY, COLLECTION_DISPATCH_ENTRY, COLLECTION_DISPATCH_RETURN, CONTACT_COMPLETION_EXIT
 from aladdin_sega.machine import Machine
 from aladdin_sega.recovery import Candidate
 from test_recovery import native_replace_rom, native_write
@@ -48,7 +48,8 @@ def contact_dispatch_machine():
     if not original.exists():
         pytest.skip('Original USA ROM required for contact qualification')
     rom = bytearray(native_replace_rom(COLLECTION_DISPATCH_ENTRY, 0x2000)); source = original.read_bytes()
-    for start, end in ((0x1CBE, 0x20BE), (0x1ABC82, 0x1ABCA2),
+    for start, end in ((0x1CBE, 0x20BE), (0x1ABC82, 0x1ABD76),
+                       (0x1A8E0C, 0x1A8E40),
                        (0x1AE9D4, 0x1AE9DA), (0x1AE4F8, 0x1AE61A),
                        (0x1B03F2, 0x1B0434)):
         rom[start:end] = source[start:end]
@@ -92,7 +93,7 @@ def test_type7b_dispatcher_composes_its_bsr_rts_and_direct_contact(writes):
         native_write(machine, 0xFF1000, b'\x7b')
         for address, value in writes:
             native_write(machine, address, bytes((value,)))
-        initial = machine.snapshot(); machine.gates([COLLECTION_DISPATCH_RETURN])
+        initial = machine.snapshot(); machine.gates([CONTACT_COMPLETION_EXIT])
         machine.gate(COLLECTION_DISPATCH_ENTRY, bypass_once=True)
         assert machine.run(instructions=10_000) == 'gate'
         expected = machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()
@@ -109,7 +110,7 @@ def test_type7b_dispatcher_composes_contact_sound31_and_local_return():
         for address, value in ((0xFF1000, 0x7B), (0xFFF0C1, 1), (0xFFF57D, 1),
                                (0xFFF0BE, 1), (0xFFEFFA, 2), (0xFF7E21, 2)):
             native_write(machine, address, bytes((value,)))
-        initial = machine.snapshot(); machine.gates([COLLECTION_DISPATCH_RETURN])
+        initial = machine.snapshot(); machine.gates([CONTACT_COMPLETION_EXIT])
         machine.gate(COLLECTION_DISPATCH_ENTRY, bypass_once=True)
         assert machine.run(instructions=10_000) == 'gate'
         expected = machine.info, machine.registers(), machine.peek_ram(0, 65536), machine.audio()

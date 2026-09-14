@@ -3,6 +3,7 @@ import pytest
 
 from aladdin_sega.recovery import Candidate
 from aladdin_sega.boundary import (COLLECTION_DISPATCH_ENTRY, COLLECTION_DISPATCH_RETURN,
+                                  CONTACT_COMPLETION_EXIT,
                                   COLLECTION_ROUTES, begin_collection, begin_collection_dispatch,
                                   dispatch_plan_view)
 from test_collection import native_write, prepared
@@ -19,7 +20,7 @@ assert {callback for _kind, callback in ROUTES} == set(COLLECTION_ROUTES)
 
 
 def original_to_return(machine):
-    machine.gates([COLLECTION_DISPATCH_RETURN])
+    machine.gates([CONTACT_COMPLETION_EXIT])
     machine.gate(COLLECTION_DISPATCH_ENTRY, bypass_once=True)
     assert machine.run(instructions=10_000) == 'gate'
     return machine.snapshot(), machine.info, machine.registers(), machine.audio()

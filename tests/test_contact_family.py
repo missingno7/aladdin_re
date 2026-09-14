@@ -7,7 +7,9 @@ their callback entries.
 """
 import pytest
 import oracle_witness as oracle
-from aladdin_sega.boundary import COLLECTION_DISPATCH_ENTRY, COLLECTION_DISPATCH_RETURN
+from aladdin_sega.boundary import (COLLECTION_DISPATCH_ENTRY,
+                                   COLLECTION_DISPATCH_RETURN,
+                                   CONTACT_COMPLETION_EXIT)
 
 
 RECORD = 0xFF6000
@@ -79,7 +81,7 @@ def family_fixture(target, *, kind=None, vertical=0x0800, blocked=0,
 def qualify(state, candidate, *, future=150, stop_after_first=False):
     return oracle.execute_region(
         state, entry=COLLECTION_DISPATCH_ENTRY, candidate=candidate,
-        expected_return=COLLECTION_DISPATCH_RETURN, future_instructions=future,
+        expected_return=CONTACT_COMPLETION_EXIT, future_instructions=future,
         include_raw=True, stop_after_first=stop_after_first)
 
 

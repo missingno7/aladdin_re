@@ -12,6 +12,8 @@ from .game.objects.contact import (activate_contact, begin_contact_launch, finis
                                    contact_route, contact_repeated_decay, contact_sibling_route,
                                    contact_script_selector, transition_contact_66, transition_contact_6b,
                                    publish_contact_record, transition_contact_77, finish_contact_type7e)
+from .game.objects.contact import (complete_contact_landing, publish_contact_position,
+                                   contact_landing_script, contact_position)
 from .game.objects.lifecycle import (
     activate_collection,
     clear_pair,
@@ -55,6 +57,10 @@ __all__ = [
     "publish_contact_record",
     "transition_contact_77",
     "finish_contact_type7e",
+    "complete_contact_landing",
+    "contact_landing_script",
+    "contact_position",
+    "publish_contact_position",
     "clear_pair",
     "collection_state",
     "contact_decay",

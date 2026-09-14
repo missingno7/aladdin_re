@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 import oracle_witness as oracle
-from aladdin_sega.boundary import COLLECTION_DISPATCH_ENTRY, COLLECTION_DISPATCH_RETURN
+from aladdin_sega.boundary import (COLLECTION_DISPATCH_ENTRY,
+                                   COLLECTION_DISPATCH_RETURN,
+                                   CONTACT_COMPLETION_EXIT)
 
 
 RECORD = 0xFF6000
@@ -39,7 +41,7 @@ def fixture(*, blocked=0, ready=0, armed=0, record=RECORD, stack=0xFFEC00,
 
 def qualify(state, candidate, **kwargs):
     return oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY, candidate=candidate,
-                                 expected_return=COLLECTION_DISPATCH_RETURN,
+                                 expected_return=CONTACT_COMPLETION_EXIT,
                                  future_instructions=150, include_raw=True, **kwargs)
 
 

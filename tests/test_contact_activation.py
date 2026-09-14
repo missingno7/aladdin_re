@@ -1,7 +1,9 @@
 """Literal-ROM qualification of the motion-gated contact activation parent."""
 import pytest
 import oracle_witness as oracle
-from aladdin_sega.boundary import COLLECTION_DISPATCH_ENTRY, COLLECTION_DISPATCH_RETURN
+from aladdin_sega.boundary import (COLLECTION_DISPATCH_ENTRY,
+                                   COLLECTION_DISPATCH_RETURN,
+                                   CONTACT_COMPLETION_EXIT)
 
 RECORD = 0xFF6000
 
@@ -37,7 +39,7 @@ def activation_fixture(*, vertical=0, blocked=0, previous=100, object_y=100,
 def qualify(state, candidate):
     return oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
                                  candidate=candidate,
-                                 expected_return=COLLECTION_DISPATCH_RETURN,
+                                 expected_return=CONTACT_COMPLETION_EXIT,
                                  include_raw=True)
 
 

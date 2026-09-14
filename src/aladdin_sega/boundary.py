@@ -24,6 +24,7 @@ TRANSITION_ENTRY = 0x1AF468
 SOUND_RETURN = 0x1AF498
 COLLECTION_DISPATCH_ENTRY = 0x1ABC82
 COLLECTION_DISPATCH_RETURN = 0x1ABCA0
+CONTACT_COMPLETION_EXIT = 0x1ABD74
 COLLECTION_DISPATCH_TABLE = 0x1CBE
 CONTACT_ENTRY = 0x1AE4F8
 CONTACT_DISPATCH_ENTRY = 0x1AE9D4
@@ -1583,6 +1584,87 @@ class _DispatchPlanView:
 def dispatch_plan_view(machine, prefix):
     """Expose planned prefix bytes needed by the immediate callback plan."""
     return _DispatchPlanView(machine, prefix.writes)
+
+
+def _contact_completion_btst(sr, value):
+    return (sr & ~0x04) | (0x04 if not (value & 0x10) else 0)
+
+
+def complete_contact_plan(machine, registers):
+    """Exact 1ABCA0 completion suffix through the scan advance label."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact completion record/stack')
+    live = ((0xFF7DF6, 2), (0xFF7DF8, 2), (0xFF7DFA, 2), (0xFF7DFC, 2),
+            (0xFF7E02, 2), (0xFF7E04, 2), (0xFF7E42, 2), (0xFF7E44, 2),
+            (0xFF7E5A, 2), (0xFF7E60, 4), (0xFF7E77, 1), (0xFFF0F5, 1),
+            (0xFFF0BE, 1), (0xFFF0C0, 1), (0xFFF0E7, 1), (0xFFF0C1, 1),
+            (0xFFF0CC, 1), (0xFFF0CD, 1), (0xFFF0D3, 1), (0xFFF0EB, 1),
+            (0xFFF173, 1), (0xFFF0B0, 2), (0xFFF101, 1))
+    # The BSR slot must not alias the position stores: otherwise the original
+    # helper's own RTS would consume a changed return address.
+    _spans_disjoint([('contact completion record', record, 66),
+                     ('contact completion return', sp - 4, 4),
+                     *(('contact completion live', address, size) for address, size in live)])
+    read = lambda address, size: _read(machine, address, size)
+    flags = read(record + 6, 1)
+    d0 = (registers['d0'] & 0xFFFFFF00) | flags
+    sr = _contact_completion_btst(_logic_sr(sr, flags, 1), flags)
+    final = {**registers, 'd0': d0, 'a7': sp, 'pc': CONTACT_COMPLETION_EXIT}
+    if not flags & 0x10:
+        return AtomicPlan(32, 3, (), {**final, 'sr': sr}, 0x1ABCA8)
+    block = read(0xFFF0F5, 1)
+    sr = _logic_sr(sr, block, 1)
+    if block:
+        return AtomicPlan(60, 5, (), {**final, 'sr': sr}, 0x1ABCB2)
+    be = read(0xFFF0BE, 1)
+    extra_cycles = extra_instructions = 0
+    sr = _logic_sr(sr, be, 1)
+    if be:
+        c0 = read(0xFFF0C0, 1)
+        sr = _logic_sr(sr, c0, 1)
+        if not c0:
+            return AtomicPlan(116, 9, (), {**final, 'sr': sr}, 0x1ABCC6)
+        extra_cycles, extra_instructions = 50, 3
+    writes = [(0xFFF0BE, 0)]
+    e7 = read(0xFFF0E7, 1)
+    sr = _logic_sr(sr, e7, 1)
+    if e7:
+        return AtomicPlan(114 + extra_cycles, 9 + extra_instructions,
+                          tuple(writes), {**final, 'sr': sr}, 0x1ABCD6)
+    vertical = read(0xFF7E5A, 2)
+    sr = _logic_sr(sr, vertical, 2)
+    kind = read(record, 1)
+    cycles, instructions, script = 384, 25, None
+    if vertical:
+        script = game.contact_landing_script(read, kind)
+        cycles, instructions = {0x121964: (544, 35), 0x121F74: (570, 37),
+                                0x1220AA: (588, 38), 0x121F84: (644, 41),
+                                0x121BB6: (670, 42)}[script]
+        if kind < 0x50:
+            # The first CMP/BCS reaches the common selector without the
+            # second type-range CMP/BCC used by kinds >= 0x52.
+            cycles -= 20
+            instructions -= 2
+    writes.extend(game.complete_contact_landing(kind, script))
+    writes.extend(_bytes(sp - 4, CONTACT_COMPLETION_EXIT, 4))
+    x, y = game.contact_position(read)
+    writes.extend(game.publish_contact_position(x, y))
+    final.update(d0=(registers['d0'] & 0xFFFF0000) | y,
+                 sr=_logic_sr(_add_sr(sr, read(0xFF7DF8, 2), read(0xFF7DFC, 2), 2), y, 2))
+    return AtomicPlan(cycles + extra_cycles, instructions + extra_instructions,
+                      tuple(dict(writes).items()), final, 0x1A8E3C, direct_calls=1)
+
+
+def extend_contact_completion(machine, plan):
+    """Compose a completed callback's planned RAM residue with 1ABCA0."""
+    if plan.registers.get('pc') != COLLECTION_DISPATCH_RETURN:
+        raise UnsupportedCandidate('contact completion entry identity')
+    registers = {**machine.registers(), **plan.registers}
+    suffix = complete_contact_plan(dispatch_plan_view(machine, plan), registers)
+    return AtomicPlan(plan.cycles + suffix.cycles, plan.instructions + suffix.instructions,
+                      tuple(dict((*plan.writes, *suffix.writes)).items()), suffix.registers,
+                      suffix.last_pc, plan.direct_calls + suffix.direct_calls)
 
 
 def begin_contact_dispatch(machine, registers, dispatch):

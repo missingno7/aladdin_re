@@ -228,6 +228,42 @@ def finish_contact_type7e(*, clear_armed):
     return writes
 
 
+def contact_landing_script(read, kind):
+    """Select the landing script after a contact stops vertical movement."""
+    if 0x50 <= kind < 0x52:
+        return 0x121964
+    if read(0xFFF173, 1):
+        return 0x121F74
+    if read(0xFFF0B0, 2):
+        return 0x1220AA
+    return 0x121F84 if read(0xFFF0EB, 1) < 0x28 else 0x121BB6
+
+
+def contact_position(read):
+    """Apply the current motion offsets to the paired player coordinates."""
+    return ((read(0xFF7DF6, 2) + read(0xFF7DFA, 2)) & 0xFFFF,
+            (read(0xFF7DF8, 2) + read(0xFF7DFC, 2)) & 0xFFFF)
+
+
+def complete_contact_landing(kind, script=None):
+    """Durable 1ABCA0 landing publication after its boundary guards admit it."""
+    writes = [(0xFFF0C1, 0xFF), (0xFFF0CD, 0xFF), (0xFFF0D3, kind), (0xFFF0EB, 0)]
+    if script is not None:
+        writes.extend(((0xFF7E5A, 0), (0xFF7E5B, 0),
+                       (0xFF7E60, (script >> 24) & 0xFF), (0xFF7E61, (script >> 16) & 0xFF),
+                       (0xFF7E62, (script >> 8) & 0xFF), (0xFF7E63, script & 0xFF),
+                       (0xFF7E77, 0), (0xFFF0CC, 0), (0xFFF101, 0)))
+    return writes
+
+
+def publish_contact_position(x, y):
+    """Publish the paired player position copies used by 1A8E0C."""
+    return [(0xFF7E02, (x >> 8) & 0xFF), (0xFF7E03, x & 0xFF),
+            (0xFF7E42, (x >> 8) & 0xFF), (0xFF7E43, x & 0xFF),
+            (0xFF7E04, (y >> 8) & 0xFF), (0xFF7E05, y & 0xFF),
+            (0xFF7E44, (y >> 8) & 0xFF), (0xFF7E45, y & 0xFF)]
+
+
 def _overlay(read, writes, address, size):
     values = {at: value for at, value in writes}
     if size == 1:

@@ -9,6 +9,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         SOUND_RETURN, begin_object_transition, finish_object_transition,
                         COLLECTION_ROUTES, COLLECTION_DISPATCH_ENTRY, begin_collection_dispatch,
                         dispatch_plan_view, CONTACT_ENTRY, CONTACT_DISPATCH_ENTRY, begin_contact_dispatch,
+                        COLLECTION_DISPATCH_RETURN, extend_contact_completion,
                         begin_contact_dispatch_sound, finish_contact_dispatch_sound, begin_contact,
                         begin_contact_sound, finish_contact_sound, begin_collection,
                         CONTACT_ACTIVATION_ENTRY, begin_contact_activation_dispatch,
@@ -46,6 +47,7 @@ class Candidate:
         "collection_hits": 0, "collection_entries": {}, "relocation_hits": 0,
         "collection_dispatch_hits": 0,
         "contact_hits": 0,
+        "contact_completion_hits": 0,
         "contact_activation_hits": 0,
         "contact_sibling_hits": 0,
         "spawn_region_hits": 0, "spawn_caller_hits": 0, "spawn_walker_hits": 0, "spawn_row_walker_hits": 0,
@@ -116,6 +118,23 @@ class Candidate:
         machine.candidate_identity = self.name
 
     def _apply(self, machine, plan, target):
+        # Callback recipes retain their direct 1ABCA0 contract.  Lifecycle
+        # dispatch may opportunistically join the measured completion suffix;
+        # a refusal leaves the shorter callback plan admissible as before.
+        if self.is_lifecycle and plan.registers.get('pc') == COLLECTION_DISPATCH_RETURN:
+            try:
+                extended = extend_contact_completion(machine, plan)
+                if machine.atomic(target=target, cycles=extended.cycles, instructions=extended.instructions,
+                                  writes=list(extended.writes), registers=extended.registers,
+                                  last_pc=extended.last_pc):
+                    self.stats['contact_completion_hits'] += 1
+                    self.stats["candidate_hits"] += 1
+                    self.stats["replaced_m68k_instructions"] += extended.instructions
+                    self.stats["charged_m68k_cycles"] += extended.cycles
+                    self.stats["direct_python_calls"] += extended.direct_calls
+                    return True
+            except UnsupportedCandidate:
+                pass
         if not machine.atomic(target=target, cycles=plan.cycles, instructions=plan.instructions,
                               writes=list(plan.writes), registers=plan.registers, last_pc=plan.last_pc):
             return False
