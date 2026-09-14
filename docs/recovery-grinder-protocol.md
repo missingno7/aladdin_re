@@ -120,10 +120,14 @@ reading the ROM by eye or counting cycles by hand.
 8. **REVIEW.** `leaf_review.py` must print `leaf review: PASS`.  Read its
    `guards` line: a removed refusal or assertion is a widening you must be
    able to justify from facts, or revert.
-9. **MILESTONE GATES** (after one to three leaves, and always before a commit):
-   full suite, then the cold comparison into a fresh `artifacts\NAME`.  While
-   it runs, touch nothing under `src/` or `tests/`; prepare the next row's
-   facts instead.  Read the result only through `verify_status.py`.
+9. **MILESTONE GATES** (after three leaves or about ninety minutes of recovery
+   work, whichever comes first, and always before a push): full suite, then
+   the cold comparison into a fresh `artifacts\NAME`, started in the
+   background.  While it runs, touch nothing under `src/` or `tests/`; do the
+   read-only preparation of the next row instead.  Read the result only
+   through `verify_status.py`.  Between milestones, commit each qualified leaf
+   locally once its focused tests, `leaf_review` and segment checks pass; do
+   not push until the milestone gates pass.
    `TIMEOUT` means rerun with a longer watchdog; `STALE_EVIDENCE` means you
    edited source during the run, rerun; `DIVERGENCE` means the leaf is wrong
    even though its tests passed, investigate the first differing frame with
@@ -137,9 +141,9 @@ reading the ROM by eye or counting cycles by hand.
 | When | Run |
 |---|---|
 | after each edit | the test module you are writing (`pytest tests\test_<name>.py -q -p no:cacheprovider`) |
-| after `check` matches | `leaf_review.py` (focused suites, about 30 s), then `segment_verify.py` on the class's fixtures (seconds) |
-| before a commit | full suite (about 3 min) and cold comparison (about 8 min for 82,000 frames, in parallel) |
-| after a PASS | copy its `reference.json` into `artifacts/evidence/main`, then `frontier_ledger.py --index` on the new artifacts; rerun the census only after a history extension |
+| after `check` matches, before each local commit | `leaf_review.py` (focused suites, about 30 s), then `segment_verify.py` on the class's child and parent fixtures (seconds) |
+| at a milestone: after three leaves or about ninety minutes of recovery work, whichever comes first, and always before a push | full suite (about 3 min), then the cold comparison started in the background (about 8 min for 82,000 frames); while it runs, do read-only preparation for the next row (`frontier_ledger`, `facts`, `branches`, `segments`) and touch nothing under `src/` or `tests/` |
+| after a milestone PASS | copy its `reference.json` into `artifacts/evidence/main`, run `frontier_ledger.py --index` on the new artifacts, update the current section of `docs/STATUS.md`, push; rerun the census only after a history extension |
 
 Do not run the full suite or the cold comparison after exploratory edits.
 Do not poll a running verifier more often than every two minutes; a quiet
@@ -147,14 +151,19 @@ process is not a failed process.
 
 ## 6. Commit and publication rules
 
-- Commit only a leaf whose full suite passed and whose cold comparison is
-  PASS with current receipts.  One leaf (or one small cohesive batch) per
-  commit; the ledger line, the tests and the source go together.
+- Commit each qualified leaf locally once its focused tests, `leaf_review.py`
+  and the segment checks on its class's child and parent fixtures pass.  One
+  leaf (or one small cohesive batch) per commit; the ledger line, the tests
+  and the source go together.
 - Message: first line `Recover <entry> <kind/arm> <recipe>`, body with the
-  test count, the cold-run frames and artifacts directory, and the fallback
-  count before and after.  End with the attribution line the host requires.
-- Push to `main` after the commit.  Never force-push, never rewrite history,
-  never commit the ROM, private recordings or `artifacts/`.
+  test count and, for a milestone, the cold-run frames and artifacts
+  directory and the fallback count before and after.  End with the
+  attribution line the host requires.
+- Push to `main` only after a milestone's full suite and cold comparison
+  PASS with current receipts.  If a milestone cold run diverges, the local
+  commits since the last push stay unpushed until the responsible leaf is
+  found through its fixtures and segments and fixed.  Never force-push, never
+  rewrite history, never commit the ROM, private recordings or `artifacts/`.
 - Never weaken an assertion, delete a test, edit a fixture, or widen a guard
   to obtain a PASS.  A caught exception is not a PASS: `UnsupportedCandidate`
   is a supported refusal; any other exception is a bug to fix.
