@@ -50,6 +50,7 @@ CONTACT_FAMILY_TYPE44_ENTRY = 0x1AEF12
 CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
 CONTACT_FAMILY_TYPE46_ENTRY = 0x1AEF5C
 CONTACT_FAMILY_TYPE55_ENTRY = 0x1AF590
+CONTACT_FAMILY_TYPE58_ENTRY = 0x1AF5F0
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
@@ -1568,6 +1569,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE03_ENTRY,
                       CONTACT_FAMILY_TYPE46_ENTRY,
                       CONTACT_FAMILY_TYPE55_ENTRY,
+                      CONTACT_FAMILY_TYPE58_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
@@ -1770,6 +1772,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
         CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
         CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
+        CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -1839,6 +1842,7 @@ def _contact_scan_resume(machine, registers):
                         CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
                         CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
                         CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
+                        CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -3769,6 +3773,76 @@ def begin_contact_family_type55_dispatch(machine, registers, dispatch):
     return _contact_family_dispatch(machine, registers, dispatch,
                                     CONTACT_FAMILY_TYPE55_ENTRY,
                                     begin_contact_family_type55)
+
+
+def begin_contact_family_type58(machine, registers):
+    """1AF5F0's bit-4 bounded-distance guard, both arms owned.
+
+    Same shape as ``begin_contact_family_type55`` (same ``FFF0BE`` selector,
+    same record-plus-6 bit-4 activity test, same shared 1AE6B4 tail), but
+    this entry's own guard adds 2 to the delta rather than subtracting 18,
+    its limit is 0xC rather than 6, and both sides of the comparison are
+    recovered on the recorded history: a pass rewrites FF7DFC with the delta
+    and returns locally at 1AF636; a fail publishes the same FFF0F5 tail flag
+    as the direct and inactive arms through 1AE6B4.  Cost table
+    (``factcheck``):
+
+        direct return  (FFF0BE set, FFF0C0 clear)                    86 /  6
+        guard fail,  no borrow, reached via FFF0BE clear             180 / 15
+        guard fail,  borrowed and negated, via FFF0BE clear          182 / 16
+        guard pass,  no borrow, reached via FFF0BE clear             178 / 15
+        guard pass,  borrowed and negated, via FFF0BE clear          180 / 16
+        every guard arm reached through FFF0BE and FFF0C0 both set  +26 /  +2
+
+    The guard's own SUB/NEG discards every incoming CCR bit it does not set;
+    a fail's final flags are the CMPI's own (ST never touches CCR), while a
+    pass's final flags come from the local MOVE.W that publishes delta.
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type58 record/stack')
+    _spans_disjoint([('type58 record', record, 66), ('type58 return', sp, 4),
+                     ('type58 flags', 0xFFF0BE, 1), ('type58 mode', 0xFFF0C0, 1),
+                     ('type58 motion', 0xFF7DFC, 2), ('type58 player', 0xFF7DF8, 2),
+                     ('type58 tail', 0xFFF0F5, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    arm, facts = game.contact_type58_guard(read, record)
+    fail_writes = tuple(game.contact_type58_fail())
+    if arm == 'direct':
+        return AtomicPlan(86, 6, fail_writes,
+                          {'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF,
+                           'sr': _logic_sr(sr, 0, 1)},
+                          0x1AE6BA)
+    if arm == 'inactive':
+        raise UnsupportedCandidate('type58 observed guard arm is not active')
+    delta, previous, distance, borrowed = (facts[key] for key in ('delta', 'previous', 'distance', 'borrowed'))
+    residue = _sub_sr(sr, previous, delta, 2)
+    if borrowed:
+        residue = _sub_sr(residue, 0, facts['difference'], 2)
+    extra_cycles, extra_instructions = (26, 2) if facts['selector'] else (0, 0)
+    base_registers = {'d0': (registers['d0'] & 0xFFFFFF00) | facts['flags'],
+                      'd2': (registers['d2'] & 0xFFFF0000) | delta,
+                      'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                      'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF}
+    if arm == 'guard_fail':
+        # The CMPI's own flags stand: ST never touches CCR.
+        base_cycles, base_instructions = (182, 16) if borrowed else (180, 15)
+        return AtomicPlan(base_cycles + extra_cycles, base_instructions + extra_instructions, fail_writes,
+                          {**base_registers, 'sr': _cmp_sr(residue, distance, 0xC, 2)},
+                          0x1AE6BA)
+    # The CMPI's flags are overwritten by the local MOVE.W that publishes
+    # delta to FF7DFC: N/Z from delta, V/C cleared, X carried from the SUB/NEG.
+    base_cycles, base_instructions = (180, 16) if borrowed else (178, 15)
+    writes = tuple(game.contact_type58_pass(delta))
+    return AtomicPlan(base_cycles + extra_cycles, base_instructions + extra_instructions, writes,
+                      {**base_registers, 'sr': _logic_sr(residue, delta, 2)},
+                      0x1AF636)
+
+
+def begin_contact_family_type58_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE58_ENTRY,
+                                    begin_contact_family_type58)
 
 
 def begin_contact_family_type44(machine, registers):

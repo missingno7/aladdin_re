@@ -6,6 +6,25 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Type-58 bounded-distance guard recovered
+
+1AF5F0 (kind 58, the grinder's first frontier target) is the same
+FFF0BE/record-plus-6-bit-4 dispatch shape as Type-55's own guard, but unlike
+Type-55 both sides of its distance comparison are observed on the recorded
+history and are now recovered: a pass rewrites FF7DFC and returns locally at
+1AF636, a fail publishes the same FFF0F5 tail flag as the direct and inactive
+arms through the shared 1AE6B4 tail.  `contact_type58_guard`,
+`contact_type58_fail` and `contact_type58_pass` are the new semantics in
+`game/objects/contact.py`; `begin_contact_family_type58` is the boundary
+planner, routed through `begin_collection_dispatch`'s accepted list, the
+family_planner map, and both contact-scan callback maps (owned inside the
+scan exactly as Type-55 is).  A borrow/no-borrow cost-table gap the
+recorded fixtures never exercised (a borrowed guard-fail arm) was caught by
+`--vary` boundary testing before qualification, not by the recorded history
+alone.  **1,695 tests pass in 204 s**; the **82,161-frame cold comparison
+passes** with zero restores at `artifacts/type58-guard/` (frames 82,161,
+87,022 candidate hits, 15,171 fallbacks, down from 21,840).
+
 ## Decoupled observation boundary landed
 
 The replay now observes each logical frame, and deadlines recovered operations,

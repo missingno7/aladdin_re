@@ -26,6 +26,7 @@ TARGET_KINDS = {
     0x1AEB7C: 0x79,  # type-79 guard return
     0x1AE796: 0x1F,  # recorded inactive position tail
     0x1AE64C: 0x43,  # recorded collection-dispatcher motion/type update
+    0x1AF5F0: 0x58,  # recorded bounded-distance guard, both arms owned
 }
 
 

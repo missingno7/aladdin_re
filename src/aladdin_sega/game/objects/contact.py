@@ -364,6 +364,44 @@ def contact_type55_return():
     return [(0xFFF0F5, 0xFF)]
 
 
+def contact_type58_guard(read, record):
+    """Select 1AF5F0's arm from live RAM and name its distance facts.
+
+    Same dispatch shape as ``contact_type55_guard`` (the same ``FFF0BE``
+    family selector, the same record-plus-6 bit-4 activity test, the same
+    shared 1AE6B4 tail), but this entry's own guard adds 2 to the delta
+    rather than subtracting 18, and its limit is 0xC rather than 6.  Unlike
+    Type-55, both sides of the guard are observed on the recorded history and
+    recovered here: a distance under the limit is the object's ordinary
+    return, not a transition.  Returns ``(arm, facts)`` with ``arm`` one of
+    ``direct``, ``inactive``, ``guard_fail`` or ``guard_pass``.
+    """
+    selector = read(0xFFF0BE, 1)
+    facts = {'selector': selector}
+    if selector and not read(0xFFF0C0, 1):
+        return 'direct', facts
+    facts['flags'] = read(record + 6, 1)
+    if not facts['flags'] & 0x10:
+        return 'inactive', facts
+    delta = (read(record + 4, 2) - read(0xFF7DF8, 2) + 2) & 0xFFFF
+    previous = read(0xFF7DFC, 2)
+    difference = (previous - delta) & 0xFFFF
+    borrowed = previous < delta
+    facts.update(delta=delta, previous=previous, difference=difference, borrowed=borrowed,
+                 distance=(-difference) & 0xFFFF if borrowed else difference)
+    return ('guard_pass' if facts['distance'] < 0xC else 'guard_fail'), facts
+
+
+def contact_type58_fail():
+    """The tail flag every recovered Type-58 direct/inactive/guard-fail return publishes through 1AE6B4."""
+    return [(0xFFF0F5, 0xFF)]
+
+
+def contact_type58_pass(delta):
+    """The motion word a Type-58 guard-pass return publishes locally through 1AF636."""
+    return _word(0xFF7DFC, delta)
+
+
 def contact_type46_request(read):
     """1AEF5C's capped command-66 counter and its sound request.
 

@@ -15,6 +15,8 @@ from .game.objects.contact import (activate_contact, begin_contact_launch, finis
 from .game.objects.contact import contact_scan_collision
 from .game.objects.contact import (contact_type55_guard, contact_type55_return,
                                    contact_type46_request, contact_type43_update)
+from .game.objects.contact import (contact_type58_guard, contact_type58_fail,
+                                   contact_type58_pass)
 from .game.objects.contact import contact_tick_reset, contact_tick_bounds
 from .game.objects.contact import (complete_contact_landing, publish_contact_position,
                                    contact_landing_script, contact_position)
@@ -59,6 +61,9 @@ __all__ = [
     "contact_type55_return",
     "contact_type46_request",
     "contact_type43_update",
+    "contact_type58_guard",
+    "contact_type58_fail",
+    "contact_type58_pass",
     "contact_tick_reset",
     "contact_tick_bounds",
     "begin_contact_launch",
