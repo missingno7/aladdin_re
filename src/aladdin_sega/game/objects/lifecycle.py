@@ -412,3 +412,26 @@ def finish_reverse_spawn_script(record):
 def finish_reverse_spawn_flag(record):
     """Apply ``1B67BC``'s ``ST.B`` at ``record + 0x35`` (roll bit 1 set)."""
     return [(record + 0x35, 0xFF)]
+
+
+def spawn_upper_fifth_coordinates(destination, d2, d3, x, y):
+    """Install ``1B52AA``'s D2/D3 fields and X/Y position.
+
+    ``1B52A0``'s own coordinate tail mirrors the shape of the shared
+    ``1B526C`` tail (``spawn_region``) but is its own separate copy in ROM
+    and omits that tail's ``CLR.B (A2,D2.W)`` indexed clear.
+    """
+    return [*((destination + 0x32 + offset, (d2 >> (8 * (1 - offset))) & 0xFF)
+              for offset in range(2)),
+            (destination + 0x34, d3 & 0xFF),
+            *((destination + 2 + offset, (x >> (8 * (1 - offset))) & 0xFF)
+              for offset in range(2)),
+            *((destination + 4 + offset, (y >> (8 * (1 - offset))) & 0xFF)
+              for offset in range(2))]
+
+
+def finish_upper_fifth_spawn(read, record):
+    """Apply ``1B661A``'s ``Y -= 8`` correction on a successful fifth-pool spawn."""
+    y = (read(record + 4, 2) - 8) & 0xFFFF
+    return [(record + 4 + offset, (y >> (8 * (1 - offset))) & 0xFF)
+            for offset in range(2)]

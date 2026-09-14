@@ -227,6 +227,14 @@ SPAWN_REVERSE_DOUBLE_CAP_ENTRY = 0x1B67C2
 SPAWN_REVERSE_DOUBLE_CAP_LAST_PC = 0x1B6800
 SPAWN_REVERSE_DOUBLE_CAP_TEMPLATE = 0x1B7DA0
 SPAWN_REVERSE_DOUBLE_CAP_SCRIPT = 0x1241FC
+SPAWN_UPPER_FIFTH_CALLER_ENTRY = 0x1B65F4
+SPAWN_UPPER_FIFTH_CALLER_EARLY_PC = 0x1B65FC
+SPAWN_UPPER_FIFTH_CALLER_LAST_PC = 0x1B6620
+SPAWN_UPPER_FIFTH_CALLER_TEMPLATE_A = 0x1B7FE4
+SPAWN_UPPER_FIFTH_CALLER_TEMPLATE_B = 0x1B7FD0
+SPAWN_UPPER_FIFTH_POOL_BASE = 0xFF7F06
+SPAWN_UPPER_FIFTH_POOL_COUNT = 20
+SPAWN_UPPER_FIFTH_POOL_EXHAUSTED = 0xFF842E
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -494,6 +502,115 @@ def _sub_sr(sr, left, right, width):
     if ((left ^ right) & (left ^ result) & sign):
         out |= 2
     return out
+
+
+def spawn_upper_fifth_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B65F4``: a guarded, template-selecting fifth allocator copy.
+
+    ``TST.B FFF10E``/``BNE`` gates the whole entry (clear declines directly
+    with no allocation attempted, matching the recorded guard-clear
+    fixture); set continues into a template selector
+    (``CMPI.B #5,FF7E26``/``BEQ``, template ``0x1B7FE4`` when equal else
+    ``0x1B7FD0``) then ``BSR 1B52A0`` -- its own separate copy of the
+    upper-pool allocator (``1AE262`` over the same ``FF7F06``, 20-slot pool
+    ``spawn_region``'s own ``SPAWN_REGION_UPPER_ENTRY`` arm uses, and the
+    same ``1AE30A`` initializer) with its own coordinate tail at ``1B52AA``
+    that mirrors the shared ``1B526C`` tail but omits its indexed clear.
+    Allocation failure returns directly (the familiar ``+26/+2`` shape);
+    success applies a final ``Y -= 8`` correction (``1B661A``) before the
+    shared ``RTS``.  ``1AE262``/``1AE30A`` are the exact same ROM
+    subroutines ``spawn_region`` already proves for every other pool, so
+    their own cost formulas (54 + 40 * index / 5 + 4 * index for a found
+    slot, 840/83 exhausted for a 20-slot pool, 476 cy / 27 instr for the
+    initializer) apply here unchanged; every other number is this entry's
+    own, from ``factcheck facts``:
+
+        TST.B FFF10E                                        16 cy /  1 instr
+        BNE.b, not taken (decline) / taken                8 / 10 cy /  1 instr
+        RTS (decline, 1B65FC)                               16 cy /  1 instr
+        LEA <template>,A6                                   12 cy /  1 instr
+        CMPI.B #5,FF7E26                                    20 cy /  1 instr
+        BEQ.b, taken (template A) / not taken (template B) 10 / 8 cy /  1 instr
+        LEA <template B> (selector mismatch only)           12 cy /  1 instr
+        BSR 1B52A0                                          18 cy /  1 instr
+        BSR 1AE262                                          18 cy /  1 instr
+        BNE.b 1B529E, not taken (found) / taken (exhausted) 8 / 10 cy / 1 instr
+        RTS (exhausted, 1B529E)                              16 cy /  1 instr
+        BSR 1AE30A                                          18 cy /  1 instr
+        MOVE.W D2,$32(A5) / MOVE.B D3,$34(A5)            12 + 12 cy /  2 instr
+        MOVE.W $FFF150,D0 / ADD.W $FF7DB0,D0 / MOVE.W D0,$2(A5)
+                                                          16+16+12 cy /  3 instr
+        MOVE.W $FFF152,D0 / ADD.W $FF7DB2,D0 / MOVE.W D0,$4(A5)
+                                                          16+16+12 cy /  3 instr
+        EOR.B D0,D0                                          4 cy /  1 instr
+        RTS (1B52D4)                                        16 cy /  1 instr
+        BNE.b 1B6620, not taken (success) / taken (fail)  8 / 10 cy /  1 instr
+        SUBI.W #$8,$4(A5) (success only)                    20 cy /  1 instr
+        RTS (shared, 1B6620)                                16 cy /  1 instr
+    """
+    sp, sr = registers['a7'], registers['sr']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper fifth caller stack')
+    _spans_disjoint([('upper fifth caller pool', 0xFF7E82, 24 * 66),
+                     ('upper fifth caller frame', sp - 12, 16),
+                     ('upper fifth caller guard', 0xFFF10E, 1),
+                     ('upper fifth caller selector', 0xFF7E26, 1),
+                     *SPAWN_REGION_GLOBALS])
+    outer_return = _read(machine, sp, 4)
+    read = lambda address, size: _read(machine, address, size)
+    guard = read(0xFFF10E, 1)
+    guard_sr = _logic_sr(sr, guard, 1)
+    if not guard:
+        return AtomicPlan(40, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': outer_return & 0xFFFFFF, 'sr': guard_sr},
+                          SPAWN_UPPER_FIFTH_CALLER_EARLY_PC)
+    selector = read(0xFF7E26, 1)
+    selector_sr = _cmp_sr(guard_sr, selector, 5, 1)
+    if selector == 5:
+        template = SPAWN_UPPER_FIFTH_CALLER_TEMPLATE_A
+        prefix_cycles, prefix_instructions = 16 + 10 + 12 + 20 + 10 + 18, 6
+    else:
+        template = SPAWN_UPPER_FIFTH_CALLER_TEMPLATE_B
+        prefix_cycles, prefix_instructions = 16 + 10 + 12 + 20 + 8 + 12 + 18, 7
+    base, count, exhausted = (SPAWN_UPPER_FIFTH_POOL_BASE, SPAWN_UPPER_FIFTH_POOL_COUNT,
+                              SPAWN_UPPER_FIFTH_POOL_EXHAUSTED)
+    call_push = _bytes(sp - 4, 0x1B6618, 4)          # BSR 1B52A0's own pushed return
+    selector_push = _bytes(sp - 8, 0x1B52A4, 4)       # BSR 1AE262's own pushed return
+    destination, index = game.free_object(read, base, count)
+    if destination is None:
+        selected_type = read((base + (count - 1) * 66) & 0xFFFFFF, 1)
+        final_sr = _logic_sr(selector_sr, selected_type, 1)
+        final = {**registers, 'a6': template, 'a5': exhausted,
+                'd0': (registers['d0'] & 0xFFFF0000) | 0xFFFF, 'a7': sp + 4,
+                'pc': outer_return & 0xFFFFFF, 'sr': final_sr}
+        return AtomicPlan(prefix_cycles + 18 + 840 + 10 + 16 + 10 + 16,
+                          prefix_instructions + 1 + 83 + 1 + 1 + 1 + 1,
+                          tuple(dict((*call_push, *selector_push)).items()), final,
+                          SPAWN_UPPER_FIFTH_CALLER_LAST_PC, direct_calls=1)
+    template_data = _object_template(machine, record=destination, template=template, entry_sp=sp - 8)
+    initializer_writes = tuple(game.initialize(destination, template_data))
+    x_base, x_offset = read(0xFFF150, 2), read(0xFF7DB0, 2)
+    y_base, y_offset = read(0xFFF152, 2), read(0xFF7DB2, 2)
+    x = (x_base + x_offset) & 0xFFFF
+    y_installed = (y_base + y_offset) & 0xFFFF
+    coordinate_writes = tuple(game.spawn_upper_fifth_coordinates(
+        destination, registers['d2'], registers['d3'], x, y_installed))
+    initializer_push = _bytes(sp - 8, 0x1B52AA, 4)    # BSR 1AE30A's own pushed return (reuses sp-8)
+    combined = dict((*call_push, *initializer_push, *initializer_writes, *coordinate_writes))
+    # The coordinate tail just installed this exact Y; the correction reads
+    # it back, so the reader can hand it over directly rather than a span.
+    correction_writes = tuple(game.finish_upper_fifth_spawn(
+        lambda address, size: y_installed, destination))
+    combined.update(correction_writes)
+    final_sr = _sub_sr(_logic_sr(selector_sr, 0, 1), y_installed, 8, 2)
+    final = {**registers, 'a5': destination, 'a6': template + 19,
+            'd0': (registers['d0'] & 0xFFFF0000) | (y_installed & 0xFF00),
+            'a7': sp + 4, 'pc': outer_return & 0xFFFFFF, 'sr': final_sr}
+    scan_cycles, scan_instructions = 54 + 40 * index, 5 + 4 * index
+    return AtomicPlan(prefix_cycles + 18 + scan_cycles + 8 + 18 + 476 + 132 + 8 + 20 + 16,
+                      prefix_instructions + 1 + scan_instructions + 1 + 1 + 27 + 10 + 1 + 1 + 1,
+                      tuple(combined.items()), final,
+                      SPAWN_UPPER_FIFTH_CALLER_LAST_PC, direct_calls=2)
 
 
 def spawn_reverse_caller(machine, registers: dict[str, int]) -> AtomicPlan:
@@ -2211,6 +2328,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_UPPER_GUARD_TILE_ENTRY: spawn_upper_guard_tile_caller,
         SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY: spawn_upper_tile_four_caller,
         SPAWN_REVERSE_DOUBLE_CAP_ENTRY: begin_spawn_reverse_double_cap,
+        SPAWN_UPPER_FIFTH_CALLER_ENTRY: spawn_upper_fifth_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \

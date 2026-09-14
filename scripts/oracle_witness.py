@@ -112,6 +112,7 @@ CALLER_POOLS[0x1B6636] = 0x1B525E  # spawn_lower_type_xy_offset_caller: SPAWN_RE
 CALLER_POOLS[0x1B7084] = 0x1B5266  # spawn_upper_guard_type4a_caller: SPAWN_REGION_UPPER_ENTRY (both guard states recover)
 CALLER_POOLS[0x1B6E86] = 0x1B5266  # spawn_upper_guard_plain_caller: SPAWN_REGION_UPPER_ENTRY (both guard states recover, no decline)
 CALLER_POOLS[0x1B67C2] = 0x1B5256  # begin_spawn_reverse_double_cap: SPAWN_REGION_REVERSE_ENTRY (RNG-gated single/double spawn, see test_spawn_reverse_double_cap.py-style bespoke coverage)
+CALLER_POOLS[0x1B65F4] = 0x1B5266  # spawn_upper_fifth_caller: its own separate copy of the SPAWN_REGION_UPPER_ENTRY-shaped allocator (guard FFF10E, selector FF7E26; bespoke coverage sweeps both)
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,

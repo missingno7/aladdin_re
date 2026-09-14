@@ -749,6 +749,52 @@ def test_reverse_double_cap_double_spawn_negative_controls(mutant):
     assert (actual.outer, actual.future) != (expected.outer, expected.future)
 
 
+UPPER_FIFTH_ENTRY = 0x1B65F4
+
+
+@pytest.mark.parametrize("name,guard,selector,free", (
+    # FFF10E clear: decline immediately, no allocation attempted at all.
+    ("guard-clear", 0, 5, 0),
+    # FFF10E set, FF7E26 == 5: template 0x1B7FE4, ordinary success.
+    ("guard-set-template-a", 1, 5, 0),
+    # FFF10E set, FF7E26 != 5: the selector's mismatch arm, one extra LEA
+    # for template 0x1B7FD0, otherwise the same shape.
+    ("guard-set-template-b", 1, 4, 0),
+    # FFF10E set, pool exhausted: 1AE262's own scan runs out (Z set at
+    # 1AE278); no initializer call, no Y correction.
+    ("guard-set-exhausted", 1, 5, None),
+))
+def test_upper_fifth_matches_original_outer_and_future(name, guard, selector, free):
+    writes = ((0xFFF10E, guard), (0xFF7E26, selector))
+    expected = oracle.execute_dispatch(UPPER_FIFTH_ENTRY, free=free, candidate=None,
+                                       incoming_x=False, setup_writes=writes)
+    actual = oracle.execute_dispatch(UPPER_FIFTH_ENTRY, free=free, candidate="lifecycle",
+                                     incoming_x=False, setup_writes=writes)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["fallbacks"] == 0
+    assert actual.stats["spawn_caller_hits"] == 1
+
+
+def test_upper_fifth_success_survives_fresh_process():
+    writes = ((0xFFF10E, 1), (0xFF7E26, 5))
+    result = oracle.execute_dispatch(UPPER_FIFTH_ENTRY, free=0, candidate="lifecycle",
+                                     incoming_x=False, setup_writes=writes, include_raw=True)
+    assert result.stats["spawn_caller_hits"] == 1
+    assert oracle.fresh_process_future(result.outer_state) == result.future
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_upper_fifth_negative_controls(mutant):
+    writes = ((0xFFF10E, 1), (0xFF7E26, 5))
+    expected = oracle.execute_dispatch(UPPER_FIFTH_ENTRY, free=0, candidate=None,
+                                       incoming_x=False, setup_writes=writes)
+    actual = oracle.execute_dispatch(UPPER_FIFTH_ENTRY, free=0,
+                                     candidate="lifecycle-mutant-" + mutant,
+                                     incoming_x=False, setup_writes=writes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
 SETUP_KNOWN_A = 0x1B72D4
 SETUP_KNOWN_B = 0x1B6802
 SETUP_UNKNOWN = 0x1B6D1E  # inadmissible (multi-native-call prefix); stays unrecovered
