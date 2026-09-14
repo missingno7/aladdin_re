@@ -34,3 +34,30 @@ def test_census_preserves_frame_zero_input_and_original_terminal(tmp_path):
     with pytest.raises(ValueError, match='empty output'):
         recovery_census.capture_entries([entry], lambda machine, pc: {'branch': 'entry'},
                                        output, history=tmp_path / 'history', node=node)
+
+
+def test_census_retains_the_parent_state_that_preceded_each_child(tmp_path):
+    store = HistoryStore(tmp_path / 'history')
+    node = store.append(ROOT_ID, [], 2)
+    rom = read_rom()
+    entry = int.from_bytes(rom[4:8], 'big')
+    with Machine(rom) as machine:
+        machine.gates([entry])
+        assert machine.run(instructions=1) == 'gate'
+        expected_parent = machine.snapshot()
+        machine.gate(entry, bypass_once=True)
+        assert machine.run(instructions=1) == 'limit'
+        child = machine.info['pc']
+    output = tmp_path / 'capture'
+    report = recovery_census.capture_entries([child], recovery_census.kind_classifier, output,
+                                             history=tmp_path / 'history', node=node,
+                                             parent=entry, retain=1)
+    key = next(iter(report['counts']))
+    assert key.startswith(f'{child:06X}:kind')
+    assert report['parent'] == f'{entry:06X}'
+    parent = report['parents'][key][0]
+    assert parent['child'] == child and parent['parent'] == entry and parent['child_frame'] == 0
+    assert (output / parent['fixture']).read_bytes() == expected_parent
+    with pytest.raises(ValueError, match='parent entry'):
+        recovery_census.capture_entries([child], recovery_census.kind_classifier, tmp_path / 'other',
+                                       history=tmp_path / 'history', node=node, parent=child)

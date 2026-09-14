@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -94,3 +95,55 @@ def test_portable_export_needs_neither_rom_nor_native_library(tmp_path):
                     '--output', str(output)], env=env,
                    capture_output=True, text=True, check=True, timeout=30)
     assert json.loads(output.read_text()) == store.flatten(c)
+
+
+def test_reference_and_candidate_workers_run_at_the_same_time(tmp_path):
+    store, *_ = graph(tmp_path)
+    barrier = threading.Barrier(2, timeout=10)
+
+    def runner(command, **kwargs):
+        barrier.wait()  # only passes when both workers are in flight together
+        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+    result = compare_history(store.path, DEFAULT_ROM, candidate='original', output=tmp_path / 'c',
+                             timeout_seconds=1, runner=runner)
+    assert result['status'] == 'TIMEOUT'
+    assert result['error']['worker'] == 'reference'
+    assert result['workers'] == 'parallel'
+
+
+def test_sequential_mode_stops_at_the_first_failed_worker(tmp_path):
+    store, *_ = graph(tmp_path)
+    started = []
+
+    def runner(command, **kwargs):
+        started.append(command[command.index('--candidate') + 1])
+        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+    result = compare_history(store.path, DEFAULT_ROM, candidate='lifecycle', output=tmp_path / 'c',
+                             timeout_seconds=1, runner=runner, parallel=False)
+    assert result['status'] == 'TIMEOUT' and result['workers'] == 'sequential'
+    assert started == ['original']
+
+
+def test_candidate_watchdog_expiry_is_a_timeout_not_a_candidate_error(tmp_path):
+    store, *_ = graph(tmp_path)
+
+    def runner(command, **kwargs):
+        if command[command.index('--candidate') + 1] == 'original':
+            return subprocess.run(command, **kwargs)
+        raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+
+    result = compare_history(store.path, DEFAULT_ROM, candidate='lifecycle', output=tmp_path / 'c',
+                             timeout_seconds=60, runner=runner)
+    assert result['status'] == 'TIMEOUT'
+    assert result['error']['worker'] == 'candidate'
+    assert 'exceeded 60 seconds' in result['error']['detail']
+
+
+def test_parallel_cold_comparison_of_a_real_branch_passes(tmp_path):
+    store, _, _, c, _ = graph(tmp_path)
+    result = compare_history(store.path, DEFAULT_ROM, node=c, candidate='original', output=tmp_path / 'c')
+    assert result['status'] == 'PASS', result
+    assert result['workers'] == 'parallel'
+    assert result['reference']['executed_frames'] == 6

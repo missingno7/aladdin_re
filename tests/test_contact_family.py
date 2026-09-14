@@ -25,6 +25,7 @@ TARGET_KINDS = {
     0x1AEF12: 0x44,  # type-44 counter/replacement callback
     0x1AEB7C: 0x79,  # type-79 guard return
     0x1AE796: 0x1F,  # recorded inactive position tail
+    0x1AE64C: 0x43,  # recorded collection-dispatcher motion/type update
 }
 
 
@@ -144,6 +145,29 @@ def type46_fixture():
                               writes=[*oracle.write_long(RECORD + 42, 0),
                                       *oracle.write_long(RECORD + 62, 0)],
                               registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
+def type43_fixture(*, fff0c1=0xFF, sound=1, motion_x=0x0140, **kwargs):
+    """Construct a valid Type-43 collection record over the original ROM.
+
+    ``family_fixture`` seeds the record's link field (object_x at record+2),
+    FF7DF8/FF7DFA/FF7DFC and FFF57D; this adds the FFF0C1 activity gate and
+    the FF7DF6 horizontal-motion word the branch also reads.
+    """
+    state = family_fixture(0x1AE64C, sound=sound, **kwargs)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        writes = [(0xFFF0C1, fff0c1), *oracle.write_word(0xFF7DF6, motion_x)]
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=writes, registers=machine.registers())
         return machine.snapshot()
     finally:
         machine.close()
@@ -708,3 +732,78 @@ def test_contact_family_scheduler_deadline_refuses_without_partial_plan():
         assert oracle.observable(candidate_machine) == expected
     finally:
         candidate_machine.close()
+
+
+@pytest.mark.parametrize('motion_x', (0x0140, 0x0007, 0xFFF3))
+def test_type43_collection_dispatch_sound_matches_original_outer_future_and_fresh(motion_x):
+    state = type43_fixture(motion_x=motion_x)
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150, include_raw=True)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle',
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   future_instructions=150, include_raw=True)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('values', [{'fff0c1': 0}, {'sound': 0}])
+def test_type43_unsupported_arms_decline_to_original(values):
+    state = type43_fixture(**values)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 0
+    assert actual.stats['fallbacks'] >= 1
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type43_collection_dispatch_sound_mutants_diverge_at_outer_boundary(mutant, monkeypatch):
+    state = type43_fixture()
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150)
+    if mutant == 'continuation':
+        # As with the type03/type79 seams, a PC+2 mutation of the prefix
+        # would divert into the native sound routine and fault instead of
+        # diverging observably; perturb only the resumed suffix plan.
+        original_mutate = oracle.Candidate._mutate
+
+        def suffix_only(candidate, plan):
+            if candidate.name.endswith('continuation') and plan.registers.get('pc') == 0x1E58B8:
+                return plan
+            return original_mutate(candidate, plan)
+
+        monkeypatch.setattr(oracle.Candidate, '_mutate', suffix_only)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle-mutant-' + mutant,
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
+
+
+def test_type43_semantics_publish_span_and_template_from_a_reader():
+    from aladdin_sega.game.objects import contact as game
+    record = 0xFF6000
+    values = {0xFFF0C1: 0xFF, 0xFFF57D: 1, 0xFF7DFA: 0x1234, 0xFF7DF6: 0x0143, 0xFF7DF8: 0x0125,
+              0xFF7DFC: 0x0010, record + 2: 0x0200}
+    read = lambda address, size: values.get(address, 0)
+    writes, facts = game.contact_type43_update(read, record)
+    assert facts['old_secondary'] == 0x1234 and facts['new_secondary'] == 0x00BD
+    assert facts['vertical_span'] == 0x0120 and facts['command'] == 0x63
+    assert dict(writes)[record] == 0x8A and dict(writes)[0xFFF154] == 0xFF
+    assert (dict(writes)[0xFF7E0A], dict(writes)[0xFF7E0B]) == (0x00, 0xC0)
+    assert (dict(writes)[0xFF7E0C], dict(writes)[0xFF7E0D]) == (0x00, 0x15)
+    assert (dict(writes)[0xFF7E0E], dict(writes)[0xFF7E0F]) == (0x01, 0x40)
+    values[0xFFF0C1] = 0
+    assert game.contact_type43_update(read, record) == ([], {'active': 0, 'sound': 1, 'command': 0x63})
+    assert game.contact_type46_request(lambda a, s: {0xFF7E3C: 0x39, 0xFFF57D: 1}.get(a, 0)) == (
+        [(0xFF7E3C, 0x39)], {'old': 0x39, 'value': 0x39, 'capped': True, 'sound': 1, 'command': 0x66})

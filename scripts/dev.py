@@ -60,9 +60,18 @@ def _visible_verification(command, *, cwd, env, check=False):
     launcher only reports process liveness; it neither restarts nor qualifies.
     """
     started = time.monotonic()
+    pid_file = None
+    if "--output" in command:
+        # verify_status reads this while comparison.json does not exist yet.
+        output = Path(command[command.index("--output") + 1])
+        output.mkdir(parents=True, exist_ok=True)
+        pid_file = output / "launcher.pid"
     with subprocess.Popen(command, cwd=cwd, env=env) as process:
-        print(f"[verification] started pid={process.pid}; two sequential workers; "
-              "comparison.json is written at completion", file=sys.stderr, flush=True)
+        if pid_file is not None:
+            pid_file.write_text(str(process.pid), encoding="utf-8")
+        print(f"[verification] started pid={process.pid}; two fresh workers "
+              "(parallel unless --sequential); comparison.json is written at completion",
+              file=sys.stderr, flush=True)
         while True:
             try:
                 code = process.wait(timeout=30)
@@ -74,6 +83,8 @@ def _visible_verification(command, *, cwd, env, check=False):
         print(f"[verification] EXIT pid={process.pid} code={code} "
               f"elapsed={time.monotonic() - started:.1f}s; inspect comparison.json",
               file=sys.stderr, flush=True)
+    if pid_file is not None and pid_file.exists():
+        pid_file.unlink()
     return subprocess.CompletedProcess(command, code)
 
 

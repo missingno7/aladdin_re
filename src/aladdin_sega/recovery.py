@@ -29,6 +29,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         begin_contact_family_type03_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE46_ENTRY, begin_contact_family_type46_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE55_ENTRY, begin_contact_family_type55_dispatch,
+                        CONTACT_FAMILY_TYPE43_ENTRY, begin_contact_family_type43_dispatch_sound_seam,
                         CONTACT_COLLECTION_RELOCATION_ENTRY,
                         begin_contact_collection_relocation_dispatch,
                         begin_contact_family_type1f_contact_dispatch,
@@ -442,6 +443,19 @@ class Candidate:
         if entry == CONTACT_FAMILY_TYPE46_ENTRY:
             try:
                 seam = begin_contact_family_type46_dispatch_sound_seam(
+                    machine, dispatch_registers, prefix)
+                if not self._apply(machine, self._mutate(seam.prefix), target):
+                    return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+            return self._run_sound_seam(
+                machine, target, seam, suffix_transform=self._mutate,
+                on_complete=lambda: self.stats.__setitem__(
+                    'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1),
+            )
+        if entry == CONTACT_FAMILY_TYPE43_ENTRY:
+            try:
+                seam = begin_contact_family_type43_dispatch_sound_seam(
                     machine, dispatch_registers, prefix)
                 if not self._apply(machine, self._mutate(seam.prefix), target):
                     return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')

@@ -556,3 +556,19 @@ Parent ownership, original-ROM found/full-pool, future/fresh and mutations pass.
 1,568 tests pass in 135.70s; cold 26,378-frame PASS/zero restores at
 `artifacts/type20-parent-history/`. Scan fallbacks fall 5,249 -> 5,245;
 dispatcher hits 165 -> 161.
+
+
+## Grinder tooling and baseline on the longer main
+
+Adopted the factory review's tracer/checker, verifier status, frontier ledger,
+parent-of-child census, leaf review gate, parallel verification workers and the
+gate-set pin as tracked scripts with tests (63 new tests).  Split the Type-55
+and Type-46 exemplars so predicates and writes live in `game/objects`; ported
+the trial's Type-55 FFF0BE arms and the Type-43 seam; routed Type-55 in both
+contact-scan callback maps.  No new native API, snapshot state or framework.
+
+Validated: 1,631 tests in 153.98 s; cold 82,161-frame comparison PASS, zero
+restores, 403.1 s with parallel workers (the sequential form would take about
+twice that), receipts current at `artifacts/factory-baseline-main/`.  Next
+frontier by count: `1AF5F0`, `1AFB36`, `1AFA84`, then `1AE9E0` and `1AEECA`;
+census fixtures with retained parents in `artifacts/census-main-*`.

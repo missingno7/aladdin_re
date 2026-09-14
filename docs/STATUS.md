@@ -6,6 +6,34 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Grinder tooling landed; baseline on the 82,161-frame main
+
+The review's DO NOW items are in the checkout.  `scripts/factcheck.py`
+(`facts`, `check`, `branches`, `segments`) derives every machine fact of a branch
+by single-stepping the original and names every fact a plan gets wrong;
+`scripts/verify_status.py` is the only reader of verifier state;
+`scripts/frontier_ledger.py` ranks what the last cold run still hands to the
+original and joins refusals to their boundary function; `scripts/recovery_census.py`
+is a command with `--parent` retention; `scripts/leaf_review.py` is the
+supervision gate.  `compare_history` runs its two fresh workers in parallel
+(`--sequential` opts out) and reports a watchdog expiry as `TIMEOUT` for either
+worker.  The lifecycle gate set is pinned at 62 (native limit 64).  The
+Type-55 and Type-46 exemplars now keep their predicates and durable writes in
+`game/objects/contact.py`; the Type-55 direct and selected-guard arms and the
+Type-43 command-63 seam from the review's trial are adopted with their tests,
+and Type-55 is owned inside the contact scan.  The step loop is
+`docs/recovery-grinder-protocol.md`; the worker prompt is
+`docs/recovery-grinder-goal.md`; per-leaf records go to `docs/recovery-ledger.md`.
+
+**1,631 tests pass in 153.98 s**; the current **82,161-frame cold comparison
+passes** with zero restores in 403.1 s (parallel workers) at
+`artifacts/factory-baseline-main/`.  The ledger of that run: 37,458 fallbacks
+against 72,249 candidate hits; the largest unrecovered collection callbacks are
+`1AF5F0` (6,668), `1AFB36` (6,277) and `1AFA84` (2,829), the scheduler refused
+15,691 admissions, and the spawn dispatcher has 40 unrecovered targets.  The
+`.venv` was recreated from the same Python 3.12.14 with `capstone` added to the
+test extras.
+
 ## Type-20 relocation composed inside contact scan
 
 Recorded Type-36 callbacks at `1AF516` now compose the existing secondary-pool

@@ -50,6 +50,7 @@ CONTACT_FAMILY_TYPE44_ENTRY = 0x1AEF12
 CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
 CONTACT_FAMILY_TYPE46_ENTRY = 0x1AEF5C
 CONTACT_FAMILY_TYPE55_ENTRY = 0x1AF590
+CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
@@ -1567,6 +1568,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE03_ENTRY,
                       CONTACT_FAMILY_TYPE46_ENTRY,
                       CONTACT_FAMILY_TYPE55_ENTRY,
+                      CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
@@ -1767,6 +1769,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE1F_ENTRY: _contact_type1f_ram_dispatch,
         CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
         CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
+        CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -1835,6 +1838,7 @@ def _contact_scan_resume(machine, registers):
                         CONTACT_FAMILY_TYPE1F_ENTRY: _contact_type1f_ram_dispatch,
                         CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
                         CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
+                        CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -3564,22 +3568,26 @@ def begin_contact_family_type46_sound_seam(machine, registers):
                      ('type46 sound', 0xFFF57D, 1),
                      ('type46 total', 0xFFF14E, 2)])
     read = lambda address, size: _read(machine, address, size)
-    old = read(0xFF7E3C, 1)
-    if old == 0x39:
+    request, facts = game.contact_type46_request(read)
+    if facts['capped']:
         raise UnsupportedCandidate('type46 capped return arm is not recovered')
-    value = min(old + 1, 0x39)
-    sound = read(0xFFF57D, 1)
-    if not sound:
+    if not facts['sound']:
         raise UnsupportedCandidate('type46 sound-off replacement arm is not recovered')
+    old, value = facts['old'], facts['value']
+    # Machine side: the local BSR frame, the five-register MOVEM save, the
+    # request argument and command words, and the JSR return to 1AEFA0.
+    # Cost table (original machine): 220 cycles / 14 instructions below the
+    # clamp, 238 / 15 when the increment is clamped at 0x39.
     writes = (*_bytes(sp - 4, 0x1AEF6C, 4), *_bytes(sp - 6, registers['d0'], 2),
               *_bytes(sp - 10, registers['a6'], 4), *_bytes(sp - 14, registers['a1'], 4),
               *_bytes(sp - 18, registers['a0'], 4), *_bytes(sp - 22, registers['d1'], 4),
-              *_bytes(sp - 26, (registers['d0'] & 0xFFFFFF00) | value, 4), *_bytes(sp - 30, 0x66, 4),
-              *_bytes(sp - 34, 0x1AEFA0, 4), *_bytes(0xFF7E3C, value, 1))
+              *_bytes(sp - 26, (registers['d0'] & 0xFFFFFF00) | value, 4),
+              *_bytes(sp - 30, facts['command'], 4),
+              *_bytes(sp - 34, 0x1AEFA0, 4), *request)
     prefix = AtomicPlan(220 if old < 0x38 else 238, 14 if old < 0x38 else 15, writes,
                         {**registers, 'd0': (registers['d0'] & 0xFFFFFF00) | value,
                          'a7': sp - 34, 'pc': 0x1E58B8,
-                         'sr': _logic_sr(sr, sound, 1)}, 0x1AEF9A, direct_calls=2)
+                         'sr': _logic_sr(sr, facts['sound'], 1)}, 0x1AEF9A, direct_calls=2)
     return SoundSeam(prefix, sp - 6, 0x1AEFA6, 0x1AEFA6, 24, 28, 28,
                      suffix=finish_contact_family_type46_sound)
 
@@ -3622,8 +3630,106 @@ def finish_contact_family_type46_sound(machine, registers):
                       tail.last_pc, tail.direct_calls)
 
 
+def begin_contact_family_type43_sound_seam(machine, registers):
+    """1AE64C's motion/template update and its command-63 sound request.
+
+    The publication itself is ``game.contact_type43_update``.  This boundary
+    owns the saved secondary-motion word at ``sp-2``, the five-register MOVEM
+    frame, the request argument/command words and the JSR return to 1AE6A0,
+    then hands the original machine the request at 1E58B8.  The resume point
+    1AE6A6 lies past a second native call (JSR 1E589A) that the free-running
+    original executes inside the same seam.  Cost table (original machine):
+    510 cycles / 32 instructions for the active, sound-on arm.
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type43 record/stack')
+    _spans_disjoint([('type43 record', record, 66),
+                     ('type43 sound frame', sp - 30, 30),
+                     ('type43 active', 0xFFF0C1, 1),
+                     ('type43 sound', 0xFFF57D, 1),
+                     ('type43 motion', 0xFF7DF6, 8),
+                     ('type43 span', 0xFF7E0A, 8),
+                     ('type43 latch', 0xFFF154, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    update, facts = game.contact_type43_update(read, record)
+    if not facts['active']:
+        raise UnsupportedCandidate('type43 inactive early return is not recovered')
+    if not facts['sound']:
+        raise UnsupportedCandidate('type43 sound-off request arm is not recovered')
+    vertical_span = facts['vertical_span']
+    writes = (*_bytes(sp - 2, facts['old_secondary'], 2),
+              *update,
+              *_bytes(sp - 22, (registers['d0'] & 0xFFFF0000) | vertical_span, 4),
+              *_bytes(sp - 18, registers['d1'], 4),
+              *_bytes(sp - 14, registers['a0'], 4),
+              *_bytes(sp - 10, registers['a1'], 4),
+              *_bytes(sp - 6, registers['a6'], 4),
+              *_bytes(sp - 26, facts['command'], 4),
+              *_bytes(sp - 30, 0x1AE6A0, 4))
+    prefix = AtomicPlan(510, 32, writes,
+                        {**registers,
+                         'd0': (registers['d0'] & 0xFFFF0000) | vertical_span,
+                         'd7': (registers['d7'] & 0xFFFF0000) | facts['new_secondary'],
+                         'a7': sp - 30, 'pc': 0x1E58B8,
+                         'sr': _logic_sr(sr, facts['sound'], 1)}, 0x1AE69A, direct_calls=2)
+    return SoundSeam(prefix, sp, 0x1AE6A6, 0x1AE6A6, 26, 26, 30,
+                     suffix=finish_contact_family_type43_sound)
+
+
+def begin_contact_family_type43_dispatch_sound_seam(machine, registers, dispatch):
+    """Compose the table prefix with Type 43's exact command-63 seam."""
+    sp = registers['a7']
+    if (dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE43_ENTRY
+            or dispatch.registers.get('a7') != sp - 4):
+        raise UnsupportedCandidate('type43 dispatch prefix identity')
+    callback_registers = {**registers, **dispatch.registers}
+    sound = begin_contact_family_type43_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                    callback_registers)
+    final = dict(dispatch.registers)
+    final.update(sound.prefix.registers)
+    prefix = AtomicPlan(dispatch.cycles + sound.prefix.cycles,
+                        dispatch.instructions + sound.prefix.instructions,
+                        tuple(dict((*dispatch.writes, *sound.prefix.writes)).items()),
+                        final, sound.prefix.last_pc,
+                        dispatch.direct_calls + sound.prefix.direct_calls)
+    return SoundSeam(prefix, sound.stack_basis, sound.resume_pc, sound.return_slot,
+                     sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, sound.suffix)
+
+
+def finish_contact_family_type43_sound(machine, registers):
+    """Restore Type 43's saved registers and secondary-motion word, then return.
+
+    ``registers`` stands at the local resume 1AE6A6, past both native sound
+    calls; its A7 is the command-word slot.  The MOVEM frame, the saved
+    FF7DFA word and the caller's return slot sit at fixed offsets above it,
+    exactly as 1AE6A6..1AE6B2 reads them back: 96 cycles / 4 instructions.
+    """
+    base = registers['a7']
+    restored = dict(registers)
+    for name, offset in (('d0', 4), ('d1', 8), ('a0', 12), ('a1', 16), ('a6', 20)):
+        restored[name] = _read(machine, base + offset, 4)
+    old_secondary = _read(machine, base + 24, 2)
+    restored.update(a7=base + 30, pc=_read(machine, base + 26, 4) & 0xFFFFFF)
+    return AtomicPlan(96, 4, _bytes(0xFF7DFA, old_secondary, 2), restored, 0x1AE6B2)
+
+
 def begin_contact_family_type55(machine, registers):
-    """1AF590's recorded bit-4 bounded-distance return through 1AE6B4."""
+    """1AF590's bit-4 bounded-distance and direct flag returns through 1AE6B4.
+
+    Arm selection and the distance arithmetic are ``game.contact_type55_guard``;
+    this boundary owns the alias guards, the cost table, the register residue
+    and the CCR.  Cost table from the original machine (``factcheck``):
+
+        direct return  (FFF0BE set, FFF0C0 clear)          86 cycles /  6 instructions
+        guard, no borrow                                   180 / 15
+        guard, borrowed and negated                        182 / 16
+        guard reached through FFF0BE and FFF0C0 both set   +26 / +2
+
+    The guard's own SUB/NEG/CMP discards every incoming CCR bit it does not
+    set, so its residue is the same however it is reached.
+    """
     record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
     if (record | sp) & 1:
         raise UnsupportedCandidate('unaligned type55 record/stack')
@@ -3632,20 +3738,26 @@ def begin_contact_family_type55(machine, registers):
                      ('type55 motion', 0xFF7DFC, 2), ('type55 player', 0xFF7DF8, 2),
                      ('type55 tail', 0xFFF0F5, 1)])
     read = lambda address, size: _read(machine, address, size)
-    if read(0xFFF0BE, 1) or not (read(record + 6, 1) & 0x10):
+    arm, facts = game.contact_type55_guard(read, record)
+    writes = tuple(game.contact_type55_return())
+    if arm == 'direct':
+        return AtomicPlan(86, 6, writes,
+                          {'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF,
+                           'sr': _logic_sr(sr, 0, 1)},
+                          0x1AE6BA)
+    if arm == 'inactive':
         raise UnsupportedCandidate('type55 observed guard arm is not active')
-    delta = (read(record + 4, 2) - read(0xFF7DF8, 2) - 18) & 0xFFFF
-    previous = read(0xFF7DFC, 2)
-    distance = (previous - delta) & 0xFFFF
-    residue = _sub_sr(sr, previous, delta, 2)
-    borrowed = bool(residue & 1)
-    if borrowed:
-        distance = (-distance) & 0xFFFF
-        residue = _sub_sr(residue, 0, (-distance) & 0xFFFF, 2)
-    if distance < 6:
+    if arm == 'transition':
         raise UnsupportedCandidate('type55 transition arm is not recovered')
-    return AtomicPlan(182 if borrowed else 180, 16 if borrowed else 15, ((0xFFF0F5, 0xFF),),
-                      {'d0': (registers['d0'] & 0xFFFFFF00) | read(record + 6, 1),
+    delta, previous, distance, borrowed = (facts[key] for key in ('delta', 'previous', 'distance', 'borrowed'))
+    residue = _sub_sr(sr, previous, delta, 2)
+    if borrowed:
+        residue = _sub_sr(residue, 0, facts['difference'], 2)
+    cycles, instructions = (182, 16) if borrowed else (180, 15)
+    if facts['selector']:
+        cycles, instructions = cycles + 26, instructions + 2
+    return AtomicPlan(cycles, instructions, writes,
+                      {'d0': (registers['d0'] & 0xFFFFFF00) | facts['flags'],
                        'd2': (registers['d2'] & 0xFFFF0000) | delta,
                        'd7': (registers['d7'] & 0xFFFF0000) | distance,
                        'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF,

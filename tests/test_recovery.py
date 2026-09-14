@@ -567,3 +567,15 @@ def test_replace_dispatch_counts_prefix_subset_and_respects_deadline(entry):
     assert candidate.gate_pcs == (COUNTED_REPLACE_ENTRY, REPLACE_ENTRY)
     assert machine.gate_call == (entry, True)
     assert candidate.stats["fallback_reasons"] == {"scheduler admission": 1}
+
+
+def test_lifecycle_gate_set_is_pinned_and_within_native_capacity():
+    """A changed gate count is a deliberate parent-entry decision, never a side effect.
+
+    The native binding arms at most 64 gates; dispatcher children are routed
+    inside the collection dispatch gate and add nothing here.  Update the
+    pinned count only in the commit that gates a new parent entry.
+    """
+    gates = Candidate('lifecycle').gate_pcs
+    assert len(gates) == len(set(gates)) == 62
+    assert len(gates) <= 64

@@ -324,6 +324,94 @@ def publish_contact_position(x, y):
             (0xFF7E44, (y >> 8) & 0xFF), (0xFF7E45, y & 0xFF)]
 
 
+def _word(address, value):
+    return [(address, (value >> 8) & 0xFF), (address + 1, value & 0xFF)]
+
+
+def _long(address, value):
+    return [(address + index, (value >> (8 * (3 - index))) & 0xFF) for index in range(4)]
+
+
+def contact_type55_guard(read, record):
+    """Select 1AF590's arm from live RAM and name its distance facts.
+
+    ``FFF0BE`` chooses the family: clear falls straight into the bit-4
+    distance guard; set first tests ``FFF0C0``, and a clear ``FFF0C0`` is a
+    direct flag return that never reads the record.  The guard subtracts the
+    object's horizontal delta from the previous motion word and negates a
+    borrowed result; a distance under six transitions the object, which is
+    not recovered.  Returns ``(arm, facts)`` with ``arm`` one of ``direct``,
+    ``inactive``, ``transition`` or ``guard``.
+    """
+    selector = read(0xFFF0BE, 1)
+    facts = {'selector': selector}
+    if selector and not read(0xFFF0C0, 1):
+        return 'direct', facts
+    facts['flags'] = read(record + 6, 1)
+    if not facts['flags'] & 0x10:
+        return 'inactive', facts
+    delta = (read(record + 4, 2) - read(0xFF7DF8, 2) - 18) & 0xFFFF
+    previous = read(0xFF7DFC, 2)
+    difference = (previous - delta) & 0xFFFF
+    borrowed = previous < delta
+    facts.update(delta=delta, previous=previous, difference=difference, borrowed=borrowed,
+                 distance=(-difference) & 0xFFFF if borrowed else difference)
+    return ('transition' if facts['distance'] < 6 else 'guard'), facts
+
+
+def contact_type55_return():
+    """The tail flag every recovered Type-55 return publishes through 1AE6B4."""
+    return [(0xFFF0F5, 0xFF)]
+
+
+def contact_type46_request(read):
+    """1AEF5C's capped command-66 counter and its sound request.
+
+    The counter byte advances by one up to ``0x39``.  An already-capped
+    counter returns without a request and a muted ``FFF57D`` replaces the
+    object without sound; neither arm is recovered.  Returns ``(writes,
+    facts)`` where ``facts`` names the old and new counter, the request
+    command and both refusal conditions.
+    """
+    old = read(0xFF7E3C, 1)
+    value = min(old + 1, 0x39)
+    facts = {'old': old, 'value': value, 'capped': old == 0x39,
+             'sound': read(0xFFF57D, 1), 'command': 0x66}
+    return [(0xFF7E3C, value)], facts
+
+
+def contact_type43_update(read, record):
+    """1AE64C's motion span and type-8A template publication.
+
+    Only an active ``FFF0C1`` publishes.  The secondary motion word becomes
+    the record's link field minus the horizontal motion; the four span words
+    at ``FF7E0A`` combine the low nibbles of the motion words with the new
+    secondary and the previous motion, then the high bits alone; the record
+    becomes type ``8A`` with template ``124454`` and the ``FFF154`` latch is
+    set.  Returns ``(writes, facts)``: the old secondary motion the caller
+    restores after its sound request, the new value, the vertical span left
+    in D0, and the activity and sound predicates.
+    """
+    active = read(0xFFF0C1, 1)
+    facts = {'active': active, 'sound': read(0xFFF57D, 1), 'command': 0x63}
+    if not active:
+        return [], facts
+    old_secondary = read(0xFF7DFA, 2)
+    motion_x, motion_y = read(0xFF7DF6, 2), read(0xFF7DF8, 2)
+    new_secondary = (read(record + 2, 2) - motion_x) & 0xFFFF
+    spans = (((motion_x & 0xF) + new_secondary) & 0xFFFF,
+             ((motion_y & 0xF) + read(0xFF7DFC, 2)) & 0xFFFF,
+             motion_x & 0xFFF0, motion_y & 0xFFF0)
+    writes = [*_word(0xFF7DFA, new_secondary),
+              (record, 0x8A), (record + 0x34, 0xFF),
+              *_long(record + 0x20, 0x124454), (record + 0x37, 0),
+              *_word(0xFF7E0A, spans[0]), *_word(0xFF7E0C, spans[1]),
+              *_word(0xFF7E0E, spans[2]), *_word(0xFF7E10, spans[3]),
+              (0xFFF154, 0xFF)]
+    facts.update(old_secondary=old_secondary, new_secondary=new_secondary, vertical_span=spans[3])
+    return writes, facts
+
+
 def _overlay(read, writes, address, size):
     values = {at: value for at, value in writes}
     if size == 1:

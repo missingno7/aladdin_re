@@ -1,6 +1,7 @@
 """Strict Genesis comparisons over cold-start input histories."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import hashlib
 import json
@@ -280,8 +281,34 @@ def _validate_execution(payload, store, selected, tree, candidate, receipt):
                 raise ValueError("Worker terminal disagrees with final frame")
 
 
+def _run_workers(roles, commands, *, timeout_seconds, parallel, runner=None):
+    """Run the reference and candidate workers; report the first failure in role order.
+
+    The two workers share nothing but the read-only history and ROM, so they
+    may run at the same time.  Each keeps its own watchdog; the report names
+    the worker whose watchdog expired.
+    """
+    if not parallel:
+        for role in roles:
+            run_worker(role, commands[role], timeout_seconds=timeout_seconds, runner=runner)
+        return
+    errors = {}
+    with ThreadPoolExecutor(max_workers=len(roles)) as pool:
+        futures = {role: pool.submit(run_worker, role, commands[role],
+                                     timeout_seconds=timeout_seconds, runner=runner) for role in roles}
+        for role in roles:
+            try:
+                futures[role].result()
+            except WorkerError as error:
+                errors[role] = error
+    for role in roles:
+        if role in errors:
+            raise errors[role]
+
+
 def compare_history(store_path, rom_path, *, node=None, candidate="lifecycle", tree=False,
-                    output=Path("artifacts/comparison"), timeout_seconds=120):
+                    output=Path("artifacts/comparison"), timeout_seconds=120, parallel=True,
+                    runner=None):
     """Separate fresh workers, strict per-frame state/video/PCM and final equality."""
     store = HistoryStore(store_path)
     selected = store.resolve(node or "main")
@@ -291,17 +318,23 @@ def compare_history(store_path, rom_path, *, node=None, candidate="lifecycle", t
     payloads = {}
     receipt = execution_receipt()
     report = {"history_id": selected, "tree": tree, "candidate": candidate,
-              "contract": "strict-genesis-every-canonical-frame", "status": "ERROR"}
+              "contract": "strict-genesis-every-canonical-frame", "status": "ERROR",
+              "workers": "parallel" if parallel else "sequential"}
     try:
-        for role, choice in (("reference", "original"), ("candidate", candidate)):
+        roles = (("reference", "original"), ("candidate", candidate))
+        commands = {}
+        for role, choice in roles:
             result_path = output / (role + ".json")
             command = [sys.executable, "-m", "aladdin_sega", "history-run", selected,
                        "--history", str(Path(store_path).resolve()), "--rom", str(Path(rom_path).resolve()),
                        "--candidate", choice, "--output", str(result_path.resolve())]
             if tree:
                 command.append("--tree")
-            run_worker(role, command, timeout_seconds=timeout_seconds)
-            payloads[role] = json.loads(result_path.read_text())
+            commands[role] = command
+        _run_workers([role for role, _ in roles], commands, timeout_seconds=timeout_seconds,
+                     parallel=parallel, runner=runner)
+        for role, choice in roles:
+            payloads[role] = json.loads((output / (role + ".json")).read_text())
             _validate_execution(payloads[role], store, selected, tree, choice, receipt)
         left, right = payloads["reference"], payloads["candidate"]
         equal = left["observations"] == right["observations"] and left["endpoints"] == right["endpoints"]
@@ -324,7 +357,14 @@ def compare_history(store_path, rom_path, *, node=None, candidate="lifecycle", t
                       reference={k:v for k,v in left.items() if k != "observations"},
                       candidate_receipt={k:v for k,v in right.items() if k != "observations"})
     except WorkerError as error:
-        report.update(status="CANDIDATE_ERROR" if error.role == "candidate" else error.kind, error=error.report())
+        # A watchdog expiry or a missing dependency is reported by its own
+        # class for either worker; only an execution failure of the candidate
+        # keeps the CANDIDATE_ERROR name.  ``error.worker`` names the role.
+        if error.kind == "ERROR":
+            status = "CANDIDATE_ERROR" if error.role == "candidate" else "ERROR"
+        else:
+            status = error.kind
+        report.update(status=status, error=error.report())
     except (OSError, ValueError, KeyError) as error:
         report.update(status="ERROR", error=str(error))
     write_json(output / "comparison.json", report)
