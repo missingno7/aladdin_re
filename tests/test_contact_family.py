@@ -33,6 +33,7 @@ TARGET_KINDS = {
     0x1AEECA: 0x23,  # recorded FFF0D8 gate, self-retype and double pool-slot spawn
     0x1AEB7A: 0x0D,  # recorded unconditional RTS stub
     0x1AEBFE: 0x14,  # recorded unconditional RTS stub (also reached by kind 0x2B)
+    0x1AE9A8: 0x0C,  # recorded FFF0D8 gate, own-buffer release and 1B7CC4 re-template
 }
 
 
@@ -257,6 +258,31 @@ def type23_fixture(*, active=1, occupy_primary=(), occupy_secondary=(), **kwargs
         assert machine.run(instructions=1) == 'gate'
         writes = [(0xFF7F06 + i * 66, 0x99) for i in occupy_primary]
         writes += [(0xFF7E82 + i * 66, 0x99) for i in occupy_secondary]
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=writes, registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
+def type0c_fixture(*, active=1, own_buffer=0, own_length=6, **kwargs):
+    """Construct a valid Type-0C collection record over the original ROM.
+
+    ``family_fixture`` seeds the record's own FFF0D8 gate (``active_d8``);
+    this optionally adds an attached buffer (record+42/record+41) for the
+    single ``_clear_objects(pair=False)`` release to find.
+    """
+    state = family_fixture(0x1AE9A8, active_d8=active, **kwargs)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        writes = [(RECORD + 41, own_length), *oracle.write_long(RECORD + 42, own_buffer)]
+        if own_buffer:
+            writes += [(own_buffer + i, 0xA5) for i in range(own_length + 1)]
         assert machine.atomic(target=machine.info['tick'] + 1_000_000,
                               cycles=1, instructions=1,
                               last_pc=COLLECTION_DISPATCH_ENTRY,

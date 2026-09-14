@@ -59,6 +59,7 @@ CONTACT_FAMILY_TYPE1A_ENTRY = 0x1AE9E0
 CONTACT_FAMILY_TYPE23_ENTRY = 0x1AEECA
 CONTACT_FAMILY_TYPE0D_ENTRY = 0x1AEB7A
 CONTACT_FAMILY_TYPE14_ENTRY = 0x1AEBFE
+CONTACT_FAMILY_TYPE0C_ENTRY = 0x1AE9A8
 CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
@@ -1623,6 +1624,61 @@ def begin_contact_family_type14_dispatch(machine, registers, dispatch):
                                     begin_contact_family_type14)
 
 
+def begin_contact_family_type0c(machine, registers):
+    """1AE9A8's FFF0D8 gate, own-buffer release and 1B7CC4 re-template.
+
+    Same shape as ``begin_contact_family_type1a`` but simpler: no linked
+    record at all, just the triggering record's own type byte and attached
+    buffer (``_clear_objects`` with ``pair=False``, the same RAM-domain
+    adapter already proven for ``clear_auxiliary_buffer``), then the exact
+    1AE30A adapter already proven for
+    ``initialize_object``/``finish_object``/``begin_contact_family_type1a``
+    re-expands a different fixed 19-byte template (1B7CC4, the same one
+    ``begin_contact_family_type23``'s own secondary spawn uses) into the
+    same record.  Neither call is a native re-entry.  Cost table
+    (``factcheck``):
+
+        inactive (FFF0D8 clear)                                       42 /  3
+        active, no buffer                                            868 / 74
+        + own buffer of length L                                 82+22L / 5+2L
+
+    Nothing on this path is a CMP/SUB/NEG, so X survives unchanged from
+    entry throughout; the closing CLR.L at 1AE36C is unconditionally the
+    last flag-setting instruction on the active arm (nothing follows it
+    here, unlike Type-23's own trailing position copy), so every active
+    exit carries the fixed Z=1 residue with only X preserved from entry --
+    the inactive arm's own TST.B FFF0D8 (value 0 by definition) yields the
+    identical Z=1 residue.
+    """
+    sp, sr = registers['a7'], registers['sr']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned type0c stack')
+    return_pc = _read(machine, sp, 4)
+    gate = _read(machine, 0xFFF0D8, 1)
+    if not gate:
+        _spans_disjoint([('type0c gate', 0xFFF0D8, 1), ('type0c return', sp, 4)])
+        return AtomicPlan(42, 3, (), {'a7': sp + 4, 'pc': return_pc & 0xFFFFFF,
+                                      'sr': _logic_sr(sr, 0, 1)}, 0x1AE9C4)
+    record = registers['a1']
+    cycles, instructions, clear_writes, linked = _clear_objects(
+        machine, registers, sp=sp - 4, pair=False,
+        extra_spans=(('type0c return', sp, 4), ('type0c gate', 0xFFF0D8, 1)))
+    init_writes = _initialize_object_effects(machine, record=record, template=0x1B7CC4, entry_sp=sp - 4)
+    # The second BSR (to 1AE30A) reuses the same sp-4 scratch slot the
+    # first BSR (to 1AE372) used; only its final push survives.
+    writes = (*clear_writes, *_bytes(sp - 4, 0x1AE9C4, 4), *init_writes)
+    return AtomicPlan(108 + cycles + 476, 8 + instructions + 27, tuple(dict(writes).items()),
+                      {'a5': record, 'a6': 0x1B7CC4 + 19, 'a7': sp + 4,
+                       'pc': return_pc & 0xFFFFFF, 'sr': _logic_sr(sr, 0, 4)},
+                      0x1AE9C4, direct_calls=2 + bool(linked))
+
+
+def begin_contact_family_type0c_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE0C_ENTRY,
+                                    begin_contact_family_type0c)
+
+
 def replace_object(machine, registers: dict[str, int], *, increment_total=False, extra_spans=(),
                    template=0x1B7ABC, return_site=REPLACE_LAST_PC, amount=0) -> AtomicPlan:
     """1AF4C6 replacement boundary, optionally including the 1AF4C2 +15 call."""
@@ -1799,6 +1855,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE23_ENTRY,
                       CONTACT_FAMILY_TYPE0D_ENTRY,
                       CONTACT_FAMILY_TYPE14_ENTRY,
+                      CONTACT_FAMILY_TYPE0C_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
@@ -2008,6 +2065,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE23_ENTRY: begin_contact_family_type23_dispatch,
         CONTACT_FAMILY_TYPE0D_ENTRY: begin_contact_family_type0d_dispatch,
         CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
+        CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -2084,6 +2142,7 @@ def _contact_scan_resume(machine, registers):
         CONTACT_FAMILY_TYPE23_ENTRY: begin_contact_family_type23_dispatch,
         CONTACT_FAMILY_TYPE0D_ENTRY: begin_contact_family_type0d_dispatch,
         CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
+        CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
