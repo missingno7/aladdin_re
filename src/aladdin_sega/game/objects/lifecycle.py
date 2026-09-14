@@ -200,6 +200,12 @@ def finish_lower_offset_spawn(record):
             for offset, byte in enumerate(bytes.fromhex('00124332'))]
 
 
+def finish_upper_tile_word_spawn(record):
+    """Apply callback 1B6FAE's FF7E26==5 fixed word write at record+0x1E."""
+    return [(record + 0x1E + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('6000'))]
+
+
 def finish_reverse_script_spawn(record):
     """Apply callback 1B6696's successful object script pointer (no retype)."""
     return [(record + 0x20 + offset, byte)

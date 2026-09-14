@@ -161,6 +161,10 @@ SPAWN_CAP_GUARD_TWO_ENTRY = 0x1B72FC
 SPAWN_CAP_GUARD_TWO_LAST_PC = 0x1B7330
 SPAWN_LOWER_OFFSET_CALLER_ENTRY = 0x1B71C4
 SPAWN_LOWER_OFFSET_CALLER_LAST_PC = 0x1B71DE
+SPAWN_UPPER_TILE_WORD_CALLER_ENTRY = 0x1B6FAE
+SPAWN_UPPER_TILE_WORD_CALLER_EARLY_PC = 0x1B6FD8
+SPAWN_UPPER_TILE_WORD_CALLER_LAST_PC = 0x1B6FE0
+SPAWN_UPPER_TILE_WORD_CALLER_TEMPLATE = 0x1B81EC
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -916,6 +920,70 @@ def spawn_lower_offset_caller(machine, registers: dict[str, int]) -> AtomicPlan:
                       prefix.direct_calls + selected.direct_calls + 2)
 
 
+def _upper_tile_word_wrapper_shape(machine):
+    raw = machine.peek_rom(SPAWN_UPPER_TILE_WORD_CALLER_ENTRY, 52)
+    if raw != bytes.fromhex(
+            '4df9001b81ec6100e2b0661e4a3900fff17566160c39000500ff7e26670e'
+            '41f9001294f24eb9001b26504e753b7c6000001e4e75'):
+        raise UnsupportedCandidate('upper tile word spawn caller ROM shape')
+
+
+def spawn_upper_tile_word_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6FAE``'s upper-pool creation, FFF175 guard and FF7E26 arm.
+
+    The same upper-pool prefix as ``spawn_upper_tile_caller`` (``1B6C0E``),
+    template ``0x1B81EC``.  A failed allocation and a successful one with
+    ``FFF175`` set both return locally at the same early RTS (``0x1B6FD8``)
+    with no further writes.  A successful allocation with ``FFF175`` clear
+    continues into a CMPI.B FF7E26,#5 selector: a match writes one fixed
+    word at record+0x1E and returns (``0x1B6FE0``, the arm every recorded
+    fixture exercises); a mismatch reaches 1B2650's VDP tile-data upload
+    (the same command-stream engine device port as 1B6C0E) and declines.
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper tile word spawn caller stack')
+    _upper_tile_word_wrapper_shape(machine)
+    _spans_disjoint([('upper tile word spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('upper tile word spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    entry = SPAWN_UPPER_TILE_WORD_CALLER_ENTRY
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': SPAWN_UPPER_TILE_WORD_CALLER_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_TILE_WORD_CALLER_EARLY_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    planned = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    guard = _read(planned, 0xFFF175, 1)
+    if guard != 0:
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], guard, 1))
+        return AtomicPlan(prefix.cycles + selected.cycles + 50,
+                          prefix.instructions + selected.instructions + 4, writes, final,
+                          SPAWN_UPPER_TILE_WORD_CALLER_EARLY_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    selector = _read(planned, 0xFF7E26, 1)
+    if selector != 5:
+        raise UnsupportedCandidate(
+            'upper tile word spawn caller requires the 1B2650 VDP tile upload')
+    suffix = tuple(game.finish_upper_tile_word_spawn(final['a5']))
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 0x6000, 2))
+    return AtomicPlan(prefix.cycles + selected.cycles + 94,
+                      prefix.instructions + selected.instructions + 7,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_UPPER_TILE_WORD_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
 def spawn_reverse_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B7232``'s direct reverse-pool allocator wrapper."""
     return spawn_plain_caller(machine, registers, SPAWN_REVERSE_PLAIN_CALLER_ENTRY)
@@ -1252,6 +1320,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_UPPER_TILE_CALLER_ENTRY: spawn_upper_tile_caller,
         SPAWN_CAP_GUARD_TWO_ENTRY: spawn_cap_guard_two,
         SPAWN_LOWER_OFFSET_CALLER_ENTRY: spawn_lower_offset_caller,
+        SPAWN_UPPER_TILE_WORD_CALLER_ENTRY: spawn_upper_tile_word_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
