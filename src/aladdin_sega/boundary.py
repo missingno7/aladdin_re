@@ -55,6 +55,7 @@ CONTACT_FAMILY_TYPE74_ENTRY = 0x1AFA84
 CONTACT_TYPE74_POOL = 0xFF7F06
 CONTACT_TYPE74_POOL_COUNT = 20
 CONTACT_FAMILY_TYPE6E_ENTRY = 0x1AFB36
+CONTACT_FAMILY_TYPE1A_ENTRY = 0x1AE9E0
 CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
@@ -1405,6 +1406,65 @@ def finish_object(machine, registers: dict[str, int]) -> AtomicPlan:
                                return_site=0x1AE976, last_pc=FINISH_LAST_PC)
 
 
+def begin_contact_family_type1a(machine, registers):
+    """1AE9E0's FFF0D8 gate, self pair-release and 1B7940 re-template.
+
+    An active ``FFF0D8`` gate (nonzero) is required; clear, the callback
+    returns at once with no writes.  Active, it sets ``FFF10E`` then runs
+    the exact external 1ABE6E pair-release (``_clear_objects``, the same
+    RAM-domain adapter already proven for ``clear_object_pair``) on the
+    triggering record itself -- its own type byte and attached buffer, and
+    if its own ``record+62`` link is set, that linked record's type byte
+    and buffer too -- then re-expands the fixed 19-byte template at
+    ``1B7940`` back into the (still-linked) triggering record through the
+    exact 1AE30A adapter already proven for ``initialize_object`` /
+    ``finish_object``.  Neither call is a native re-entry; both are plain
+    68000 subroutines this boundary already owns, so this is one RAM-only
+    leaf despite its two internal BSRs.  Cost table (each row additive):
+
+        inactive (FFF0D8 clear)                                       42 /  3
+        active, no buffer, no link                                   868 / 74
+        + own buffer of length L                                 82+22L / 5+2L
+        + linked record (no linked buffer)                          264 / 22
+        + linked record's own buffer of length M                82+22M / 5+2M
+
+    Nothing along this path is a CMP/SUB/NEG, so X survives unchanged from
+    entry throughout; the closing CLR.L at 1AE36C is unconditionally the
+    last flag-setting instruction on the active arm, so every active exit
+    carries N=Z=V=C from that fixed zero regardless of data (Z=1) with only
+    X preserved -- the inactive arm's own TST.B FFF0D8 (value 0 by
+    definition) yields the identical Z=1 residue.
+    """
+    sp, sr = registers['a7'], registers['sr']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned type1a stack')
+    return_pc = _read(machine, sp, 4)
+    gate = _read(machine, 0xFFF0D8, 1)
+    if not gate:
+        _spans_disjoint([('type1a gate', 0xFFF0D8, 1), ('type1a return', sp, 4)])
+        return AtomicPlan(42, 3, (), {'a7': sp + 4, 'pc': return_pc & 0xFFFFFF,
+                                      'sr': _logic_sr(sr, 0, 1)}, 0x1AE9FE)
+    record = registers['a1']
+    cycles, instructions, clear_writes, linked = _clear_objects(
+        machine, registers, sp=sp - 4, pair=True,
+        extra_spans=(('type1a return', sp, 4), ('type1a gate', 0xFFF0D8, 1), ('type1a tail', 0xFFF10E, 1)))
+    init_writes = _initialize_object_effects(machine, record=record, template=0x1B7940, entry_sp=sp - 4)
+    # The second BSR (to 1AE30A) reuses the same sp-4 scratch slot the first
+    # BSR (to 1ABE6E) used; only its final push (the resume-at-RTS address)
+    # survives as a permanent RAM diff.
+    writes = (*clear_writes, (0xFFF10E, 0xFF), *_bytes(sp - 4, 0x1AE9FE, 4), *init_writes)
+    return AtomicPlan(112 + cycles + 476, 8 + instructions + 27, tuple(dict(writes).items()),
+                      {'a5': record, 'a6': 0x1B7940 + 19, 'a7': sp + 4,
+                       'pc': return_pc & 0xFFFFFF, 'sr': _logic_sr(sr, 0, 4)},
+                      0x1AE9FE, direct_calls=2 + bool(linked))
+
+
+def begin_contact_family_type1a_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE1A_ENTRY,
+                                    begin_contact_family_type1a)
+
+
 def replace_object(machine, registers: dict[str, int], *, increment_total=False, extra_spans=(),
                    template=0x1B7ABC, return_site=REPLACE_LAST_PC, amount=0) -> AtomicPlan:
     """1AF4C6 replacement boundary, optionally including the 1AF4C2 +15 call."""
@@ -1577,6 +1637,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE58_ENTRY,
                       CONTACT_FAMILY_TYPE74_ENTRY,
                       CONTACT_FAMILY_TYPE6E_ENTRY,
+                      CONTACT_FAMILY_TYPE1A_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
@@ -1782,6 +1843,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
         CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
         CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
+        CONTACT_FAMILY_TYPE1A_ENTRY: begin_contact_family_type1a_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -1854,6 +1916,7 @@ def _contact_scan_resume(machine, registers):
                         CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
                         CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
         CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
+        CONTACT_FAMILY_TYPE1A_ENTRY: begin_contact_family_type1a_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,

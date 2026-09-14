@@ -29,6 +29,7 @@ TARGET_KINDS = {
     0x1AF5F0: 0x58,  # recorded bounded-distance guard, both arms owned
     0x1AFA84: 0x74,  # recorded bounded-distance guard, window/kind/state gate and child spawn
     0x1AFB36: 0x6E,  # recorded gate cascade, dual-axis distance guard and FFF103 state tail (kinds 6E-73)
+    0x1AE9E0: 0x1A,  # recorded FFF0D8 gate, self pair-release and 1B7940 re-template
 }
 
 
@@ -192,6 +193,41 @@ def type6e_fixture(*, origin_x2=0, fff103=1, **kwargs):
         machine.gates([COLLECTION_DISPATCH_ENTRY])
         assert machine.run(instructions=1) == 'gate'
         writes = [*oracle.write_word(0xFF7DF6, origin_x2), (0xFFF103, fff103)]
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=writes, registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
+def type1a_fixture(*, active=1, own_buffer=0, own_length=6, linked=0, linked_buffer=0,
+                   linked_length=3, **kwargs):
+    """Construct a valid Type-1A collection record over the original ROM.
+
+    ``family_fixture`` seeds the record's own FFF0D8 gate (``active_d8``);
+    this adds the record's own attached-buffer pointer/length (record+42/
+    record+41), its record+62 link to a second synthetic record, and that
+    linked record's own attached-buffer pointer/length.
+    """
+    state = family_fixture(0x1AE9E0, active_d8=active, **kwargs)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        writes = [(RECORD + 41, own_length), *oracle.write_long(RECORD + 42, own_buffer)]
+        if own_buffer:
+            writes += [(own_buffer + i, 0xA5) for i in range(own_length + 1)]
+        if linked:
+            writes += [*oracle.write_long(RECORD + 62, linked)]
+            writes += [(linked + i, 0xA5) for i in range(66)]
+            writes += [(linked + 41, linked_length), *oracle.write_long(linked + 42, linked_buffer)]
+            if linked_buffer:
+                writes += [(linked_buffer + i, 0xA5) for i in range(linked_length + 1)]
+        else:
+            writes += [*oracle.write_long(RECORD + 62, 0)]
         assert machine.atomic(target=machine.info['tick'] + 1_000_000,
                               cycles=1, instructions=1,
                               last_pc=COLLECTION_DISPATCH_ENTRY,
