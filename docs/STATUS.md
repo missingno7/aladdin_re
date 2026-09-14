@@ -6,6 +6,47 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B71C4, 1B6FAE and 1B6756 recovered (spawn dispatcher family, three more leaves)
+
+1B71C4 (kind 02) is a closure-plus-Y-offset shape identical to
+`spawn_closure_guard_caller`'s own tail (lower-pool allocation, template
+`0x1B78F0`, a record+0x20 script-pointer write, then a -8 Y-offset via
+`game.offset_spawn_position`/`_sub_sr`), just without that entry's FFF12A
+guard prefix; every arm -- allocation failure and success alike -- returns
+locally with no decline. 1B6FAE (kind 00) is the same upper-pool creation
+and FFF175 guard shape as 1B6C0E, but every recorded fixture exercises a
+third, fully RAM-only arm behind the guard: a `CMPI.B FF7E26,#5` selector
+whose match writes one fixed word at record+0x1E and returns; only the
+unrecorded selector-mismatch arm reaches 1B2650's VDP upload and declines.
+1B6756 (kind 33) is an FF7E26 selector guarding an *unconditional* reverse-
+pool spawn -- the wrapper branches to its shared RTS with no Z-flag check
+at all, so allocation success and pool exhaustion both recover as one arm;
+the unrecorded `FF7E26 == 0x0B` selector nests a second guard, a second
+spawn and a second VDP call, and declines. All three land as new standalone
+planners (`spawn_lower_offset_caller`, `spawn_upper_tile_word_caller`,
+`spawn_reverse_guard_caller`), qualified directly in
+`tests/test_spawn_partial_arms.py` since 1B6FAE and 1B6756 both decline on
+their unrecorded arm (1B71C4 has no decline and joins oracle_witness's
+`CALLER_POOLS`/`DISPATCH_CALLBACKS` directly instead). Two drafting bugs
+were caught by `factcheck check` before qualification, not guessed: an
+undercounted shared alloc-check BNE in 1B6FAE's word-write suffix (8
+cycles/1 instruction short), and an inverted guard condition in 1B6756 (the
+first draft declined the recorded arm and matched the unrecorded one).
+**2,186 tests pass in about 250 s**; the **82,161-frame cold comparison
+passes** with zero restores at `artifacts/spawn-guards3/` (frames 82,161,
+91,840 candidate hits, 2,563 fallbacks, down from 2,977). Next frontier:
+1B67C2 (211, a three-call shape with an embedded PRNG subroutine at 1B3032
+gating a double spawn -- needs its own characterization, deferred), 1B6F4A
+and 1B6F34 (115/110, pure `SPAWN_CLOSURE_CALLER_FACTS` table additions,
+same template `0x1B8264`, different script values), 1B6EEE/1B6FEE/1B7158/
+1B7018/1B6836 (84/79/79/`+4`/`+2`, closure- and guard-shaped variants
+sharing templates already proven -- `0x1B79B8`, `0x1B78F0` -- with existing
+entries, read-only characterized but not yet implemented), 1B65C0 (72, a
+Y-offset-only variant of `spawn_lower_offset_caller` with no script write),
+1B75D6 (72, upper-pool creation with an unconditional VDP call and no
+guard at all -- only its pool-exhaustion arm is recoverable), then the rest
+of the spawn dispatcher census by fallback count.
+
 ## 1B6696, 1B6C0E and 1B72FC recovered (spawn dispatcher family, three leaves)
 
 1B6696 (kind 33) is a pure `SPAWN_CLOSURE_CALLER_FACTS` table addition:
