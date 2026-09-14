@@ -1,5 +1,7 @@
 # Recovery workflow
 
+For sustained single-agent work, see [Solo recovery handoff](solo-recovery.md).
+
 Recovery work now uses immutable cold-start input histories.  A history is a
 canonical controller-input DAG, not a machine-state artifact.  The selected ROM
 and native binding replay each branch from its root; caches only accelerate a
