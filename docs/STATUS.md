@@ -6,6 +6,30 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B6C2E, 1B6E86 and 1B6F82 recovered (spawn dispatcher family, three more leaves)
+
+1B6C2E is byte-for-byte `spawn_upper_tile_caller`'s own shape (1B6C0E)
+with a different template (`0x1B7AA8`): RAM-only arms recover, the
+FFF175-clear VDP arm declines, matching 1B6C0E's recipe exactly. 1B6E86 is
+the only spawn-family entry recovered this stint with *zero* decline and
+zero writes on either guard state: a `BEQ.W`-form guard (`FFF107`) whose
+clear arm declines directly with no spawn attempted at all, and whose set
+arm runs an unconditional upper-pool spawn (template `0x1B7C24`) with no
+Z-check and no suffix. 1B6F82 wraps an outer `FF7E21` guard around exactly
+`spawn_upper_tile_caller`'s own shape again (template `0x1B8228`) --
+guard-clear declines directly, guard-set reaches the familiar FFF175/VDP
+split. **2,523 tests pass in about 290 s**; the **82,161-frame cold
+comparison passes** with zero restores at `artifacts/spawn-guardtile9/`
+(frames 82,161, 91,763 candidate hits, 1,514 fallbacks, down from 1,558).
+Next frontier: 1B75D6 (72, yet another byte-for-byte clone of
+`spawn_upper_tile_caller`'s shape, template `0x1B8174`, both non-VDP arms
+already MATCH-confirmed via `--vary`), then only `1B6D1E` and `1B6C5A`
+remain outside the escalated rows (`1B67C2`, `1B65F4`) -- both chain
+multiple native calls (VDP plus two or three distinct sound-seam JSRs)
+in one prefix, which section 3's admission filter excludes outright
+("more than one native call in its native shape with writes between
+them"), so neither is an admissible row for this recipe set.
+
 ## 1B70B0, 1B7060, 1B703C, 1B6636 and 1B7084 recovered (spawn dispatcher family, five more leaves)
 
 1B70B0/1B7060/1B703C are three more pure `SPAWN_CLOSURE_CALLER_FACTS`
