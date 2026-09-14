@@ -57,6 +57,8 @@ CONTACT_TYPE74_POOL_COUNT = 20
 CONTACT_FAMILY_TYPE6E_ENTRY = 0x1AFB36
 CONTACT_FAMILY_TYPE1A_ENTRY = 0x1AE9E0
 CONTACT_FAMILY_TYPE23_ENTRY = 0x1AEECA
+CONTACT_FAMILY_TYPE0D_ENTRY = 0x1AEB7A
+CONTACT_FAMILY_TYPE14_ENTRY = 0x1AEBFE
 CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
@@ -1586,6 +1588,41 @@ def begin_contact_family_type23_dispatch(machine, registers, dispatch):
                                     begin_contact_family_type23)
 
 
+def _begin_contact_family_noop(machine, registers, entry_pc):
+    """Shared shape for a dispatch-table slot whose whole body is an
+    unconditional RTS: no gate, no write, no flag change (RTS never
+    touches CCR, and nothing before it runs at all)."""
+    sp, sr = registers['a7'], registers['sr']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned noop stack')
+    return_pc = _read(machine, sp, 4)
+    _spans_disjoint([('noop return', sp, 4)])
+    return AtomicPlan(16, 1, (), {'a7': sp + 4, 'pc': return_pc & 0xFFFFFF, 'sr': sr}, entry_pc)
+
+
+def begin_contact_family_type0d(machine, registers):
+    """1AEB7A's entire body is an unconditional RTS."""
+    return _begin_contact_family_noop(machine, registers, 0x1AEB7A)
+
+
+def begin_contact_family_type0d_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE0D_ENTRY,
+                                    begin_contact_family_type0d)
+
+
+def begin_contact_family_type14(machine, registers):
+    """1AEBFE's entire body is an unconditional RTS.  Reached by both the
+    kind-0x14 and kind-0x2B collection-dispatch slots."""
+    return _begin_contact_family_noop(machine, registers, 0x1AEBFE)
+
+
+def begin_contact_family_type14_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE14_ENTRY,
+                                    begin_contact_family_type14)
+
+
 def replace_object(machine, registers: dict[str, int], *, increment_total=False, extra_spans=(),
                    template=0x1B7ABC, return_site=REPLACE_LAST_PC, amount=0) -> AtomicPlan:
     """1AF4C6 replacement boundary, optionally including the 1AF4C2 +15 call."""
@@ -1760,6 +1797,8 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE6E_ENTRY,
                       CONTACT_FAMILY_TYPE1A_ENTRY,
                       CONTACT_FAMILY_TYPE23_ENTRY,
+                      CONTACT_FAMILY_TYPE0D_ENTRY,
+                      CONTACT_FAMILY_TYPE14_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
@@ -1967,6 +2006,8 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
         CONTACT_FAMILY_TYPE1A_ENTRY: begin_contact_family_type1a_dispatch,
         CONTACT_FAMILY_TYPE23_ENTRY: begin_contact_family_type23_dispatch,
+        CONTACT_FAMILY_TYPE0D_ENTRY: begin_contact_family_type0d_dispatch,
+        CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -2041,6 +2082,8 @@ def _contact_scan_resume(machine, registers):
         CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
         CONTACT_FAMILY_TYPE1A_ENTRY: begin_contact_family_type1a_dispatch,
         CONTACT_FAMILY_TYPE23_ENTRY: begin_contact_family_type23_dispatch,
+        CONTACT_FAMILY_TYPE0D_ENTRY: begin_contact_family_type0d_dispatch,
+        CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,

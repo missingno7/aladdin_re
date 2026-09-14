@@ -31,6 +31,8 @@ TARGET_KINDS = {
     0x1AFB36: 0x6E,  # recorded gate cascade, dual-axis distance guard and FFF103 state tail (kinds 6E-73)
     0x1AE9E0: 0x1A,  # recorded FFF0D8 gate, self pair-release and 1B7940 re-template
     0x1AEECA: 0x23,  # recorded FFF0D8 gate, self-retype and double pool-slot spawn
+    0x1AEB7A: 0x0D,  # recorded unconditional RTS stub
+    0x1AEBFE: 0x14,  # recorded unconditional RTS stub (also reached by kind 0x2B)
 }
 
 
