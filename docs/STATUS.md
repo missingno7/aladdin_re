@@ -6,6 +6,34 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B717C, 1B6F60, 1B7018 and 1B6836 recovered (spawn dispatcher family, four more leaves)
+
+1B717C and 1B6F60 are further clones of already-established shapes:
+1B717C is byte-for-byte `spawn_closure_guard_caller`'s own shape (lower
+pool, template `0x1B78F0`, -8 Y-offset tail) with a different guard
+address (`FFF129`) and script value; 1B6F60 is a `SPAWN_CLOSURE_CALLER_FACTS`
+row sharing template `0x1B8264` with `1B6F4A`/`1B6F34`. 1B7018 is another
+pure closure-table row, byte-for-byte `finish_type_4c_spawn`'s own shape
+with a different type byte (`0x47` vs `0x4C`) -- a first draft assumed
+its allocator matched the upper-pool sibling that shares its template
+value, and was caught by a 10-cycle/1-instruction `factcheck check`
+MISMATCH before qualification; the fixture's own `calls:` line settled it
+(`SPAWN_REGION_LOWER_ENTRY`). 1B6836 is a new standalone planner: an
+FFF100 guard (both states recover) gating a reverse-pool creation whose
+tail writes a type/script pair and then both a +15 X and a -1 Y offset via
+the already-proven `offset_spawn_position`. **2,361 tests pass in about
+272 s**; the **82,161-frame cold comparison passes** with zero restores at
+`artifacts/spawn-closures6/` (frames 82,161, 91,782 candidate hits, 1,913
+fallbacks, down from 2,090). Next frontier: 1B712C (110, a two-flag guard
+cascade -- FFF127/FFF128 -- ahead of the same lower-pool/script/Y-offset
+tail shape as the `closure_guard` family), 1B75D6 (72, upper-pool creation
+with an unconditional VDP call and no guard -- only pool-exhaustion
+recoverable), 1B6654 (57, lower-pool creation with a type byte, a second
+flag byte at +9, and a +0x10 Y-only offset, no script write), 1B70F8 (57,
+a three-flag guard cascade -- FFF126/FFF127/FFF128 -- otherwise the same
+shape as 1B712C), then the rest of the census by fallback count. 1B67C2
+(211) remains escalated per `docs/blockers/2026-09-14-1B67C2.md`.
+
 ## 1B6EEE, 1B7158 and 1B6FEE recovered; 1B67C2 escalated (spawn dispatcher family)
 
 1B6EEE (kind 33) is a `SPAWN_CLOSURE_CALLER_FACTS` table addition: upper-
