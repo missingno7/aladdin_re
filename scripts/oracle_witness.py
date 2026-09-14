@@ -84,6 +84,7 @@ CLOSURE_WRAPPERS = {
     0x1B72AE: (0x1B5256,),  # reverse type 0x84, template 0x123E7A
     0x1B70D4: (0x1B5266,),  # upper type 0x4C, template 0x123E36
     0x1B71A0: (0x1B525E,),  # guarded lower, template 0x124318
+    0x1B6696: (0x1B5256,),  # reverse, script-only (no retype), template 0x125348
 }
 CALLER_POOLS.update({entry: callee for entry, (callee,) in CLOSURE_WRAPPERS.items()})
 CALLER_POOLS[SAFE_RETURN] = 0x1B5266
