@@ -433,7 +433,7 @@ def test_walker_seam_truncation_negative_controls(mutant):
 
 ROW_KNOWN_A = 0x1B72D4
 ROW_KNOWN_B = 0x1B6802
-ROW_UNKNOWN = 0x1B67C2
+ROW_UNKNOWN = 0x1B6D1E  # inadmissible (multi-native-call prefix); stays unrecovered
 ROW_CASES = (
     ("empty", (None,) * 23),
     ("single", (ROW_KNOWN_A,) + (None,) * 22),
@@ -692,9 +692,66 @@ def test_guarded_spawn_success_installs_its_script(free):
     assert _outer_record_bytes(result.outer_state, ((0x20, 0x124318),)) == {0x20: 0x124318}
 
 
+DOUBLE_CAP_ENTRY = 0x1B67C2
+
+
+def _double_cap_seed_writes(seed):
+    return tuple((0xFF7DEA + index, (seed >> (8 * (3 - index))) & 0xFF) for index in range(4))
+
+
+@pytest.mark.parametrize("name,seed,free,extra_free", (
+    # roll 1 low byte 0xCA (>= 0xC8): skip the first attempt, go straight to
+    # the shared second/skip-arm tail; that lone allocation succeeds.
+    ("skip-first", 0xF, 0, ()),
+    # roll 1 low byte 0x07 (< 0xC8): attempt the first spawn, but the pool is
+    # fully occupied (free=None) so its allocation fails with no roll spent
+    # on jitter and no second cap check at all.
+    ("attempt-first-alloc-fails", 0x0, None, ()),
+    # roll 1 low byte 0x48 (< 0xC8): first spawn succeeds and its jitter
+    # writes (bit 0 set, bit 1 clear); roll 4 (the second cap check) is
+    # 0xEB (>= 0xC8), so the second attempt is skipped.
+    ("attempt-first-then-skip-second", 0x5, 0, ()),
+    # roll 1 low byte 0x07 (< 0xC8): first spawn succeeds (script written,
+    # bit 0 set); roll 4 is 0x14 (< 0xC8) so a second, independent
+    # allocation is attempted and also succeeds (both jitter bits clear).
+    ("double-spawn", 0x0, 0, (0xFF842E,)),
+))
+def test_reverse_double_cap_matches_original_outer_and_future(name, seed, free, extra_free):
+    writes = _double_cap_seed_writes(seed) + tuple((address, 0) for address in extra_free)
+    expected = oracle.execute_dispatch(DOUBLE_CAP_ENTRY, free=free, candidate=None,
+                                       incoming_x=False, setup_writes=writes)
+    actual = oracle.execute_dispatch(DOUBLE_CAP_ENTRY, free=free, candidate="lifecycle",
+                                     incoming_x=False, setup_writes=writes)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
+
+
+def test_reverse_double_cap_skip_first_matches_the_bare_second_attempt_shape():
+    """The skip-first arm reaches the same 1B67E6 tail with no roll spent
+    on a first attempt: only one allocation and one jitter/script pair."""
+    writes = _double_cap_seed_writes(0xF)
+    result = oracle.execute_dispatch(DOUBLE_CAP_ENTRY, free=0, candidate="lifecycle",
+                                     incoming_x=False, setup_writes=writes, include_raw=True)
+    assert result.stats["spawn_caller_hits"] == 1
+    assert oracle.fresh_process_future(result.outer_state) == result.future
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_reverse_double_cap_double_spawn_negative_controls(mutant):
+    writes = _double_cap_seed_writes(0x0) + ((0xFF842E, 0),)
+    expected = oracle.execute_dispatch(DOUBLE_CAP_ENTRY, free=0, candidate=None,
+                                       incoming_x=False, setup_writes=writes)
+    actual = oracle.execute_dispatch(DOUBLE_CAP_ENTRY, free=0,
+                                     candidate="lifecycle-mutant-" + mutant,
+                                     incoming_x=False, setup_writes=writes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
 SETUP_KNOWN_A = 0x1B72D4
 SETUP_KNOWN_B = 0x1B6802
-SETUP_UNKNOWN = 0x1B67C2
+SETUP_UNKNOWN = 0x1B6D1E  # inadmissible (multi-native-call prefix); stays unrecovered
 
 
 def _setup_callbacks(entry, case):

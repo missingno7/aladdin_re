@@ -223,6 +223,10 @@ SPAWN_CLOSURE_GUARD_THREE_LAST_PC = 0x1B719E
 SPAWN_PRIMARY_FLAG_CALLER_ENTRY = 0x1B6FEE
 SPAWN_PRIMARY_FLAG_CALLER_LAST_PC = 0x1B6FFE
 SPAWN_PRIMARY_FLAG_CALLER_TEMPLATE = 0x1B7C74
+SPAWN_REVERSE_DOUBLE_CAP_ENTRY = 0x1B67C2
+SPAWN_REVERSE_DOUBLE_CAP_LAST_PC = 0x1B6800
+SPAWN_REVERSE_DOUBLE_CAP_TEMPLATE = 0x1B7DA0
+SPAWN_REVERSE_DOUBLE_CAP_SCRIPT = 0x1241FC
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -2206,6 +2210,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_UPPER_GUARD_PLAIN_ENTRY: spawn_upper_guard_plain_caller,
         SPAWN_UPPER_GUARD_TILE_ENTRY: spawn_upper_guard_tile_caller,
         SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY: spawn_upper_tile_four_caller,
+        SPAWN_REVERSE_DOUBLE_CAP_ENTRY: begin_spawn_reverse_double_cap,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
@@ -5543,6 +5548,218 @@ def rng_step(machine, registers):
                        'a7': sp + 4, 'pc': _read(machine, sp, 4) & 0xFFFFFF,
                        'sr': _logic_sr(residue, output, 2)},
                       RNG_LAST_PC)
+
+
+def _spawn_double_cap_roll(machine, registers, bsr_pc, resume_pc):
+    """Compose one caller-side ``BSR 1B3032`` into ``rng_step`` (18 cy/1 instr
+    for the BSR itself, plus ``rng_step``'s own 194 cy/17 instr), resuming at
+    ``resume_pc`` -- ``rng_step`` reads that pushed address back off the
+    stack, so no separate pop bookkeeping is needed here.
+    """
+    sp = registers['a7']
+    prefix = AtomicPlan(18, 1, _bytes(sp - 4, resume_pc, 4),
+                        {**registers, 'a7': sp - 4, 'pc': RNG_ENTRY}, bsr_pc, direct_calls=1)
+    step = rng_step(dispatch_plan_view(machine, prefix), prefix.registers)
+    return AtomicPlan(prefix.cycles + step.cycles, prefix.instructions + step.instructions,
+                      tuple(dict((*prefix.writes, *step.writes)).items()),
+                      {**registers, **step.registers}, step.last_pc,
+                      prefix.direct_calls + step.direct_calls)
+
+
+def _combine(cur, step):
+    """Fold one already-composed step (full registers) into the running plan."""
+    return AtomicPlan(cur.cycles + step.cycles, cur.instructions + step.instructions,
+                      tuple(dict((*cur.writes, *step.writes)).items()),
+                      step.registers, step.last_pc, cur.direct_calls + step.direct_calls)
+
+
+def _spawn_double_cap_jitter(machine, cur, bsr_pc, resume_pc, record):
+    """Compose ``1B6794``: two more rolls, signed X jitter, conditional
+    script pointer and flag writes, ending back at ``resume_pc``.
+
+    Shared by both the first spawn attempt (no position offset before it)
+    and the second/skip-arm attempt (``Y += 8`` / flag flip already applied
+    by the caller).  Cost table, every number from ``factcheck facts``:
+
+        BSR.b 1B6794                                18 cy / 1 instr
+        roll (jitter)                              212 cy / 18 instr
+        ANDI.W #$7,D7                                8 cy / 1 instr
+        SUBI.W #$3,D7                                8 cy / 1 instr
+        ADD.W D7,$2(A5)                             16 cy / 1 instr
+        roll (script bits)                         212 cy / 18 instr
+        BTST.B #0,D7                                10 cy / 1 instr
+        bit 0 clear: BEQ.b taken                    10 cy / 1 instr
+        bit 0 set: BEQ.b not taken + MOVE.L      8 + 24 cy / 2 instr
+        BTST.B #1,D7                                10 cy / 1 instr
+        bit 1 clear: BEQ.b taken + RTS            10 + 16 cy / 2 instr
+        bit 1 set: BEQ.b not taken + ST.B + RTS  8 + 16 + 16 cy / 3 instr
+    """
+    sp = cur.registers['a7']
+    push = AtomicPlan(18, 1, _bytes(sp - 4, resume_pc, 4),
+                      {**cur.registers, 'a7': sp - 4, 'pc': 0x1B6794}, bsr_pc, direct_calls=1)
+    body = _combine(cur, push)
+    body = _combine(body, _spawn_double_cap_roll(
+        dispatch_plan_view(machine, body), body.registers, 0x1B6794, 0x1B6798))
+    roll_a = body.registers['d7'] & 0xFFFF
+    masked = roll_a & 7
+    sr = _logic_sr(body.registers['sr'], masked, 2)               # ANDI.W #$7,D7
+    subi = (masked - 3) & 0xFFFF
+    sr = _sub_sr(sr, masked, 3, 2)                                 # SUBI.W #$3,D7
+    view = dispatch_plan_view(machine, body)
+    x_before = _read(view, record + 2, 2)
+    sr = _add_sr(sr, x_before, subi, 2)                            # ADD.W D7,$2(A5)
+    jitter_writes = tuple(game.jitter_reverse_spawn_x(
+        lambda address, size: _read(view, address, size), record, roll_a))
+    body = _combine(body, AtomicPlan(8 + 8 + 16, 3, jitter_writes,
+                                     {**body.registers,
+                                      'd7': (body.registers['d7'] & 0xFFFF0000) | subi, 'sr': sr},
+                                     0x1B67A0))
+    body = _combine(body, _spawn_double_cap_roll(
+        dispatch_plan_view(machine, body), body.registers, 0x1B67A4, 0x1B67A8))
+    roll_b = body.registers['d7'] & 0xFF
+    sr = body.registers['sr']
+    sr_bit0 = (sr & ~0x04) | (0x04 if not (roll_b & 1) else 0)     # BTST.B #0,D7
+    if roll_b & 1:
+        script_writes = tuple(game.finish_reverse_spawn_script(record))
+        sr = _logic_sr(sr_bit0, SPAWN_REVERSE_DOUBLE_CAP_SCRIPT, 4)
+        body = _combine(body, AtomicPlan(10 + 8 + 24, 3, script_writes,
+                                         {**body.registers, 'sr': sr}, 0x1B67B6))
+    else:
+        body = _combine(body, AtomicPlan(10 + 10, 2, (), {**body.registers, 'sr': sr_bit0}, 0x1B67B6))
+    sr = body.registers['sr']
+    sr_bit1 = (sr & ~0x04) | (0x04 if not (roll_b & 2) else 0)     # BTST.B #1,D7
+    if roll_b & 2:
+        flag_writes = tuple(game.finish_reverse_spawn_flag(record))
+        body = _combine(body, AtomicPlan(10 + 8 + 16 + 16, 4, flag_writes,
+                                         {**body.registers, 'a7': body.registers['a7'] + 4,
+                                          'pc': resume_pc, 'sr': sr_bit1}, 0x1B67C0))
+    else:
+        body = _combine(body, AtomicPlan(10 + 10 + 16, 3, (),
+                                         {**body.registers, 'a7': body.registers['a7'] + 4,
+                                          'pc': resume_pc, 'sr': sr_bit1}, 0x1B67C0))
+    return body
+
+
+def begin_spawn_reverse_double_cap(machine, registers):
+    """Recover ``1B67C2``: an RNG-gated reverse-pool spawn attempt, up to two.
+
+    ``BSR 1B3032`` rolls a cap check (``CMPI.B #$C8,D7``/``BCC``); a roll
+    ``>= 0xC8`` skips straight to the second/skip-arm shared tail at
+    ``1B67E6`` with no first attempt at all.  A roll ``< 0xC8`` attempts the
+    first spawn: an ordinary reverse-pool allocation (the proven
+    ``spawn_region`` ``SPAWN_REGION_REVERSE_ENTRY`` arm, template
+    ``0x1B7DA0``) that returns directly on failure (no further roll
+    consumed) or, on success, runs the shared jitter/script tail
+    (``_spawn_double_cap_jitter``, above) with no position offset. After
+    that tail a *second*, independently-rolled cap check gates a second
+    spawn attempt at the same shared ``1B67E6`` tail the skip arm reaches
+    directly -- this one applies ``Y += 8`` and flips every bit of
+    ``record + 9`` (``EORI.B #$FF``) before its own jitter/script tail.
+    Both allocation failures and both cap-check-skip arms return directly
+    with no further writes.
+
+    Cost table for the branch tree itself (``_spawn_double_cap_jitter``
+    above covers its own tail); every number from ``factcheck facts``:
+
+        roll (cap check)                                 212 cy / 18 instr
+        CMPI.B #$C8,D7                                      8 cy /  1 instr
+        BCC.b cap 1, not taken / taken                   8 / 10 cy /  1 instr
+        LEA + BSR into spawn_region                         30 cy /  2 instr
+        BNE.w 1B6800 (first attempt), not taken / taken 12 / 10 cy /  1 instr
+        BNE.b 1B6800 (second attempt), not taken/taken   8 / 10 cy /  1 instr
+        ADDI.W #$8,$4(A5) (second attempt only)             20 cy /  1 instr
+        EORI.B #$FF,$9(A5) (second attempt only)            20 cy /  1 instr
+        BCC.b cap 2, not taken / taken                   8 / 10 cy /  1 instr
+        RTS (1B6800, shared final)                          16 cy /  1 instr
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned spawn double-cap stack')
+    _spans_disjoint([('spawn double-cap frame', sp - 24, 28),
+                     ('spawn double-cap pool', 0xFF7E82, 24 * 66),
+                     *SPAWN_REGION_GLOBALS])
+    outer_return = _read(machine, sp, 4)
+
+    def finish(cur, sr):
+        final = {**cur.registers, 'a7': sp + 4, 'pc': outer_return & 0xFFFFFF, 'sr': sr}
+        return AtomicPlan(cur.cycles + 16, cur.instructions + 1, cur.writes, final,
+                          SPAWN_REVERSE_DOUBLE_CAP_LAST_PC, cur.direct_calls)
+
+    def second_attempt(cur):
+        """The shared ``1B67E6`` tail: allocate, then on success offset+flip+jitter."""
+        entry_sp = cur.registers['a7']
+        prefix = AtomicPlan(30, 2, _bytes(entry_sp - 4, 0x1B67F0, 4),
+                            {**cur.registers, 'a6': SPAWN_REVERSE_DOUBLE_CAP_TEMPLATE,
+                             'a7': entry_sp - 4, 'pc': SPAWN_REGION_REVERSE_ENTRY},
+                            0x1B67EC, direct_calls=1)
+        selected = spawn_region(dispatch_plan_view(machine, _combine(cur, prefix)),
+                                prefix.registers, SPAWN_REGION_REVERSE_ENTRY)
+        allocated = _combine(cur, AtomicPlan(prefix.cycles + selected.cycles,
+                                             prefix.instructions + selected.instructions,
+                                             tuple(dict((*prefix.writes, *selected.writes)).items()),
+                                             selected.registers, selected.last_pc,
+                                             prefix.direct_calls + selected.direct_calls))
+        alloc_failed = not (selected.registers['sr'] & 4)
+        allocated = _combine(allocated, AtomicPlan(10 if alloc_failed else 8, 1, (),
+                                                   allocated.registers, allocated.last_pc))
+        if alloc_failed:
+            return finish(allocated, allocated.registers['sr'])
+        record = allocated.registers['a5']
+        view = dispatch_plan_view(machine, allocated)
+        offset_writes = tuple(game.offset_second_reverse_spawn(
+            lambda address, size: _read(view, address, size), record))
+        y_before = _read(view, record + 4, 2)
+        flag_before = _read(view, record + 9, 1)
+        sr = _add_sr(allocated.registers['sr'], y_before, 8, 2)   # ADDI.W #$8,$4(A5)
+        sr = _logic_sr(sr, flag_before ^ 0xFF, 1)                  # EORI.B #$FF,$9(A5)
+        offset_applied = _combine(allocated, AtomicPlan(20 + 20, 2, offset_writes,
+                                                         {**allocated.registers, 'sr': sr},
+                                                         allocated.last_pc))
+        finished = _spawn_double_cap_jitter(machine, offset_applied, 0x1B67FE, 0x1B6800, record)
+        return finish(finished, finished.registers['sr'])
+
+    def first_attempt(cur):
+        """The fall-through ``1B67CC`` tail: allocate, then on success jitter, then cap 2."""
+        entry_sp = cur.registers['a7']
+        prefix = AtomicPlan(30, 2, _bytes(entry_sp - 4, 0x1B67D6, 4),
+                            {**cur.registers, 'a6': SPAWN_REVERSE_DOUBLE_CAP_TEMPLATE,
+                             'a7': entry_sp - 4, 'pc': SPAWN_REGION_REVERSE_ENTRY},
+                            0x1B67D2, direct_calls=1)
+        selected = spawn_region(dispatch_plan_view(machine, _combine(cur, prefix)),
+                                prefix.registers, SPAWN_REGION_REVERSE_ENTRY)
+        allocated = _combine(cur, AtomicPlan(prefix.cycles + selected.cycles,
+                                             prefix.instructions + selected.instructions,
+                                             tuple(dict((*prefix.writes, *selected.writes)).items()),
+                                             selected.registers, selected.last_pc,
+                                             prefix.direct_calls + selected.direct_calls))
+        alloc_failed = not (selected.registers['sr'] & 4)
+        allocated = _combine(allocated, AtomicPlan(10 if alloc_failed else 12, 1, (),
+                                                   allocated.registers, allocated.last_pc))
+        if alloc_failed:
+            return finish(allocated, allocated.registers['sr'])
+        record = allocated.registers['a5']
+        jittered = _spawn_double_cap_jitter(machine, allocated, 0x1B67DA, 0x1B67DC, record)
+        rolled = _combine(jittered, _spawn_double_cap_roll(
+            dispatch_plan_view(machine, jittered), jittered.registers, 0x1B67DC, 0x1B67E0))
+        d7 = rolled.registers['d7']
+        sr = _cmp_sr(rolled.registers['sr'], d7 & 0xFF, 0xC8, 1)      # CMPI.B #$C8,D7
+        skip_second = (d7 & 0xFF) >= 0xC8
+        rolled = _combine(rolled, AtomicPlan(8, 1, (), {**rolled.registers, 'sr': sr}, rolled.last_pc))
+        rolled = _combine(rolled, AtomicPlan(10 if skip_second else 8, 1, (),
+                                             rolled.registers, rolled.last_pc))
+        if skip_second:
+            return finish(rolled, rolled.registers['sr'])
+        return second_attempt(rolled)
+
+    current = AtomicPlan(0, 0, (), dict(registers), SPAWN_REVERSE_DOUBLE_CAP_ENTRY)
+    rolled = _combine(current, _spawn_double_cap_roll(machine, current.registers,
+                                                      SPAWN_REVERSE_DOUBLE_CAP_ENTRY, 0x1B67C6))
+    d7 = rolled.registers['d7']
+    sr = _cmp_sr(rolled.registers['sr'], d7 & 0xFF, 0xC8, 1)          # CMPI.B #$C8,D7
+    skip_first = (d7 & 0xFF) >= 0xC8
+    rolled = _combine(rolled, AtomicPlan(8, 1, (), {**rolled.registers, 'sr': sr}, rolled.last_pc))
+    rolled = _combine(rolled, AtomicPlan(10 if skip_first else 8, 1, (), rolled.registers, rolled.last_pc))
+    return second_attempt(rolled) if skip_first else first_attempt(rolled)
 
 
 def begin_contact_family_type55(machine, registers):

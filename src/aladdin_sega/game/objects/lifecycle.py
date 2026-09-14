@@ -379,3 +379,36 @@ def finish_primary_mixed_guard_spawn(record):
             *[(record + 0x0a + offset, value)
               for offset, value in enumerate(bytes.fromhex('0012146c'))],
             (record + 0x29, 1)]
+
+
+def offset_second_reverse_spawn(read, record):
+    """Apply ``1B67F2``/``1B67F8``'s second-attempt Y offset and flag flip.
+
+    Only the second (or skip-first) reverse-pool spawn attempt of ``1B67C2``
+    applies this correction before its shared jitter/script tail: Y += 8,
+    then every bit of the fixed flag byte at ``record + 9`` is flipped.
+    """
+    y = (read(record + 4, 2) + 8) & 0xFFFF
+    flag = read(record + 9, 1) ^ 0xFF
+    return [*((record + 4 + index, (y >> (8 * (1 - index))) & 0xFF)
+              for index in range(2)),
+            (record + 9, flag)]
+
+
+def jitter_reverse_spawn_x(read, record, roll):
+    """Apply ``1B6798``..``1B67A0``'s signed X jitter: X += (roll & 7) - 3."""
+    delta = (roll & 7) - 3
+    x = (read(record + 2, 2) + delta) & 0xFFFF
+    return [(record + 2 + index, (x >> (8 * (1 - index))) & 0xFF)
+            for index in range(2)]
+
+
+def finish_reverse_spawn_script(record):
+    """Apply ``1B67AE``'s fixed script pointer write (roll bit 0 set)."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('001241fc'))]
+
+
+def finish_reverse_spawn_flag(record):
+    """Apply ``1B67BC``'s ``ST.B`` at ``record + 0x35`` (roll bit 1 set)."""
+    return [(record + 0x35, 0xFF)]

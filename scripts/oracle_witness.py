@@ -111,6 +111,7 @@ CALLER_POOLS[0x1B6654] = 0x1B525E  # spawn_lower_type_flag_offset_caller: SPAWN_
 CALLER_POOLS[0x1B6636] = 0x1B525E  # spawn_lower_type_xy_offset_caller: SPAWN_REGION_LOWER_ENTRY
 CALLER_POOLS[0x1B7084] = 0x1B5266  # spawn_upper_guard_type4a_caller: SPAWN_REGION_UPPER_ENTRY (both guard states recover)
 CALLER_POOLS[0x1B6E86] = 0x1B5266  # spawn_upper_guard_plain_caller: SPAWN_REGION_UPPER_ENTRY (both guard states recover, no decline)
+CALLER_POOLS[0x1B67C2] = 0x1B5256  # begin_spawn_reverse_double_cap: SPAWN_REGION_REVERSE_ENTRY (RNG-gated single/double spawn, see test_spawn_reverse_double_cap.py-style bespoke coverage)
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
@@ -457,11 +458,19 @@ def execute(entry: int, *, free: int | None, candidate: str | None, incoming_x: 
 
 def execute_dispatch(target: int, *, free: int | None, candidate: str | None, incoming_x: bool,
                      include_raw: bool = False, guard_value: int | None = None,
-                     stack: int = STACK, initial_d0: int = 0):
+                     stack: int = STACK, initial_d0: int = 0,
+                     setup_writes: tuple[tuple[int, int], ...] = ()):
     machine = dispatcher_fixture(target, free=free, incoming_x=incoming_x,
                                  guard_value=guard_value, stack=stack,
                                  initial_d0=initial_d0)
     try:
+        if setup_writes:
+            machine.gates([SPAWN_DISPATCH_ITERATION_ENTRY])
+            assert machine.run(instructions=1) == "gate"
+            registers = machine.registers()
+            assert machine.atomic(target=machine.info["tick"] + 1_000_000,
+                                  cycles=1, instructions=1, last_pc=SPAWN_DISPATCH_ITERATION_ENTRY,
+                                  writes=list(setup_writes), registers=registers)
         machine.gates([SPAWN_DISPATCH_ITERATION_ENTRY, 0x1AE44A, 0x1AE47C])
         assert machine.run(instructions=1) == "gate"
         recovery = Candidate(candidate) if candidate else None
