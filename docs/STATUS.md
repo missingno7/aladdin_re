@@ -6,6 +6,21 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Sibling wrappers compose inside the contact tick
+
+Existing `1AE9C6` / `1AE9DA` planners now run directly inside the owned scan.
+Four new self-contained cases qualify two callbacks per tick, including early
+returns and counter decrements, strict outer state, 150 original instructions
+and fresh-process restore. No new native API or snapshot mechanism was added.
+
+All **1,474 tests pass (117.82 s)**. Full **26,378-frame cold comparison passes**
+with zero restores and exact state/video/PCM equality. Parent admissions rise
+18,152 -> 18,201; dispatcher hits fall 344 -> 294; total gates fall
+29,693 -> 29,643. Legacy entries/returns remain 199/180. Evidence:
+`artifacts/contact-wrappers-full/comparison.json`, milestone `592c9e4`.
+
+The figures below describe the preceding parent milestone.
+
 ## Contact tick owns the scan and caller return
 
 The production entry is now `1ABB40`, covering contact countdowns/latches,
