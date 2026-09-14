@@ -165,6 +165,13 @@ SPAWN_LOWER_TYPE_XY_OFFSET_ENTRY = 0x1B6636
 SPAWN_LOWER_TYPE_XY_OFFSET_LAST_PC = 0x1B6652
 SPAWN_UPPER_GUARD_TYPE4A_ENTRY = 0x1B7084
 SPAWN_UPPER_GUARD_TYPE4A_LAST_PC = 0x1B70AE
+SPAWN_UPPER_TILE_TWO_CALLER_ENTRY = 0x1B6C2E
+SPAWN_UPPER_TILE_TWO_CALLER_LAST_PC = 0x1B6C4C
+SPAWN_UPPER_TILE_TWO_CALLER_TEMPLATE = 0x1B7AA8
+SPAWN_UPPER_GUARD_PLAIN_ENTRY = 0x1B6E86
+SPAWN_UPPER_GUARD_PLAIN_DECLINE_PC = 0x1B6EB0
+SPAWN_UPPER_GUARD_PLAIN_SPAWN_PC = 0x1B6E9A
+SPAWN_UPPER_GUARD_PLAIN_TEMPLATE = 0x1B7C24
 SPAWN_CLOSURE_SAFE_RETURN_ENTRY = 0x1B65BE
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
@@ -1337,6 +1344,94 @@ def spawn_upper_tile_caller(machine, registers: dict[str, int]) -> AtomicPlan:
                       prefix.direct_calls + selected.direct_calls)
 
 
+def _upper_tile_two_wrapper_shape(machine):
+    raw = machine.peek_rom(SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, 32)
+    if raw != bytes.fromhex(
+            '4df9001b7aa86100e63066124a3900fff175660a41f9001292b26100ba064e75'):
+        raise UnsupportedCandidate('upper tile spawn caller (two) ROM shape')
+
+
+def spawn_upper_tile_two_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6C2E``'s upper-pool creation and FFF175 tile-upload guard.
+
+    Byte-for-byte the same shape as ``spawn_upper_tile_caller`` (``1B6C0E``),
+    just a different template (``0x1B7AA8``). A failed allocation and a
+    successful one with ``FFF175`` set both return locally; a successful
+    allocation with ``FFF175`` clear reaches the same 1B2650 VDP upload and
+    declines.
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper tile spawn caller (two) stack')
+    _upper_tile_two_wrapper_shape(machine)
+    _spans_disjoint([('upper tile spawn caller (two) pool', 0xFF7E82, 24 * 66),
+                     ('upper tile spawn caller (two) frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    entry = SPAWN_UPPER_TILE_TWO_CALLER_ENTRY
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': SPAWN_UPPER_TILE_TWO_CALLER_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_TILE_TWO_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    planned = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    guard = _read(planned, 0xFFF175, 1)
+    if guard == 0:
+        raise UnsupportedCandidate(
+            'upper tile spawn caller (two) requires the 1B2650 VDP tile upload')
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], guard, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 50,
+                      prefix.instructions + selected.instructions + 4, writes, final,
+                      SPAWN_UPPER_TILE_TWO_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_upper_guard_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6E86``'s FFF107 guard and its unconditional upper-pool spawn.
+
+    A clear guard declines directly (no spawn attempted at all). A set
+    guard runs the upper-pool allocator (template ``0x1B7C24``) then
+    returns immediately with no Z-check and no suffix -- the wrapper's own
+    RTS is the very next instruction after the BSR, so both allocation
+    success and pool exhaustion recover identically with no further writes
+    either way.
+    """
+    entry, sp = SPAWN_UPPER_GUARD_PLAIN_ENTRY, registers['a7']
+    shape = bytes.fromhex('4a3900fff107670000224df9001b7c246100e3ce4e75')
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('upper guard plain spawn caller ROM shape')
+    outer, guard = _read(machine, sp, 4), _read(machine, 0xFFF107, 1)
+    tested_sr = _logic_sr(registers['sr'], guard, 1)
+    if guard == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4, 'pc': outer & 0xFFFFFF,
+                          'sr': tested_sr}, SPAWN_UPPER_GUARD_PLAIN_DECLINE_PC)
+    _spans_disjoint([('upper guard plain spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('upper guard plain spawn caller frame', sp - 8, 12),
+                     ('upper guard plain spawn caller flag', 0xFFF107, 1), *SPAWN_REGION_GLOBALS])
+    prefix = AtomicPlan(58, 4, _bytes(sp - 4, entry + 20, 4),
+                        {**registers, 'a6': SPAWN_UPPER_GUARD_PLAIN_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY, 'sr': tested_sr},
+                        entry + 16, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 16,
+                      prefix.instructions + selected.instructions + 1,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_UPPER_GUARD_PLAIN_SPAWN_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
 def spawn_cap_guard_two(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B72FC``'s FFEFE0 cap comparison against ``$3030``.
 
@@ -1902,6 +1997,8 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_LOWER_TYPE_FLAG_OFFSET_ENTRY: spawn_lower_type_flag_offset_caller,
         SPAWN_LOWER_TYPE_XY_OFFSET_ENTRY: spawn_lower_type_xy_offset_caller,
         SPAWN_UPPER_GUARD_TYPE4A_ENTRY: spawn_upper_guard_type4a_caller,
+        SPAWN_UPPER_TILE_TWO_CALLER_ENTRY: spawn_upper_tile_two_caller,
+        SPAWN_UPPER_GUARD_PLAIN_ENTRY: spawn_upper_guard_plain_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \

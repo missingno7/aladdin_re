@@ -110,6 +110,7 @@ CALLER_POOLS[0x1B70F8] = 0x1B525E  # spawn_closure_guard_five_caller: SPAWN_REGI
 CALLER_POOLS[0x1B6654] = 0x1B525E  # spawn_lower_type_flag_offset_caller: SPAWN_REGION_LOWER_ENTRY
 CALLER_POOLS[0x1B6636] = 0x1B525E  # spawn_lower_type_xy_offset_caller: SPAWN_REGION_LOWER_ENTRY
 CALLER_POOLS[0x1B7084] = 0x1B5266  # spawn_upper_guard_type4a_caller: SPAWN_REGION_UPPER_ENTRY (both guard states recover)
+CALLER_POOLS[0x1B6E86] = 0x1B5266  # spawn_upper_guard_plain_caller: SPAWN_REGION_UPPER_ENTRY (both guard states recover, no decline)
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
