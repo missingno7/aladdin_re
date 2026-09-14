@@ -29,9 +29,11 @@ from aladdin_sega.boundary import (SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_REGION_
                                    SPAWN_UPPER_TILE_WORD_CALLER_ENTRY,
                                    SPAWN_REVERSE_GUARD_CALLER_ENTRY,
                                    SPAWN_UPPER_TILE_TWO_CALLER_ENTRY,
+                                   SPAWN_UPPER_GUARD_TILE_ENTRY,
                                    UnsupportedCandidate, spawn_upper_tile_caller,
                                    spawn_cap_guard_two, spawn_upper_tile_word_caller,
-                                   spawn_reverse_guard_caller, spawn_upper_tile_two_caller)
+                                   spawn_reverse_guard_caller, spawn_upper_tile_two_caller,
+                                   spawn_upper_guard_tile_caller)
 from aladdin_sega.recovery import Candidate
 
 
@@ -392,6 +394,78 @@ def test_upper_tile_two_mutants_diverge_at_the_dispatcher_boundary(mutant):
     expected = _run_dispatch(SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=False, candidate=None, pokes=pokes)
     actual = _run_dispatch(SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
+                           pokes=pokes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
+# ---------------------------------------------------------------------------
+# 1B6F82: an FF7E21 guard wrapped around 1B6C0E's own upper-tile shape.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
+@pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
+def test_upper_guard_tile_recovered_skip_arm_matches_original(free, incoming_x):
+    """FF7E21 set, FFF175 set (or allocation exhausted): the recovered arm."""
+    pokes = [(0xFF7E21, 0x01), (0xFFF175, 0x01)]
+    expected = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=free, incoming_x=incoming_x, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=free, incoming_x=incoming_x, candidate="lifecycle", pokes=pokes)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
+
+
+def test_upper_guard_tile_outer_guard_clear_matches_original():
+    """FF7E21 clear: declines directly, no spawn attempted."""
+    pokes = [(0xFF7E21, 0x00)]
+    expected = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate="lifecycle", pokes=pokes)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
+
+
+def test_upper_guard_tile_vdp_arm_declines_to_original():
+    """FF7E21 set, FFF175 clear and a successful allocation: the VDP upload."""
+    pokes = [(0xFF7E21, 0x01), (0xFFF175, 0x00)]
+    expected = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate="lifecycle", pokes=pokes)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 0
+    assert actual.stats["fallbacks"] == 1
+
+
+def test_upper_guard_tile_isolated_plan_declines_on_the_vdp_arm():
+    machine = oracle.cold_fixture(SPAWN_REGION_UPPER_ENTRY, free=0,
+                                  pc_entry=SPAWN_UPPER_GUARD_TILE_ENTRY)
+    try:
+        machine.gates([SPAWN_UPPER_GUARD_TILE_ENTRY])
+        assert machine.run(instructions=1) == "gate"
+        registers = machine.registers()
+        assert machine.atomic(target=machine.info["tick"] + 1_000_000, cycles=1, instructions=1,
+                              last_pc=SPAWN_UPPER_GUARD_TILE_ENTRY,
+                              writes=[(0xFF7E21, 1), (0xFFF175, 0)], registers=registers)
+        with pytest.raises(UnsupportedCandidate, match="1B2650 VDP tile upload"):
+            spawn_upper_guard_tile_caller(machine, machine.registers())
+    finally:
+        machine.close()
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_upper_guard_tile_mutants_diverge_at_the_dispatcher_boundary(mutant):
+    pokes = [(0xFF7E21, 0x01), (0xFFF175, 0x01)]
+    expected = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                            free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
                            pokes=pokes)
     assert (actual.outer, actual.future) != (expected.outer, expected.future)

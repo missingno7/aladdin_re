@@ -172,6 +172,9 @@ SPAWN_UPPER_GUARD_PLAIN_ENTRY = 0x1B6E86
 SPAWN_UPPER_GUARD_PLAIN_DECLINE_PC = 0x1B6EB0
 SPAWN_UPPER_GUARD_PLAIN_SPAWN_PC = 0x1B6E9A
 SPAWN_UPPER_GUARD_PLAIN_TEMPLATE = 0x1B7C24
+SPAWN_UPPER_GUARD_TILE_ENTRY = 0x1B6F82
+SPAWN_UPPER_GUARD_TILE_LAST_PC = 0x1B6FAC
+SPAWN_UPPER_GUARD_TILE_TEMPLATE = 0x1B8228
 SPAWN_CLOSURE_SAFE_RETURN_ENTRY = 0x1B65BE
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
@@ -1432,6 +1435,57 @@ def spawn_upper_guard_plain_caller(machine, registers: dict[str, int]) -> Atomic
                       prefix.direct_calls + selected.direct_calls)
 
 
+def spawn_upper_guard_tile_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6F82``'s FF7E21 guard around ``spawn_upper_tile_caller``'s own shape.
+
+    ``CMPI.B #0,FF7E21`` / ``BEQ.W`` gates the whole entry (guard clear
+    declines directly, no spawn attempted).  Guard set continues into
+    exactly the same upper-pool-creation/FFF175-tile-upload shape as
+    ``spawn_upper_tile_caller`` (``1B6C0E``): allocation failure and a
+    successful allocation with FFF175 set both recover; a successful
+    allocation with FFF175 clear reaches 1B2650's VDP upload and declines.
+    """
+    entry, sp = SPAWN_UPPER_GUARD_TILE_ENTRY, registers['a7']
+    shape = bytes.fromhex(
+        '0c39000000ff7e21670000204df9001b82286100e2d066124a39'
+        '00fff175660a41f9001295326100b6a64e75')
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('upper guard tile spawn caller ROM shape')
+    outer, guard = _read(machine, sp, 4), _read(machine, 0xFF7E21, 1)
+    tested_sr = _sub_sr(registers['sr'], guard, 0, 1)
+    if guard == 0:
+        return AtomicPlan(46, 3, (), {**registers, 'a7': sp + 4, 'pc': outer & 0xFFFFFF,
+                          'sr': tested_sr}, SPAWN_UPPER_GUARD_TILE_LAST_PC)
+    _spans_disjoint([('upper guard tile spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('upper guard tile spawn caller frame', sp - 8, 12),
+                     ('upper guard tile spawn caller flag', 0xFF7E21, 1), *SPAWN_REGION_GLOBALS])
+    prefix = AtomicPlan(62, 4, _bytes(sp - 4, entry + 22, 4),
+                        {**registers, 'a6': SPAWN_UPPER_GUARD_TILE_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY, 'sr': tested_sr},
+                        entry + 18, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_GUARD_TILE_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    planned = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    tile_guard = _read(planned, 0xFFF175, 1)
+    if tile_guard == 0:
+        raise UnsupportedCandidate('upper guard tile spawn caller requires the 1B2650 VDP tile upload')
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], tile_guard, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 50,
+                      prefix.instructions + selected.instructions + 4, writes, final,
+                      SPAWN_UPPER_GUARD_TILE_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
 def spawn_cap_guard_two(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B72FC``'s FFEFE0 cap comparison against ``$3030``.
 
@@ -1999,6 +2053,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_UPPER_GUARD_TYPE4A_ENTRY: spawn_upper_guard_type4a_caller,
         SPAWN_UPPER_TILE_TWO_CALLER_ENTRY: spawn_upper_tile_two_caller,
         SPAWN_UPPER_GUARD_PLAIN_ENTRY: spawn_upper_guard_plain_caller,
+        SPAWN_UPPER_GUARD_TILE_ENTRY: spawn_upper_guard_tile_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
