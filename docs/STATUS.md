@@ -6,6 +6,38 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1AEBDC, 1AF81C and 1AF228 recovered (contact-family and collection-route, three leaves)
+
+1AEBDC (kinds 0x78/0x7A) gates on FFF0D8: clear, it falls straight into a
+BSR of the shared 1AE4F8 contact root; active, a +/-8 window first
+compares D0 against the triggering record's own record+2 field, and only
+a pass also BSRs 1AE4F8. The nested call is composed exactly as
+`begin_contact_dispatch`/`begin_contact_dispatch_sound` compose type 7B's
+own BSR into CONTACT_ENTRY, with the extra local RTS that unwinds this
+wrapper's own frame made explicit. 1AF81C (kinds 0x62/0x63) is the same
+Type-55/58-shaped bounded-distance guard (limit 0xA, no delta
+adjustment) whose pass continues into a CMPI.B #$63 self-kind check: a
+match returns locally, a mismatch retypes the record and either returns
+locally or continues into its own private command-0x45 seam, the same
+24/28/28 ABI shape as `begin_contact_family_type46_sound_seam`. 1AF228
+(kind 0x3A only; kind 0x3B already falls through the existing
+'secondary' route at 0x1AF21E) composes the shared FFEFE2/FFEFE3 counter
+(`game.collection_state('secondary', ...)`, already proven for that same
+'secondary' route) with a new command-0x0D seam and the already-proven
+`replace_object(increment_total=True)` tail; its FFEFE2==0x3939 capped
+arm is not observed on the recorded history and declines. Two real bugs
+were found and fixed only by the end-to-end qualify()/recovery.py
+harness, not by factcheck's per-plan check: 1AF81C's SoundSeam used the
+true outer caller's SP instead of the callback's own post-JSR SP for
+`stack_basis`, and 1AF228's no-sound arm dropped the outer dispatch
+prefix's own A4/D1 from its final register file. **1,980 tests pass in
+about 265 s**; the **82,161-frame cold comparison passes** with zero
+restores at `artifacts/type78-window/` (frames 82,161, 92,071 candidate
+hits, 4,762 fallbacks, down from 5,136). Next frontier: 1AEE40 (65,
+gates on FFF0D8 between a quick 1AE372+1AE4F8 composition and a larger,
+unrecovered pool-scan-and-spawn arm behind a new subroutine 1AE2DA),
+then the spawn dispatcher children per the census instructions.
+
 ## 1AEB7A, 1AEBFE and 1AE9A8 recovered (contact-family, three more leaves)
 
 1AEB7A (kind 0x0D) and 1AEBFE (kind 0x14, and also reached by the kind
