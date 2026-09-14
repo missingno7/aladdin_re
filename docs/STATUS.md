@@ -6,6 +6,50 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B6EEE, 1B7158 and 1B6FEE recovered; 1B67C2 escalated (spawn dispatcher family)
+
+1B6EEE (kind 33) is a `SPAWN_CLOSURE_CALLER_FACTS` table addition: upper-
+pool creation whose success tail clears record+0xA, writes a script
+pointer at +0x20, then a type byte (`0x22`) at offset 0. 1B7158 (kind 02)
+and 1B6FEE (kind 02) are two new standalone planners with no declining
+arm: 1B7158 is byte-for-byte the same shape as `spawn_closure_guard_caller`
+(1B71A0) -- same allocator/template/Y-offset, just a different guard
+address (`FFF128`) and script value; 1B6FEE is primary-pool creation
+followed by an unconditional `ST.B` at record+9, which (unlike every
+other closure/offset tail) does not touch the condition codes and so
+needed its own function rather than the closure table's always-applied
+`_logic_sr`. All three join `oracle_witness`'s generic coverage with zero
+bespoke test code (833 passed). **2,291 tests pass in about 263 s**; the
+**82,161-frame cold comparison passes** with zero restores at
+`artifacts/spawn-guardtwo5/` (frames 82,161, 91,792 candidate hits, 2,090
+fallbacks, down from 2,266).
+
+1B67C2 (211 fallbacks, second-highest remaining) was characterized and
+escalated instead of recovered: it is a spawn dispatcher child whose
+census retained 23 distinct path classes, every one calling a
+previously-unseen bounded PRNG subroutine at `1B3032` (`new_seed =
+13*seed + 7 mod 2^32`, output `low16(new_seed) XOR swap16(new_seed)`,
+decoded from the traced facts) two or three times to gate up to two
+independent reverse-pool spawns, each with its own RNG-jittered position
+and a two-bit conditional script write. One branch (the bit-1-clear
+continuation inside the shared `1B6794` sub-body) was never reached by
+any retained fixture and remains uncharacterized. Blocker package at
+`docs/blockers/2026-09-14-1B67C2.md` (code `DATA_STRUCTURE`); commit
+`6ac868d`. Next frontier: 1B712C (110, a two-flag guard cascade sharing
+its prefix with `1B70F8`'s own three-flag chain -- the two dispatch slots
+appear to fall through into shared code and need tracing together),
+1B75D6 (72, upper-pool creation with an unconditional VDP call and no
+guard -- only pool-exhaustion recoverable), 1B6654 (57, a combo shape:
+type tag, a second field write and a position offset, not yet fully
+traced), 1B70F8 (57, the three-flag guard chain 1B712C shares a prefix
+with), 1B7018 and 1B6836 (50/48, previously characterized `finish_type_4c_spawn`-
+and `spawn_closure_guard_caller`-shaped clones, not yet implemented),
+1B6C2E (47) and the rest of the census by fallback count. 1B717C and
+1B6F60 (both already fully characterized -- 1B717C an exact
+`spawn_closure_guard_two_caller`-shaped clone with guard `FFF129` and
+script `0x1242FE`; 1B6F60 a pure closure-table row sharing template
+`0x1B8264` with `1B6F4A`/`1B6F34`) are the very next leaves.
+
 ## 1B6F4A, 1B6F34 and 1B65C0 recovered (spawn dispatcher family, three more leaves)
 
 1B6F4A and 1B6F34 are pure `SPAWN_CLOSURE_CALLER_FACTS` table additions
