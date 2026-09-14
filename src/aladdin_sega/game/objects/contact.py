@@ -492,6 +492,87 @@ def contact_type74_position(destination, x, y):
     return [*_word(destination + 2, x), *_word(destination + 4, y)]
 
 
+def contact_type6e_guard(read, record):
+    """Select 1AFB36's arm from live RAM and name its distance facts.
+
+    Reached by six adjacent collection-dispatch kinds (0x6E-0x73) that share
+    this one entry; the record's own kind byte plays no part in the body.  A
+    new ``FFF0E7`` gate precedes everything else: set, it returns at once
+    with no writes at all.  Clear, a new ``FF7E5A`` sign test follows: a
+    negative word returns through the shared 1AE6B4 tail.  Only then does
+    the familiar ``FFF0BE``/``FFF0C0`` family selector and the record-plus-6
+    bit-4 activity test run (the same shape as Type-55/58/74's own guard),
+    and only past those does the distance guard itself run: the object's
+    horizontal delta (record+2 against ``FF7DF6``) against a running
+    ``FF7DFA`` word, limit 0xC, borrow negated exactly as the sibling
+    guards.  A fail returns through 1AE6B4.  Returns ``(arm, facts)`` with
+    ``arm`` one of ``inactive``, ``negative``, ``direct``, ``bit4_inactive``,
+    ``guard_fail`` or ``guard_pass``.
+    """
+    gate = read(0xFFF0E7, 1)
+    facts = {'gate': gate}
+    if gate:
+        return 'inactive', facts
+    state = read(0xFF7E5A, 2)
+    facts['state'] = state
+    if state & 0x8000:
+        return 'negative', facts
+    selector = read(0xFFF0BE, 1)
+    facts['selector'] = selector
+    if selector:
+        mode = read(0xFFF0C0, 1)
+        facts['mode'] = mode
+        if not mode:
+            return 'direct', facts
+    flags = read(record + 6, 1)
+    facts['flags'] = flags
+    if not flags & 0x10:
+        return 'bit4_inactive', facts
+    delta = (read(record + 2, 2) - read(0xFF7DF6, 2)) & 0xFFFF
+    previous = read(0xFF7DFA, 2)
+    difference = (previous - delta) & 0xFFFF
+    borrowed = previous < delta
+    distance = (-difference) & 0xFFFF if borrowed else difference
+    facts.update(delta=delta, previous=previous, difference=difference,
+                 borrowed=borrowed, distance=distance)
+    return ('guard_pass' if distance < 0xC else 'guard_fail'), facts
+
+
+def contact_type6e_fail():
+    """The tail flag every recovered Type-6E inactive/negative/direct/
+    bit4-inactive/guard-fail return publishes through 1AE6B4."""
+    return [(0xFFF0F5, 0xFF)]
+
+
+def contact_type6e_reinit():
+    """1AFBA6..1AFBDC's state-machine reset, fired only when ``FFF103`` was
+    zero on entry: a fixed script pointer, the motion window and four more
+    state globals all return to their initial values."""
+    return [*_long(0xFF7E60, 0x00121964), (0xFF7E77, 0),
+            *_word(0xFF7DFE, 0xB0), *_word(0xFF7E00, 0x150),
+            *_word(0xFFF0B0, 0), (0xFFF0CC, 0),
+            *_word(0xFF7E58, 0), *_word(0xFF7E5A, 0)]
+
+
+def contact_type6e_pass(read, record, delta):
+    """The writes a Type-6E guard-pass return always publishes locally.
+
+    The X delta the guard already computed publishes to ``FF7DFA``; the Y
+    delta (record+4 against ``FF7DF8``, plus 0x10) recomputes and publishes
+    to ``FF7DFC`` unconditionally.  ``FFF103`` then keys the state machine:
+    zero also fires ``contact_type6e_reinit``; either way the FFF0D7/FFF0D0/
+    FFF103 tail at 1AFBDE always publishes last.  Returns ``(writes,
+    reinit)``.
+    """
+    y_delta = (read(record + 4, 2) - read(0xFF7DF8, 2) + 0x10) & 0xFFFF
+    writes = [*_word(0xFF7DFA, delta), *_word(0xFF7DFC, y_delta)]
+    reinit = not read(0xFFF103, 1)
+    if reinit:
+        writes.extend(contact_type6e_reinit())
+    writes.extend([(0xFFF0D7, 0xFF), (0xFFF0D0, 0xFF), (0xFFF103, 0x04)])
+    return writes, reinit
+
+
 def contact_type46_request(read):
     """1AEF5C's capped command-66 counter and its sound request.
 

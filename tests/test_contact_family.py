@@ -28,6 +28,7 @@ TARGET_KINDS = {
     0x1AE64C: 0x43,  # recorded collection-dispatcher motion/type update
     0x1AF5F0: 0x58,  # recorded bounded-distance guard, both arms owned
     0x1AFA84: 0x74,  # recorded bounded-distance guard, window/kind/state gate and child spawn
+    0x1AFB36: 0x6E,  # recorded gate cascade, dual-axis distance guard and FFF103 state tail (kinds 6E-73)
 }
 
 
@@ -166,6 +167,31 @@ def type43_fixture(*, fff0c1=0xFF, sound=1, motion_x=0x0140, **kwargs):
         machine.gates([COLLECTION_DISPATCH_ENTRY])
         assert machine.run(instructions=1) == 'gate'
         writes = [(0xFFF0C1, fff0c1), *oracle.write_word(0xFF7DF6, motion_x)]
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=writes, registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
+def type6e_fixture(*, origin_x2=0, fff103=1, **kwargs):
+    """Construct a valid Type-6E collection record over the original ROM.
+
+    ``family_fixture`` seeds the record's own link field (object_x at
+    record+2), FF7DF8/FF7DFA(``motion``)/FF7DFC and FFF0E7(``blocked``)/
+    FFF0BE(``be``)/FFF0C0(``c0``); this adds the FF7DF6 horizontal target
+    the X-axis guard reads and the FFF103 state-machine key its tail
+    branches on.
+    """
+    state = family_fixture(0x1AFB36, **kwargs)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        writes = [*oracle.write_word(0xFF7DF6, origin_x2), (0xFFF103, fff103)]
         assert machine.atomic(target=machine.info['tick'] + 1_000_000,
                               cycles=1, instructions=1,
                               last_pc=COLLECTION_DISPATCH_ENTRY,

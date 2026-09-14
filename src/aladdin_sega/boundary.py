@@ -54,6 +54,7 @@ CONTACT_FAMILY_TYPE58_ENTRY = 0x1AF5F0
 CONTACT_FAMILY_TYPE74_ENTRY = 0x1AFA84
 CONTACT_TYPE74_POOL = 0xFF7F06
 CONTACT_TYPE74_POOL_COUNT = 20
+CONTACT_FAMILY_TYPE6E_ENTRY = 0x1AFB36
 CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
@@ -1575,6 +1576,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE55_ENTRY,
                       CONTACT_FAMILY_TYPE58_ENTRY,
                       CONTACT_FAMILY_TYPE74_ENTRY,
+                      CONTACT_FAMILY_TYPE6E_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
@@ -1779,6 +1781,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
         CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
         CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
+        CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -1850,6 +1853,7 @@ def _contact_scan_resume(machine, registers):
                         CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
                         CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
                         CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
+        CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -4068,6 +4072,122 @@ def begin_contact_family_type74_dispatch(machine, registers, dispatch):
     return _contact_family_dispatch(machine, registers, dispatch,
                                     CONTACT_FAMILY_TYPE74_ENTRY,
                                     begin_contact_family_type74)
+
+
+def begin_contact_family_type6e(machine, registers):
+    """1AFB36's gate cascade and dual-axis distance guard, both arms owned.
+
+    Reached by six adjacent collection-dispatch kinds (0x6E-0x73) that share
+    this one entry.  ``game.contact_type6e_guard`` selects the arm; this
+    boundary owns the alias guards, the cost table and the CCR.  Cost table
+    (``factcheck``), each row additive to the row above it in source order
+    (26/2 route: FFF0BE and FFF0C0 both set; 1/2 borrow: previous < delta;
+    166/8 reinit: FFF103 was zero on entry):
+
+        inactive          (FFF0E7 set)                                42 /  3
+        negative state    (FF7E5A < 0)                                90 /  6
+        direct return     (FFF0BE set, FFF0C0 clear)                 142 / 10
+        bit4 inactive     (record+6 bit4 clear)                      144 / 10
+        guard fail,  no borrow                                       222 / 17
+        guard pass,  no borrow, FFF103 nonzero (immediate tail)      358 / 26
+        guard pass,  no borrow, FFF103 zero (reinit tail)            524 / 34
+
+    Every TST/BTST/SUB/NEG/CMP/MOVE/ADDI/CLR along the way sets its own
+    flags in source order; ST never touches CCR and the tail's final
+    MOVE.B #4,FFF103 is a fixed positive nonzero constant, so every arm
+    that reaches it exits with N=Z=V=C=0 and only X survives from whichever
+    SUB/ADD last set it (the distance SUB/NEG chain for a fail, the
+    Y-delta SUBI/ADDI chain for a pass -- the pass path's own SUB/ADDI
+    overwrite whatever the distance chain left, exactly as the pool scan
+    overwrites its own predecessor in ``begin_contact_family_type74``).
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type6e record/stack')
+    _spans_disjoint([
+        ('type6e record', record, 66), ('type6e return', sp, 4),
+        ('type6e gate', 0xFFF0E7, 1), ('type6e state', 0xFF7E5A, 2),
+        ('type6e flags', 0xFFF0BE, 1), ('type6e mode', 0xFFF0C0, 1),
+        ('type6e player x', 0xFF7DF6, 2), ('type6e motion x', 0xFF7DFA, 2),
+        ('type6e player y', 0xFF7DF8, 2), ('type6e motion y', 0xFF7DFC, 2),
+        ('type6e machine state', 0xFFF103, 1),
+        ('type6e tail a', 0xFFF0D7, 1), ('type6e tail b', 0xFFF0D0, 1),
+        ('type6e fail tail', 0xFFF0F5, 1),
+        ('type6e reinit script', 0xFF7E60, 4), ('type6e reinit stream', 0xFF7E77, 1),
+        ('type6e reinit window x', 0xFF7DFE, 2), ('type6e reinit window y', 0xFF7E00, 2),
+        ('type6e reinit counter', 0xFFF0B0, 2), ('type6e reinit latch', 0xFFF0CC, 1),
+        ('type6e reinit timer', 0xFF7E58, 2),
+    ])
+    read = lambda address, size: _read(machine, address, size)
+    arm, facts = game.contact_type6e_guard(read, record)
+    return_pc = read(sp, 4) & 0xFFFFFF
+    residue = _logic_sr(sr, facts['gate'], 1)
+    if arm == 'inactive':
+        return AtomicPlan(42, 3, (), {'a7': sp + 4, 'pc': return_pc, 'sr': residue}, 0x1AFBF2)
+
+    fail_writes = tuple(game.contact_type6e_fail())
+    residue = _logic_sr(residue, facts['state'], 2)
+    if arm == 'negative':
+        return AtomicPlan(90, 6, fail_writes, {'a7': sp + 4, 'pc': return_pc, 'sr': residue}, 0x1AE6BA)
+
+    residue = _logic_sr(residue, facts['selector'], 1)
+    if facts['selector']:
+        residue = _logic_sr(residue, facts['mode'], 1)
+    if arm == 'direct':
+        return AtomicPlan(142, 10, fail_writes, {'a7': sp + 4, 'pc': return_pc, 'sr': residue}, 0x1AE6BA)
+
+    residue = _contact_completion_btst(residue, facts['flags'])
+    route_cycles, route_instructions = (26, 2) if facts['selector'] else (0, 0)
+    if arm == 'bit4_inactive':
+        return AtomicPlan(144 + route_cycles, 10 + route_instructions, fail_writes,
+                          {'a7': sp + 4, 'pc': return_pc, 'sr': residue}, 0x1AE6BA)
+
+    delta, previous, distance, borrowed = (facts[key] for key in ('delta', 'previous', 'distance', 'borrowed'))
+    record_x = read(record + 2, 2)
+    residue = _sub_sr(residue, record_x, read(0xFF7DF6, 2), 2)
+    residue = _sub_sr(residue, previous, delta, 2)
+    if borrowed:
+        residue = _sub_sr(residue, 0, facts['difference'], 2)
+    residue = _cmp_sr(residue, distance, 0xC, 2)
+    borrow_cycles, borrow_instructions = (2, 1) if borrowed else (0, 0)
+    if arm == 'guard_fail':
+        return AtomicPlan(222 + route_cycles + borrow_cycles, 17 + route_instructions + borrow_instructions,
+                          fail_writes,
+                          {'d5': (registers['d5'] & 0xFFFF0000) | delta,
+                           'd6': (registers['d6'] & 0xFFFF0000) | distance,
+                           'a7': sp + 4, 'pc': return_pc, 'sr': residue},
+                          0x1AE6BA)
+
+    # guard_pass: the X delta publishes as-is; the Y delta always recomputes.
+    pass_writes, reinit = game.contact_type6e_pass(read, record, delta)
+    pass_writes = tuple(pass_writes)
+    record_y, player_y = read(record + 4, 2), read(0xFF7DF8, 2)
+    y_partial = (record_y - player_y) & 0xFFFF
+    y_delta = (y_partial + 0x10) & 0xFFFF
+    residue = _logic_sr(residue, delta, 2)          # move.w d5,$ff7dfa.l
+    residue = _logic_sr(residue, record_y, 2)        # move.w $4(a1),d5
+    residue = _sub_sr(residue, record_y, player_y, 2)  # sub.w $ff7df8.l,d5
+    residue = _add_sr(residue, y_partial, 0x10, 2)     # addi.w #$10,d5
+    residue = _logic_sr(residue, y_delta, 2)           # move.w d5,$ff7dfc.l
+    residue = _logic_sr(residue, read(0xFFF103, 1), 1)  # tst.b $fff103.l
+    reinit_cycles, reinit_instructions = (166, 8) if reinit else (0, 0)
+    # ST never touches CCR; the tail's own MOVE.B #4,$fff103.l is a fixed
+    # positive nonzero byte, so every guard-pass arm exits N=Z=V=C=0 with
+    # only X surviving from the Y-delta SUBI/ADDI chain just above.
+    residue = _logic_sr(residue, 4, 1)
+    return AtomicPlan(358 + route_cycles + borrow_cycles + reinit_cycles,
+                      26 + route_instructions + borrow_instructions + reinit_instructions,
+                      pass_writes,
+                      {'d5': (registers['d5'] & 0xFFFF0000) | y_delta,
+                       'd6': (registers['d6'] & 0xFFFF0000) | distance,
+                       'a7': sp + 4, 'pc': return_pc, 'sr': residue},
+                      0x1AFBF2)
+
+
+def begin_contact_family_type6e_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE6E_ENTRY,
+                                    begin_contact_family_type6e)
 
 
 def begin_contact_family_type44(machine, registers):
