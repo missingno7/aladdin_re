@@ -146,6 +146,7 @@ SPAWN_CLOSURE_REVERSE_SCRIPT_ENTRY = 0x1B6696
 SPAWN_CLOSURE_REVERSE_SCRIPT_A_ENTRY = 0x1B6F4A
 SPAWN_CLOSURE_REVERSE_SCRIPT_B_ENTRY = 0x1B6F34
 SPAWN_CLOSURE_UPPER_TYPE22_ENTRY = 0x1B6EEE
+SPAWN_CLOSURE_REVERSE_SCRIPT_C_ENTRY = 0x1B6F60
 SPAWN_CLOSURE_SAFE_RETURN_ENTRY = 0x1B65BE
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
@@ -176,6 +177,8 @@ SPAWN_REVERSE_Y_OFFSET_CALLER_LAST_PC = 0x1B65D2
 SPAWN_REVERSE_Y_OFFSET_CALLER_TEMPLATE = 0x1B7D14
 SPAWN_CLOSURE_GUARD_TWO_ENTRY = 0x1B7158
 SPAWN_CLOSURE_GUARD_TWO_LAST_PC = 0x1B717A
+SPAWN_CLOSURE_GUARD_THREE_ENTRY = 0x1B717C
+SPAWN_CLOSURE_GUARD_THREE_LAST_PC = 0x1B719E
 SPAWN_PRIMARY_FLAG_CALLER_ENTRY = 0x1B6FEE
 SPAWN_PRIMARY_FLAG_CALLER_LAST_PC = 0x1B6FFE
 SPAWN_PRIMARY_FLAG_CALLER_TEMPLATE = 0x1B7C74
@@ -657,6 +660,9 @@ SPAWN_CLOSURE_CALLER_FACTS = {
     SPAWN_CLOSURE_UPPER_TYPE22_ENTRY: (SPAWN_REGION_UPPER_ENTRY, 0x1B7C38,
         bytes.fromhex('4df9001b7c386100e370661042ad000a2b7c001238b200201abc00224e75'),
         game.finish_upper_type22_spawn, 84, 5, 0x1B6F0A, (0x22, 1)),
+    SPAWN_CLOSURE_REVERSE_SCRIPT_C_ENTRY: (SPAWN_REGION_REVERSE_ENTRY, 0x1B8264,
+        bytes.fromhex('4df9001b82646100e2ee66082b7c00125aa800204e75'),
+        game.finish_reverse_script_c_spawn, 48, 3, 0x1B6F74, (0x00125aa8, 4)),
 }
 
 
@@ -890,6 +896,54 @@ def spawn_primary_flag_caller(machine, registers: dict[str, int]) -> AtomicPlan:
                       tuple(dict((*writes, *suffix)).items()), final,
                       SPAWN_PRIMARY_FLAG_CALLER_LAST_PC,
                       prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_closure_guard_three_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B717C``'s FFF129 guard and its lower-pool successful suffix.
+
+    The exact same shape as ``spawn_closure_guard_caller`` (``1B71A0``) and
+    ``spawn_closure_guard_two_caller`` (``1B7158``): same allocator/template
+    (``SPAWN_REGION_LOWER_ENTRY``, ``0x1B78F0``), same -8 Y-offset tail;
+    only the guard address (``FFF129``) and script pointer (``0x1242FE``)
+    differ.
+    """
+    entry, sp = SPAWN_CLOSURE_GUARD_THREE_ENTRY, registers['a7']
+    shape = bytes.fromhex(
+        '4a3900fff129671a4df9001b78f06100e0d2660e2b7c001242fe0020046d000800044e75')
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('closure guarded spawn (three) ROM shape')
+    outer, guard = _read(machine, sp, 4), _read(machine, 0xFFF129, 1)
+    tested_sr = _logic_sr(registers['sr'], guard, 1)
+    if guard == 0:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4, 'pc': outer & 0xFFFFFF,
+                          'sr': tested_sr}, SPAWN_CLOSURE_GUARD_THREE_LAST_PC)
+    _spans_disjoint([('closure guarded spawn (three) pool', 0xFF7E82, 24 * 66),
+                     ('closure guard (three) frame', sp - 8, 12),
+                     ('closure guard (three) flag', 0xFFF129, 1), *SPAWN_REGION_GLOBALS])
+    prefix = AtomicPlan(54, 4, _bytes(sp - 4, entry + 18, 4),
+                        {**registers, 'a6': 0x1B78F0, 'a7': sp - 4, 'pc': SPAWN_REGION_LOWER_ENTRY,
+                         'sr': tested_sr}, entry + 14, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_LOWER_ENTRY)
+    writes, final = tuple(dict((*prefix.writes, *selected.writes)).items()), dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    if not (final['sr'] & 4):
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_CLOSURE_GUARD_THREE_LAST_PC, prefix.direct_calls + selected.direct_calls)
+    view = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    y = _read(view, final['a5'] + 4, 2)
+    suffix = (*game.finish_guarded_lower_three_spawn(final['a5']),
+              *game.offset_spawn_position(lambda address, size: _read(view, address, size),
+                                          final['a5'], 0, -8))
+    final['sr'] = _sub_sr(selected.registers['sr'], y, 8, 2)
+    return AtomicPlan(prefix.cycles + selected.cycles + 68,
+                      prefix.instructions + selected.instructions + 4,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_CLOSURE_GUARD_THREE_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls + 2)
 
 
 def spawn_closure_safe_return(machine, registers: dict[str, int]) -> AtomicPlan:
@@ -1519,6 +1573,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_REVERSE_Y_OFFSET_CALLER_ENTRY: spawn_reverse_y_offset_caller,
         SPAWN_CLOSURE_GUARD_TWO_ENTRY: spawn_closure_guard_two_caller,
         SPAWN_PRIMARY_FLAG_CALLER_ENTRY: spawn_primary_flag_caller,
+        SPAWN_CLOSURE_GUARD_THREE_ENTRY: spawn_closure_guard_three_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \

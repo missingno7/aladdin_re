@@ -232,6 +232,18 @@ def finish_guarded_lower_two_spawn(record):
             for offset, byte in enumerate(bytes.fromhex('001242e4'))]
 
 
+def finish_guarded_lower_three_spawn(record):
+    """Apply callback 1B717C's successful object script pointer."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('001242fe'))]
+
+
+def finish_reverse_script_c_spawn(record):
+    """Apply callback 1B6F60's successful object script pointer."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('00125aa8'))]
+
+
 def finish_reverse_script_spawn(record):
     """Apply callback 1B6696's successful object script pointer (no retype)."""
     return [(record + 0x20 + offset, byte)
