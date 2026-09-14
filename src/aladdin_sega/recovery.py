@@ -732,11 +732,19 @@ class Candidate:
         if self.is_lifecycle and entry == SPAWN_DISPATCH_ITERATION_ENTRY:
             self.stats['gates'] += 1
             try:
-                plan = self._mutate(spawn_dispatch_iteration(machine, machine.registers()))
-                if not self._apply(machine, plan, target):
-                    return self._fallback(machine, entry, 'scheduler admission')
+                result = spawn_dispatch_iteration(machine, machine.registers())
             except UnsupportedCandidate as error:
                 return self._fallback(machine, entry, f'unsupported domain: {error}')
+            if isinstance(result, SoundSeam):
+                if not self._apply(machine, self._mutate(result.prefix), target):
+                    return self._fallback(machine, entry, 'scheduler admission')
+                return self._run_sound_seam(
+                    machine, target, result, suffix_transform=self._mutate,
+                    on_complete=lambda: self.stats.__setitem__(
+                        'spawn_caller_hits', self.stats['spawn_caller_hits'] + 1),
+                )
+            if not self._apply(machine, self._mutate(result), target):
+                return self._fallback(machine, entry, 'scheduler admission')
             self.stats['spawn_caller_hits'] += 1
             return True
         if self.is_lifecycle and entry == SPAWN_UPPER_VARIANT_CALLER_ENTRY:

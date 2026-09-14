@@ -2,20 +2,22 @@
 
 1B6C0E, 1B72FC, 1B6FAE, 1B6756 and 1B6C2E are spawn dispatcher callbacks
 (``--parent 1AE46C`` census) whose recorded evidence shows a RAM-only
-recipe-matched arm alongside an arm no recipe reaches: 1B6C0E's, 1B6FAE's
-and 1B6C2E's successful-allocation/FFF175-clear arm (when 1B6FAE's own
-FF7E26 selector also mismatches) continues into 1B2650's VDP tile-data
-upload (a device port write inside the ``1B263C..1B26D0`` command-stream
-engine range); 1B72FC's FFEFE0==0x3030 arm is an unrecorded four-slot
-allocation sequence with no retained fixture; 1B6756's FF7E26==0x0B arm
-nests a second guard, a second reverse-pool spawn and a second 1B2650 VDP
-call, also with no retained fixture.  None fit the plain/offset/closure
-table shapes tests/test_spawn_oracle.py exercises generically, and none
-may join oracle_witness's DISPATCH_CALLBACKS bulk matrix: that suite's
-default fixture leaves FFF175/FFEFE0/FF7E26 at their cold-boot RAM
-residue, which lands 1B6C0E, 1B6FAE, 1B6756 and 1B6C2E on their declining
-arm and would break the suite's blanket ``fallbacks == 0`` assumption.
-This module qualifies all five directly instead, mirroring
+recipe-matched arm alongside a second arm: 1B6C0E's, 1B6FAE's, 1B6C2E's,
+1B6F82's and 1B75D6's successful-allocation/FFF175-clear arm (when
+1B6FAE's own FF7E26 selector also mismatches) continues into 1B2650's VDP
+tile-data upload -- a device access inside a ``pathfacts.NATIVE_ENTRIES``
+seam callee, not in either caller's own prefix or suffix, so it now
+recovers as a ``SoundSeam`` (``_vdp_tile_upload_seam`` /
+``finish_upper_tile_vdp_spawn``) rather than declining.  1B72FC's
+FFEFE0==0x3030 arm is an unrecorded four-slot allocation sequence with no
+retained fixture; 1B6756's FF7E26==0x0B arm nests a second guard, a
+second reverse-pool spawn and a second 1B2650 VDP call, also with no
+retained fixture -- both remain genuine declines.  None fit the
+plain/offset/closure table shapes tests/test_spawn_oracle.py exercises
+generically, and none may join oracle_witness's DISPATCH_CALLBACKS bulk
+matrix without first auditing that suite's blanket ``fallbacks == 0``
+assumption against every entry's default cold-boot RAM residue.  This
+module qualifies all five directly instead, mirroring
 oracle_witness.dispatcher_fixture and execute_dispatch without touching
 their shared dicts.
 """
@@ -25,17 +27,41 @@ import pytest
 import oracle_witness as oracle
 from aladdin_sega.boundary import (SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                                    SPAWN_REGION_REVERSE_ENTRY,
-                                   SPAWN_UPPER_TILE_CALLER_ENTRY, SPAWN_CAP_GUARD_TWO_ENTRY,
+                                   SPAWN_UPPER_TILE_CALLER_ENTRY, SPAWN_UPPER_TILE_CALLER_LAST_PC,
+                                   SPAWN_CAP_GUARD_TWO_ENTRY,
                                    SPAWN_UPPER_TILE_WORD_CALLER_ENTRY,
+                                   SPAWN_UPPER_TILE_WORD_CALLER_EARLY_PC,
                                    SPAWN_REVERSE_GUARD_CALLER_ENTRY,
                                    SPAWN_UPPER_TILE_TWO_CALLER_ENTRY,
-                                   SPAWN_UPPER_GUARD_TILE_ENTRY,
+                                   SPAWN_UPPER_TILE_TWO_CALLER_LAST_PC,
+                                   SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_UPPER_GUARD_TILE_LAST_PC,
                                    SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY,
-                                   UnsupportedCandidate, spawn_upper_tile_caller,
+                                   SPAWN_UPPER_TILE_FOUR_CALLER_LAST_PC,
+                                   UnsupportedCandidate, SoundSeam, spawn_upper_tile_caller,
                                    spawn_cap_guard_two, spawn_upper_tile_word_caller,
                                    spawn_reverse_guard_caller, spawn_upper_tile_two_caller,
                                    spawn_upper_guard_tile_caller, spawn_upper_tile_four_caller)
 from aladdin_sega.recovery import Candidate
+
+
+def _guard_seam_prefix_continuation(monkeypatch):
+    """Keep the 'continuation' mutant off a VDP seam's own prefix.
+
+    The prefix deliberately parks PC at 0x1B2650, the native tile-upload
+    entry; perturbing that PC would execute unrelated ROM mid-instruction
+    (a real M68000 crash, not a semantic divergence).  Perturb the resumed
+    suffix instead -- the observable continuation contract under test --
+    mirroring tests/test_contact_family.py's identical guard for the sound
+    seams (there keyed on 0x1E58B8).
+    """
+    original_mutate = Candidate._mutate
+
+    def suffix_only(candidate, plan):
+        if candidate.name.endswith('continuation') and plan.registers.get('pc') == 0x1B2650:
+            return plan
+        return original_mutate(candidate, plan)
+
+    monkeypatch.setattr(Candidate, '_mutate', suffix_only)
 
 
 def _dispatch_fixture(target, pool_entry, *, free=0, incoming_x=False, pokes=()):
@@ -111,8 +137,8 @@ def test_upper_tile_recovered_skip_arm_matches_original(free, incoming_x):
 
 
 @pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
-def test_upper_tile_vdp_arm_declines_to_original(incoming_x):
-    """FFF175 clear and a successful allocation: the undeclined VDP upload."""
+def test_upper_tile_vdp_arm_recovers_as_a_seam(incoming_x):
+    """FFF175 clear and a successful allocation: the VDP upload, now a seam."""
     pokes = [(0xFFF175, 0x00)]
     expected = _run_dispatch(SPAWN_UPPER_TILE_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=incoming_x, candidate=None, pokes=pokes)
@@ -120,11 +146,11 @@ def test_upper_tile_vdp_arm_declines_to_original(incoming_x):
                            free=0, incoming_x=incoming_x, candidate="lifecycle", pokes=pokes)
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats["spawn_caller_hits"] == 0
-    assert actual.stats["fallbacks"] == 1
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
-def test_upper_tile_isolated_plan_declines_on_the_vdp_arm():
+def test_upper_tile_isolated_plan_seams_on_the_vdp_arm():
     machine = oracle.cold_fixture(SPAWN_REGION_UPPER_ENTRY, free=0,
                                   pc_entry=SPAWN_UPPER_TILE_CALLER_ENTRY)
     try:
@@ -134,8 +160,10 @@ def test_upper_tile_isolated_plan_declines_on_the_vdp_arm():
         assert machine.atomic(target=machine.info["tick"] + 1_000_000, cycles=1, instructions=1,
                               last_pc=SPAWN_UPPER_TILE_CALLER_ENTRY, writes=[(0xFFF175, 0)],
                               registers=registers)
-        with pytest.raises(UnsupportedCandidate, match="1B2650 VDP tile upload"):
-            spawn_upper_tile_caller(machine, machine.registers())
+        result = spawn_upper_tile_caller(machine, machine.registers())
+        assert isinstance(result, SoundSeam)
+        assert result.prefix.registers["pc"] == 0x1B2650
+        assert result.resume_pc == SPAWN_UPPER_TILE_CALLER_LAST_PC
     finally:
         machine.close()
 
@@ -145,6 +173,19 @@ def test_upper_tile_mutants_diverge_at_the_dispatcher_boundary(mutant):
     pokes = [(0xFFF175, 0x01)]
     expected = _run_dispatch(SPAWN_UPPER_TILE_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_TILE_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
+                           pokes=pokes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_upper_tile_vdp_seam_mutants_diverge_at_the_dispatcher_boundary(mutant, monkeypatch):
+    pokes = [(0xFFF175, 0x00)]
+    expected = _run_dispatch(SPAWN_UPPER_TILE_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    if mutant == "continuation":
+        _guard_seam_prefix_continuation(monkeypatch)
     actual = _run_dispatch(SPAWN_UPPER_TILE_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                            free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
                            pokes=pokes)
@@ -242,8 +283,8 @@ def test_upper_tile_word_guard_set_arm_matches_original(incoming_x):
     assert actual.stats["fallbacks"] == 0
 
 
-def test_upper_tile_word_vdp_arm_declines_to_original():
-    """FFF175 clear and FF7E26 != 5: the undeclined VDP upload."""
+def test_upper_tile_word_vdp_arm_recovers_as_a_seam():
+    """FFF175 clear and FF7E26 != 5: the VDP upload, now a seam."""
     pokes = [(0xFFF175, 0x00), (0xFF7E26, 0x00)]
     expected = _run_dispatch(SPAWN_UPPER_TILE_WORD_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=False, candidate=None, pokes=pokes)
@@ -251,11 +292,11 @@ def test_upper_tile_word_vdp_arm_declines_to_original():
                            free=0, incoming_x=False, candidate="lifecycle", pokes=pokes)
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats["spawn_caller_hits"] == 0
-    assert actual.stats["fallbacks"] == 1
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
-def test_upper_tile_word_isolated_plan_declines_on_the_vdp_arm():
+def test_upper_tile_word_isolated_plan_seams_on_the_vdp_arm():
     machine = oracle.cold_fixture(SPAWN_REGION_UPPER_ENTRY, free=0,
                                   pc_entry=SPAWN_UPPER_TILE_WORD_CALLER_ENTRY)
     try:
@@ -265,8 +306,10 @@ def test_upper_tile_word_isolated_plan_declines_on_the_vdp_arm():
         assert machine.atomic(target=machine.info["tick"] + 1_000_000, cycles=1, instructions=1,
                               last_pc=SPAWN_UPPER_TILE_WORD_CALLER_ENTRY,
                               writes=[(0xFFF175, 0), (0xFF7E26, 0)], registers=registers)
-        with pytest.raises(UnsupportedCandidate, match="1B2650 VDP tile upload"):
-            spawn_upper_tile_word_caller(machine, machine.registers())
+        result = spawn_upper_tile_word_caller(machine, machine.registers())
+        assert isinstance(result, SoundSeam)
+        assert result.prefix.registers["pc"] == 0x1B2650
+        assert result.resume_pc == SPAWN_UPPER_TILE_WORD_CALLER_EARLY_PC
     finally:
         machine.close()
 
@@ -276,6 +319,19 @@ def test_upper_tile_word_mutants_diverge_at_the_dispatcher_boundary(mutant):
     pokes = [(0xFFF175, 0x00), (0xFF7E26, 0x05)]
     expected = _run_dispatch(SPAWN_UPPER_TILE_WORD_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_TILE_WORD_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
+                           pokes=pokes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_upper_tile_word_vdp_seam_mutants_diverge_at_the_dispatcher_boundary(mutant, monkeypatch):
+    pokes = [(0xFFF175, 0x00), (0xFF7E26, 0x00)]
+    expected = _run_dispatch(SPAWN_UPPER_TILE_WORD_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    if mutant == "continuation":
+        _guard_seam_prefix_continuation(monkeypatch)
     actual = _run_dispatch(SPAWN_UPPER_TILE_WORD_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                            free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
                            pokes=pokes)
@@ -360,8 +416,8 @@ def test_upper_tile_two_recovered_skip_arm_matches_original(free, incoming_x):
 
 
 @pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
-def test_upper_tile_two_vdp_arm_declines_to_original(incoming_x):
-    """FFF175 clear and a successful allocation: the undeclined VDP upload."""
+def test_upper_tile_two_vdp_arm_recovers_as_a_seam(incoming_x):
+    """FFF175 clear and a successful allocation: the VDP upload, now a seam."""
     pokes = [(0xFFF175, 0x00)]
     expected = _run_dispatch(SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=incoming_x, candidate=None, pokes=pokes)
@@ -369,11 +425,11 @@ def test_upper_tile_two_vdp_arm_declines_to_original(incoming_x):
                            free=0, incoming_x=incoming_x, candidate="lifecycle", pokes=pokes)
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats["spawn_caller_hits"] == 0
-    assert actual.stats["fallbacks"] == 1
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
-def test_upper_tile_two_isolated_plan_declines_on_the_vdp_arm():
+def test_upper_tile_two_isolated_plan_seams_on_the_vdp_arm():
     machine = oracle.cold_fixture(SPAWN_REGION_UPPER_ENTRY, free=0,
                                   pc_entry=SPAWN_UPPER_TILE_TWO_CALLER_ENTRY)
     try:
@@ -383,8 +439,10 @@ def test_upper_tile_two_isolated_plan_declines_on_the_vdp_arm():
         assert machine.atomic(target=machine.info["tick"] + 1_000_000, cycles=1, instructions=1,
                               last_pc=SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, writes=[(0xFFF175, 0)],
                               registers=registers)
-        with pytest.raises(UnsupportedCandidate, match="1B2650 VDP tile upload"):
-            spawn_upper_tile_two_caller(machine, machine.registers())
+        result = spawn_upper_tile_two_caller(machine, machine.registers())
+        assert isinstance(result, SoundSeam)
+        assert result.prefix.registers["pc"] == 0x1B2650
+        assert result.resume_pc == SPAWN_UPPER_TILE_TWO_CALLER_LAST_PC
     finally:
         machine.close()
 
@@ -394,6 +452,19 @@ def test_upper_tile_two_mutants_diverge_at_the_dispatcher_boundary(mutant):
     pokes = [(0xFFF175, 0x01)]
     expected = _run_dispatch(SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
+                           pokes=pokes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_upper_tile_two_vdp_seam_mutants_diverge_at_the_dispatcher_boundary(mutant, monkeypatch):
+    pokes = [(0xFFF175, 0x00)]
+    expected = _run_dispatch(SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    if mutant == "continuation":
+        _guard_seam_prefix_continuation(monkeypatch)
     actual = _run_dispatch(SPAWN_UPPER_TILE_TWO_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                            free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
                            pokes=pokes)
@@ -432,8 +503,8 @@ def test_upper_guard_tile_outer_guard_clear_matches_original():
     assert actual.stats["fallbacks"] == 0
 
 
-def test_upper_guard_tile_vdp_arm_declines_to_original():
-    """FF7E21 set, FFF175 clear and a successful allocation: the VDP upload."""
+def test_upper_guard_tile_vdp_arm_recovers_as_a_seam():
+    """FF7E21 set, FFF175 clear and a successful allocation: the VDP upload, now a seam."""
     pokes = [(0xFF7E21, 0x01), (0xFFF175, 0x00)]
     expected = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=False, candidate=None, pokes=pokes)
@@ -441,11 +512,11 @@ def test_upper_guard_tile_vdp_arm_declines_to_original():
                            free=0, incoming_x=False, candidate="lifecycle", pokes=pokes)
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats["spawn_caller_hits"] == 0
-    assert actual.stats["fallbacks"] == 1
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
-def test_upper_guard_tile_isolated_plan_declines_on_the_vdp_arm():
+def test_upper_guard_tile_isolated_plan_seams_on_the_vdp_arm():
     machine = oracle.cold_fixture(SPAWN_REGION_UPPER_ENTRY, free=0,
                                   pc_entry=SPAWN_UPPER_GUARD_TILE_ENTRY)
     try:
@@ -455,8 +526,10 @@ def test_upper_guard_tile_isolated_plan_declines_on_the_vdp_arm():
         assert machine.atomic(target=machine.info["tick"] + 1_000_000, cycles=1, instructions=1,
                               last_pc=SPAWN_UPPER_GUARD_TILE_ENTRY,
                               writes=[(0xFF7E21, 1), (0xFFF175, 0)], registers=registers)
-        with pytest.raises(UnsupportedCandidate, match="1B2650 VDP tile upload"):
-            spawn_upper_guard_tile_caller(machine, machine.registers())
+        result = spawn_upper_guard_tile_caller(machine, machine.registers())
+        assert isinstance(result, SoundSeam)
+        assert result.prefix.registers["pc"] == 0x1B2650
+        assert result.resume_pc == SPAWN_UPPER_GUARD_TILE_LAST_PC
     finally:
         machine.close()
 
@@ -466,6 +539,19 @@ def test_upper_guard_tile_mutants_diverge_at_the_dispatcher_boundary(mutant):
     pokes = [(0xFF7E21, 0x01), (0xFFF175, 0x01)]
     expected = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
+                           pokes=pokes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_upper_guard_tile_vdp_seam_mutants_diverge_at_the_dispatcher_boundary(mutant, monkeypatch):
+    pokes = [(0xFF7E21, 0x01), (0xFFF175, 0x00)]
+    expected = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    if mutant == "continuation":
+        _guard_seam_prefix_continuation(monkeypatch)
     actual = _run_dispatch(SPAWN_UPPER_GUARD_TILE_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                            free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
                            pokes=pokes)
@@ -492,8 +578,8 @@ def test_upper_tile_four_recovered_skip_arm_matches_original(free, incoming_x):
 
 
 @pytest.mark.parametrize("incoming_x", (False, True), ids=("x-clear", "x-set"))
-def test_upper_tile_four_vdp_arm_declines_to_original(incoming_x):
-    """FFF175 clear and a successful allocation: the undeclined VDP upload."""
+def test_upper_tile_four_vdp_arm_recovers_as_a_seam(incoming_x):
+    """FFF175 clear and a successful allocation: the VDP upload, now a seam."""
     pokes = [(0xFFF175, 0x00)]
     expected = _run_dispatch(SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=incoming_x, candidate=None, pokes=pokes)
@@ -501,11 +587,11 @@ def test_upper_tile_four_vdp_arm_declines_to_original(incoming_x):
                            free=0, incoming_x=incoming_x, candidate="lifecycle", pokes=pokes)
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats["spawn_caller_hits"] == 0
-    assert actual.stats["fallbacks"] == 1
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["fallbacks"] == 0
 
 
-def test_upper_tile_four_isolated_plan_declines_on_the_vdp_arm():
+def test_upper_tile_four_isolated_plan_seams_on_the_vdp_arm():
     machine = oracle.cold_fixture(SPAWN_REGION_UPPER_ENTRY, free=0,
                                   pc_entry=SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY)
     try:
@@ -515,8 +601,10 @@ def test_upper_tile_four_isolated_plan_declines_on_the_vdp_arm():
         assert machine.atomic(target=machine.info["tick"] + 1_000_000, cycles=1, instructions=1,
                               last_pc=SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY, writes=[(0xFFF175, 0)],
                               registers=registers)
-        with pytest.raises(UnsupportedCandidate, match="1B2650 VDP tile upload"):
-            spawn_upper_tile_four_caller(machine, machine.registers())
+        result = spawn_upper_tile_four_caller(machine, machine.registers())
+        assert isinstance(result, SoundSeam)
+        assert result.prefix.registers["pc"] == 0x1B2650
+        assert result.resume_pc == SPAWN_UPPER_TILE_FOUR_CALLER_LAST_PC
     finally:
         machine.close()
 
@@ -526,6 +614,19 @@ def test_upper_tile_four_mutants_diverge_at_the_dispatcher_boundary(mutant):
     pokes = [(0xFFF175, 0x01)]
     expected = _run_dispatch(SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                              free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
+                           pokes=pokes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_upper_tile_four_vdp_seam_mutants_diverge_at_the_dispatcher_boundary(mutant, monkeypatch):
+    pokes = [(0xFFF175, 0x00)]
+    expected = _run_dispatch(SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    if mutant == "continuation":
+        _guard_seam_prefix_continuation(monkeypatch)
     actual = _run_dispatch(SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                            free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
                            pokes=pokes)

@@ -170,6 +170,7 @@ SPAWN_UPPER_GUARD_TYPE4A_LAST_PC = 0x1B70AE
 SPAWN_UPPER_TILE_TWO_CALLER_ENTRY = 0x1B6C2E
 SPAWN_UPPER_TILE_TWO_CALLER_LAST_PC = 0x1B6C4C
 SPAWN_UPPER_TILE_TWO_CALLER_TEMPLATE = 0x1B7AA8
+SPAWN_UPPER_TILE_TWO_CALLER_CALL_PC = 0x1B6C48
 SPAWN_UPPER_GUARD_PLAIN_ENTRY = 0x1B6E86
 SPAWN_UPPER_GUARD_PLAIN_DECLINE_PC = 0x1B6EB0
 SPAWN_UPPER_GUARD_PLAIN_SPAWN_PC = 0x1B6E9A
@@ -177,9 +178,12 @@ SPAWN_UPPER_GUARD_PLAIN_TEMPLATE = 0x1B7C24
 SPAWN_UPPER_GUARD_TILE_ENTRY = 0x1B6F82
 SPAWN_UPPER_GUARD_TILE_LAST_PC = 0x1B6FAC
 SPAWN_UPPER_GUARD_TILE_TEMPLATE = 0x1B8228
+SPAWN_UPPER_GUARD_TILE_CALL_PC = 0x1B6FA8
+SPAWN_UPPER_GUARD_TILE_VDP_SOURCE = 0x129532
 SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY = 0x1B75D6
 SPAWN_UPPER_TILE_FOUR_CALLER_LAST_PC = 0x1B75F4
 SPAWN_UPPER_TILE_FOUR_CALLER_TEMPLATE = 0x1B8174
+SPAWN_UPPER_TILE_FOUR_CALLER_CALL_PC = 0x1B75F0
 SPAWN_CLOSURE_SAFE_RETURN_ENTRY = 0x1B65BE
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
@@ -194,6 +198,8 @@ SPAWN_UPPER_DISPATCH_LAST_PC = 0x1B7472
 SPAWN_UPPER_TILE_CALLER_ENTRY = 0x1B6C0E
 SPAWN_UPPER_TILE_CALLER_LAST_PC = 0x1B6C2C
 SPAWN_UPPER_TILE_CALLER_TEMPLATE = 0x1B7A80
+SPAWN_UPPER_TILE_CALLER_CALL_PC = 0x1B6C28
+SPAWN_UPPER_TILE_VDP_SOURCE = 0x1292B2
 SPAWN_CAP_GUARD_TWO_ENTRY = 0x1B72FC
 SPAWN_CAP_GUARD_TWO_LAST_PC = 0x1B7330
 SPAWN_LOWER_OFFSET_CALLER_ENTRY = 0x1B71C4
@@ -202,6 +208,8 @@ SPAWN_UPPER_TILE_WORD_CALLER_ENTRY = 0x1B6FAE
 SPAWN_UPPER_TILE_WORD_CALLER_EARLY_PC = 0x1B6FD8
 SPAWN_UPPER_TILE_WORD_CALLER_LAST_PC = 0x1B6FE0
 SPAWN_UPPER_TILE_WORD_CALLER_TEMPLATE = 0x1B81EC
+SPAWN_UPPER_TILE_WORD_CALLER_CALL_PC = 0x1B6FD2
+SPAWN_UPPER_TILE_WORD_VDP_SOURCE = 0x1294F2
 SPAWN_REVERSE_GUARD_CALLER_ENTRY = 0x1B6756
 SPAWN_REVERSE_GUARD_CALLER_LAST_PC = 0x1B6792
 SPAWN_REVERSE_GUARD_CALLER_TEMPLATE = 0x1B7DDC
@@ -1305,6 +1313,38 @@ def _upper_tile_wrapper_shape(machine):
         raise UnsupportedCandidate('upper tile spawn caller ROM shape')
 
 
+def _vdp_tile_upload_seam(sp, cycles, instructions, writes, registers, direct_calls,
+                          segment_cycles, segment_instructions, source, call_pc, resume_pc):
+    """Compose the shared VDP tile-upload seam every ``spawn_upper_tile*`` caller reaches.
+
+    ``segment_cycles``/``segment_instructions`` cover the caller's own
+    TST.B FFF175 (or CMPI.B FF7E26)/Bcc chain plus the final LEA <source>,A0
+    and BSR/JSR to 1B2650; the prefix ends there with the frame pushed (the
+    wrapper's own immediate RTS, ``resume_pc``, is the pushed return
+    address).  1B2650 (39 instructions, VRAM writes through the VDP ports)
+    is a proven ``pathfacts.NATIVE_ENTRIES`` seam callee, so the machine
+    runs it for real; the suffix is always ``finish_upper_tile_vdp_spawn``.
+    """
+    seam_registers = {**registers, 'a0': source, 'a7': sp - 4, 'pc': 0x1B2650}
+    prefix = AtomicPlan(cycles + segment_cycles, instructions + segment_instructions,
+                        tuple(dict((*writes, *_bytes(sp - 4, resume_pc, 4))).items()),
+                        seam_registers, call_pc, direct_calls)
+    return SoundSeam(prefix, sp, resume_pc, resume_pc, 0, 4, 4, suffix=finish_upper_tile_vdp_spawn)
+
+
+def finish_upper_tile_vdp_spawn(machine, registers):
+    """Finish any ``spawn_upper_tile*`` VDP seam: the wrapper's own bare RTS.
+
+    1B2650 returns straight to the wrapper's own final instruction, an
+    unconditional RTS with no further writes -- no RAM-domain recipe
+    reaches the device ports the upload touched, so this suffix only
+    restores the caller's own return PC.
+    """
+    sp = registers['a7']
+    return AtomicPlan(16, 1, (), {**registers, 'a7': sp + 4, 'pc': _read(machine, sp, 4) & 0xFFFFFF},
+                      registers['pc'])
+
+
 def spawn_upper_tile_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B6C0E``'s upper-pool creation and its FFF175 tile-upload guard.
 
@@ -1312,11 +1352,12 @@ def spawn_upper_tile_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     return locally with no further writes -- the same LEA/BSR upper-pool
     prefix as ``spawn_upper_caller``, with a plain RTS tail instead of a
     coordinate-correction suffix.  A successful allocation with ``FFF175``
-    clear continues into ``1B2650``'s VDP tile-data upload: a MOVE.L to the
+    clear continues into ``1B2650``'s VDP tile-data upload (a MOVE.L to the
     VDP control port ``$C00004`` followed by a 16-word transfer through the
-    data port ``$C00000``, inside the ``1B263C..1B26D0`` command-stream
-    engine range.  No RAM-domain recipe reaches a device port, so that arm
-    declines.
+    data port ``$C00000``): the TST.B FFF175/BNE, LEA ``$1292B2``,A0 and
+    BSR.W 1B2650 form the seam prefix, and the wrapper's own bare RTS at
+    ``0x1B6C2C`` (the pushed return address) is the suffix, both via
+    ``_vdp_tile_upload_seam``/``finish_upper_tile_vdp_spawn``.
     """
     sp = registers['a7']
     if sp & 1:
@@ -1344,7 +1385,12 @@ def spawn_upper_tile_caller(machine, registers: dict[str, int]) -> AtomicPlan:
         writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
     guard = _read(planned, 0xFFF175, 1)
     if guard == 0:
-        raise UnsupportedCandidate('upper tile spawn caller requires the 1B2650 VDP tile upload')
+        return _vdp_tile_upload_seam(
+            sp, prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+            writes, {**final, 'sr': _logic_sr(final['sr'], guard, 1)},
+            prefix.direct_calls + selected.direct_calls,
+            62, 5, SPAWN_UPPER_TILE_VDP_SOURCE, SPAWN_UPPER_TILE_CALLER_CALL_PC,
+            SPAWN_UPPER_TILE_CALLER_LAST_PC)
     final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], guard, 1))
     return AtomicPlan(prefix.cycles + selected.cycles + 50,
                       prefix.instructions + selected.instructions + 4, writes, final,
@@ -1365,8 +1411,8 @@ def spawn_upper_tile_two_caller(machine, registers: dict[str, int]) -> AtomicPla
     Byte-for-byte the same shape as ``spawn_upper_tile_caller`` (``1B6C0E``),
     just a different template (``0x1B7AA8``). A failed allocation and a
     successful one with ``FFF175`` set both return locally; a successful
-    allocation with ``FFF175`` clear reaches the same 1B2650 VDP upload and
-    declines.
+    allocation with ``FFF175`` clear reaches the same 1B2650 VDP upload,
+    recovered as the same seam (source ``$1292B2``, resume ``0x1B6C4C``).
     """
     sp = registers['a7']
     if sp & 1:
@@ -1394,8 +1440,12 @@ def spawn_upper_tile_two_caller(machine, registers: dict[str, int]) -> AtomicPla
         writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
     guard = _read(planned, 0xFFF175, 1)
     if guard == 0:
-        raise UnsupportedCandidate(
-            'upper tile spawn caller (two) requires the 1B2650 VDP tile upload')
+        return _vdp_tile_upload_seam(
+            sp, prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+            writes, {**final, 'sr': _logic_sr(final['sr'], guard, 1)},
+            prefix.direct_calls + selected.direct_calls,
+            62, 5, SPAWN_UPPER_TILE_VDP_SOURCE, SPAWN_UPPER_TILE_TWO_CALLER_CALL_PC,
+            SPAWN_UPPER_TILE_TWO_CALLER_LAST_PC)
     final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], guard, 1))
     return AtomicPlan(prefix.cycles + selected.cycles + 50,
                       prefix.instructions + selected.instructions + 4, writes, final,
@@ -1448,7 +1498,8 @@ def spawn_upper_guard_tile_caller(machine, registers: dict[str, int]) -> AtomicP
     exactly the same upper-pool-creation/FFF175-tile-upload shape as
     ``spawn_upper_tile_caller`` (``1B6C0E``): allocation failure and a
     successful allocation with FFF175 set both recover; a successful
-    allocation with FFF175 clear reaches 1B2650's VDP upload and declines.
+    allocation with FFF175 clear reaches 1B2650's VDP upload, recovered as
+    the same seam (source ``$129532``, resume ``0x1B6FAC``).
     """
     entry, sp = SPAWN_UPPER_GUARD_TILE_ENTRY, registers['a7']
     shape = bytes.fromhex(
@@ -1483,7 +1534,12 @@ def spawn_upper_guard_tile_caller(machine, registers: dict[str, int]) -> AtomicP
         writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
     tile_guard = _read(planned, 0xFFF175, 1)
     if tile_guard == 0:
-        raise UnsupportedCandidate('upper guard tile spawn caller requires the 1B2650 VDP tile upload')
+        return _vdp_tile_upload_seam(
+            sp, prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+            writes, {**final, 'sr': _logic_sr(final['sr'], tile_guard, 1)},
+            prefix.direct_calls + selected.direct_calls,
+            62, 5, SPAWN_UPPER_GUARD_TILE_VDP_SOURCE, SPAWN_UPPER_GUARD_TILE_CALL_PC,
+            SPAWN_UPPER_GUARD_TILE_LAST_PC)
     final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], tile_guard, 1))
     return AtomicPlan(prefix.cycles + selected.cycles + 50,
                       prefix.instructions + selected.instructions + 4, writes, final,
@@ -1502,7 +1558,8 @@ def spawn_upper_tile_four_caller(machine, registers: dict[str, int]) -> AtomicPl
     """Recover ``1B75D6``'s upper-pool creation and FFF175 tile-upload guard.
 
     Byte-for-byte the same shape as ``spawn_upper_tile_caller`` (``1B6C0E``),
-    just a different template (``0x1B8174``).
+    just a different template (``0x1B8174``); the FFF175-clear arm reaches
+    the same 1B2650 VDP seam (source ``$1292B2``, resume ``0x1B75F4``).
     """
     sp = registers['a7']
     if sp & 1:
@@ -1530,8 +1587,12 @@ def spawn_upper_tile_four_caller(machine, registers: dict[str, int]) -> AtomicPl
         writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
     guard = _read(planned, 0xFFF175, 1)
     if guard == 0:
-        raise UnsupportedCandidate(
-            'upper tile spawn caller (four) requires the 1B2650 VDP tile upload')
+        return _vdp_tile_upload_seam(
+            sp, prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+            writes, {**final, 'sr': _logic_sr(final['sr'], guard, 1)},
+            prefix.direct_calls + selected.direct_calls,
+            62, 5, SPAWN_UPPER_TILE_VDP_SOURCE, SPAWN_UPPER_TILE_FOUR_CALLER_CALL_PC,
+            SPAWN_UPPER_TILE_FOUR_CALLER_LAST_PC)
     final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], guard, 1))
     return AtomicPlan(prefix.cycles + selected.cycles + 50,
                       prefix.instructions + selected.instructions + 4, writes, final,
@@ -1664,7 +1725,8 @@ def spawn_upper_tile_word_caller(machine, registers: dict[str, int]) -> AtomicPl
     continues into a CMPI.B FF7E26,#5 selector: a match writes one fixed
     word at record+0x1E and returns (``0x1B6FE0``, the arm every recorded
     fixture exercises); a mismatch reaches 1B2650's VDP tile-data upload
-    (the same command-stream engine device port as 1B6C0E) and declines.
+    through a JSR (not BSR) but the same shape otherwise, recovered as a
+    seam (source ``$1294F2``, resume the shared early RTS ``0x1B6FD8``).
     """
     sp = registers['a7']
     if sp & 1:
@@ -1699,8 +1761,12 @@ def spawn_upper_tile_word_caller(machine, registers: dict[str, int]) -> AtomicPl
                           prefix.direct_calls + selected.direct_calls)
     selector = _read(planned, 0xFF7E26, 1)
     if selector != 5:
-        raise UnsupportedCandidate(
-            'upper tile word spawn caller requires the 1B2650 VDP tile upload')
+        return _vdp_tile_upload_seam(
+            sp, prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+            writes, {**final, 'sr': _cmp_sr(final['sr'], selector, 5, 1)},
+            prefix.direct_calls + selected.direct_calls,
+            92, 7, SPAWN_UPPER_TILE_WORD_VDP_SOURCE, SPAWN_UPPER_TILE_WORD_CALLER_CALL_PC,
+            SPAWN_UPPER_TILE_WORD_CALLER_EARLY_PC)
     suffix = tuple(game.finish_upper_tile_word_spawn(final['a5']))
     final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], 0x6000, 2))
     return AtomicPlan(prefix.cycles + selected.cycles + 94,
@@ -2058,6 +2124,38 @@ def spawn_upper_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPla
 
 
 
+def _spawn_dispatch_call_seam(sp, prefix, seam, call_last_pc, resume_pc):
+    """Compose 1AE46C's MOVEM save/restore frame around a callback's own seam.
+
+    Mirrors ``begin_contact_family_type46_dispatch_sound_seam``: the outer
+    dispatch prefix (the 16-cycle push to the callback's entry) and the
+    inner seam's own prefix (up to the native VDP entry) combine into one
+    checked prefix; the inner seam's stack/frame identity is unchanged
+    (those checks are all relative to the callback's own SP, which already
+    reflects every push).  The new suffix runs the inner ``finish`` first,
+    then the same 15-register MOVEM restore and 132-cycle/1-instruction
+    tail ``spawn_dispatch_call`` applies to every non-seam callback.
+    """
+    combined = AtomicPlan(prefix.cycles + seam.prefix.cycles,
+                          prefix.instructions + seam.prefix.instructions,
+                          tuple(dict((*prefix.writes, *seam.prefix.writes)).items()),
+                          {**prefix.registers, **seam.prefix.registers}, seam.prefix.last_pc,
+                          prefix.direct_calls + seam.prefix.direct_calls)
+
+    def suffix(machine, returned):
+        callback = seam.suffix(machine, returned)
+        restored = {name: _read(machine, sp + 4 * index, 4)
+                    for index, name in enumerate(('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7',
+                                                   'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6'))}
+        final = {**restored, 'a7': sp + 60, 'pc': resume_pc, 'sr': callback.registers['sr']}
+        return AtomicPlan(callback.cycles + 132, callback.instructions + 1,
+                          callback.writes, final, call_last_pc, callback.direct_calls)
+
+    return SoundSeam(combined, seam.stack_basis, seam.resume_pc, seam.return_slot,
+                     seam.saved_frame, seam.frame_size, seam.return_delta,
+                     seam.counts_contact, suffix)
+
+
 def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> AtomicPlan:
     """Compose one admitted ``1AE46C`` callback and its MOVEM restore.
 
@@ -2131,6 +2229,8 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         callback = spawn_closure_caller(planner, prefix.registers, target)
     else:
         callback = callback_function(planner, prefix.registers)
+    if isinstance(callback, SoundSeam):
+        return _spawn_dispatch_call_seam(sp, prefix, callback, call_last_pc, resume_pc)
     restored = {name: _read(machine, sp + 4 * index, 4)
                 for index, name in enumerate(('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7',
                                                'a0', 'a1', 'a2', 'a3', 'a4', 'a5', 'a6'))}
@@ -2208,6 +2308,42 @@ def spawn_upper_scripted_caller(machine, registers: dict[str, int]) -> AtomicPla
                       prefix.direct_calls + selected.direct_calls)
 
 
+def _spawn_dispatch_iteration_seam(prefix, seam, row):
+    """Compose the iteration's own MOVEM-save prefix and D4/D5/D6/A0 tail around a callback seam.
+
+    Mirrors ``_spawn_dispatch_call_seam`` one level out: the iteration's
+    15-register save (128 cycles) joins the inner seam's own prefix; the new
+    suffix runs the inner ``finish`` first, then the same loop-counter
+    update (``D4``/``D5``/``D6``/``A0``) and PC selection
+    ``spawn_dispatch_iteration`` applies to every non-seam callback.
+    """
+    combined = AtomicPlan(prefix.cycles + seam.prefix.cycles,
+                          prefix.instructions + seam.prefix.instructions,
+                          tuple(dict((*prefix.writes, *seam.prefix.writes)).items()),
+                          {**prefix.registers, **seam.prefix.registers}, seam.prefix.last_pc,
+                          prefix.direct_calls + seam.prefix.direct_calls)
+
+    def suffix(machine, returned):
+        callback = seam.suffix(machine, returned)
+        final = dict(callback.registers)
+        d4, d5, d6 = (final[name] for name in ('d4', 'd5', 'd6'))
+        if not row:
+            final['a0'] = (final['a0'] + _signed_word(d5)) & 0xFFFFFFFF
+        final['d6'] = (d6 & 0xFFFF0000) | ((d6 + 0x10) & 0xFFFF)
+        final['d4'] = (d4 & 0xFFFF0000) | ((d4 - 1) & 0xFFFF)
+        final['sr'] = _add_sr(final['sr'], d6 & 0xFFFF, 0x10, 2)
+        tail_cycles = (22 if (d4 & 0xFFFF) == 0 else 18) if row else (30 if (d4 & 0xFFFF) == 0 else 26)
+        final['pc'] = ((SPAWN_ROW_DISPATCH_WALKER_LAST_PC if (d4 & 0xFFFF) == 0 else SPAWN_ROW_DISPATCH_WALKER_ENTRY)
+                       if row else (0x1AE47C if (d4 & 0xFFFF) == 0 else 0x1AE44A))
+        iteration_last_pc = 0x1AE4F2 if row else SPAWN_DISPATCH_ITERATION_LAST_PC
+        return AtomicPlan(callback.cycles + tail_cycles, callback.instructions + (2 if row else 3),
+                          callback.writes, final, iteration_last_pc, callback.direct_calls)
+
+    return SoundSeam(combined, seam.stack_basis, seam.resume_pc, seam.return_slot,
+                     seam.saved_frame, seam.frame_size, seam.return_delta,
+                     seam.counts_contact, suffix)
+
+
 def spawn_dispatch_iteration(machine, registers: dict[str, int], *, row=False) -> AtomicPlan:
     """Recover one admitted ``1AE468`` callback iteration.
 
@@ -2228,6 +2364,8 @@ def spawn_dispatch_iteration(machine, registers: dict[str, int], *, row=False) -
                         {**registers, 'a7': sp - 60,
                          'pc': 0x1AE4E8 if row else SPAWN_DISPATCH_CALL_ENTRY}, iteration_entry)
     callback = spawn_dispatch_call(dispatch_plan_view(machine, prefix), prefix.registers, row=row)
+    if isinstance(callback, SoundSeam):
+        return _spawn_dispatch_iteration_seam(prefix, callback, row)
     final = dict(callback.registers)
     d4, d5, d6 = (final[name] for name in ('d4', 'd5', 'd6'))
     if not row:
@@ -2309,6 +2447,12 @@ def spawn_dispatch_walker(machine, registers: dict[str, int], *, row=False) -> A
                                   0x1AE4DE if row else 0x1AE462, direct_calls=1)
             callback = spawn_dispatch_iteration(dispatch_plan_view(view, selected),
                                                 selected.registers, row=row)
+            if isinstance(callback, SoundSeam):
+                # The batched walker cannot suspend its Python loop mid-pass
+                # for a native excursion; decline the whole pass so the
+                # single-iteration gate (which can) owns this slot instead.
+                raise UnsupportedCandidate(
+                    'spawn dispatcher walker cannot batch a VDP tile-upload seam mid-loop')
             step = AtomicPlan(selected.cycles + callback.cycles,
                               selected.instructions + callback.instructions,
                               tuple(dict((*selected.writes, *callback.writes)).items()),
