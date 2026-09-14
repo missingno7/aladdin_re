@@ -30,6 +30,7 @@ TARGET_KINDS = {
     0x1AFA84: 0x74,  # recorded bounded-distance guard, window/kind/state gate and child spawn
     0x1AFB36: 0x6E,  # recorded gate cascade, dual-axis distance guard and FFF103 state tail (kinds 6E-73)
     0x1AE9E0: 0x1A,  # recorded FFF0D8 gate, self pair-release and 1B7940 re-template
+    0x1AEECA: 0x23,  # recorded FFF0D8 gate, self-retype and double pool-slot spawn
 }
 
 
@@ -228,6 +229,32 @@ def type1a_fixture(*, active=1, own_buffer=0, own_length=6, linked=0, linked_buf
                 writes += [(linked_buffer + i, 0xA5) for i in range(linked_length + 1)]
         else:
             writes += [*oracle.write_long(RECORD + 62, 0)]
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY,
+                              writes=writes, registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
+def type23_fixture(*, active=1, occupy_primary=(), occupy_secondary=(), **kwargs):
+    """Construct a valid Type-23 collection record over the original ROM.
+
+    ``family_fixture`` seeds the record's own FFF0D8 gate (``active_d8``);
+    this optionally occupies chosen 0-based slot indices of the primary
+    (FF7F06, 20 slots) and secondary (FF7E82, 24 slots) pools the two
+    spawn attempts search, to exercise a specific found index or
+    exhaustion of either.
+    """
+    state = family_fixture(0x1AEECA, active_d8=active, **kwargs)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        writes = [(0xFF7F06 + i * 66, 0x99) for i in occupy_primary]
+        writes += [(0xFF7E82 + i * 66, 0x99) for i in occupy_secondary]
         assert machine.atomic(target=machine.info['tick'] + 1_000_000,
                               cycles=1, instructions=1,
                               last_pc=COLLECTION_DISPATCH_ENTRY,

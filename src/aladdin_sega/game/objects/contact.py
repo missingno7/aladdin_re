@@ -573,6 +573,18 @@ def contact_type6e_pass(read, record, delta):
     return writes, reinit
 
 
+def contact_type23_retype(record):
+    """1ABFFA's self-retype the triggering record publishes before either spawn attempt."""
+    return [(record, 0x84), *_long(record + 0x20, 0x12319C), (record + 0x37, 0)]
+
+
+def contact_type23_override(destination):
+    """1AC014..1AC018's retype of the FF7F06 pool child, published after its template
+    and position already have (the primary spawn's own kind and long field are
+    overwritten a second time before the secondary FF7E82-pool spawn attempt)."""
+    return [(destination, 0x3B), *_long(destination + 0x20, 0x122BD8)]
+
+
 def contact_type46_request(read):
     """1AEF5C's capped command-66 counter and its sound request.
 

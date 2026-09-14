@@ -56,6 +56,7 @@ CONTACT_TYPE74_POOL = 0xFF7F06
 CONTACT_TYPE74_POOL_COUNT = 20
 CONTACT_FAMILY_TYPE6E_ENTRY = 0x1AFB36
 CONTACT_FAMILY_TYPE1A_ENTRY = 0x1AE9E0
+CONTACT_FAMILY_TYPE23_ENTRY = 0x1AEECA
 CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
@@ -1465,6 +1466,126 @@ def begin_contact_family_type1a_dispatch(machine, registers, dispatch):
                                     begin_contact_family_type1a)
 
 
+def begin_contact_family_type23(machine, registers):
+    """1AEECA's FFF0D8 gate, self-retype and double pool-slot spawn.
+
+    An active FFF0D8 gate is required; clear, the callback returns at once
+    with no writes.  Active, the triggering record retypes itself to a used
+    kind-0x84 marker (``game.contact_type23_retype``) before either spawn
+    attempt, then a child is sought in the FF7F06 pool exactly as
+    ``begin_contact_family_type74``'s own scan (``game.free_object``, same
+    20-slot pool); found, it is expanded from the fixed 1B79B8 template
+    (``game.initialize``), given the triggering record's own position
+    (``game.contact_type74_position``, the same primitive already proven
+    for that spawn), and then retyped a second time to kind 0x3B with its
+    own +0x20 long field overwritten (``game.contact_type23_override`` --
+    the fresh template's own values at those offsets are discarded).  Only
+    then is a second child sought in the wider 24-slot FF7E82 pool (the
+    same pool the contact scan itself walks); found, it is expanded from
+    the fixed 1B7CC4 template and given the same triggering-record
+    position, with no further retype.  Either pool exhausted abandons only
+    what follows it; the first pool's own spawn, once committed, is never
+    undone.  Neither spawn is a native re-entry: both reuse the exact
+    1AE262/1AE30A adapters already proven for
+    ``begin_contact_family_type74``, so despite four internal BSRs this is
+    one RAM-only leaf.  Cost table (``factcheck``, i and j the zero-based
+    index each pool's search finds its slot at):
+
+        inactive                                                       42 /   3
+        active, primary pool exhausted                              1022 /  96
+        active, primary slot at index i, secondary pool exhausted  1878+40i / 154+4i
+        active, primary slot i, secondary slot j                  1476+40i+40j / 91+4i+4j
+
+    Nothing on this path is a CMP/SUB/NEG, so X survives unchanged from
+    entry throughout.  A primary-pool exhaustion's own residue is the last
+    slot the scan actually tested (index 19, not the one-past address A5
+    is left holding -- the same distinction ``begin_contact_family_type74``
+    already documents for the identical 1AE262 scan); a secondary-pool
+    exhaustion's residue is likewise its own last tested slot (index 23).
+    Either pool's own successful find instead carries through to the
+    closing position copy, whose final MOVE.W (the child's Y coordinate)
+    is what every completed spawn's exit flags actually come from.
+    """
+    sp, sr = registers['a7'], registers['sr']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned type23 stack')
+    return_pc = _read(machine, sp, 4)
+    read = lambda address, size: _read(machine, address, size)
+    gate = read(0xFFF0D8, 1)
+    if not gate:
+        _spans_disjoint([('type23 gate', 0xFFF0D8, 1), ('type23 return', sp, 4)])
+        return AtomicPlan(42, 3, (), {'a7': sp + 4, 'pc': return_pc & 0xFFFFFF,
+                                      'sr': _logic_sr(sr, 0, 1)}, 0x1AEEDC)
+    record = registers['a1']
+    a2, a6 = registers['a2'], registers['a6']
+    if record & 1:
+        raise UnsupportedCandidate('unaligned type23 record')
+    _spans_disjoint([('type23 record', record, 66), ('type23 return', sp, 4),
+                     ('type23 gate', 0xFFF0D8, 1), ('type23 frame', sp - 16, 16)])
+    _spans_disjoint([('type23 primary pool', 0xFF7F06, 20 * 66), ('type23 return', sp, 4),
+                     ('type23 frame', sp - 16, 16)])
+    _spans_disjoint([('type23 secondary pool', 0xFF7E82, 24 * 66), ('type23 return', sp, 4),
+                     ('type23 frame', sp - 16, 16)])
+    retype = tuple(game.contact_type23_retype(record))
+    x, y = read(record + 2, 2), read(record + 4, 2)
+    # The outer two BSRs (1AEECA's own call to 1ABFFA, then 1ABFFA's first
+    # call to 1AE262) always leave their resume address as a permanent
+    # scratch diff -- a2's saved value at sp-4, then 0x1AC00E at sp-12,
+    # both at the depth 1ABFFA's own frame runs at (its own return sits at
+    # sp-8).  Whichever later BSR runs last at that same sp-12 depth
+    # (1ABFFA's own frame never grows past this one nested call at a time)
+    # overwrites 0x1AC00E in turn; sp-16 only ever receives a value when
+    # the primary spawn's own 1AC0BA wrapper runs its nested 1AE30A call.
+    base_scratch = (*_bytes(sp - 4, a2, 4), *_bytes(sp - 8, 0x1AEEDA, 4))
+    slot1, index1 = game.free_object(read, 0xFF7F06, 20)
+    if slot1 is None:
+        last = read(0xFF7F06 + 19 * 66, 1)
+        return AtomicPlan(1022, 96, (*retype, *base_scratch, *_bytes(sp - 12, 0x1AC00E, 4)),
+                          {'a2': a2, 'a5': 0xFF7F06 + 20 * 66, 'a6': a6, 'd0': (registers['d0'] & 0xFFFF0000) | 0xFFFF,
+                           'a7': sp + 4, 'pc': return_pc & 0xFFFFFF, 'sr': _logic_sr(sr, last, 1)},
+                          0x1AEEDC)
+    template1 = machine.peek_rom(0x1B79B8, 19)
+    init1 = tuple(game.initialize(slot1, template1))
+    position1 = tuple(game.contact_type74_position(slot1, x, y))
+    override1 = tuple(game.contact_type23_override(slot1))
+    a6_after_1 = 0x1B79B8 + 19
+    cycles1, instructions1 = 1476 + 40 * index1, 91 + 4 * index1
+    exhausted_extra_cycles, exhausted_extra_instructions = 402, 63
+    # The secondary pool's own scan runs after the primary spawn's writes
+    # (including its retype override) are already live in RAM; a plan view
+    # exposes them to game.free_object exactly as the real 1AE27A scan
+    # would see them, so a just-filled primary slot is never mistaken for
+    # a free secondary one.
+    committed = (*retype, *init1, *position1, *override1)
+    view_read = lambda address, size: _read(dispatch_plan_view(machine, AtomicPlan(0, 0, committed, {}, 0)), address, size)
+    slot2, index2 = game.free_object(view_read, 0xFF7E82, 24)
+    if slot2 is None:
+        last = view_read(0xFF7E82 + 23 * 66, 1)
+        return AtomicPlan(cycles1 + exhausted_extra_cycles, instructions1 + exhausted_extra_instructions,
+                          (*retype, *base_scratch, *_bytes(sp - 12, 0x1AC024, 4), *_bytes(sp - 16, 0x1AC0C4, 4),
+                           *init1, *position1, *override1),
+                          {'a2': a2, 'a5': 0xFF7E82 + 24 * 66, 'a6': a6_after_1,
+                           'd0': (registers['d0'] & 0xFFFF0000) | 0xFFFF,
+                           'a7': sp + 4, 'pc': return_pc & 0xFFFFFF, 'sr': _logic_sr(sr, last, 1)},
+                          0x1AEEDC)
+    template2 = machine.peek_rom(0x1B7CC4, 19)
+    init2 = tuple(game.initialize(slot2, template2))
+    position2 = tuple(game.contact_type74_position(slot2, x, y))
+    return AtomicPlan(cycles1 + 40 * index2, instructions1 + 4 * index2,
+                      (*retype, *base_scratch, *_bytes(sp - 12, 0x1AC030, 4), *_bytes(sp - 16, 0x1AC0C4, 4),
+                       *init1, *position1, *override1, *init2, *position2),
+                      {'a2': a2, 'a5': slot2, 'a6': 0x1B7CC4 + 19,
+                       'd0': (registers['d0'] & 0xFFFF0000) | ((0x17 - index2) & 0xFFFF),
+                       'a7': sp + 4, 'pc': return_pc & 0xFFFFFF, 'sr': _logic_sr(sr, y, 2)},
+                      0x1AEEDC)
+
+
+def begin_contact_family_type23_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE23_ENTRY,
+                                    begin_contact_family_type23)
+
+
 def replace_object(machine, registers: dict[str, int], *, increment_total=False, extra_spans=(),
                    template=0x1B7ABC, return_site=REPLACE_LAST_PC, amount=0) -> AtomicPlan:
     """1AF4C6 replacement boundary, optionally including the 1AF4C2 +15 call."""
@@ -1638,6 +1759,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE74_ENTRY,
                       CONTACT_FAMILY_TYPE6E_ENTRY,
                       CONTACT_FAMILY_TYPE1A_ENTRY,
+                      CONTACT_FAMILY_TYPE23_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
@@ -1844,6 +1966,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
         CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
         CONTACT_FAMILY_TYPE1A_ENTRY: begin_contact_family_type1a_dispatch,
+        CONTACT_FAMILY_TYPE23_ENTRY: begin_contact_family_type23_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -1917,6 +2040,7 @@ def _contact_scan_resume(machine, registers):
                         CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
         CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
         CONTACT_FAMILY_TYPE1A_ENTRY: begin_contact_family_type1a_dispatch,
+        CONTACT_FAMILY_TYPE23_ENTRY: begin_contact_family_type23_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
