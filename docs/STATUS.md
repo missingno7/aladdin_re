@@ -6,6 +6,40 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1AFB36, 1AE9E0 and 1AEECA recovered (contact-family, three leaves)
+
+Three connected contact-family leaves land in one milestone.  1AFB36 (kinds
+0x6E-0x73, one shared entry) is the Type-55/58/74 distance-guard shape with a
+new FFF0E7/FF7E5A gate cascade ahead of the familiar FFF0BE/FFF0C0/bit4
+gates, a second (X-axis) distance guard alongside the Y-axis one, and an
+FFF103-keyed reinitialisation tail; every one of its 36 recorded path
+classes plus every unrecorded arm (inactive, direct, bit4-inactive, and the
+FFF0BE-set/borrowed guard-pass and reinit variants -- 256/256 `--vary`
+combinations) is recovered, all RAM-only with no native calls.  1AE9E0
+(kind 0x1A) gates on FFF0D8 and, active, runs the triggering record's own
+pair-release and re-expands it from a fixed template -- both internal BSRs
+reuse `_clear_objects` and `_initialize_object_effects`, the same adapters
+already proven for `clear_object_pair`/`finish_object`/`initialize_object`,
+so no new machine mechanism was needed.  1AEECA (kind 0x23) retypes the
+triggering record to a used marker, then spawns one child in the 20-slot
+FF7F06 pool and, if that succeeds, a second in the wider 24-slot FF7E82
+pool -- both spawns reuse the exact `game.free_object`/`game.initialize`
+adapters already proven for `begin_contact_family_type74`'s own spawn; the
+boundary builds a plan view over the primary spawn's own writes so the
+secondary pool's free_object scan sees a just-filled primary slot exactly
+as the real second scan would.  All three entries are owned inside the
+contact scan too (both callback maps).  **2,207 tests pass in about 280 s**
+(full suite alongside these); the **82,161-frame cold comparison passes**
+with zero restores at `artifacts/type6e-guard/` (frames 82,161, 91,753
+candidate hits, 5,473 fallbacks, down from 12,341).  Next frontier:
+1AEBDC (183, calls the shared CONTACT_ENTRY contact-check subroutine),
+1AF81C (156, a Type-55-shaped guard whose kind-mismatch arm needs a
+single-call sound seam), 1AE9A8 (116, the same pair-release/re-template
+shape as 1AE9E0 but buffer-only, no linked record), 1AEB7A and 1AEBFE
+(116 and 106, unconditional single-instruction RTS stubs at two more
+dispatch-table slots), 1AF228 and 1AEE40 (80 and 64, two-native-call sound
+seams matching the Type-43 exemplar plus unfamiliar wrapping subroutines).
+
 ## 1AFA84 (kinds 74/75) distance guard, window/kind/state gate and spawn recovered
 
 1AFA84 is reached by both the kind-0x74 and kind-0x75 collection-dispatch
