@@ -1,10 +1,49 @@
-# Status - 14 September 2026
+# Status - 15 September 2026
 
 The project now has an immutable cold-start input-history model for player
 sessions and verification.  It replaces the current play/replay/snapshot
 workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
+
+## VDP tile-upload arms of five spawn children recovered as seams
+
+1B2650 (the VDP tile-data upload, 39 instructions, writes VRAM through the
+VDP ports) is now a proven `pathfacts.NATIVE_ENTRIES` seam callee, so the
+FFF175-clear arms of `spawn_upper_tile_caller` (1B6C0E), its two clones
+`spawn_upper_tile_two_caller` (1B6C2E) and `spawn_upper_tile_four_caller`
+(1B75D6), the outer-guarded `spawn_upper_guard_tile_caller` (1B6F82) and
+the FF7E26-selector variant `spawn_upper_tile_word_caller` (1B6FAE) -- all
+previously declining, per the spawn dispatcher children census -- now
+recover as a `SoundSeam` (`_vdp_tile_upload_seam` /
+`finish_upper_tile_vdp_spawn`).  Composing the seam required threading
+`SoundSeam` support one and two levels further out than any existing
+exemplar: `spawn_dispatch_call` (the 1AE46C callback dispatch) and
+`spawn_dispatch_iteration` (the single-slot gate) now detect and compose
+around a callback's own seam; the batched `spawn_dispatch_walker` still
+declines cleanly when a slot's callback seams (it cannot suspend its
+Python loop for a native excursion mid-pass), falling back to native for
+that whole pass exactly as before.  **2,553 tests pass in about 58 s**
+(`-n 8`); the **82,161-frame cold comparison passes** with zero restores
+at `artifacts/spawn-vdpseam11/` (91,796 candidate hits, 1,481 fallbacks,
+down from 1,514).  `leaf_review`'s guards check reports the deliberate
+widening this recipe describes (4 removed `raise UnsupportedCandidate`,
+10 removed test asserts across the batch), justified by `factcheck check`
+MATCH on every prefix and replaced by equivalent-or-stronger seam-recovery
+tests (96 focused tests).
+
+Next frontier: 1B67C2 (211, still the top row) is now fully characterized
+by direct tracing (not implemented yet): the first RNG roll's `CMPI.B
+#$C8,D7`/`BCC` selects between a short single-spawn tail (jump to 1B67E6)
+and a fall-through that, after the same first spawn's own jitter/script
+work, reaches a *second*, independently-rolled cap check at 1B67DC/1B67E0
+(a dedicated fourth `BSR 1B3032`, not a reused register) gating a second
+spawn attempt that reuses the exact same 1B67E6 tail and the same
+template (`0x1B7DA0`) as the first; the previously-uncharacterized
+bit-1-clear branch at 1B67BA is a single `ST.B $35(A5)` before the shared
+RTS.  Every building block (`rng_step`, the reverse-pool allocator, the
+jitter/script writes) is already proven; only the branch composition
+remains.  1B65F4 (46) remains resolved-but-unimplemented per its blocker.
 
 ## 1B75D6 recovered; spawn dispatcher family frontier EMPTY
 
