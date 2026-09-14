@@ -30,6 +30,12 @@ The census of the 18 frontier entries on `main` took 341 s and retained about
 against the reference in 50 s.  **1,642 tests pass**; the **82,161-frame cold
 comparison passes** with zero restores at `artifacts/evidence-tooling-main/`.
 
+The 15,691 scheduler refusals are a phase artifact: the contact tick plan is
+2,488 cycles (2 percent of a frame) but the game runs the tick at the end of
+the frame, so 16 to 22 percent of ticks straddle the deadline; the 378-cycle
+prefix alone would fit in 49 of 54 measured refusals.  Options are recorded in
+the study's addendum; no recipe addresses them.
+
 ## Grinder tooling landed; baseline on the 82,161-frame main
 
 The review's DO NOW items are in the checkout.  `scripts/factcheck.py`

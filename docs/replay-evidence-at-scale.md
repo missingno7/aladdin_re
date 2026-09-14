@@ -291,6 +291,32 @@ largest artifact any of them writes is the existing 162 KB state.
 | Retention by value boundaries, alias relationships or input state | no case in the repository was found by the replay and missed by the constructed matrix | WAIT |
 | A coverage framework, instruction or bus traces, generated datasets | the signature is one line per occurrence and the state is 162 KB; nothing larger was needed to answer any question here | REJECT |
 
+## Addendum: the scheduler refusals, measured
+
+Over four 150-frame segments from retained parent states (336 contact ticks,
+`artifacts/replay-evidence-study/slack_study.py`):
+
+- The tick plan is small: 2,488 cycles median, 3,250 at most, 2 percent of
+  the 128,005-cycle frame; no plan exceeds a tenth of a frame.
+- The game runs the contact tick at the very end of the frame: median phase
+  125,237 cycles into the frame.  54 of 336 ticks (16 percent; 22 percent on
+  the whole of `main`) straddle the frame deadline, and the native admission
+  rule rightly refuses a plan that would end after the boundary.
+- At refusal the slack is 1,327 cycles median (9 to 3,077).  The tick's
+  RAM-only prefix is 378 cycles and would fit in 49 of the 54; the 24-slot
+  scan (about 2,100 cycles) is what does not.  Capping plans at 2,000 cycles
+  would still leave 37 refusals; no plan size fixes a phase problem.
+
+So the 15,691 scheduler refusals on `main` are neither a recovery gap nor a
+grinder task.  Two honest options: (A) admit the tick in pieces, the prefix
+at `1ABB40` and then as many scan slots as fit before the deadline, leaving
+the rest of the scan to the original in that frame (a runner and planner
+mechanism that changes the "deadline refusal is one original instruction"
+contract deliberately, and needs a gate budget, 62 of 64 used); or (C) keep
+the mechanism and read the ledger's `fallbacks by gate` line as the phase
+artifact it is.  Either way the parent-ownership tier must treat a refused
+parent plan as inconclusive, which `segment_verify` now does.
+
 ## Appendix: experiments and how to rerun them
 
 All scripts read the checkout and the local history; none writes to the
@@ -305,6 +331,8 @@ repository.  Outputs are regenerable.
 - `artifacts/replay-evidence-study/sched_attrib.py FIXTURE.state FRAMES`:
   attributes fallback reasons to gates and measures the slack at refused
   admissions over a segment.
+- `artifacts/replay-evidence-study/slack_study.py FRAMES PARENT.state ...`:
+  contact tick admissions against frame slack over segments.
 - `paths.json`: the 195 path classes with counts, first frames, cost,
   native shape and fixtures; `report.json`: the 415 raw signatures.
 

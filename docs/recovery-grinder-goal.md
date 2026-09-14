@@ -43,9 +43,11 @@ retained parent states for every row).  The first three are RAM-only callback
 children that return through `1AE6B4` to `1ABCA0`, the Type-55 recipe shape;
 the fourth is an escalation drill.
 
-1. `1AF5F0` (kind 58, 3,337 recorded hits, 6,668 fallbacks): 17 instructions,
-   one write (`FFF0F5`), D0/D2/D7 residue, the same distance-guard shape as
-   Type-55.
+1. `1AF5F0` (kind 58, 3,337 recorded hits, 6,668 fallbacks): seven path
+   classes in `artifacts/evidence/main` (`1AF5F0-kind58-p0..p6.state`); the
+   dominant one, p3 (2,748 hits), is 15 instructions, one write (`FF7DFC`),
+   D0/D2/D7 residue, the Type-55 distance-guard shape with limit `0xC`; p4
+   is the 6-instruction direct return.
 2. `1AFA84` (kinds 74 and 75, 1,415 hits, 2,829 fallbacks): 13 instructions,
    one write, the same shape.
 3. `1AFB36` (kinds 6E to 73, 3,172 hits, 6,277 fallbacks): 34 instructions,
