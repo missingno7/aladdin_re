@@ -6,7 +6,49 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
-## Whole contact scan qualified and integrated
+## Contact tick owns the scan and caller return
+
+The production entry is now `1ABB40`, covering contact countdowns/latches,
+player-bound preparation, the qualified 24-record scan and the real RTS at
+`1ABD7C`. Known recorded calls return to `1A8C44`. The former `1ABBD6` scan
+gate is no longer armed in production; its adapter remains usable by explicit
+oracle witnesses. Unsupported callbacks decline before any prefix is committed,
+and existing dispatcher/child recovery remains available during original flow.
+This is whole-routine ownership for the admitted RAM-only domain, not coverage
+of every callback or removal of the original CPU/sound subsystem.
+
+**1,470 tests pass in 116.93 s**. Full **26,378-frame** cold comparison passes
+with zero restores, strict state/video/PCM equality and matching current source
+and native receipts. `history-verify --timeout-seconds 180` takes **236.22 s**
+for both fresh workers and comparison. Fresh-interpreter outer-tick witness
+(including 150 native instructions and fresh-process continuation) has a
+**0.423 s** median across five runs, with no native rebuild.
+
+The parent admits 18,152 times. Configured gates remain62; standalone scan hits
+fall18,665->0. Total gates29,689->29,693 and dispatcher hits340->344: the wider
+atomic interval declines slightly more often. Fallbacks5052->5565, replaced
+instructions3,674,268->4,088,159. Existing recovered-callee accounting52,532
+and legacy entries199/returns180 remain unchanged. This absorbs a previous
+production boundary without claiming an overall crossing reduction.
+
+The 34 new self-contained tests cover countdown saturation, descriptor/player
+guards, mirroring, staged descriptor aliases, real caller returns, stack/register
+variations, partial callback register effects, deadlines and four mutants.
+They also prove a first landing changes the player's position and rejects the
+second object's collision. Five actual outer-entry fixtures independently
+qualify;23 captured configurations require unsupported callbacks.
+Evidence: `artifacts/contact-step-full/{comparison,latency}.json` and
+`artifacts/contact-parent-frontier/production-step-qualified.json`.
+
+Next measured opportunity: four recorded scan fixtures can directly compose
+existing sibling wrappers `1AE9C6`/`1AE9DA`; two require the command8 sound seam.
+That extension is qualified as an artifact, not yet production. No new leaf,
+continuation mechanism or native API is needed for the four admitted cases.
+
+Earlier milestone sections below are historical baselines.
+
+## Scan milestone (`caec59b`)
+
 
 The lifecycle candidate owns the complete 24-record pass from `1ABBD6` to
 before the RTS at `1ABD7C` when its collisions select the five supported
@@ -50,7 +92,7 @@ Its contact timers/latches/player-bounds prefix is qualified as a prototype;
 five complete recorded outer paths compose with the scan. No production hook
 for that parent has yet been added. See `artifacts/contact-parent-frontier/`.
 
-## Callback ownership now includes shared contact completion
+## Shared-completion milestone (`82d0257`)
 
 Lifecycle callback plans returning to `1ABCA0` can now own the common contact
 completion through `1ABD74`. Landing script selection, position calculation and

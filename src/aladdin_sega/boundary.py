@@ -27,6 +27,7 @@ COLLECTION_DISPATCH_RETURN = 0x1ABCA0
 CONTACT_COMPLETION_EXIT = 0x1ABD74
 CONTACT_SCAN_ENTRY = 0x1ABBD6
 CONTACT_SCAN_EXIT = 0x1ABD7C
+CONTACT_STEP_ENTRY = 0x1ABB40
 COLLECTION_DISPATCH_TABLE = 0x1CBE
 CONTACT_ENTRY = 0x1AE4F8
 CONTACT_DISPATCH_ENTRY = 0x1AE9D4
@@ -1767,6 +1768,61 @@ def contact_scan_plan(machine, registers):
                      pc=CONTACT_SCAN_EXIT if slot == 23 else 0x1ABBE0)
         current = _join_plans(aggregate, AtomicPlan(28 if slot == 23 else 24, 2, (), state, 0x1ABD78))
     return current
+
+
+def _contact_step_prefix(machine, registers):
+    if registers.get('pc') != CONTACT_STEP_ENTRY:
+        raise UnsupportedCandidate('contact tick entry identity')
+    read = lambda address, size=1: _read(machine, address, size)
+    ee, f2 = read(0xFFF0EE), read(0xFFF0F2)
+    writes = game.contact_tick_reset(read(0xFFF0D3), ee, f2)
+    cycles, instructions = 210 + 18 * bool(ee) + 18 * bool(f2), 12 + bool(ee) + bool(f2)
+    # SUBQ.B #1 has a known non-borrowing X result whenever either timer ran.
+    sr = registers['sr'] & ~0x10 if ee or f2 else registers['sr']
+    shape = read(0xFF7E54, 4)
+    final = {**registers, 'pc': CONTACT_SCAN_EXIT, 'sr': _logic_sr(sr, shape, 4)}
+    if not shape:
+        return AtomicPlan(cycles, instructions, tuple(writes), final, 0x1ABB8A)
+    player = 0xFF7E40
+    active = read(player)
+    cycles += 52; instructions += 4
+    final.update(a2=player, a3=shape, sr=_logic_sr(final['sr'], active, 1))
+    if not active:
+        return AtomicPlan(cycles, instructions, tuple(writes), final, 0x1ABB9C)
+    staged = dispatch_plan_view(machine, AtomicPlan(1, 1, tuple(writes), {}, CONTACT_STEP_ENTRY))
+    def descriptor(offset):
+        address = shape + offset
+        if 0 <= address < 0x200000:
+            return machine.peek_rom(address, 1)[0]
+        return _read(staged, address, 1)
+    mirrored = read(0xFF7E49)
+    left, right = game.contact_tick_bounds(read(player + 2, 2), descriptor(2), descriptor(4), mirrored)
+    writes.extend((*_bytes(0xFFF08C, left, 2), *_bytes(0xFFF08E, right, 2)))
+    final.update(d0=(registers['d0'] & 0xffff0000) | left,
+                 d2=(registers['d2'] & 0xffff0000) | right, pc=CONTACT_SCAN_ENTRY,
+                 sr=_logic_sr(_add_sr(final['sr'], descriptor(4) if not mirrored else (-descriptor(2) & 0xff),
+                                       read(player + 2, 2), 2), right, 2))
+    return AtomicPlan(cycles + 116 + (16 if mirrored else 0),
+                      instructions + 10 + (3 if mirrored else 0), tuple(writes), final, 0x1ABBD0)
+
+
+def contact_step_plan(machine, registers):
+    """Recover one 1ABB40 contact tick through its real caller return."""
+    prefix = _contact_step_prefix(machine, registers)
+    combined = prefix
+    if prefix.registers['pc'] == CONTACT_SCAN_ENTRY:
+        scan = contact_scan_plan(dispatch_plan_view(machine, prefix), prefix.registers)
+        combined = _join_plans(prefix, scan)
+    final = dict(combined.registers)
+    sp = final['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned contact tick return stack')
+    outer = _read(dispatch_plan_view(machine, combined), sp, 4) & 0xffffff
+    if outer & 1:
+        raise UnsupportedCandidate('unaligned contact tick return PC')
+    final.update(a7=sp + 4, pc=outer)
+    return AtomicPlan(combined.cycles + 16, combined.instructions + 1, combined.writes,
+                      final, CONTACT_SCAN_EXIT, combined.direct_calls)
 
 
 def begin_contact_dispatch(machine, registers, dispatch):

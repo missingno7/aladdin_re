@@ -409,3 +409,36 @@ prefix prototype. It uses the same countdown/CCR and staged-write patterns;
 no new integration protocol was needed. Continue upward, retaining strict
 adapters for unresolved callers. Do not call the contact subsystem CPU-free:
 sound/device callbacks and script progress remain outside this admitted domain.
+
+
+## 14 September: enclosing contact tick and real return
+
+Recovered1ABB40 timers/latches and player horizontal bounds, then directly
+composed the entire owned scan and realRTS1ABD7C. One parent entry replaces
+the old1ABBD6 production gate; old scan dispatch survives as an explicit oracle
+adapter. Semantic source adds19lines; boundary56; policy13net; exports3.
+Countdown conditional cost/CCR, mirrored-byte coordinate arithmetic and staged
+return-slot consumption reuse existing mechanisms. New execution protocols,
+continuation/snapshot states/native APIs:zero. No generator was introduced.
+
+This step reused the root-qualified prefix prototype and existing scan unchanged
+in behavior. Root independently supplied34self-contained original-ROM tests,
+including landing-driven later collision rejection, partial-register overlay,
+odd-return refusal and exact timers/guards/aliases/return/future/fresh/mutants.
+All1470tests pass; five actual outer-entry paths qualify,23decline unsupported.
+Fullcold26378-frame PASS, zerorestores, currentreceipts; bothworkers/comparison
+236.22s with explicit180s per-worker watchdog. Witnessmedian0.423s.
+
+Parent18152admissions; oldstandalonescan18665->0; configuredgatesremain62.
+Totalgates29689->29693; fallback5052->5565; dispatcher340->344. The larger
+atomic interval loses some scheduler admissions, so this is not a global
+crossing-speedup. Replacedinstructions3674268->4088159; recovered-callee
+accounting52532 andlegacy199/180unchanged. Actual internal gate removal
+occurred without deleting the useful strict scan oracle.
+
+Next evidenced composition requires no newgameRE: existingC6/DA sibling
+wrappers qualify in four recorded scanfixtures; two others need command8sound.
+The remaining manual effort is chiefly exact qualification and choosing useful
+connected domains. Source-only Terra work reused the previous region's protocol;
+independent root tests are still essential. Continue, with small reuse/derivation
+only where concrete repetition warrants it.

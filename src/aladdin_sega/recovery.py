@@ -10,7 +10,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         COLLECTION_ROUTES, COLLECTION_DISPATCH_ENTRY, begin_collection_dispatch,
                         dispatch_plan_view, CONTACT_ENTRY, CONTACT_DISPATCH_ENTRY, begin_contact_dispatch,
                         COLLECTION_DISPATCH_RETURN, extend_contact_completion,
-                        CONTACT_SCAN_ENTRY, contact_scan_plan,
+                        CONTACT_SCAN_ENTRY, contact_scan_plan, CONTACT_STEP_ENTRY, contact_step_plan,
                         begin_contact_dispatch_sound, finish_contact_dispatch_sound, begin_contact,
                         begin_contact_sound, finish_contact_sound, begin_collection,
                         CONTACT_ACTIVATION_ENTRY, begin_contact_activation_dispatch,
@@ -50,6 +50,7 @@ class Candidate:
         "contact_hits": 0,
         "contact_completion_hits": 0,
         "contact_scan_hits": 0,
+        "contact_step_hits": 0,
         "contact_activation_hits": 0,
         "contact_sibling_hits": 0,
         "spawn_region_hits": 0, "spawn_caller_hits": 0, "spawn_walker_hits": 0, "spawn_row_walker_hits": 0,
@@ -99,7 +100,7 @@ class Candidate:
             return tuple(dict.fromkeys((SPAWN_UPPER_TYPED_SECONDARY_ENTRY,
                                         SPAWN_LOWER_RESET_ENTRY, SPAWN_LOWER_SCRIPTED_ENTRY,
                                         COLLECTION_DISPATCH_ENTRY, CONTACT_ENTRY,
-                                        CONTACT_SCAN_ENTRY,
+                                        CONTACT_STEP_ENTRY,
                                         CONTACT_SIBLING_ENTRY, CONTACT_SIBLING_WRAPPER,
                                         CONTACT_SIBLING_DIRECT, *COLLECTION_ROUTES,
                                         0x1AF516, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY, SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY, SPAWN_UPPER_SECONDARY_CALLER_ENTRY, SPAWN_UPPER_TERTIARY_CALLER_ENTRY, SPAWN_UPPER_TYPED_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_GUARD_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY, SPAWN_PRIMARY_GUARD_ENTRY, SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY, SPAWN_PRIMARY_INVERSE_GUARD_ENTRY, SPAWN_PRIMARY_MIXED_GUARD_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY, SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_GUARD_ENTRY, SPAWN_DISPATCH_WALKER_ENTRY, SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_ROW_DISPATCH_WALKER_ENTRY, SPAWN_SETUP_LEFT_ENTRY, SPAWN_SETUP_RIGHT_ENTRY, SPAWN_SETUP_ROW_LOW_ENTRY, SPAWN_SETUP_ROW_HIGH_ENTRY,
@@ -412,6 +413,16 @@ class Candidate:
             except UnsupportedCandidate as error:
                 return self._fallback(machine, entry, f'unsupported domain: {error}')
             self.stats['contact_scan_hits'] += 1
+            return True
+        if self.is_lifecycle and entry == CONTACT_STEP_ENTRY:
+            self.stats['gates'] += 1
+            try:
+                plan = self._mutate(contact_step_plan(machine, machine.registers()))
+                if not self._apply(machine, plan, target):
+                    return self._fallback(machine, entry, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, entry, f'unsupported domain: {error}')
+            self.stats['contact_step_hits'] += 1
             return True
         if self.is_lifecycle and entry == CONTACT_ENTRY:
             return self._contact(machine, target)

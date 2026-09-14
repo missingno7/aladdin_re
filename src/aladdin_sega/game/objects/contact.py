@@ -47,6 +47,25 @@ _RESET_GATES = (0xFFF0BE, 0xFFF0D0, 0xFFF0D7, 0xFFF0CD, 0xFFF0D4)
 _RESET_NAMES = ('be', 'd0', 'd7', 'cd', 'd4')
 
 
+def contact_tick_reset(previous_contact, countdown_ee, countdown_f2):
+    """Durable timer/latch writes at the beginning of one contact tick."""
+    writes = [(0xFFF0F0, 0), (0xFFF0EF, 0)]
+    if countdown_ee:
+        writes.append((0xFFF0EE, (countdown_ee - 1) & 0xff))
+    if countdown_f2:
+        writes.append((0xFFF0F2, (countdown_f2 - 1) & 0xff))
+    writes.extend(((0xFFF0D4, previous_contact), (0xFFF0D3, 0),
+                   (0xFFF0F6, 0), (0xFFF0CD, 0)))
+    return writes
+
+
+def contact_tick_bounds(player_x, left_extent, right_extent, mirrored):
+    """Return the wrapped horizontal bounds published before the object scan."""
+    if mirrored:
+        left_extent, right_extent = (-right_extent) & 0xff, (-left_extent) & 0xff
+    return ((player_x + left_extent) & 0xffff, (player_x + right_extent) & 0xffff)
+
+
 def contact_route(read):
     """Name the ordered original branch through 1AE4F8 without state."""
     for address in _EARLY:

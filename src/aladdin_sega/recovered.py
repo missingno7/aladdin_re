@@ -13,6 +13,7 @@ from .game.objects.contact import (activate_contact, begin_contact_launch, finis
                                    contact_script_selector, transition_contact_66, transition_contact_6b,
                                    publish_contact_record, transition_contact_77, finish_contact_type7e)
 from .game.objects.contact import contact_scan_collision
+from .game.objects.contact import contact_tick_reset, contact_tick_bounds
 from .game.objects.contact import (complete_contact_landing, publish_contact_position,
                                    contact_landing_script, contact_position)
 from .game.objects.lifecycle import (
@@ -52,6 +53,8 @@ __all__ = [
     "activate_collection",
     "activate_contact",
     "contact_scan_collision",
+    "contact_tick_reset",
+    "contact_tick_bounds",
     "begin_contact_launch",
     "finish_contact_launch",
     "transition_contact_66",
