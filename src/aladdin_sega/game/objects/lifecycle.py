@@ -218,6 +218,20 @@ def finish_reverse_script_b_spawn(record):
             for offset, byte in enumerate(bytes.fromhex('00125a68'))]
 
 
+def finish_upper_type22_spawn(record):
+    """Apply callback 1B6EEE's cleared field, script pointer and object type."""
+    return [*((record + 0xA + offset, 0) for offset in range(4)),
+            *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('001238b2'))),
+            (record, 0x22)]
+
+
+def finish_guarded_lower_two_spawn(record):
+    """Apply callback 1B7158's successful object script pointer."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('001242e4'))]
+
+
 def finish_reverse_script_spawn(record):
     """Apply callback 1B6696's successful object script pointer (no retype)."""
     return [(record + 0x20 + offset, byte)
