@@ -165,6 +165,9 @@ SPAWN_UPPER_TILE_WORD_CALLER_ENTRY = 0x1B6FAE
 SPAWN_UPPER_TILE_WORD_CALLER_EARLY_PC = 0x1B6FD8
 SPAWN_UPPER_TILE_WORD_CALLER_LAST_PC = 0x1B6FE0
 SPAWN_UPPER_TILE_WORD_CALLER_TEMPLATE = 0x1B81EC
+SPAWN_REVERSE_GUARD_CALLER_ENTRY = 0x1B6756
+SPAWN_REVERSE_GUARD_CALLER_LAST_PC = 0x1B6792
+SPAWN_REVERSE_GUARD_CALLER_TEMPLATE = 0x1B7DDC
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -984,6 +987,52 @@ def spawn_upper_tile_word_caller(machine, registers: dict[str, int]) -> AtomicPl
                       prefix.direct_calls + selected.direct_calls)
 
 
+def _reverse_guard_wrapper_shape(machine):
+    raw = machine.peek_rom(SPAWN_REVERSE_GUARD_CALLER_ENTRY, 22)
+    if raw != bytes.fromhex('0c39000b00ff7e26670c4df9001b7ddc6100eaee6026'):
+        raise UnsupportedCandidate('reverse guard spawn caller ROM shape')
+
+
+def spawn_reverse_guard_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6756``'s FF7E26 selector and its unconditional reverse spawn.
+
+    A ``FF7E26 != 0x0B`` selector (every recorded fixture) allocates from
+    the reverse pool (template ``0x1B7DDC``) then branches unconditionally
+    to a shared RTS with no Z-flag check at all: whether the allocation
+    succeeds or the pool is exhausted, the wrapper returns with no further
+    writes either way, so this owns both sub-cases as one arm.  A
+    ``FF7E26 == 0x0B`` selector is unobserved on the recorded history and
+    nests a second guard, a second reverse-pool spawn and a second 1B2650
+    VDP tile upload behind it; that arm has no retained fixture and no
+    RAM-domain recipe for the VDP call, so it declines.
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned reverse guard spawn caller stack')
+    _reverse_guard_wrapper_shape(machine)
+    selector = _read(machine, 0xFF7E26, 1)
+    tested_sr = _sub_sr(registers['sr'], selector, 0x0B, 1)
+    if tested_sr & 4:
+        raise UnsupportedCandidate(
+            'reverse guard spawn caller requires its unrecorded FF7E26==0x0B chain')
+    _spans_disjoint([('reverse guard spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('reverse guard spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    entry = SPAWN_REVERSE_GUARD_CALLER_ENTRY
+    prefix = AtomicPlan(58, 4, _bytes(sp - 4, entry + 20, 4),
+                        {**registers, 'a6': SPAWN_REVERSE_GUARD_CALLER_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_REVERSE_ENTRY}, entry + 16, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_REVERSE_ENTRY)
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                      prefix.instructions + selected.instructions + 2,
+                      tuple(dict((*prefix.writes, *selected.writes)).items()), final,
+                      SPAWN_REVERSE_GUARD_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
 def spawn_reverse_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B7232``'s direct reverse-pool allocator wrapper."""
     return spawn_plain_caller(machine, registers, SPAWN_REVERSE_PLAIN_CALLER_ENTRY)
@@ -1321,6 +1370,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_CAP_GUARD_TWO_ENTRY: spawn_cap_guard_two,
         SPAWN_LOWER_OFFSET_CALLER_ENTRY: spawn_lower_offset_caller,
         SPAWN_UPPER_TILE_WORD_CALLER_ENTRY: spawn_upper_tile_word_caller,
+        SPAWN_REVERSE_GUARD_CALLER_ENTRY: spawn_reverse_guard_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
