@@ -6,6 +6,41 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B75D6 recovered; spawn dispatcher family frontier EMPTY
+
+1B75D6 is byte-for-byte `spawn_upper_tile_caller`'s own shape (1B6C0E)
+with a different template (`0x1B8174`): RAM-only arms recover, the
+FFF175-clear VDP arm declines. **2,535 tests pass in about 291 s**; the
+**82,161-frame cold comparison passes** with zero restores at
+`artifacts/spawn-final10/` (frames 82,161, 91,763 candidate hits, 1,514
+fallbacks -- unchanged from the prior milestone, since every one of
+1B75D6's own 72 recorded-history occurrences was already the VDP arm; the
+entry is nonetheless correctly owned and attributed as
+`UNSUPPORTED_ARM` rather than `UNRECOVERED_TARGET`).
+
+This closes the spawn dispatcher children census (`--parent 1AE46C`):
+the only rows left are `1B67C2` (211, escalated --
+`docs/blockers/2026-09-14-1B67C2.md`, `DATA_STRUCTURE`, an embedded PRNG
+subroutine gating a double spawn) and `1B65F4` (46, escalated --
+`docs/blockers/2026-09-14-1B65F4.md`, `NEW_MACHINE_MECHANISM`, a fifth
+unproven allocator pool entry `1B52A0`), plus `1B6D1E` and `1B6C5A`,
+which section 3's admission filter excludes outright (each chains
+multiple native calls -- a VDP upload plus two or three distinct
+sound-seam JSRs -- in one prefix). No admissible row remains in the
+spawn dispatcher family; see
+`docs/blockers/2026-09-15-spawn-family-empty-frontier.md`
+(`EMPTY_FRONTIER`) for the full accounting.
+
+Across this stint the spawn dispatcher family went from 37,458
+fallbacks at the very start of the recovery project (baseline) to 1,514
+today, with the contact-family frontier separately closed out earlier.
+Summary of the spawn family alone: 34 children recovered (1B6696,
+1B6C0E, 1B72FC, 1B71C4, 1B6FAE, 1B6756, 1B6F4A, 1B6F34, 1B65C0, 1B6EEE,
+1B7158, 1B6FEE, 1B668A, 1B688A, 1B6864, 1B674A, 1B7000, 1B673E, 1B717C,
+1B6F60, 1B7018, 1B6836, 1B712C, 1B70F8, 1B6654, 1B70B0, 1B7060, 1B703C,
+1B6636, 1B7084, 1B6C2E, 1B6E86, 1B6F82, 1B75D6), 2 escalated (1B67C2,
+1B65F4), 2 inadmissible by filter (1B6D1E, 1B6C5A).
+
 ## 1B6C2E, 1B6E86 and 1B6F82 recovered (spawn dispatcher family, three more leaves)
 
 1B6C2E is byte-for-byte `spawn_upper_tile_caller`'s own shape (1B6C0E)
