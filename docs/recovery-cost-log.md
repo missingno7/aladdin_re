@@ -442,3 +442,31 @@ The remaining manual effort is chiefly exact qualification and choosing useful
 connected domains. Source-only Terra work reused the previous region's protocol;
 independent root tests are still essential. Continue, with small reuse/derivation
 only where concrete repetition warrants it.
+
+
+## Sibling wrappers inside the contact tick
+
+The existing C6/DA sibling dispatch planners now compose inside the 24-record
+scan, and therefore inside the enclosing contact tick. Production change:
+7 added / 4 removed boundary lines; no semantic rewrite, policy change, native
+API, snapshot metadata or new execution mechanism. Four recorded scan states
+and two recorded parent states qualified during discovery; command-8 routes
+still decline without mutation.
+
+Four self-contained original-ROM cases exercise both wrapper entries with two
+callbacks each, including early returns and counter decrements. They compare
+full outer machine state, 150 native continuation instructions and fresh-process
+restore; production assertions require one parent admission, zero dispatcher
+hits and no fallback. Existing mutation/deadline/domain checks remain in place.
+All 1,474 tests pass in 117.82 s. Full cold 26,378-frame comparison passes
+with zero restores and unchanged native binary. Parent admissions rise from
+18,152 to 18,201; dispatcher hits fall 344 to 294, total gates 29,693 to
+29,643 and fallbacks 5,565 to 5,516. Replaced instructions rise 4,088,159
+to 4,099,918. Direct-call accounting remains 52,532; legacy entries/returns
+remain 199/180. Evidence: artifacts/contact-wrappers-full/comparison.json.
+
+The marginal implementation work was reusing the correct existing child planner
+and independently checking staged state composition. No new machine concept was
+needed. Remaining recorded collection paths really execute sound callee 1E58B8;
+they require parent composition across the existing synchronous seam, not another
+RAM-only callback adapter.

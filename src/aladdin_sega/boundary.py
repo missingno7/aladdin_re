@@ -1749,10 +1749,13 @@ def contact_scan_plan(machine, registers):
         if branch == 'contact':
             view = dispatch_plan_view(machine, _join_plans(current, prefix))
             target, dispatch = begin_collection_dispatch(view, prefix.registers)
-            planner = callbacks.get(target)
-            if planner is None:
-                raise UnsupportedCandidate(f'contact scan callback at slot {slot}: {target:06X} unresolved/device-or-sound')
-            callback = planner(view, prefix.registers, dispatch)
+            if target in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+                callback = begin_contact_sibling_dispatch(view, prefix.registers, dispatch, target)
+            else:
+                planner = callbacks.get(target)
+                if planner is None:
+                    raise UnsupportedCandidate(f'contact scan callback at slot {slot}: {target:06X} unresolved/device-or-sound')
+                callback = planner(view, prefix.registers, dispatch)
             if callback.registers.get('pc') != COLLECTION_DISPATCH_RETURN:
                 raise UnsupportedCandidate(f'contact scan callback at slot {slot}: noncompletion handoff')
             callback_registers = dict(prefix.registers)

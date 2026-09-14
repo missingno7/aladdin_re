@@ -130,3 +130,35 @@ def test_outer_tick_contract_rejects_mutants(mutant):
         return replace(plan,last_pc=plan.last_pc-2)
     with pytest.raises((AssertionError,RuntimeError)):
         qualify(state,wrong)
+
+
+@pytest.mark.parametrize('kind', (0x05, 0x06))
+@pytest.mark.parametrize('route', ('early', 'decrement'))
+def test_sibling_wrappers_compose_inside_outer_tick(kind, route):
+    state = step_fixture(kind=kind, two=True)
+    with oracle.Machine(oracle.read_rom()) as machine:
+        machine.restore(state)
+        machine.gates([ENTRY]); assert machine.run(instructions=1) == 'gate'
+        writes = [(0xFFF0D8, 1), (0xFFF57D, 0),
+                  *oracle.write_word(0xFF7E02, 100 if route == 'early' else 99)]
+        for record in (RECORD, RECORD + 23 * 66):
+            writes += [(record + 1, 2), (record + 6, 0)]
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000,
+                              cycles=1, instructions=1, last_pc=ENTRY,
+                              writes=writes, registers=machine.registers())
+        state = machine.snapshot()
+    qualify(state)
+    expected = oracle.execute_region(state, entry=ENTRY, candidate=None,
+                                     expected_return=RETURN, include_raw=True)
+    actual = oracle.execute_region(state, entry=ENTRY, candidate='lifecycle',
+                                   expected_return=RETURN, include_raw=True)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['contact_step_hits'] == 1
+    assert actual.stats['collection_dispatch_hits'] == 0
+    assert actual.stats['fallbacks'] == 0
+    assert actual.stats['direct_python_calls'] >= 4
+    with oracle.Machine(oracle.read_rom()) as machine:
+        machine.restore(actual.outer_state)
+        for record in (RECORD, RECORD + 23 * 66):
+            assert machine.peek_ram((record + 1) & 65535, 1) == bytes([2 if route == 'early' else 1])
