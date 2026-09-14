@@ -37,9 +37,10 @@ blocker package first, then stop.
 
 ## First supervised targets
 
-Chosen from the frontier ledger of `artifacts/factory-baseline-main` and the
-census in `artifacts/census-main-top` (82,161-frame `main`, fixtures and
-retained parent states for every row).  The first three are RAM-only callback
+Chosen from the frontier ledger of the newest PASS cold run named in
+`docs/recovery-ledger.md` and the evidence index in `artifacts/evidence/main`
+(82,161-frame `main`, one fixture per executed path and a retained parent
+state for every row).  The first three are RAM-only callback
 children that return through `1AE6B4` to `1ABCA0`, the Type-55 recipe shape;
 the fourth is an escalation drill.
 

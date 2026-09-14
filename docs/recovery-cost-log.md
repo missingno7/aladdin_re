@@ -589,3 +589,19 @@ caller-dependent and stay facets.  No native change, no trace system.
 Validated: 1,642 tests; census 341 s retaining about 190 paths of 33 classes;
 every retained parent segment PASS; cold 82,161-frame comparison PASS, zero
 restores, at `artifacts/evidence-tooling-main/`.
+
+
+## Decoupled observation boundary
+
+Landed the DO NOW row of `docs/execution-model-research.md`: the controller mask
+is still applied at the interval's nominal tick, the frame is observed and
+recovered operations are deadlined half a frame later at the game's idle
+instant.  About fifteen lines in `GenesisRun.step`, one profile constant, cache
+contract 2, one new history test.  No native change, no new state, no change to
+`AtomicPlan`, planners, gates or seams.
+
+Validated: 1,641 tests pass (the two recorded-evidence tests failed only until
+the evidence was regenerated under the new boundary); cold 82,161-frame
+comparison PASS, zero restores, at `artifacts/decoupled-baseline-main/`.
+Scheduler refusals 15,691 -> 103, fallbacks 37,458 -> 21,840, contact ticks
+owned 53,342 -> 65,338 (+22 percent), instructions replaced 12.64M -> 15.41M.

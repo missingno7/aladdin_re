@@ -6,6 +6,12 @@ from pathlib import Path
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 MASTER_HZ = 53_693_175
 FRAME_TICKS = 896_040
+# Where inside a logical frame the replay observes the machine and deadlines
+# recovered operations: raster line 131, the middle of the game's idle window
+# (the 68000 waits for the next VBlank from line 60 to line 224; it is busy
+# from the VBlank at line 225 through the frame wrap to line 37).  The input
+# instant stays at the frame wrap.  Measured in docs/execution-model-research.md.
+OBSERVATION_OFFSET_TICKS = FRAME_TICKS // 2
 PROFILE = {
     "id": "aladdin-usa-ntsc-v1", "rom_sha256": ROM_SHA256,
     "master_hz": MASTER_HZ, "m68k_divider": 7, "z80_divider": 15,

@@ -57,11 +57,42 @@ def test_history_presentation_is_metadata_only(tmp_path):
 
 
 def test_genesis_run_counts_logical_frames_despite_native_tick_overshoot():
+    from aladdin_sega.profile import OBSERVATION_OFFSET_TICKS
     with GenesisRun(synthetic_rom()) as run:
         run.step(1)
         assert run.frame == 1
-        assert run.machine.info["tick"] >= FRAME_TICKS
-        assert run.machine.info["tick"] != FRAME_TICKS
+        assert run.machine.info["tick"] >= OBSERVATION_OFFSET_TICKS
+        assert run.machine.info["tick"] != OBSERVATION_OFFSET_TICKS
+        run.step(1)
+        assert run.frame == 2
+        assert run.machine.info["tick"] >= FRAME_TICKS + OBSERVATION_OFFSET_TICKS
+
+
+def test_input_instant_stays_at_the_frame_wrap_and_operations_are_deadlined_at_the_idle_instant():
+    """The recorded meaning of an event is unchanged; only observation and admission move."""
+    from aladdin_sega.profile import OBSERVATION_OFFSET_TICKS
+    rom = read_rom()
+    entry = int.from_bytes(rom[4:8], 'big')
+    pad_ticks, deadlines = [], []
+
+    class Probe:
+        def on_gate(self, machine, target):
+            deadlines.append((machine.info['tick'], target))
+            machine.gate(machine.info['pc'], bypass_once=True)
+            machine.run(instructions=1)
+
+    with GenesisRun(rom) as run:
+        run.candidate = Probe()
+        run.machine.gates([entry])
+        real_pad = run.machine.pad
+        run.machine.pad = lambda mask: (pad_ticks.append(run.machine.info['tick']), real_pad(mask))
+        run.advance(3, [{'frame': 0, 'buttons': 1}, {'frame': 2, 'buttons': 3}])
+    assert deadlines[0] == (0, OBSERVATION_OFFSET_TICKS)
+    assert pad_ticks[0] == 0
+    # The frame-2 mask is applied at the first boundary at or after 2 * FRAME_TICKS,
+    # not at the observation instant half a frame later.
+    assert 2 * FRAME_TICKS <= pad_ticks[1] < 2 * FRAME_TICKS + OBSERVATION_OFFSET_TICKS // 8
+    assert run.frame == 3
 
 
 def test_cold_and_cache_continuations_match_full_state_frame_and_pcm(tmp_path):

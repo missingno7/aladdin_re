@@ -6,6 +6,17 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Decoupled observation boundary landed
+
+The replay now observes each logical frame, and deadlines recovered operations,
+at the idle instant half a frame after the interval's nominal tick (raster line
+131, `OBSERVATION_OFFSET_TICKS`), while the controller mask is still applied at
+the nominal tick.  This is the DO NOW row of `docs/execution-model-research.md`:
+about fifteen lines in `GenesisRun.step`, no native change, no new state, the
+cache contract bumped to 2.  Recorded trajectories are unchanged to the
+instruction; recovered operations that merely straddle the frame wrap are no
+longer refused.  Baseline numbers are in the ledger row of the same date.
+
 ## Replay evidence at scale: index, segments, caches
 
 `docs/replay-evidence-at-scale.md` measured how replay-derived evidence should

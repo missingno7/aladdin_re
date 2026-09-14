@@ -18,17 +18,22 @@ a child branch.  `main` is only a movable convenience reference.
 Every history replay reconstructs from this cold root.  It never begins from an
 embedded machine snapshot.
 
-Genesis execution completes the native instruction that crosses a frame
-boundary.  Its resulting tick can therefore pass the nominal frame tick.  That
-machine-detail is observable in verification, but it is not part of history
-identity; the canonical clock is the completed frame count.
-
-Event frame `n` means set the controller mask before advancing interval
-`[n, n+1)`. The Genesis adapter uses 896,040 master ticks per interval at
-53,693,175 Hz (about 59.92 intervals/second). Inputs are sampled by the host at
-these boundaries; there is no sub-frame event format. A future native port
-must implement these logical input intervals, not instruction-boundary ticks.
-The overshoot and PCM-drain checks are covered by executable history tests.
+Event frame `n` means set the controller mask at the first operation boundary
+at or after the interval's nominal tick `n * 896,040` (53,693,175 Hz, about
+59.92 intervals/second); there is no sub-frame event format.  Each interval is
+observed, and recovered operations are deadlined, half a frame later at
+`n * 896,040 + 448,020` (raster line 131), the middle of the window in which
+the game idles waiting for the next VBlank.  A recovered operation admitted
+before the nominal tick may therefore end after it; recovered regions contain
+no controller read, so the game cannot observe whether the mask changed one
+instruction or one operation after the tick, and the recorded trajectory is
+unchanged to the instruction (`docs/execution-model-research.md`).  Genesis
+execution completes the native operation that crosses either instant, so the
+resulting tick can pass the nominal one; that machine detail is observable in
+verification but is not history identity, whose clock is the completed frame
+count.  A future native port must implement these logical input intervals, not
+instruction-boundary ticks.  The overshoot, input-instant and PCM-drain checks
+are covered by executable history tests.
 
 Recovery caches are allowed only between completed steps, outside an active
 synchronous legacy sound call. No Python activation is serialized. If a

@@ -89,11 +89,16 @@ def check(fixture, *, frames=120, candidate='lifecycle', reference=None, history
         frames = path['end_frame'] - frame
     if frames <= 0:
         return {'status': 'ERROR', 'detail': 'fixture frame %d is at the end of the history' % frame}
+    # The mask in effect before interval ``frame`` began; the interval's own
+    # event is replayed at its nominal tick by the first step (a fixture
+    # captured after that tick already holds the mask, and setting it again
+    # is idempotent), so a state captured on either side of the tick resumes
+    # with the recorded inputs.
     buttons = 0
     for event in path['events']:
-        if event['frame'] <= frame:
+        if event['frame'] < frame:
             buttons = event['buttons']
-    events = [event for event in path['events'] if event['frame'] > frame]
+    events = [event for event in path['events'] if event['frame'] >= frame]
     state = fixture.read_bytes()
     rom = read_rom()
     reference_observations, problem = (None, None)

@@ -6,7 +6,7 @@ from pathlib import Path
 from . import artifacts
 from .history import ROOT_ID, digest, encoded, natural
 from .machine import Machine
-from .profile import FRAME_TICKS, PROFILE_SHA256
+from .profile import FRAME_TICKS, OBSERVATION_OFFSET_TICKS, PROFILE_SHA256
 from .receipt import execution_receipt
 
 
@@ -31,7 +31,7 @@ class GenesisRun:
             self.candidate = Candidate(candidate)
             self.candidate.arm(self.machine)
         receipt = execution_receipt(candidate=candidate)
-        self.implementation = {"backend": "genesis", "cache_contract": 1,
+        self.implementation = {"backend": "genesis", "cache_contract": 2,
                                "native": receipt["native_binary_sha256"],
                                "source": receipt["python_modules_sha256"],
                                "state_version": self.machine.state_version,
@@ -54,13 +54,8 @@ class GenesisRun:
     def __exit__(self, *_):
         self.close()
 
-    def step(self, buttons):
-        if type(buttons) is not int or not 0 <= buttons <= 255:
-            raise ValueError("Invalid input mask")
-        if buttons != self.buttons:
-            self.machine.pad(buttons)
-            self.buttons = buttons
-        target = (self.frame + 1) * FRAME_TICKS
+    def _run_to(self, target, deadline):
+        """Run to ``target``; recovered operations may run on until ``deadline``."""
         parked = 0
         while self.machine.info["tick"] < target:
             before = self.machine.info
@@ -68,7 +63,7 @@ class GenesisRun:
             if reason == "gate":
                 if self.candidate is None:
                     raise RuntimeError("Unexpected original execution gate")
-                self.candidate.on_gate(self.machine, target)
+                self.candidate.on_gate(self.machine, deadline)
             elif reason != "limit":
                 raise RuntimeError("Unexpected Genesis stop")
             after = self.machine.info
@@ -77,8 +72,29 @@ class GenesisRun:
             parked = parked + 1 if after["tick"] <= before["tick"] else 0
             if parked > 8:
                 raise RuntimeError("History execution remained parked")
-        # The adapter finishes the native operation crossing the frame boundary.
-        # That physical tick is a receipt fact, never an input-history timestamp.
+
+    def step(self, buttons):
+        if type(buttons) is not int or not 0 <= buttons <= 255:
+            raise ValueError("Invalid input mask")
+        wrap = self.frame * FRAME_TICKS
+        observed = wrap + OBSERVATION_OFFSET_TICKS
+        # The controller mask for interval [frame, frame + 1) is set at the
+        # first operation boundary at or after the interval's nominal tick, as
+        # it always was.  The interval is observed, and recovered operations
+        # are deadlined, at the idle instant half a frame later, where the game
+        # waits for the next VBlank.  An operation admitted before the wrap may
+        # therefore end after it; recovered regions contain no controller read,
+        # so the game cannot observe whether the mask changed one instruction
+        # or one operation after the wrap.  This keeps recorded inputs exact
+        # and stops refusing recovered work that merely straddles the wrap.
+        self._run_to(wrap, observed)
+        if buttons != self.buttons:
+            self.machine.pad(buttons)
+            self.buttons = buttons
+        self._run_to(observed, observed)
+        # The adapter finishes the native operation crossing the observation
+        # instant.  That physical tick is a receipt fact, never an input-history
+        # timestamp.
         pcm = self.machine.audio()
         self.pcm_digest = digest(bytes.fromhex(self.pcm_digest) + pcm)
         self.pcm_bytes += len(pcm)

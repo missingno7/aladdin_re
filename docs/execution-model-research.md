@@ -392,6 +392,10 @@ boundary layer should, until it is deleted; the oracle backend always will.
 
 ## 8. Recommendation
 
+Landed the same evening: the decoupled boundary is in `GenesisRun.step` with
+`OBSERVATION_OFFSET_TICKS` in the profile and cache contract 2; see the STATUS
+section and ledger row of 14 September.
+
 | Change | Verdict | Why |
 |---|---|---|
 | Decouple the input instant from the observation and admission instant: input at the frame wrap, observation and deadline at the idle instant (raster line 131), `cache_contract` bump | DO NOW | measured: 574 to 2 refusals, +26 percent owned ticks, frame-exact, trajectory-exact; about fifteen lines; no new state or abstraction |
