@@ -33,8 +33,13 @@ comparison passes** with zero restores at `artifacts/evidence-tooling-main/`.
 The 15,691 scheduler refusals are a phase artifact: the contact tick plan is
 2,488 cycles (2 percent of a frame) but the game runs the tick at the end of
 the frame, so 16 to 22 percent of ticks straddle the deadline; the 378-cycle
-prefix alone would fit in 49 of 54 measured refusals.  Options are recorded in
-the study's addendum; no recipe addresses them.
+prefix alone would fit in 49 of 54 measured refusals.  The cause and the
+answer are in `docs/execution-model-research.md`: the replay's observation and
+admission instant sits in the game's busy window at the frame wrap; keeping the
+input instant there and moving the observation and deadline to the game's idle
+window (raster line 131) removed 3,824 of 3,834 refusals over 20,000 cold frames
+in a prototype, frame-exact and trajectory-exact, with no change to `AtomicPlan`.
+That report also concludes that no new execution abstraction is needed.
 
 ## Grinder tooling landed; baseline on the 82,161-frame main
 
