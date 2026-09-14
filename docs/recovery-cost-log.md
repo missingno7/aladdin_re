@@ -370,3 +370,42 @@ classification as declines. Correct staged composition fixed them without a new
 mechanism. Unsupported device/sound callbacks remain explicit. More independent
 completion discipline is still needed from workers; medium effort alone has not
 eliminated root review and resumption cost.
+
+
+## 14 September: complete contact-pool scan
+
+Recovered geometry rejection/acceptance across all24 records, direct selection
+of five known RAM-only callback families and shared completion in one operation.
+Semantic work: byte-mirrored extents, unsigned wrapped rectangle comparisons,
+callback state dependencies, and the distinction between fixed horizontal bounds
+and live player/record state. Live RAM remains the only mutable authority.
+Reused AtomicPlan, staged-read view, existing callback/completion adapters,
+CCR arithmetic helpers, native admission, standard strict/future/fresh qualifier
+and canonical history comparison. New execution mechanisms/native APIs/snapshot
+formats/scheduler exceptions:zero. One additional entry gate; no child gate.
+
+Production adds41 semantic lines,102 boundary lines,13 policy lines and2 exports.
+The branch/cycle table and loop ABI remain handwritten mechanical work. No new
+code generator. Parent review replaced shallow plan-only tests with real-ROM
+qualification and fixed missing X carry after coordinate addition; prior green
+artifact cases did not span that incoming-CCR variation. Two actual callbacks
+now demonstrate a motion dependency, with a stale-read mutant rejected even
+when all stores remain. Worker review is still necessary: lower model effort
+has not made claims about fixture coverage self-verifying.
+
+1,436tests pass. Full26378-frame cold comparison passes with zero restores.
+Candidate execution120.64s narrowly exceeds the old120s watchdog; the completed
+reference was reused with unchanged receipts and the existing validator, not
+weaker comparison. Use an explicit180s watchdog for the present corpus.
+Fresh-interpreter whole-scan outer/150/fresh witness median0.413s.
+18,665scan admissions swallow255former dispatcher boundaries; dispatcher hits
+595->340. Gate hits7609->29689 because the scan entry executes every tick.
+Replaced instructions464365->3674268; direct recovered-callee count52532
+unchanged; legacy199entries/180returns unchanged. The added common geometry
+ownership costs more total crossings despite internal child collapse.
+
+Next parent1ABB40 now has actual entry/caller/terminal evidence and a qualified
+prefix prototype. It uses the same countdown/CCR and staged-write patterns;
+no new integration protocol was needed. Continue upward, retaining strict
+adapters for unresolved callers. Do not call the contact subsystem CPU-free:
+sound/device callbacks and script progress remain outside this admitted domain.

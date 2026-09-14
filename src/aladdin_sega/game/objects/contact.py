@@ -1,6 +1,47 @@
 """Pure live-RAM effects for the bounded 1AE4F8 contact reaction block."""
 
 
+def contact_scan_collision(read_ram, read_source, *, record, player, player_shape):
+    """Classify one 1ABBE0 object against the player contact rectangle.
+
+    This is deliberately just the game predicate.  The boundary owns operand
+    provenance, the exact 68000 register/CCR residue, and branch costs.
+    """
+    kind = read_ram(record, 1)
+    if kind == 0:
+        return {'branch': 'inactive'}
+    if kind >= 0x7f:
+        return {'branch': 'non-contact-kind'}
+    shape = read_ram(record + 20, 4)
+    if shape == 0:
+        return {'branch': 'no-shape'}
+    x, y, mirrored = read_ram(record + 2, 2), read_ram(record + 4, 2), read_ram(record + 9, 1)
+    left_byte = read_source(shape + (4 if mirrored else 2), 1)
+    left = ((-left_byte) & 0xff) if mirrored else left_byte
+    object_horizontal = (x + left) & 0xffff
+    player_horizontal = read_ram(0xfff08e, 2)
+    if player_horizontal < object_horizontal:
+        return {'branch': 'left', 'player_horizontal_edge': player_horizontal, 'object_horizontal_edge': object_horizontal,
+                'shape': shape, 'mirrored': mirrored}
+    player_vertical = (read_ram(player + 4, 2) + read_source(player_shape + 5, 1)) & 0xffff
+    object_vertical = (y + read_source(shape + 3, 1)) & 0xffff
+    if player_vertical < object_vertical:
+        return {'branch': 'above', 'player_horizontal_edge': player_horizontal, 'player_vertical_edge': player_vertical,
+                'object_horizontal_edge': object_horizontal, 'object_vertical_edge': object_vertical, 'shape': shape, 'mirrored': mirrored}
+    right_byte = read_source(shape + (2 if mirrored else 4), 1)
+    right = ((-right_byte) & 0xff) if mirrored else right_byte
+    object_horizontal = (x + right) & 0xffff
+    player_horizontal = read_ram(0xfff08c, 2)
+    if player_horizontal >= object_horizontal:
+        return {'branch': 'right', 'player_horizontal_edge': player_horizontal, 'player_vertical_edge': player_vertical,
+                'object_horizontal_edge': object_horizontal, 'object_vertical_edge': object_vertical, 'shape': shape, 'mirrored': mirrored}
+    player_vertical = (read_ram(player + 4, 2) + read_source(player_shape + 3, 1)) & 0xffff
+    object_vertical = (y + read_source(shape + 5, 1)) & 0xffff
+    return {'branch': 'below' if player_vertical >= object_vertical else 'contact', 'player_horizontal_edge': player_horizontal,
+            'player_vertical_edge': player_vertical, 'object_horizontal_edge': object_horizontal,
+            'object_vertical_edge': object_vertical, 'shape': shape, 'mirrored': mirrored}
+
+
 _EARLY = (0xFFF0E7, 0xFFF0E6, 0xFFF0E9, 0xFFF0F2)
 _RESET_GATES = (0xFFF0BE, 0xFFF0D0, 0xFFF0D7, 0xFFF0CD, 0xFFF0D4)
 _RESET_NAMES = ('be', 'd0', 'd7', 'cd', 'd4')

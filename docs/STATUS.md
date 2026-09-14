@@ -6,6 +6,50 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Whole contact scan qualified and integrated
+
+The lifecycle candidate owns the complete 24-record pass from `1ABBD6` to
+before the RTS at `1ABD7C` when its collisions select the five supported
+RAM-only callback families. Geometry, callback selection, recovered callbacks
+and shared completion compose in one admitted plan; later iterations read prior
+planned writes. Unknown/device/sound callbacks and scheduler refusals leave the
+entry unchanged and retain the previous dispatcher recovery opportunities.
+This does not recover all contact callbacks or remove original sound execution.
+
+**1,436 tests pass in 110.56 s**. The full **26,378-frame** cold comparison passes,
+including every canonical state/frame/PCM observation and terminal state, with
+zero restores and matching current source/native receipts. The first candidate
+worker exceeded the default 120-second watchdog. Re-running that worker with a
+300-second limit completed in **120.64 s**; the already completed original trace
+was retained and validated with the existing execution validator. Equality was
+not relaxed. Use `history-verify --timeout-seconds 180` for this current corpus.
+The original timeout report remains alongside `comparison-completed.json` in
+`artifacts/contact-scan-full/`.
+
+The scan admits 18,665 times and absorbs 255 previous dispatcher/completion
+entries: standalone dispatcher admissions fall 595 to 340. Replaced instructions
+rise 464,365 to 3,674,268. Total gates rise 7,609 to 29,689 because the added
+scan gate runs each gameplay tick; fallbacks rise 1,382 to 5,052. Configured
+entries rise 61 to 62. Existing recovered-callee accounting stays 52,532 and
+legacy entries/returns stay 199/180. This is actual internal composition, not
+an overall crossing reduction. Geometry Python calls are not included in that
+historical direct-callee counter.
+
+The 29 self-contained new witnesses include all eight collision edges, mirror
+and word wrap, two real callback transitions, register/stack variations,
+unchanged-state refusals, deadlines and result/return/timing/final-PC mutants.
+A stale second-callback motion read is rejected with all stores retained.
+Stronger CCR variation found and fixed the final coordinate ADD's X residue.
+Ten genuine full scan fixtures (eight contact-bearing) independently qualify;
+39 retained fixtures require unsupported callbacks. Fresh-interpreter whole-scan
+outer/150-native/fresh-restore witness median is **0.413 s**, without a rebuild.
+
+The next enclosing entry is confirmed as `1ABB40`, called from `1A8C40`.
+Original-only census observes 22,335 entries with exact terminal equality.
+Its contact timers/latches/player-bounds prefix is qualified as a prototype;
+five complete recorded outer paths compose with the scan. No production hook
+for that parent has yet been added. See `artifacts/contact-parent-frontier/`.
+
 ## Callback ownership now includes shared contact completion
 
 Lifecycle callback plans returning to `1ABCA0` can now own the common contact

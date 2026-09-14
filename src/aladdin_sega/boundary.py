@@ -25,6 +25,8 @@ SOUND_RETURN = 0x1AF498
 COLLECTION_DISPATCH_ENTRY = 0x1ABC82
 COLLECTION_DISPATCH_RETURN = 0x1ABCA0
 CONTACT_COMPLETION_EXIT = 0x1ABD74
+CONTACT_SCAN_ENTRY = 0x1ABBD6
+CONTACT_SCAN_EXIT = 0x1ABD7C
 COLLECTION_DISPATCH_TABLE = 0x1CBE
 CONTACT_ENTRY = 0x1AE4F8
 CONTACT_DISPATCH_ENTRY = 0x1AE9D4
@@ -1665,6 +1667,106 @@ def extend_contact_completion(machine, plan):
     return AtomicPlan(plan.cycles + suffix.cycles, plan.instructions + suffix.instructions,
                       tuple(dict((*plan.writes, *suffix.writes)).items()), suffix.registers,
                       suffix.last_pc, plan.direct_calls + suffix.direct_calls)
+
+
+_CONTACT_SCAN_COST = {
+    'inactive': (18, 2, 0x1ABBE2), 'non-contact-kind': (42, 4, 0x1ABBEA),
+    'no-shape': (70, 6, 0x1ABBF2), 'left': (168, 15, 0x1ABC20),
+    'above': (240, 23, 0x1ABC3A), 'right': (322, 31, 0x1ABC64),
+    'below': (394, 39, 0x1ABC7E), 'contact': (396, 39, 0x1ABC7E),
+}
+
+
+def _contact_scan_source(machine, address, size):
+    if 0xff0000 <= address <= 0xffffff:
+        return _read(machine, address, size)
+    if 0 <= address < 0x200000 and not (size > 1 and address & 1):
+        return int.from_bytes(machine.peek_rom(address, size), 'big')
+    raise UnsupportedCandidate('contact scan descriptor is neither aligned ROM nor work RAM')
+
+
+def _contact_scan_prefix(machine, registers):
+    facts = game.contact_scan_collision(lambda address, size: _read(machine, address, size),
+                                        lambda address, size: _contact_scan_source(machine, address, size),
+                                        record=registers['a1'], player=registers['a2'],
+                                        player_shape=registers['a3'])
+    branch = facts['branch']; cycles, instructions, last_pc = _CONTACT_SCAN_COST[branch]
+    sr = registers['sr']; kind = _read(machine, registers['a1'], 1)
+    if branch == 'inactive':
+        residue = _logic_sr(sr, kind, 1)
+    else:
+        residue = _cmp_sr(sr, kind, 0x7f, 1)
+        if branch == 'no-shape':
+            residue = _logic_sr(residue, 0, 4)
+        elif branch not in ('non-contact-kind',):
+            horizontal = branch in ('left', 'right')
+            axis = 'horizontal' if horizontal else 'vertical'
+            object_edge = facts[f'object_{axis}_edge']
+            origin = _read(machine, registers['a1'] + (2 if horizontal else 4), 2)
+            # The final object-edge ADD.W owns X. CMP preserves that bit;
+            # subsequent rejected/inactive scan slots preserve it as well.
+            residue = (residue & ~0x10) | (0x10 if object_edge < origin else 0)
+            residue = _cmp_sr(residue, facts[f'player_{axis}_edge'], object_edge, 2)
+            if facts.get('mirrored'):
+                cycles += 12 if branch in ('left', 'above') else 24
+                instructions += 2 if branch in ('left', 'above') else 4
+    final = dict(registers)
+    for name, fact in (('d0', 'player_horizontal_edge'), ('d1', 'player_vertical_edge'),
+                       ('d2', 'object_horizontal_edge'), ('d3', 'object_vertical_edge')):
+        if fact in facts:
+            final[name] = (final[name] & 0xffff0000) | facts[fact]
+    if 'shape' in facts:
+        final['a0'] = facts['shape']
+    final.update(sr=residue, pc=COLLECTION_DISPATCH_ENTRY if branch == 'contact' else CONTACT_COMPLETION_EXIT)
+    return AtomicPlan(cycles, instructions, (), final, last_pc), branch
+
+
+def _join_plans(first, second):
+    final = dict(first.registers); final.update(second.registers)
+    return AtomicPlan(first.cycles + second.cycles, first.instructions + second.instructions,
+                      tuple(dict((*first.writes, *second.writes)).items()), final, second.last_pc,
+                      first.direct_calls + second.direct_calls)
+
+
+def contact_scan_plan(machine, registers):
+    """Exact 1ABBD6 24-record scan through the instruction before its RTS."""
+    if registers.get('pc') != CONTACT_SCAN_ENTRY:
+        raise UnsupportedCandidate('contact scan entry identity')
+    callbacks = {
+        CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
+        CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
+        CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
+        CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
+        CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch,
+    }
+    current = AtomicPlan(20, 2, (), {**registers, 'a1': 0xff7e82,
+                         'd4': (registers['d4'] & 0xffff0000) | 23,
+                         'pc': 0x1ABBE0, 'sr': _logic_sr(registers['sr'], 23, 2)}, 0x1ABBDC)
+    for slot in range(24):
+        prefix, branch = _contact_scan_prefix(dispatch_plan_view(machine, current), current.registers)
+        step = prefix
+        if branch == 'contact':
+            view = dispatch_plan_view(machine, _join_plans(current, prefix))
+            target, dispatch = begin_collection_dispatch(view, prefix.registers)
+            planner = callbacks.get(target)
+            if planner is None:
+                raise UnsupportedCandidate(f'contact scan callback at slot {slot}: {target:06X} unresolved/device-or-sound')
+            callback = planner(view, prefix.registers, dispatch)
+            if callback.registers.get('pc') != COLLECTION_DISPATCH_RETURN:
+                raise UnsupportedCandidate(f'contact scan callback at slot {slot}: noncompletion handoff')
+            callback_registers = dict(prefix.registers)
+            callback_registers.update(dispatch.registers)
+            callback_registers.update(callback.registers)
+            complete = complete_contact_plan(dispatch_plan_view(machine, _join_plans(_join_plans(current, prefix), callback)),
+                                             callback_registers)
+            step = _join_plans(prefix, _join_plans(callback, complete))
+        aggregate = _join_plans(current, step)
+        state = dict(aggregate.registers); remaining = state['d4'] & 0xffff
+        state.update(a1=(state['a1'] + 66) & 0xffffff,
+                     d4=(state['d4'] & 0xffff0000) | ((remaining - 1) & 0xffff),
+                     pc=CONTACT_SCAN_EXIT if slot == 23 else 0x1ABBE0)
+        current = _join_plans(aggregate, AtomicPlan(28 if slot == 23 else 24, 2, (), state, 0x1ABD78))
+    return current
 
 
 def begin_contact_dispatch(machine, registers, dispatch):
