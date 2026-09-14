@@ -175,6 +175,9 @@ SPAWN_UPPER_GUARD_PLAIN_TEMPLATE = 0x1B7C24
 SPAWN_UPPER_GUARD_TILE_ENTRY = 0x1B6F82
 SPAWN_UPPER_GUARD_TILE_LAST_PC = 0x1B6FAC
 SPAWN_UPPER_GUARD_TILE_TEMPLATE = 0x1B8228
+SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY = 0x1B75D6
+SPAWN_UPPER_TILE_FOUR_CALLER_LAST_PC = 0x1B75F4
+SPAWN_UPPER_TILE_FOUR_CALLER_TEMPLATE = 0x1B8174
 SPAWN_CLOSURE_SAFE_RETURN_ENTRY = 0x1B65BE
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
@@ -1486,6 +1489,54 @@ def spawn_upper_guard_tile_caller(machine, registers: dict[str, int]) -> AtomicP
                       prefix.direct_calls + selected.direct_calls)
 
 
+def _upper_tile_four_wrapper_shape(machine):
+    raw = machine.peek_rom(SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY, 32)
+    if raw != bytes.fromhex(
+            '4df9001b81746100dc8866124a3900fff175660a41f9001292b26100b05e4e75'):
+        raise UnsupportedCandidate('upper tile spawn caller (four) ROM shape')
+
+
+def spawn_upper_tile_four_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B75D6``'s upper-pool creation and FFF175 tile-upload guard.
+
+    Byte-for-byte the same shape as ``spawn_upper_tile_caller`` (``1B6C0E``),
+    just a different template (``0x1B8174``).
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper tile spawn caller (four) stack')
+    _upper_tile_four_wrapper_shape(machine)
+    _spans_disjoint([('upper tile spawn caller (four) pool', 0xFF7E82, 24 * 66),
+                     ('upper tile spawn caller (four) frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    entry = SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': SPAWN_UPPER_TILE_FOUR_CALLER_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY}, entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_TILE_FOUR_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    planned = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    guard = _read(planned, 0xFFF175, 1)
+    if guard == 0:
+        raise UnsupportedCandidate(
+            'upper tile spawn caller (four) requires the 1B2650 VDP tile upload')
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], guard, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 50,
+                      prefix.instructions + selected.instructions + 4, writes, final,
+                      SPAWN_UPPER_TILE_FOUR_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
 def spawn_cap_guard_two(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B72FC``'s FFEFE0 cap comparison against ``$3030``.
 
@@ -2054,6 +2105,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_UPPER_TILE_TWO_CALLER_ENTRY: spawn_upper_tile_two_caller,
         SPAWN_UPPER_GUARD_PLAIN_ENTRY: spawn_upper_guard_plain_caller,
         SPAWN_UPPER_GUARD_TILE_ENTRY: spawn_upper_guard_tile_caller,
+        SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY: spawn_upper_tile_four_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
