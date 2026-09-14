@@ -6,6 +6,32 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B70B0, 1B7060, 1B703C, 1B6636 and 1B7084 recovered (spawn dispatcher family, five more leaves)
+
+1B70B0/1B7060/1B703C are three more pure `SPAWN_CLOSURE_CALLER_FACTS`
+table rows, byte-for-byte `finish_type_4c_spawn`'s own shape with type
+bytes `0x4B`/`0x49`/`0x48`. 1B6636 is a standalone offset-only sibling of
+`1B6654` (same template `0x1B7FF8`, both X and Y +0x10, no flag byte, no
+script). 1B7084 combines an `FFF179` guard (both states recover) with the
+same `finish_type_4c_spawn`-shaped tail, type `0x4A`. A dedicated blocker
+package for 1B65F4 (`docs/blockers/2026-09-14-1B65F4.md`, code
+`NEW_MACHINE_MECHANISM`) was written and committed in the same window:
+its allocator call target `1B52A0` is a fifth pool entry `_SPAWN_REGION_ARMS`
+does not yet prove. **2,488 tests pass in about 288 s**; the
+**82,161-frame cold comparison passes** with zero restores at
+`artifacts/spawn-typeclones8/` (frames 82,161, 91,762 candidate hits,
+1,558 fallbacks, down from 1,689). Next frontier: 1B75D6 (72, still only
+pool-exhaustion recoverable), 1B6C2E (47, byte-for-byte the same
+FFF175/1B2650 shape as 1B6C0E/1B6FAE, template `0x1B7AA8` -- both the
+allocation-failure and FFF175-set arms are fully characterized and MATCH
+against `spawn_upper_tile_caller`'s own numbers exactly, confirming the
+recipe transfers unchanged), 1B6E86 (44, a genuinely full recovery with
+*no* decline at all: a `BEQ.W` guard whose clear arm declines directly and
+whose set arm runs an unconditional upper-pool spawn -- template
+`0x1B7C24` -- with no Z-check and no suffix beyond the allocator's own
+tail), then the rest of the census by fallback count. 1B67C2 (211) and
+1B65F4 (46) remain escalated.
+
 ## 1B712C, 1B70F8 and 1B6654 recovered (spawn dispatcher family, three more leaves)
 
 1B712C and 1B70F8 generalize the `closure_guard` family to two and three
