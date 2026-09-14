@@ -61,3 +61,47 @@ def test_census_retains_the_parent_state_that_preceded_each_child(tmp_path):
     with pytest.raises(ValueError, match='parent entry'):
         recovery_census.capture_entries([child], recovery_census.kind_classifier, tmp_path / 'other',
                                        history=tmp_path / 'history', node=node, parent=child)
+
+
+# A five-instruction subroutine the boot code calls fourteen times in frame 4,
+# and a routine called once just before it (found by tracing a cold boot).
+BOOT_LEAF, BOOT_PARENT = 0x1E5800, 0x1E5780
+
+
+def test_signature_census_retains_one_fixture_per_path_and_writes_the_index(tmp_path):
+    import json
+    import pathfacts
+    store = HistoryStore(tmp_path / 'history')
+    node = store.append(ROOT_ID, [], 6)
+    rom = read_rom()
+    with GenesisRun(rom) as run:
+        run.advance(6, [])
+        expected_terminal = run.observable()
+    output = tmp_path / 'capture'
+    report = recovery_census.capture_entries([BOOT_LEAF], recovery_census.kind_classifier, output,
+                                             history=tmp_path / 'history', node=node,
+                                             parent=BOOT_PARENT, signatures=True)
+    assert report['terminal'] == expected_terminal  # stepping the original did not perturb the replay
+    plain = recovery_census.capture_entries([BOOT_LEAF], recovery_census.kind_classifier, tmp_path / 'plain',
+                                            history=tmp_path / 'history', node=node)
+    key = next(iter(report['counts']))
+    assert key.startswith('1E5800:kind') and report['counts'] == plain['counts']
+    count = report['counts'][key]
+    assert count >= 14
+    cls = report['classes'][key]
+    assert (cls['distinct'], cls['cut'], cls['unclassified'], report['signature_mismatches']) == (1, 0, 0, 0)
+    row = cls['signatures'][0]
+    assert row['count'] == count and row['signature']['instructions'] == 5 and row['first_frame'] == 4
+    assert row['fixture'] == key.replace(':', '-') + '-p0.state'
+    assert row['parent_fixture'] == 'parent-' + row['fixture']
+    assert sorted(p.name for p in output.glob('*.state')) == sorted([row['fixture'], row['parent_fixture']])
+    facts = pathfacts.trace((output / row['fixture']).read_bytes())
+    assert pathfacts.signature_key(pathfacts.path_signature(facts)) == row['signature_key']
+    index = json.loads((output / 'index.json').read_text())
+    assert index['history_id'] == node and index['parent'] == '1E5780'
+    (entry,) = index['rows']
+    assert (entry['entry'], entry['count'], entry['instructions'], entry['natives']) == ('1E5800', count, 5, [])
+    assert entry['fixture'] == row['fixture'] and entry['parent_fixture'] == row['parent_fixture']
+    assert entry['writes'] is not None
+    parent = json.loads((output / row['parent_fixture']).with_suffix('.json').read_text())
+    assert parent['child'] == BOOT_LEAF and parent['parent_frame'] == 4 and parent['child_fixture'] == row['fixture']

@@ -579,3 +579,21 @@ def test_lifecycle_gate_set_is_pinned_and_within_native_capacity():
     gates = Candidate('lifecycle').gate_pcs
     assert len(gates) == len(set(gates)) == 62
     assert len(gates) <= 64
+
+
+def test_fallbacks_are_attributed_to_their_gate():
+    class FakeMachine:
+        info = {'pc': 0x1AE5B6}
+        def gate(self, pc, *, bypass_once=False):
+            self.bypassed = pc
+        def run(self, *, instructions=0, target=0):
+            return 'limit'
+    candidate = Candidate('lifecycle')
+    machine = FakeMachine()
+    assert candidate._fallback(machine, 0x1ABB40, 'scheduler admission') is False
+    candidate._fallback(machine, 0x1ABB40, 'unsupported domain: x')
+    candidate._fallback(machine, None, 'legacy deadline')
+    assert candidate.stats['fallbacks_by_gate'] == {'1ABB40': 2, '1AE5B6': 1}
+    assert candidate.stats['fallback_reasons'] == {'scheduler admission': 1, 'unsupported domain: x': 1,
+                                                    'legacy deadline': 1}
+    assert candidate.stats['fallbacks'] == 3

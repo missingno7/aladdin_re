@@ -39,8 +39,9 @@ reading the ROM by eye or counting cycles by hand.
 
 | Command | What it answers |
 |---|---|
-| `& $py scripts\frontier_ledger.py ARTIFACTS [--census DIR]` | What the last cold run still hands to the original, ranked by count, with the boundary function that refused it and the recorded census counts per record kind. |
-| `& $py scripts\recovery_census.py OUT --entry PC [--entry PC] --parent 1ABB40 --retain 3` | Retains the first three original entry states per (entry, kind) from the cold history, plus the contact-tick parent state that led to each child (`parent-*.state`). |
+| `& $py scripts\frontier_ledger.py ARTIFACTS --index artifacts\evidence\main` | What the last cold run still hands to the original, ranked by count, with the boundary function that refused it, the scheduler refusals by gate, and the evidence index: every recorded behavior class with its count, first frame, cost, native shape, child and parent fixtures. |
+| `& $py scripts\recovery_census.py artifacts\evidence\main --entry PC [--entry PC] --parent 1ABB40` | The discovery pass: one original replay that single-steps every occurrence of the entries, retains one entry state per distinct executed path (plus one per exit CCR) with the contact-tick parent state that led to it (`parent-*.state`), and writes `index.json`, the evidence index the ledger reads.  Run it once per history extension, for all frontier entries together. |
+| `& $py scripts\segment_verify.py FIXTURE.state --frames 120 [--reference ARTIFACTS]` | Restores a retained state, runs the candidate for N frames under real deadlines and compares every frame with the stored reference observations of the last PASS cold run (copy its `reference.json` into the evidence directory).  For a `parent-*` fixture it says whether the child was owned or declined.  Seconds, independent of replay length. |
 | `& $py scripts\factcheck.py facts FIXTURE.state [--park PC] [--stop PC] [--path]` | Instructions, cycles, last_pc, stack delta, changed registers, CCR, every RAM byte written, calls/returns, and with `--path` each executed instruction. |
 | `& $py scripts\factcheck.py segments FIXTURE.state [--park PC]` | The PYTHON / NATIVE split around sound calls (1E58B8, 1E58F4, 1E589A): the prefix you may own, the native call, the resumed suffix, each with its own facts. |
 | `& $py scripts\factcheck.py branches FIXTURE.state --park PC --vary ADDR[.w]=v1,v2` | Which executed path each input takes and whether the cost is constant inside a path. |
@@ -52,14 +53,16 @@ reading the ROM by eye or counting cycles by hand.
 ## 3. Choosing the next bite
 
 1. Run `frontier_ledger.py` on the newest artifacts directory whose
-   `verify_status` is PASS, with `--census` pointing at the newest census of
-   the same history.
-2. Take the highest-count row that is `UNRECOVERED_TARGET` or
-   `UNSUPPORTED_ARM` and has census fixtures.  Skip a row when its fixtures'
-   `facts --path` shows any of: two or more native sound calls in one arm, a
-   read or write outside work RAM (`FF0000`-`FFFFFF`) and ROM, a loop whose
-   trip count is not bounded by a RAM byte you can name, or more than about
-   600 instructions in one arm.  Those rows are escalations (section 7).
+   `verify_status` is PASS, with `--index` pointing at the evidence
+   directory of the same history (`artifacts/evidence/main`).
+2. Take the entry with the highest fallback count whose evidence rows have a
+   child fixture, then work its path classes from the most frequent down;
+   every class is one arm to recover or to decline explicitly.  Skip a class
+   when its row shows any of: more than one native call in its native shape
+   with writes between them, a read or write outside work RAM
+   (`FF0000`-`FFFFFF`) and ROM in `facts --path`, a loop whose trip count is
+   not bounded by a RAM byte you can name, or more than about 600
+   instructions.  Those rows are escalations (section 7).
 3. Write the chosen row and its reason as the first line of your session
    notes before touching any source.
 
@@ -108,10 +111,12 @@ reading the ROM by eye or counting cycles by hand.
    (seam): outer equality, future equality, `fresh_process_future`, one
    dispatcher hit and zero fallbacks per admitted arm; each unsupported arm
    declines with `fallbacks >= 1` and no writes; the three mutants
-   (result, continuation, timing) diverge.  When the census retained a
-   parent state, add a parent-replay test that executes the recorded
-   `parent-*.state` from `1ABB40` and asserts the parent hit with zero
-   dispatcher hits, like `test_type55_is_owned_inside_the_complete_contact_scan`.
+   (result, continuation, timing) diverge.  Then run `segment_verify.py` on every retained child and
+   parent fixture of the class (`--frames 120`): each must PASS against the
+   reference, and a parent fixture must report the child as owned unless the
+   arm is one you declined on purpose.  `tests/test_recorded_evidence.py` is
+   the tracked form of that check; it runs whenever the evidence directory
+   exists.
 8. **REVIEW.** `leaf_review.py` must print `leaf review: PASS`.  Read its
    `guards` line: a removed refusal or assertion is a widening you must be
    able to justify from facts, or revert.
@@ -132,9 +137,9 @@ reading the ROM by eye or counting cycles by hand.
 | When | Run |
 |---|---|
 | after each edit | the test module you are writing (`pytest tests\test_<name>.py -q -p no:cacheprovider`) |
-| after `check` matches | `leaf_review.py` (focused suites, about 30 s) |
+| after `check` matches | `leaf_review.py` (focused suites, about 30 s), then `segment_verify.py` on the class's fixtures (seconds) |
 | before a commit | full suite (about 3 min) and cold comparison (about 8 min for 82,000 frames, in parallel) |
-| after a PASS | `frontier_ledger.py` on the new artifacts; census only when a new entry needs fixtures |
+| after a PASS | copy its `reference.json` into `artifacts/evidence/main`, then `frontier_ledger.py --index` on the new artifacts; rerun the census only after a history extension |
 
 Do not run the full suite or the cold comparison after exploratory edits.
 Do not poll a running verifier more often than every two minutes; a quiet

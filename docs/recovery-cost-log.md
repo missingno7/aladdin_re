@@ -572,3 +572,20 @@ restores, 403.1 s with parallel workers (the sequential form would take about
 twice that), receipts current at `artifacts/factory-baseline-main/`.  Next
 frontier by count: `1AF5F0`, `1AFB36`, `1AFA84`, then `1AE9E0` and `1AEECA`;
 census fixtures with retained parents in `artifacts/census-main-*`.
+
+
+## Replay evidence at scale
+
+Studied replay-derived evidence on the 82,161-frame main: 9,111 occurrences
+of 33 (entry, kind) classes are 195 distinct executed paths, 77 of them seen
+once, 31 first after frame 50,000; first-three retention covered 55 of 195; a
+162 KB state restores in 1 ms and a 300-frame segment verifies in 3 s
+frame-exact to the reference.  Landed the DO NOW rows: path-class retention
+and the evidence index in the census, `segment_verify`, original cache keys
+without Python source, fallbacks by gate, ledger index support.  The behavior
+identity is the executed path outside native sound calls plus depth-zero
+calls; exit PC, changed registers and RAM-diff writes proved value- or
+caller-dependent and stay facets.  No native change, no trace system.
+Validated: 1,642 tests; census 341 s retaining about 190 paths of 33 classes;
+every retained parent segment PASS; cold 82,161-frame comparison PASS, zero
+restores, at `artifacts/evidence-tooling-main/`.

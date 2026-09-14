@@ -133,3 +133,33 @@ def test_parse_vary_pokes_bytes_words_and_longs():
     assert factcheck.parse_vary(['FFF0BE=0,1']) == [[((0xFFF0BE, 0),), ((0xFFF0BE, 1),)]]
     assert factcheck.parse_vary(['FF7DFC.w=0x1234']) == [[((0xFF7DFC, 0x12), (0xFF7DFD, 0x34))]]
     assert factcheck.parse_vary(['FF7E60.l=0x001226CE']) == [[((0xFF7E60, 0), (0xFF7E61, 0x12), (0xFF7E62, 0x26), (0xFF7E63, 0xCE))]]
+
+
+def test_tracer_on_a_live_machine_matches_trace_and_signatures_separate_arms(monkeypatch):
+    state = parked_type55(monkeypatch, previous=100)
+    expected = pathfacts.trace(state)
+    rom = read_rom()
+    with Machine(rom) as machine:
+        machine.restore(state)
+        machine.gates([TYPE55, 0x1AE6BA])  # gates armed inside the region must not disturb the trace
+        tracer = pathfacts.Tracer(machine, rom)
+        while not tracer.at_exit():
+            tracer.step()
+        live = tracer.facts()
+    for key in ('cycles', 'instructions', 'last_pc', 'exit_pc', 'ram_writes_final', 'changed_registers'):
+        assert live[key] == expected[key], key
+    guard = pathfacts.path_signature(expected)
+    borrow = pathfacts.path_signature(pathfacts.trace(parked_type55(monkeypatch, previous=0)))
+    direct = pathfacts.path_signature(pathfacts.trace(parked_type55(monkeypatch, previous=100, be=1, c0=0)))
+    assert guard['exit'] == borrow['exit'] == direct['exit'] == '1ABCA0'
+    assert len({pathfacts.signature_key(s) for s in (guard, borrow, direct)}) == 3
+    assert (guard['instructions'], borrow['instructions'], direct['instructions']) == (15, 16, 6)
+    assert guard['writes'] == ['FFF0F5'] and guard['natives'] == [] and guard['calls'] == []
+    untracked = pathfacts.path_signature(pathfacts.trace(state, track_ram=False))
+    assert pathfacts.signature_key(untracked) == pathfacts.signature_key(guard) and untracked['writes'] == []
+    seam = pathfacts.path_signature(pathfacts.trace(pathfacts.park(type46_fixture(), 0x1AEF5C)))
+    # Type-46 requests its sound from inside a local BSR: the native shape is
+    # visible, the depth-zero call is the BSR itself.
+    assert seam['natives'] == ['1E58B8', '1E589A'] and seam['calls'][0] == '1AEF70'
+    # Record and global writes are labels; the activation's stack slots are not.
+    assert 'FF7E3C' in seam['writes'] and all(not w.startswith('stk') for w in seam['writes'])

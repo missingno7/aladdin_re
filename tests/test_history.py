@@ -249,3 +249,30 @@ def test_graph_validation_rejects_broken_ancestry(tmp_path, damage):
         write_json(path, value)
     with pytest.raises((ValueError, FileNotFoundError)):
         store.flatten(b)
+
+
+def test_original_caches_survive_a_python_source_edit_but_candidate_caches_do_not(tmp_path, monkeypatch):
+    from aladdin_sega import history_runtime
+    store = HistoryStore(tmp_path / 'history')
+    with Session(store, read_rom()) as session:
+        session.step(0)
+    node = store.resolve()
+    path = store.flatten(node)
+    with GenesisRun(read_rom(), 'lifecycle') as candidate:
+        candidate.advance(path['end_frame'], path['events'])
+        candidate.cache(store, node)
+    real = history_runtime.execution_receipt
+
+    def edited(candidate='original'):
+        receipt = dict(real(candidate=candidate))
+        receipt['python_modules_sha256'] = {**receipt['python_modules_sha256'], 'boundary.py': '0' * 64}
+        return receipt
+
+    monkeypatch.setattr(history_runtime, 'execution_receipt', edited)
+    with GenesisRun(read_rom()) as original:
+        assert 'source' in original.implementation and 'source' not in original.cache_implementation
+        assert original.restore_cache(store, node)
+        assert original.frame == path['end_frame']
+    with GenesisRun(read_rom(), 'lifecycle') as changed:
+        assert 'source' in changed.cache_implementation
+        assert not changed.restore_cache(store, node)

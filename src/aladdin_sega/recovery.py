@@ -80,6 +80,7 @@ class Candidate:
         "carrier_entries": 0, "carrier_completed": 0, "legacy_entries": 0, "legacy_returns": 0,
         "local_fallbacks": 0, "foreign_returns": 0, "legacy_deadline_fallbacks": 0,
         "replaced_m68k_instructions": 0, "charged_m68k_cycles": 0, "fallback_reasons": {},
+        "fallbacks_by_gate": {},
     })
 
     _names = {
@@ -174,6 +175,9 @@ class Candidate:
         self.stats["fallbacks"] += 1
         reasons = self.stats["fallback_reasons"]
         reasons[reason] = reasons.get(reason, 0) + 1
+        gate = f"{(machine.info['pc'] if pc is None else pc):06X}"
+        by_gate = self.stats["fallbacks_by_gate"]
+        by_gate[gate] = by_gate.get(gate, 0) + 1
         if pc is not None:
             machine.gate(pc, bypass_once=True)
             machine.run(instructions=1)

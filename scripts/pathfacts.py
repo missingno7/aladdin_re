@@ -1,11 +1,18 @@
 """pathfacts: derive compact machine facts by single-stepping the ORIGINAL machine.
 
-Prototype (Python-side, zero native changes). Facts: executed PCs + disassembly,
+Python-side, zero native changes.  Facts: executed PCs and disassembly,
 per-instruction cycles, RAM writes (final residue and write counts), register
 deltas, CCR/X history, stack delta, return PC, calls/returns, branch decisions.
+
+``Tracer`` steps a live machine the caller owns (the census uses it during a
+replay); ``trace`` opens its own machine on a snapshot.  ``path_signature``
+reduces a fact report to the behavior identity used to group occurrences:
+the executed path outside native sound calls and the depth-zero call
+targets.  Cycles are implied by the path; the exit PC, the exit CCR, the
+changed registers and the writes are facets kept beside it.
 """
 import ctypes
-import json
+import hashlib
 import sys
 from collections import OrderedDict
 from pathlib import Path as _Path
@@ -23,23 +30,28 @@ CCR = (('X', 0x10), ('N', 0x08), ('Z', 0x04), ('V', 0x02), ('C', 0x01))
 _MD = capstone.Cs(capstone.CS_ARCH_M68K, capstone.CS_MODE_M68K_000)
 _BRANCHES = {'bra', 'bsr', 'bhi', 'bls', 'bcc', 'bcs', 'bne', 'beq', 'bvc', 'bvs',
              'bpl', 'bmi', 'bge', 'blt', 'bgt', 'ble'}
+SOUND_ENTRIES = {0x1E58B8: 'sound-request', 0x1E58F4: 'sound-fixed-helper', 0x1E589A: 'sound-flush'}
+STACK_WINDOW = (128, 8)  # bytes below and above the entry A7 that belong to the activation's stack
 
 
 def ram_bytes(machine):
     return ctypes.string_at(machine.ram_address, 65536)
 
 
-def disasm(rom, ram, pc):
-    if pc < len(rom):
-        code = rom[pc:pc + 10]
-    elif 0xFF0000 <= pc <= 0xFFFFFF:
-        code = ram[pc & 0xFFFF:(pc & 0xFFFF) + 10]
-    else:
-        return '??', 2
+def _disasm_code(code, pc):
     for insn in _MD.disasm(code, pc):
         return (insn.mnemonic + ' ' + insn.op_str).strip(), insn.size
-    word = int.from_bytes(code[:2], 'big')
-    return 'dc.w $%04X' % word, 2
+    if len(code) < 2:
+        return '??', 2
+    return 'dc.w $%04X' % int.from_bytes(code[:2], 'big'), 2
+
+
+def disasm(rom, ram, pc):
+    if pc < len(rom):
+        return _disasm_code(rom[pc:pc + 10], pc)
+    if 0xFF0000 <= pc <= 0xFFFFFF and ram:
+        return _disasm_code(ram[pc & 0xFFFF:(pc & 0xFFFF) + 10], pc)
+    return '??', 2
 
 
 def park(state, at_pc, *, rom=None, max_instructions=200000):
@@ -55,95 +67,138 @@ def park(state, at_pc, *, rom=None, max_instructions=200000):
         return m.snapshot()
 
 
-def trace(state, *, entry=None, stop_pc=None, max_instructions=20000, rom=None, detail=True):
+class Tracer:
+    """Single-step a live ORIGINAL machine from its current PC and record facts.
+
+    The caller owns the machine and decides when to stop (``at_exit`` for the
+    caller return or a stop PC, a deadline, a cap).  With ``track_ram`` off no
+    RAM is copied per step: writes are not recorded, which is enough for a
+    path signature and about twice as fast.  A gate stop that executed nothing
+    is bypassed once and retried, so gates armed inside the region are
+    harmless to the trace.
+    """
+
+    def __init__(self, machine, rom, *, track_ram=True, detail=True):
+        self.machine, self.rom, self.track_ram, self.detail = machine, rom, track_ram, detail
+        self.regs, self.info = machine.registers(), dict(machine.info)
+        self.ram = ram_bytes(machine) if track_ram else None
+        self.entry_regs, self.entry_info, self.entry_ram = dict(self.regs), dict(self.info), self.ram
+        self.entry = self.regs['pc']
+        self.entry_a7 = self.regs['a7']
+        self.caller_return = int.from_bytes(machine.peek_ram(self.entry_a7 & 0xFFFF, 4), 'big') & 0xFFFFFF
+        self.steps, self.writes, self.write_counts, self.calls, self.stack = [], OrderedDict(), {}, [], []
+        self.ccr_last = {name: None for name, _ in CCR}
+        self.interrupts, self.last_pc, self.n = 0, None, 0
+
+    def at_exit(self, stop_pc=None):
+        if self.n == 0:
+            return False
+        pc = self.regs['pc']
+        if stop_pc is not None:
+            return pc == stop_pc
+        return pc == self.caller_return and self.regs['a7'] == self.entry_a7 + 4
+
+    def _code_at(self, pc):
+        if pc < len(self.rom):
+            return self.rom[pc:pc + 10]
+        if 0xFF0000 <= pc <= 0xFFFFFF:
+            if self.ram is not None:
+                return self.ram[pc & 0xFFFF:(pc & 0xFFFF) + 10]
+            offset = pc & 0xFFFF
+            return self.machine.peek_ram(offset, min(10, 0x10000 - offset))
+        return b''
+
+    def step(self):
+        m, regs, info, ram = self.machine, self.regs, self.info, self.ram
+        pc = regs['pc']
+        text, size = _disasm_code(self._code_at(pc), pc)
+        before = info['m68k_instructions']
+        m.run(instructions=1)
+        new_info = dict(m.info)
+        if new_info['m68k_instructions'] == before:
+            # A gate armed on this PC stopped the machine before executing it.
+            m.gate(pc, bypass_once=True)
+            m.run(instructions=1)
+            new_info = dict(m.info)
+        new_regs = m.registers()
+        new_ram = ram_bytes(m) if self.track_ram else None
+        cycles = new_info['m68k_cycles'] - info['m68k_cycles']
+        if new_info['vblanks'] != info['vblanks']:
+            self.interrupts += 1
+        changed = {k: (regs[k], new_regs[k]) for k in REGS if regs[k] != new_regs[k] and k != 'pc'}
+        step_writes = []
+        if self.track_ram and new_ram != ram:
+            for base in range(0, 65536, 256):
+                if new_ram[base:base + 256] != ram[base:base + 256]:
+                    for i in range(base, base + 256):
+                        if new_ram[i] != ram[i]:
+                            addr = 0xFF0000 + i
+                            step_writes.append((addr, new_ram[i]))
+                            self.writes[addr] = new_ram[i]
+                            self.write_counts[addr] = self.write_counts.get(addr, 0) + 1
+        mnemonic = text.split(' ')[0].split('.')[0]
+        taken = None
+        if mnemonic in _BRANCHES or mnemonic.startswith('db'):
+            taken = new_regs['pc'] != pc + size
+        if mnemonic in ('bsr', 'jsr'):
+            self.calls.append({'site': pc, 'callee': new_regs['pc'], 'return_slot': new_regs['a7'],
+                               'return_pc': pc + size, 'depth': len(self.stack), 'step': self.n})
+            self.stack.append(pc + size)
+        elif mnemonic == 'rts':
+            self.calls.append({'site': pc, 'return_to': new_regs['pc'], 'depth': len(self.stack) - 1, 'step': self.n})
+            if self.stack:
+                self.stack.pop()
+        if 'sr' in changed:
+            for name, bit in CCR:
+                if (changed['sr'][0] ^ changed['sr'][1]) & bit:
+                    self.ccr_last[name] = self.n
+        record = {'n': self.n, 'pc': pc, 'text': text, 'cycles': cycles, 'taken': taken,
+                  'changed': {k: v[1] for k, v in changed.items()},
+                  'writes': step_writes, 'sr': new_regs['sr'] & 0x1F}
+        if self.detail:
+            self.steps.append(record)
+        self.last_pc = pc
+        self.n += 1
+        self.regs, self.info, self.ram = new_regs, new_info, new_ram
+        return record
+
+    def facts(self):
+        exit_regs, exit_info = dict(self.regs), dict(self.info)
+        changed_regs = {k: (self.entry_regs[k], exit_regs[k]) for k in REGS if self.entry_regs[k] != exit_regs[k]}
+        return {
+            'entry': self.entry, 'exit_pc': exit_regs['pc'], 'last_pc': self.last_pc,
+            'instructions': exit_info['m68k_instructions'] - self.entry_info['m68k_instructions'],
+            'cycles': exit_info['m68k_cycles'] - self.entry_info['m68k_cycles'],
+            'master_ticks': exit_info['tick'] - self.entry_info['tick'],
+            'interrupts_during_trace': self.interrupts,
+            'stack_delta': exit_regs['a7'] - self.entry_regs['a7'],
+            'caller_return_slot_at_entry': self.caller_return,
+            'entry_registers': self.entry_regs,
+            'entry_ram': self.entry_ram,
+            'changed_registers': changed_regs,
+            'ccr_exit': {name: bool(exit_regs['sr'] & bit) for name, bit in CCR},
+            'ccr_last_changed_step': self.ccr_last,
+            'ram_writes_final': self.writes, 'ram_write_counts': self.write_counts,
+            'calls': self.calls, 'steps': self.steps,
+        }
+
+
+def trace(state, *, entry=None, stop_pc=None, max_instructions=20000, rom=None, detail=True, track_ram=True):
     rom = rom or read_rom()
     with Machine(rom) as m:
         m.restore(state)
         m.gates([])
-        regs = m.registers()
-        info = m.info
-        ram = ram_bytes(m)
-        entry = regs['pc'] if entry is None else entry
-        if regs['pc'] != entry:
-            raise ValueError('state stands at %06X, not %06X' % (regs['pc'], entry))
-        entry_regs, entry_info = dict(regs), dict(info)
-        entry_ram = ram
-        entry_a7 = regs['a7']
-        caller_return = int.from_bytes(ram[entry_a7 & 0xFFFF:(entry_a7 & 0xFFFF) + 4], 'big') & 0xFFFFFF
-        steps, writes, write_counts, calls, stack = [], OrderedDict(), {}, [], []
-        ccr_last = {name: None for name, _ in CCR}
-        interrupts = 0
-        last_pc = None
-        for n in range(max_instructions):
-            pc = regs['pc']
-            if n > 0:
-                if stop_pc is not None and pc == stop_pc:
-                    break
-                if stop_pc is None and pc == caller_return and regs['a7'] == entry_a7 + 4:
-                    break
-            text, size = disasm(rom, ram, pc)
-            m.run(instructions=1)
-            new_regs, new_info, new_ram = m.registers(), m.info, ram_bytes(m)
-            cycles = new_info['m68k_cycles'] - info['m68k_cycles']
-            if new_info['vblanks'] != info['vblanks']:
-                interrupts += 1
-            changed = {k: (regs[k], new_regs[k]) for k in REGS if regs[k] != new_regs[k] and k != 'pc'}
-            step_writes = []
-            if new_ram != ram:
-                # Chunked diff: compare 256-byte slices first, scan only the changed ones.
-                for base in range(0, 65536, 256):
-                    if new_ram[base:base + 256] != ram[base:base + 256]:
-                        for i in range(base, base + 256):
-                            if new_ram[i] != ram[i]:
-                                addr = 0xFF0000 + i
-                                step_writes.append((addr, new_ram[i]))
-                                writes[addr] = new_ram[i]
-                                write_counts[addr] = write_counts.get(addr, 0) + 1
-            mnemonic = text.split(' ')[0].split('.')[0]
-            taken = None
-            if mnemonic in _BRANCHES or mnemonic.startswith('db'):
-                taken = new_regs['pc'] != pc + size
-            if mnemonic in ('bsr', 'jsr'):
-                calls.append({'site': pc, 'callee': new_regs['pc'], 'return_slot': new_regs['a7'],
-                              'return_pc': pc + size, 'depth': len(stack), 'step': n})
-                stack.append(pc + size)
-            elif mnemonic == 'rts':
-                calls.append({'site': pc, 'return_to': new_regs['pc'], 'depth': len(stack) - 1, 'step': n})
-                if stack:
-                    stack.pop()
-            if 'sr' in changed:
-                for name, bit in CCR:
-                    if (changed['sr'][0] ^ changed['sr'][1]) & bit:
-                        ccr_last[name] = n
-            if detail:
-                steps.append({'n': n, 'pc': pc, 'text': text, 'cycles': cycles, 'taken': taken,
-                              'changed': {k: v[1] for k, v in changed.items()},
-                              'writes': step_writes, 'sr': new_regs['sr'] & 0x1F})
-            last_pc = pc
-            regs, info, ram = new_regs, new_info, new_ram
+        tracer = Tracer(m, rom, track_ram=track_ram, detail=detail)
+        entry = tracer.entry if entry is None else entry
+        if tracer.entry != entry:
+            raise ValueError('state stands at %06X, not %06X' % (tracer.entry, entry))
+        for _ in range(max_instructions):
+            if tracer.at_exit(stop_pc):
+                break
+            tracer.step()
         else:
             raise RuntimeError('trace exceeded instruction cap before reaching its stop')
-        exit_regs, exit_info = dict(regs), dict(info)
-    changed_regs = {k: (entry_regs[k], exit_regs[k]) for k in REGS if entry_regs[k] != exit_regs[k]}
-    return {
-        'entry': entry, 'exit_pc': exit_regs['pc'], 'last_pc': last_pc,
-        'instructions': exit_info['m68k_instructions'] - entry_info['m68k_instructions'],
-        'cycles': exit_info['m68k_cycles'] - entry_info['m68k_cycles'],
-        'master_ticks': exit_info['tick'] - entry_info['tick'],
-        'interrupts_during_trace': interrupts,
-        'stack_delta': exit_regs['a7'] - entry_regs['a7'],
-        'caller_return_slot_at_entry': caller_return,
-        'entry_registers': entry_regs,
-        'entry_ram': entry_ram,
-        'changed_registers': changed_regs,
-        'ccr_exit': {name: bool(exit_regs['sr'] & bit) for name, bit in CCR},
-        'ccr_last_changed_step': ccr_last,
-        'ram_writes_final': writes, 'ram_write_counts': write_counts,
-        'calls': calls, 'steps': steps,
-    }
-
-
-SOUND_ENTRIES = {0x1E58B8: 'sound-request', 0x1E58F4: 'sound-fixed-helper', 0x1E589A: 'sound-flush'}
+        return tracer.facts()
 
 
 def registers_at(facts, step_index):
@@ -208,6 +263,53 @@ def split_at_native(facts, callees=None):
             'registers_after': registers_at(facts, b),
         })
     return result
+
+
+def path_signature(facts):
+    """Reduce a fact report to the behavior identity and its facets.
+
+    Identity: sha1 of the executed PCs in the python segments and the
+    depth-zero call targets (native callees marked with ``*``).  Facets beside
+    it: exit PC (the caller's return site), instructions, cycles, exit CCR,
+    the native-call shape, the set of registers whose value differs at exit,
+    and the record/global writes
+    outside the activation's stack window and outside native segments (empty
+    when RAM was not tracked).  Changed registers and writes are value-blind,
+    so they are labels rather than identity.
+    """
+    segments = split_at_native(facts)
+    digest = hashlib.sha1()
+    writes = set()
+    record = facts['entry_registers']['a1'] & 0xFFFFFF
+    sp = facts['entry_registers']['a7']
+    for segment in segments:
+        if segment['kind'] != 'python':
+            continue
+        for step in facts['steps'][segment['first_step']:segment['last_step'] + 1]:
+            digest.update(step['pc'].to_bytes(4, 'big'))
+            for address, _ in step['writes']:
+                if sp - STACK_WINDOW[0] <= address <= sp + STACK_WINDOW[1]:
+                    continue
+                writes.add('rec+%02X' % (address - record) if record <= address < record + 66 else '%06X' % address)
+    calls = ['%06X%s' % (c['callee'], '*' if c['callee'] in SOUND_ENTRIES else '')
+             for c in facts['calls'] if 'callee' in c and c['depth'] == 0]
+    natives = ['%06X' % c['callee'] for c in facts['calls'] if 'callee' in c and c['callee'] in SOUND_ENTRIES]
+    ccr = sum(bit for name, bit in CCR if facts['ccr_exit'][name])
+    return {'exit': '%06X' % facts['exit_pc'], 'path': digest.hexdigest()[:16], 'calls': calls,
+            'changed': sorted(k for k in facts['changed_registers'] if k not in ('pc', 'sr')),
+            'instructions': facts['instructions'], 'cycles': facts['cycles'], 'ccr': ccr,
+            'natives': natives, 'writes': sorted(writes)}
+
+
+def signature_key(signature):
+    """The identity string of a path signature: the path and its depth-zero calls.
+
+    The exit PC is the caller's return site, a context facet: one leaf called
+    from five sites is one behavior.  The changed-register set is a facet
+    too: like a RAM diff it is value-blind (a register rewritten with its old
+    value is not "changed"), so one path can show different sets.
+    """
+    return '%s:%s' % (signature['path'], ','.join(signature['calls']))
 
 
 def report_segments(segments):
@@ -286,6 +388,11 @@ def report(facts, *, path=True):
             else:
                 items.append('rts %06X -> %06X (depth %d)' % (c['site'], c['return_to'], c['depth']))
         lines.append('calls: ' + '; '.join(items))
+    if facts['steps']:
+        signature = path_signature(facts)
+        lines.append('signature: exit %s path %s calls %s changed %s ccr %02X' % (
+            signature['exit'], signature['path'], ' '.join(signature['calls']) or '-',
+            ' '.join(signature['changed']) or '-', signature['ccr']))
     if path:
         lines.append('path:')
         for s in facts['steps']:

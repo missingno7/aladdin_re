@@ -52,8 +52,10 @@ ended with a held button; the existing node remains unchanged.
 
 Screenshots are presentation metadata below `history/screenshots/`.  Genesis
 caches are disposable implementation-specific accelerators below
-`history/caches/`; they are checked against the ROM, source, native binary, and
-state contract before use.  Removing either does not alter a history node or
+`history/caches/`; they are checked against the ROM, native binary, state
+contract and (for candidate runs) the Python source before use.  An original
+run's cache survives a source edit, because recovered Python never executes
+in it.  Removing either does not alter a history node or
 prevent cold reconstruction.
 
 ## Commands

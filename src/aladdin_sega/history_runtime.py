@@ -37,7 +37,13 @@ class GenesisRun:
                                "state_version": self.machine.state_version,
                                "rom": self.machine.rom_sha256, "profile": PROFILE_SHA256,
                                "candidate": candidate}
-        self.implementation_id = digest(encoded(self.implementation))
+        # The original's trajectory is fixed by the ROM, the native binary, the
+        # profile and the state contract; recovered Python source never runs in
+        # it, so an edit below src must not discard its caches.  A candidate's
+        # cache stays bound to the exact source that produced it.
+        self.cache_implementation = {key: value for key, value in self.implementation.items()
+                                     if not (candidate == "original" and key == "source")}
+        self.implementation_id = digest(encoded(self.cache_implementation))
 
     def close(self):
         self.machine.close()
@@ -119,7 +125,7 @@ class GenesisRun:
         if (node["end_frame"], node["buttons"]) != (self.frame, self.buttons):
             raise ValueError("Cache position differs from history node")
         state = self.save()[0]
-        meta = {"node": node_id, "implementation": self.implementation,
+        meta = {"node": node_id, "implementation": self.cache_implementation,
                 "frame": self.frame, "buttons": self.buttons,
                 "pcm_sha256": self.pcm_digest, "pcm_bytes": self.pcm_bytes,
                 "state_sha256": digest(state)}
@@ -141,7 +147,7 @@ class GenesisRun:
             if checksum != digest(encoded(meta)):
                 return False
             node = store.node(node_id)
-            if (meta["implementation"] != self.implementation or meta["node"] != node_id
+            if (meta["implementation"] != self.cache_implementation or meta["node"] != node_id
                     or meta["state_sha256"] != digest(parts["state.bin"])
                     or (meta["frame"], meta["buttons"]) != (node["end_frame"], node["buttons"])):
                 return False

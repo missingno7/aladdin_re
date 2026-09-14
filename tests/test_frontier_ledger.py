@@ -59,3 +59,29 @@ def test_every_literal_refusal_in_the_boundary_has_a_site():
 def test_cli_needs_a_comparison(tmp_path, capsys):
     assert frontier_ledger.main([str(tmp_path)]) == 1
     assert 'run history-verify first' in capsys.readouterr().out
+
+
+def test_index_rows_join_fallback_counts_and_render_with_gates(tmp_path):
+    report = {'status': 'PASS', 'history_id': 'abc123', 'candidate_receipt': {
+        'executed_frames': 82161, 'candidate_stats': {'fallbacks': 40, 'candidate_hits': 9000,
+            'fallbacks_by_gate': {'1ABB40': 30, '1ABC82': 10},
+            'fallback_reasons': {'scheduler admission': 30,
+                                 'unsupported domain: collection dispatch target 1AF5F0 is not recovered': 10}}}}
+    (tmp_path / 'comparison.json').write_text(json.dumps(report), encoding='utf-8')
+    evidence = tmp_path / 'evidence'
+    evidence.mkdir()
+    (evidence / 'index.json').write_text(json.dumps({'history_id': 'abc123', 'rows': [
+        {'entry': '1AF5F0', 'branch': 'kind58', 'path_class': 0, 'count': 2697, 'first_frame': 51260, 'last_frame': 81990,
+         'instructions': 17, 'cycles': 206, 'exit': '1AE6BA', 'natives': [], 'writes': ['FFF0F5'], 'ccr_variants': {'04': 'a'},
+         'fixture': 'a.state', 'parent_fixture': 'parent-a.state'},
+        {'entry': '1AE64C', 'branch': 'kind43', 'path_class': 1, 'count': 16, 'first_frame': 42970, 'last_frame': 80000,
+         'instructions': 3, 'cycles': 42, 'exit': '1ABCA0', 'natives': ['1E58B8', '1E589A'], 'writes': [], 'ccr_variants': {},
+         'fixture': 'b.state', 'parent_fixture': None}]}), encoding='utf-8')
+    summary = frontier_ledger.ledger(tmp_path / 'comparison.json', BOUNDARY)
+    rows = frontier_ledger.index_rows([evidence], summary)
+    assert [(row['entry'], row['fallbacks'], row['status']) for row in rows] == [
+        ('1AF5F0', 10, 'unrecovered target'), ('1AE64C', 0, 'not named in fallbacks')]
+    text = frontier_ledger.render(summary, index=rows)
+    assert 'fallbacks by gate: 1ABB40 (30), 1ABC82 (10)' in text
+    assert 'evidence index:' in text and '1AF5F0 58     p0      2697     51260    17     10 none          yes     yes' in text
+    assert frontier_ledger.index_rows([tmp_path / 'absent'], summary) == []

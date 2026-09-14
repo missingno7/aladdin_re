@@ -6,6 +6,30 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Replay evidence at scale: index, segments, caches
+
+`docs/replay-evidence-at-scale.md` measured how replay-derived evidence should
+work now that `main` covers 82,161 frames, and its DO NOW rows are in the
+checkout.  `scripts/recovery_census.py` single-steps every occurrence during
+the replay and retains one entry state per distinct executed path (plus one
+per exit CCR) with the contact-tick parent state that led to it, writing an
+`index.json` evidence index; the plain (entry, kind) mode remains behind
+`--plain`.  `scripts/segment_verify.py` restores a retained state and verifies
+the candidate for a few frames against the stored reference observations of
+the last PASS cold run, reporting whether a parent owned or declined its
+child; `tests/test_recorded_evidence.py` runs it over every retained parent
+when `artifacts/evidence/main` exists.  Original-machine history caches are no
+longer keyed by Python source, so a source edit keeps them.  Candidate stats
+carry `fallbacks_by_gate`, and the frontier ledger reads the evidence index and
+lists scheduler refusals by gate.  Nothing here replaces the every-frame cold
+comparison from power-on; it moves the per-leaf work off the replay.
+
+The census of the 18 frontier entries on `main` took 341 s and retained about
+190 path classes (385 child and parent states, 96 MB, regenerable) in
+`artifacts/evidence/main`; every retained parent verifies over two frames
+against the reference in 50 s.  **1,642 tests pass**; the **82,161-frame cold
+comparison passes** with zero restores at `artifacts/evidence-tooling-main/`.
+
 ## Grinder tooling landed; baseline on the 82,161-frame main
 
 The review's DO NOW items are in the checkout.  `scripts/factcheck.py`
