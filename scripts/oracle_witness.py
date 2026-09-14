@@ -712,6 +712,13 @@ def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
             if pc != entry:
                 if recovery:
                     recovery.on_gate(machine, machine.info["tick"] + 1_000_000)
+                    # A completed sound seam resets the live gate set to the
+                    # production list in its own `finally` clause, dropping
+                    # this harness's extra `entry`/`exit_pc` watchpoints;
+                    # restore them so the walker's own outer exit is still
+                    # detected instead of running past it.
+                    machine.gates(list(dict.fromkeys(
+                        (*recovery.gate_pcs, entry, exit_pc))))
                 else:
                     machine.gate(pc, bypass_once=True)
                     machine.run(instructions=1)
@@ -728,11 +735,13 @@ def execute_walker(fixture: str | Path | bytes, *, candidate: str | None,
                     return ExecutionResult(at_outer, None, stats,
                                            outer_state if include_raw else None,
                                            iterations=iterations)
-                if not handled:
-                    # Keep the actual production gates: after one native
-                    # fallback instruction, later loop heads may retry.
-                    machine.gates(list(dict.fromkeys(
-                        (*recovery.gate_pcs, entry, exit_pc))))
+                # Keep the actual production gates (plus this harness's own
+                # entry/exit watchpoints): after a decline, one native
+                # fallback instruction runs and later loop heads may retry;
+                # after a handled seam, its own `finally` clause has already
+                # reset the live gate set to the production list alone.
+                machine.gates(list(dict.fromkeys(
+                    (*recovery.gate_pcs, entry, exit_pc))))
             else:
                 machine.gate(entry, bypass_once=True)
                 machine.run(instructions=1)

@@ -2388,9 +2388,18 @@ def spawn_dispatch_walker(machine, registers: dict[str, int], *, row=False) -> A
 
     Setup through ``1AE446`` remains native. Starting at the loop head, this
     owns one to sixteen slots selected by the existing D4 DBRA counter. Known
-    callbacks compose through ``spawn_dispatch_iteration``; an unknown
-    callback declines before the aggregate plan can be admitted, allowing the
-    native instruction stream to retain that slot.
+    callbacks compose through ``spawn_dispatch_iteration``; a callback whose
+    own body needs a native seam (the VDP tile-upload excursion) cannot be
+    absorbed into this batched Python loop, which has no way to suspend
+    itself for a native call mid-pass. When that slot is not the first one
+    in this call, the iterations already composed before it are admitted as
+    one truncated plan ending at the loop head (``walker_entry``) with the
+    loop state exactly as the original leaves it there -- the same register
+    and stack shape a fresh entry to this same gate expects. The next visit
+    to this gate then starts at the seam slot with nothing yet composed, so
+    it declines immediately and the single-iteration gate (which can
+    suspend for the seam) owns that slot and every slot after it, exactly as
+    a whole-pass decline would have, but without discarding the prefix.
     """
     sp, a1, a2, d4, d5 = (registers[name] for name in ('a7', 'a1', 'a2', 'd4', 'd5'))
     walker_entry, walker_last_pc = ((SPAWN_ROW_DISPATCH_WALKER_ENTRY, SPAWN_ROW_DISPATCH_WALKER_LAST_PC)
@@ -2412,6 +2421,7 @@ def spawn_dispatch_walker(machine, registers: dict[str, int], *, row=False) -> A
         cursor = (cursor + stride) & 0xFFFFFFFF
 
     current = AtomicPlan(0, 0, (), dict(registers), walker_entry)
+    truncated_at_seam = False
     for _ in range(count):
         view = dispatch_plan_view(machine, current)
         state = dict(current.registers)
@@ -2448,11 +2458,19 @@ def spawn_dispatch_walker(machine, registers: dict[str, int], *, row=False) -> A
             callback = spawn_dispatch_iteration(dispatch_plan_view(view, selected),
                                                 selected.registers, row=row)
             if isinstance(callback, SoundSeam):
-                # The batched walker cannot suspend its Python loop mid-pass
-                # for a native excursion; decline the whole pass so the
-                # single-iteration gate (which can) owns this slot instead.
-                raise UnsupportedCandidate(
-                    'spawn dispatcher walker cannot batch a VDP tile-upload seam mid-loop')
+                if current.instructions == 0:
+                    # Nothing admitted yet this call: there is no prefix to
+                    # truncate to, so decline exactly as before and let the
+                    # single-iteration gate own this slot once native
+                    # execution reaches it.
+                    raise UnsupportedCandidate(
+                        'spawn dispatcher walker cannot batch a VDP tile-upload seam mid-loop')
+                # Truncate the batch here: the iterations already folded
+                # into `current` end at the loop head (see docstring) and
+                # are admitted as-is; the seam slot and everything after it
+                # is left for the next visit to this same gate.
+                truncated_at_seam = True
+                break
             step = AtomicPlan(selected.cycles + callback.cycles,
                               selected.instructions + callback.instructions,
                               tuple(dict((*selected.writes, *callback.writes)).items()),
@@ -2465,10 +2483,15 @@ def spawn_dispatch_walker(machine, registers: dict[str, int], *, row=False) -> A
                              step.registers, step.last_pc,
                              current.direct_calls + step.direct_calls)
 
-    if current.registers['pc'] != walker_last_pc:
-        raise UnsupportedCandidate('spawn dispatcher walker did not reach its return')
-    # The bounded product boundary is the original RTS instruction. It stays
-    # native so the future-continuation witness also verifies its outer return.
+    expected_pc = walker_entry if truncated_at_seam else walker_last_pc
+    if current.registers['pc'] != expected_pc:
+        raise UnsupportedCandidate(
+            'spawn dispatcher walker truncation did not reach the loop head' if truncated_at_seam
+            else 'spawn dispatcher walker did not reach its return')
+    # The bounded product boundary is the original RTS instruction (or, for a
+    # truncated batch, the loop head DBRA re-enters) -- either way it stays
+    # native so the future-continuation witness also verifies its outer
+    # resumption point.
     return AtomicPlan(current.cycles, current.instructions, current.writes,
                       current.registers, 0x1AE4F2 if row else SPAWN_DISPATCH_ITERATION_LAST_PC,
                       current.direct_calls)
@@ -2521,6 +2544,18 @@ def spawn_setup_dispatch(machine, registers: dict[str, int], entry: int) -> Atom
     combined = AtomicPlan(prefix.cycles + walker.cycles, prefix.instructions + walker.instructions,
                           tuple(dict((*prefix.writes, *walker.writes)).items()), walker.registers,
                           walker.last_pc, prefix.direct_calls + walker.direct_calls)
+    walker_entry = SPAWN_ROW_DISPATCH_WALKER_ENTRY if row else SPAWN_DISPATCH_WALKER_ENTRY
+    walker_exit = SPAWN_ROW_DISPATCH_WALKER_LAST_PC if row else SPAWN_DISPATCH_WALKER_LAST_PC
+    if combined.registers['pc'] != walker_exit:
+        # The walker truncated its own batch at a seam slot before reaching
+        # its RTS (see spawn_dispatch_walker): there is no outer return
+        # address to pop yet, only the loop head to resume at, exactly like
+        # a direct walker gate hit leaves it. Composing the outer RTS here
+        # would misread the stack as a return address that was never
+        # pushed.
+        if combined.registers['pc'] != walker_entry:
+            raise UnsupportedCandidate('spawn setup walker did not reach its loop head or return')
+        return combined
     final = dict(walker.registers)
     planned = dispatch_plan_view(machine, combined)
     outer = _read(planned, final['a7'], 4)
