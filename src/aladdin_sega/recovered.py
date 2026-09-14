@@ -10,6 +10,7 @@ from .game.objects.collection import collection_state, increment_counter
 from .game.objects.contact import (activate_contact, begin_contact_launch, finish_contact_launch,
                                    contact_decay, contact_path, contact_reaction, contact_reset,
                                    contact_route, contact_repeated_decay, contact_sibling_route,
+                                   contact_type78_route,
                                    contact_script_selector, transition_contact_66, transition_contact_6b,
                                    publish_contact_record, transition_contact_77, finish_contact_type7e)
 from .game.objects.contact import contact_scan_collision
@@ -104,6 +105,7 @@ __all__ = [
     "contact_route",
     "contact_repeated_decay",
     "contact_sibling_route",
+    "contact_type78_route",
     "contact_script_selector",
     "finish_reverse_spawn",
     "finish_primary_double_guard_spawn",

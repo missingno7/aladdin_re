@@ -34,6 +34,7 @@ TARGET_KINDS = {
     0x1AEB7A: 0x0D,  # recorded unconditional RTS stub
     0x1AEBFE: 0x14,  # recorded unconditional RTS stub (also reached by kind 0x2B)
     0x1AE9A8: 0x0C,  # recorded FFF0D8 gate, own-buffer release and 1B7CC4 re-template
+    0x1AEBDC: 0x78,  # recorded FFF0D8 gate, +/-8 window guard, BSR into shared 1AE4F8 (also kind 0x7A)
 }
 
 

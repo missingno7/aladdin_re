@@ -113,6 +113,28 @@ def contact_sibling_route(read, record):
     return 'retire', kind
 
 
+def contact_type78_route(read, record, window):
+    """Classify 1AEBDC's FFF0D8 gate and, when active, its +/-8 window check.
+
+    ``window`` is the caller's D0 register (masked to a word) at entry; the
+    gate and the window bound both come from live RAM.  Returns ``('call',
+    facts)`` when the wrapper falls straight through to a BSR into the
+    shared 1AE4F8 contact root (``facts['gate']`` says whether the window
+    check ran first), or ``('window_upper_fail' | 'window_lower_fail',
+    facts)`` when the window rejects it before ever reaching 1AE4F8.
+    """
+    if not read(0xFFF0D8, 1):
+        return 'call', {'gate': 0}
+    base = read(record + 2, 2)
+    upper = (base + 8) & 0xffff
+    if window >= upper:
+        return 'window_upper_fail', {'upper': upper}
+    lower = (base - 8) & 0xffff
+    if window < lower:
+        return 'window_lower_fail', {'lower': lower}
+    return 'call', {'gate': 1, 'lower': lower}
+
+
 def contact_script_selector(read):
     """Classify 1AD150's flag-priority script-pointer selection.
 

@@ -60,6 +60,7 @@ CONTACT_FAMILY_TYPE23_ENTRY = 0x1AEECA
 CONTACT_FAMILY_TYPE0D_ENTRY = 0x1AEB7A
 CONTACT_FAMILY_TYPE14_ENTRY = 0x1AEBFE
 CONTACT_FAMILY_TYPE0C_ENTRY = 0x1AE9A8
+CONTACT_FAMILY_TYPE78_ENTRY = 0x1AEBDC
 CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
@@ -1856,6 +1857,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE0D_ENTRY,
                       CONTACT_FAMILY_TYPE14_ENTRY,
                       CONTACT_FAMILY_TYPE0C_ENTRY,
+                      CONTACT_FAMILY_TYPE78_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
@@ -2066,6 +2068,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE0D_ENTRY: begin_contact_family_type0d_dispatch,
         CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
         CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
+        CONTACT_FAMILY_TYPE78_ENTRY: begin_contact_family_type78_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -2143,6 +2146,7 @@ def _contact_scan_resume(machine, registers):
         CONTACT_FAMILY_TYPE0D_ENTRY: begin_contact_family_type0d_dispatch,
         CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
         CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
+        CONTACT_FAMILY_TYPE78_ENTRY: begin_contact_family_type78_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -2335,6 +2339,131 @@ def finish_contact_dispatch_sound(machine, registers):
     final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
     return AtomicPlan(contact.cycles + 16, contact.instructions + 1, contact.writes, final,
                       CONTACT_DISPATCH_LOCAL_RETURN, contact.direct_calls)
+
+
+def _contact_type78_prefix(machine, registers, read, record, sp, sr):
+    """1AEBDC's own FFF0D8 gate/window prefix, shared by both call arms.
+
+    Returns ``(arm, facts, callback)`` where ``callback`` is ``None`` for a
+    window-rejected arm (nothing further to compose) and otherwise the
+    ``AtomicPlan`` for the BSR frame into ``CONTACT_ENTRY``.
+    """
+    window = registers['d0'] & 0xffff
+    arm, facts = game.contact_type78_route(read, record, window)
+    if arm != 'call':
+        return arm, facts, None
+    if facts['gate']:
+        cycles, instructions = 94, 10
+        d2 = (registers['d2'] & 0xffff0000) | facts['lower']
+        prefix_sr = _cmp_sr(sr, window, facts['lower'], 2)
+        extra = {'d2': d2}
+    else:
+        cycles, instructions = 44, 3
+        prefix_sr = _logic_sr(sr, 0, 1)
+        extra = {}
+    callback = AtomicPlan(cycles, instructions, _bytes(sp - 4, 0x1AEBFC, 4),
+                          {**registers, **extra, 'a7': sp - 4, 'pc': CONTACT_ENTRY, 'sr': prefix_sr},
+                          0x1AEBFC, direct_calls=1)
+    return arm, facts, callback
+
+
+def begin_contact_family_type78(machine, registers):
+    """1AEBDC's FFF0D8 gate and, when active, a +/-8 window guard around a
+    BSR into the shared 1AE4F8 contact root through ``begin_contact``.
+
+    Arm selection is ``game.contact_type78_route``; this boundary owns the
+    alias guards, the cost table and the CCR.  Cost table (``factcheck``),
+    each call row exclusive of ``begin_contact`` itself:
+
+        window upper fail  (FFF0D8 set, D0 >= record+2 + 8)     74 /  7
+        window lower fail  (FFF0D8 set, D0 <  record+2 - 8)     94 / 10
+        call, FFF0D8 clear                                      44 /  3
+        call, FFF0D8 set and D0 inside the window                94 / 10
+
+    The gate's own TST/CMP discard every incoming CCR bit they do not set;
+    a window-fail's final flags are its own last CMP's, a call's final
+    flags are ``begin_contact``'s.
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type78 record/stack')
+    _spans_disjoint([('type78 record', record, 66), ('type78 return', sp, 4),
+                     ('type78 bsr return', sp - 4, 4), ('type78 gate', 0xFFF0D8, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    return_pc = read(sp, 4) & 0xFFFFFF
+    arm, facts, callback = _contact_type78_prefix(machine, registers, read, record, sp, sr)
+    if arm == 'window_upper_fail':
+        d2 = (registers['d2'] & 0xffff0000) | facts['upper']
+        return AtomicPlan(74, 7, (), {'d2': d2, 'a7': sp + 4, 'pc': return_pc,
+                                       'sr': _cmp_sr(sr, registers['d0'] & 0xffff, facts['upper'], 2)},
+                          0x1AEBFC)
+    if arm == 'window_lower_fail':
+        d2 = (registers['d2'] & 0xffff0000) | facts['lower']
+        return AtomicPlan(94, 10, (), {'d2': d2, 'a7': sp + 4, 'pc': return_pc,
+                                        'sr': _cmp_sr(sr, registers['d0'] & 0xffff, facts['lower'], 2)},
+                          0x1AEBFC)
+    contact = begin_contact(dispatch_plan_view(machine, callback), callback.registers)
+    # ``begin_contact`` accounts for exactly one RTS (landing at our own
+    # local return, the BSR's return slot); a second, explicit RTS there
+    # unwinds our own frame back to the true caller, exactly as
+    # ``begin_contact_dispatch`` adds for its own nested BSR.
+    final = dict(callback.registers)
+    final.update(contact.registers)
+    final.update(a7=sp + 4, pc=return_pc)
+    return AtomicPlan(callback.cycles + contact.cycles + 16, callback.instructions + contact.instructions + 1,
+                      tuple(dict((*callback.writes, *contact.writes)).items()), final,
+                      0x1AEBFC, callback.direct_calls + contact.direct_calls)
+
+
+def begin_contact_family_type78_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE78_ENTRY, begin_contact_family_type78)
+
+
+def begin_contact_family_type78_sound(machine, registers):
+    """Enter 1AEBDC's window-guarded contact root through command 31."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type78 sound record/stack')
+    _spans_disjoint([('type78 sound record', record, 66), ('type78 sound return', sp, 4),
+                     ('type78 sound bsr return', sp - 4, 4), ('type78 sound gate', 0xFFF0D8, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    arm, facts, callback = _contact_type78_prefix(machine, registers, read, record, sp, sr)
+    if arm != 'call':
+        raise UnsupportedCandidate('contact type78 sound outside the window pass')
+    sound = begin_contact_sound(dispatch_plan_view(machine, callback), callback.registers)
+    final = dict(callback.registers)
+    final.update(sound.registers)
+    return AtomicPlan(callback.cycles + sound.cycles, callback.instructions + sound.instructions,
+                      tuple(dict((*callback.writes, *sound.writes)).items()), final,
+                      sound.last_pc, callback.direct_calls + sound.direct_calls)
+
+
+def begin_contact_family_type78_dispatch_sound(machine, registers, dispatch):
+    """Compose collection dispatch with type-78's sound-seam arm."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE78_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type78 sound dispatch identity')
+    sound = begin_contact_family_type78_sound(dispatch_plan_view(machine, dispatch), callback_registers)
+    final = dict(callback_registers)
+    final.update(sound.registers)
+    return AtomicPlan(dispatch.cycles + sound.cycles, dispatch.instructions + sound.instructions,
+                      tuple(dict((*dispatch.writes, *sound.writes)).items()), final,
+                      sound.last_pc, dispatch.direct_calls + sound.direct_calls)
+
+
+def finish_contact_family_type78_sound(machine, registers):
+    """Restore command 31, then type-78's own BSR/RTS pair to the dispatcher."""
+    contact = finish_contact_sound(machine, registers)
+    local_sp = contact.registers['a7']
+    if (contact.registers.get('pc') != 0x1AEBFC
+            or _read(machine, local_sp, 4) != COLLECTION_DISPATCH_RETURN):
+        raise UnsupportedCandidate('contact type78 sound local return identity')
+    final = dict(contact.registers)
+    final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
+    return AtomicPlan(contact.cycles + 16, contact.instructions + 1,
+                      contact.writes, final, 0x1AEBFC, contact.direct_calls)
 
 
 CONTACT_ACTIVATION_GLOBALS = tuple((name, address, size) for name, address, size in (
