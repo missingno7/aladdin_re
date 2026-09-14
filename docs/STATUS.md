@@ -6,6 +6,30 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1AFA84 (kinds 74/75) distance guard, window/kind/state gate and spawn recovered
+
+1AFA84 is reached by both the kind-0x74 and kind-0x75 collection-dispatch
+slots.  It opens with the same FFF0BE/FFF0C0 family selector as Type-55/58's
+own guard (no bit-4 activity test here), then a guard pass continues into a
+horizontal-window, kind and state gate: only when every check clears does
+the triggering record retype itself to a used kind-0x75 marker and spawn a
+child from the fixed 1B7E7C template into the first free FF7F06 pool slot.
+The pool scan and template expansion reuse `game.free_object` and
+`game.initialize`, the same primitives already proven for the spawn-region
+callers, so only the surrounding gate and the self-retype needed new
+semantics (`contact_type74_guard`, `contact_type74_fail`,
+`contact_type74_pass`, `contact_type74_target`, `contact_type74_retype`,
+`contact_type74_position`).  A kind-0x75 record always fails the kind
+recheck, which is why the kind-0x75 dispatch slot sharing this entry never
+re-spawns.  Two facts the recorded fixtures never exercised on their own --
+a borrowed guard-fail arm and the pool-exhausted spawn arm's own register
+residue (1AE262's exit A5 is a fixed one-past-pool constant, not the last
+checked slot) -- were caught by `--vary` boundary testing before
+qualification, not by the recorded history alone.  **1,752 tests pass in
+233 s**; the **82,161-frame cold comparison passes** with zero restores at
+`artifacts/type74-guard/` (frames 82,161, 88,379 candidate hits, 12,341
+fallbacks, down from 15,171).
+
 ## Type-58 bounded-distance guard recovered
 
 1AF5F0 (kind 58, the grinder's first frontier target) is the same

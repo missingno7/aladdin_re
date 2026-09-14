@@ -402,6 +402,96 @@ def contact_type58_pass(delta):
     return _word(0xFF7DFC, delta)
 
 
+def contact_type74_guard(read, record):
+    """Select 1AFA84's arm from live RAM and name its distance facts.
+
+    Same FFF0BE/FFF0C0 family selector as Type-55/58, but this entry has no
+    bit-4 activity test at all: a cleared selector, or a selector with
+    FFF0C0 set, falls straight into the distance guard, which subtracts
+    0xB from the delta and bounds it to 0xA.  Returns ``(arm, facts)`` with
+    ``arm`` one of ``direct``, ``guard_fail`` or ``guard_pass``.
+    """
+    selector = read(0xFFF0BE, 1)
+    facts = {'selector': selector}
+    if selector and not read(0xFFF0C0, 1):
+        return 'direct', facts
+    delta = (read(record + 4, 2) - read(0xFF7DF8, 2) - 0xB) & 0xFFFF
+    previous = read(0xFF7DFC, 2)
+    difference = (previous - delta) & 0xFFFF
+    borrowed = previous < delta
+    distance = (-difference) & 0xFFFF if borrowed else difference
+    facts.update(delta=delta, previous=previous, difference=difference,
+                 borrowed=borrowed, distance=distance)
+    return ('guard_pass' if distance < 0xA else 'guard_fail'), facts
+
+
+def contact_type74_fail():
+    """The tail flag every recovered Type-74/75 direct/guard-fail return publishes through 1AE6B4."""
+    return [(0xFFF0F5, 0xFF)]
+
+
+def contact_type74_pass(delta):
+    """The motion word a Type-74/75 guard-pass return publishes locally through FF7DFC."""
+    return _word(0xFF7DFC, delta)
+
+
+def contact_type74_target(read, record, player_x):
+    """1AFAC4..1AFAF8's horizontal-window, kind and state gate.
+
+    Reached only after a guard pass.  The screen position ``player_x`` must
+    fall inside ``[record_x - 0x10, record_x + 0x10)``, the record's own
+    kind byte must still be 0x74 (a kind-0x75 self-marker never
+    re-triggers, which is how the kind-0x75 collection-dispatch slot that
+    shares this same entry always declines past this point), FFF0D8 must be
+    clear, and FF7E5A must be a strictly positive word.  Returns
+    ``(stage, facts)`` where ``stage`` names the first failing check, or
+    ``spawn``.
+    """
+    record_x = read(record + 2, 2)
+    upper = (record_x + 0x10) & 0xFFFF
+    facts = {'record_x': record_x, 'upper': upper}
+    if player_x >= upper:
+        return 'window_upper', facts
+    lower = (upper - 0x20) & 0xFFFF
+    facts['lower'] = lower
+    if player_x < lower:
+        return 'window_lower', facts
+    kind = read(record, 1)
+    facts['kind'] = kind
+    if kind != 0x74:
+        return 'kind_mismatch', facts
+    gate = read(0xFFF0D8, 1)
+    facts['gate'] = gate
+    if gate:
+        return 'state_gate', facts
+    state = read(0xFF7E5A, 2)
+    facts['state'] = state
+    if state & 0x8000:
+        return 'negative_state', facts
+    if state == 0:
+        return 'zero_state', facts
+    return 'spawn', facts
+
+
+def contact_type74_retype(record):
+    """The triggering record's own self-retype writes 1AFAFC..1AFB14 publish
+    once the window/kind/state gate passes: it becomes a used kind-0x75
+    marker (FFF0CC and FFF0B0 latches cleared, a fixed template long
+    published at +0xA, +0x36 cleared) so it never re-triggers a second
+    spawn -- the kind-0x75 recheck in ``contact_type74_target`` fails on it.
+    """
+    return [(0xFFF0CC, 0), (0xFFF0B0, 0), (0xFFF0B1, 0),
+            *_long(record + 0xA, 0x120A42), (record + 0x36, 0),
+            (record, 0x75)]
+
+
+def contact_type74_position(destination, x, y):
+    """The child slot's position copy 1AFB28..1AFB2E publishes once
+    ``initialize`` has expanded the fixed 19-byte template into it --
+    ``initialize`` deliberately leaves offsets 2..5 alone for this."""
+    return [*_word(destination + 2, x), *_word(destination + 4, y)]
+
+
 def contact_type46_request(read):
     """1AEF5C's capped command-66 counter and its sound request.
 

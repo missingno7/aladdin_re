@@ -51,6 +51,10 @@ CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
 CONTACT_FAMILY_TYPE46_ENTRY = 0x1AEF5C
 CONTACT_FAMILY_TYPE55_ENTRY = 0x1AF590
 CONTACT_FAMILY_TYPE58_ENTRY = 0x1AF5F0
+CONTACT_FAMILY_TYPE74_ENTRY = 0x1AFA84
+CONTACT_TYPE74_POOL = 0xFF7F06
+CONTACT_TYPE74_POOL_COUNT = 20
+CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
@@ -1570,6 +1574,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE46_ENTRY,
                       CONTACT_FAMILY_TYPE55_ENTRY,
                       CONTACT_FAMILY_TYPE58_ENTRY,
+                      CONTACT_FAMILY_TYPE74_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
@@ -1773,6 +1778,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
         CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
         CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
+        CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -1843,6 +1849,7 @@ def _contact_scan_resume(machine, registers):
                         CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
                         CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
                         CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
+                        CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -3843,6 +3850,224 @@ def begin_contact_family_type58_dispatch(machine, registers, dispatch):
     return _contact_family_dispatch(machine, registers, dispatch,
                                     CONTACT_FAMILY_TYPE58_ENTRY,
                                     begin_contact_family_type58)
+
+
+def begin_contact_family_type74(machine, registers):
+    """1AFA84's bounded-distance guard, window/kind/state gate and child spawn.
+
+    Same FFF0BE/FFF0C0 family selector as Type-55/58's own guard (no bit-4
+    test here), reached by both the kind-0x74 and kind-0x75 collection
+    dispatch slots -- kind 0x75 is what a triggering record becomes after it
+    spawns, so a kind-0x75 re-entry always fails the kind recheck below.  A
+    guard pass rewrites FF7DFC and continues into a horizontal-window, kind
+    and state gate (``game.contact_type74_target``); any one of those checks
+    that fails returns locally at 1AFB34 with only the FF7DFC rewrite
+    already published.  Passing every check retypes the triggering record
+    to a used kind-0x75 marker and spawns a child from the fixed 1B7E7C
+    template into the first free FF7F06 pool slot -- ``game.free_object``
+    and ``game.initialize`` are the same primitives already proven for the
+    spawn-region callers, so only the surrounding gate and the self-retype
+    are new semantics.  A guard fail publishes the same FFF0F5 tail flag as
+    the direct arm through the shared 1AE6B4 tail.  Cost table
+    (``factcheck``), each row additive to the selector-route prefix (26/2
+    short: FFF0BE clear; 52/4 full: FFF0BE and FFF0C0 both set):
+
+        direct return    (FFF0BE set, FFF0C0 clear)                    86 /  6
+        guard fail,  no borrow                                        136 / 11
+        guard fail,  borrowed and negated                             138 / 12
+        window upper fail   (player x >= record x + 0x10)             168 / 15  (after a guard pass)
+        window lower fail   (player x <  record x - 0x10)              38 /  4
+        kind mismatch        (record kind != 0x74)                     38 /  3
+        state gate            (FFF0D8 != 0)                            42 /  3
+        negative state        (FF7E5A < 0)                             42 /  3
+        zero state            (FF7E5A == 0)                            42 /  3
+        spawn, pool exhausted                                         976 / 91
+        spawn, pool slot at index i                          734 + 40*i / 44 + 4*i
+
+    (the window-upper row already folds in the fixed run from the guard
+    pass through its own branch; every later row is additive to the row
+    above it, in source order.)  The gate's own TST/CMP/SUBI/ADDI discard
+    every incoming CCR bit they do not set; a bail's final flags are its own
+    last comparison's, a spawn's final flags come from the local MOVE.W
+    that publishes the child's Y position, and the pool scan's own exit
+    flags (found or exhausted) sit between -- exactly as they do inside the
+    already-proven ``spawn_region``.
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type74 record/stack')
+    # The triggering record is itself one member of the same 66-byte-stride
+    # object space the FF7F06 pool scans, so it is deliberately not checked
+    # disjoint from the pool here: its own kind byte is nonzero (0x74 or
+    # 0x75) both before and after the retype below, so ``game.free_object``
+    # never selects it regardless of read order.
+    _spans_disjoint([
+        ('type74 record', record, 66), ('type74 return', sp, 4),
+        ('type74 flags', 0xFFF0BE, 1), ('type74 mode', 0xFFF0C0, 1),
+        ('type74 motion', 0xFF7DFC, 2), ('type74 player', 0xFF7DF8, 2),
+        ('type74 screen x', 0xFF7E02, 2), ('type74 gate', 0xFFF0D8, 1),
+        ('type74 state', 0xFF7E5A, 2), ('type74 tail', 0xFFF0F5, 1),
+        ('type74 retype latch', 0xFFF0CC, 1), ('type74 retype counter', 0xFFF0B0, 2),
+    ])
+    _spans_disjoint([
+        ('type74 pool', CONTACT_TYPE74_POOL, CONTACT_TYPE74_POOL_COUNT * 66),
+        ('type74 return', sp, 4),
+        ('type74 flags', 0xFFF0BE, 1), ('type74 mode', 0xFFF0C0, 1),
+        ('type74 motion', 0xFF7DFC, 2), ('type74 player', 0xFF7DF8, 2),
+        ('type74 screen x', 0xFF7E02, 2), ('type74 gate', 0xFFF0D8, 1),
+        ('type74 state', 0xFF7E5A, 2), ('type74 tail', 0xFFF0F5, 1),
+        ('type74 retype latch', 0xFFF0CC, 1), ('type74 retype counter', 0xFFF0B0, 2),
+    ])
+    read = lambda address, size: _read(machine, address, size)
+    arm, facts = game.contact_type74_guard(read, record)
+    fail_writes = tuple(game.contact_type74_fail())
+    return_pc = read(sp, 4) & 0xFFFFFF
+    if arm == 'direct':
+        return AtomicPlan(86, 6, fail_writes,
+                          {'a7': sp + 4, 'pc': return_pc, 'sr': _logic_sr(sr, 0, 1)},
+                          0x1AE6BA)
+
+    delta, previous, distance, borrowed = (facts[key] for key in ('delta', 'previous', 'distance', 'borrowed'))
+    residue = _sub_sr(sr, previous, delta, 2)
+    if borrowed:
+        residue = _sub_sr(residue, 0, facts['difference'], 2)
+    route_cycles, route_instructions = (52, 4) if facts['selector'] else (26, 2)
+    player_x = read(0xFF7E02, 2)
+    d0 = (registers['d0'] & 0xFFFF0000) | player_x
+    d2_delta = (registers['d2'] & 0xFFFF0000) | delta
+    d7 = (registers['d7'] & 0xFFFF0000) | distance
+
+    if arm == 'guard_fail':
+        base_cycles, base_instructions = (102, 10) if borrowed else (100, 9)
+        return AtomicPlan(route_cycles + base_cycles + 36, route_instructions + base_instructions + 2,
+                          fail_writes,
+                          {'d0': d0, 'd2': d2_delta, 'd7': d7, 'a7': sp + 4, 'pc': return_pc,
+                           'sr': _cmp_sr(residue, distance, 0xA, 2)},
+                          0x1AE6BA)
+
+    # guard_pass: publish the motion word, then walk the window/kind/state gate.
+    pass_writes = tuple(game.contact_type74_pass(delta))
+    base_cycles, base_instructions = (104, 10) if borrowed else (102, 9)
+    cycles = route_cycles + base_cycles + 16   # + the local FF7DFC MOVE.W
+    instructions = route_instructions + base_instructions + 1
+    stage_sr = _logic_sr(residue, delta, 2)
+
+    stage, target_facts = game.contact_type74_target(read, record, player_x)
+    record_x, upper = target_facts['record_x'], target_facts['upper']
+    stage_sr = _logic_sr(stage_sr, record_x, 2)              # move.w record+2,d2
+    stage_sr = _add_sr(stage_sr, record_x, 0x10, 2)           # addi.w #$10,d2
+    cycles += 20; instructions += 2
+    d2_upper = (registers['d2'] & 0xFFFF0000) | upper
+    stage_sr = _cmp_sr(stage_sr, player_x, upper, 2)          # cmp.w d2,d0
+    if stage == 'window_upper':
+        return AtomicPlan(cycles + 30, instructions + 3, pass_writes,
+                          {'d0': d0, 'd2': d2_upper, 'd7': d7, 'a7': sp + 4, 'pc': return_pc,
+                           'sr': stage_sr},
+                          0x1AFB34)
+    cycles += 12; instructions += 2
+
+    lower = target_facts['lower']
+    stage_sr = _sub_sr(stage_sr, upper, 0x20, 2)              # subi.w #$20,d2
+    d2_lower = (registers['d2'] & 0xFFFF0000) | lower
+    stage_sr = _cmp_sr(stage_sr, player_x, lower, 2)          # cmp.w d2,d0
+    if stage == 'window_lower':
+        return AtomicPlan(cycles + 38, instructions + 4, pass_writes,
+                          {'d0': d0, 'd2': d2_lower, 'd7': d7, 'a7': sp + 4, 'pc': return_pc,
+                           'sr': stage_sr},
+                          0x1AFB34)
+    cycles += 20; instructions += 3
+
+    kind = target_facts['kind']
+    stage_sr = _cmp_sr(stage_sr, kind, 0x74, 1)               # cmpi.b #$74,(a1)
+    if stage == 'kind_mismatch':
+        return AtomicPlan(cycles + 38, instructions + 3, pass_writes,
+                          {'d0': d0, 'd2': d2_lower, 'd7': d7, 'a7': sp + 4, 'pc': return_pc,
+                           'sr': stage_sr},
+                          0x1AFB34)
+    cycles += 20; instructions += 2
+
+    gate = target_facts['gate']
+    stage_sr = _logic_sr(stage_sr, gate, 1)                   # tst.b fff0d8
+    if stage == 'state_gate':
+        return AtomicPlan(cycles + 42, instructions + 3, pass_writes,
+                          {'d0': d0, 'd2': d2_lower, 'd7': d7, 'a7': sp + 4, 'pc': return_pc,
+                           'sr': stage_sr},
+                          0x1AFB34)
+    cycles += 28; instructions += 2
+
+    state = target_facts['state']
+    stage_sr = _logic_sr(stage_sr, state, 2)                  # tst.w ff7e5a
+    if stage == 'negative_state':
+        return AtomicPlan(cycles + 42, instructions + 3, pass_writes,
+                          {'d0': d0, 'd2': d2_lower, 'd7': d7, 'a7': sp + 4, 'pc': return_pc,
+                           'sr': stage_sr},
+                          0x1AFB34)
+    cycles += 28; instructions += 2
+    # The re-test 1AFAF2 reads the same word, so it yields identical flags.
+    if stage == 'zero_state':
+        return AtomicPlan(cycles + 42, instructions + 3, pass_writes,
+                          {'d0': d0, 'd2': d2_lower, 'd7': d7, 'a7': sp + 4, 'pc': return_pc,
+                           'sr': stage_sr},
+                          0x1AFB34)
+    cycles += 28; instructions += 2
+
+    # Every gate cleared: retype the trigger to a used kind-0x75 marker and
+    # spawn a child from the fixed template into the first free pool slot.
+    retype_writes = tuple(game.contact_type74_retype(record))
+    stage_sr = _logic_sr(stage_sr, 0, 1)          # clr.b fff0cc
+    stage_sr = _logic_sr(stage_sr, 0, 2)          # clr.w fff0b0
+    stage_sr = _logic_sr(stage_sr, 0x120A42, 4)   # move.l #$120a42,$a(a1)
+    stage_sr = _logic_sr(stage_sr, 0, 1)          # clr.b $36(a1)
+    stage_sr = _logic_sr(stage_sr, 0x75, 1)       # move.b #$75,(a1)
+    cycles += 92; instructions += 5
+
+    destination, index = game.free_object(read, CONTACT_TYPE74_POOL, CONTACT_TYPE74_POOL_COUNT)
+    cycles += 18; instructions += 1               # bsr.w 1AE262
+    if destination is None:
+        last_kind = read(CONTACT_TYPE74_POOL + (CONTACT_TYPE74_POOL_COUNT - 1) * 66, 1)
+        stage_sr = _logic_sr(stage_sr, last_kind, 1)
+        # The 1AE262 call's own return address is the only stack scratch a
+        # single BSR/RTS pair leaves behind (nothing pushes over it again).
+        scan_return = _bytes(sp - 4, 0x1AFB1C, 4)
+        return AtomicPlan(cycles + 840 + 10 + 16, instructions + 83 + 1 + 1,
+                          (*pass_writes, *retype_writes, *scan_return),
+                          {'d0': (registers['d0'] & 0xFFFF0000) | 0xFFFF,
+                           'd2': d2_lower, 'd7': d7,
+                           'a5': CONTACT_TYPE74_POOL + CONTACT_TYPE74_POOL_COUNT * 66,
+                           'a7': sp + 4, 'pc': return_pc, 'sr': stage_sr},
+                          0x1AFB34)
+    stage_sr = _logic_sr(stage_sr, 0, 1)           # the found slot's own tst.b
+    cycles += 54 + 40 * index + 8
+    instructions += (5 + 4 * index) + 1
+
+    template = machine.peek_rom(CONTACT_TYPE74_TEMPLATE, 19)
+    init_writes = tuple(game.initialize(destination, template))
+    stage_sr = _logic_sr(stage_sr, 0, 4)           # 1AE30A's own closing clr.l
+    cycles += 30 + 476; instructions += 2 + 27
+
+    x, y = read(record + 2, 2), read(record + 4, 2)
+    position_writes = tuple(game.contact_type74_position(destination, x, y))
+    stage_sr = _logic_sr(stage_sr, x, 2)
+    stage_sr = _logic_sr(stage_sr, y, 2)
+    cycles += 40; instructions += 2
+
+    d0_found = (registers['d0'] & 0xFFFF0000) | (0x13 - index)
+    # The 1AE30A call's return address overwrites the same stack slot the
+    # 1AE262 call's own return address left behind; only this final value
+    # of that scratch slot survives.
+    call_return = _bytes(sp - 4, 0x1AFB28, 4)
+    return AtomicPlan(cycles + 16, instructions + 1,
+                      (*pass_writes, *retype_writes, *init_writes, *position_writes, *call_return),
+                      {'d0': d0_found, 'd2': d2_lower, 'd7': d7, 'a5': destination,
+                       'a6': CONTACT_TYPE74_TEMPLATE + 19, 'a7': sp + 4, 'pc': return_pc,
+                       'sr': stage_sr},
+                      0x1AFB34)
+
+
+def begin_contact_family_type74_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE74_ENTRY,
+                                    begin_contact_family_type74)
 
 
 def begin_contact_family_type44(machine, registers):
