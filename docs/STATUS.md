@@ -6,6 +6,46 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B6696, 1B6C0E and 1B72FC recovered (spawn dispatcher family, three leaves)
+
+1B6696 (kind 33) is a pure `SPAWN_CLOSURE_CALLER_FACTS` table addition:
+reverse-pool allocation (`spawn_region` via `SPAWN_REGION_REVERSE_ENTRY`)
+plus a fixed record+0x20 script-pointer write, no type retag, so the
+already-proven `spawn_closure_caller` handles it with one new
+`game.finish_reverse_script_spawn` semantic function. 1B6C0E (kinds 00/33)
+is the same upper-pool creation shape as `spawn_upper_caller`, but its
+success tail is an FFF175 guard: set, it returns directly (recovered);
+clear, it continues into 1B2650's VDP tile-data upload -- a MOVE.L to the
+VDP control port `$C00004` and a 16-word transfer through the data port
+`$C00000`, inside the `1B263C..1B26D0` command-stream engine range -- which
+declines explicitly, since no RAM-domain recipe reaches a device port; the
+allocation-failure arm (unobserved on the recorded history) was caught by a
+`--vary` pool-exhaustion sweep, not the fixtures alone. 1B72FC (kinds 00/02)
+is a standalone FFEFE0 cap guard (`CMPI.W #$3030`) whose recorded not-equal
+arm returns directly; an exact match falls into an unrecorded four-slot
+allocation sequence with no retained fixture and declines. Both new
+standalone planners (`spawn_upper_tile_caller`, `spawn_cap_guard_two`) route
+through `spawn_dispatch_call`'s existing callbacks map with no recovery.py
+changes; neither fits the plain/offset/closure table shapes
+`tests/test_spawn_oracle.py` exercises generically (their declining arm
+would break that suite's blanket `fallbacks == 0` assumption), so a new
+`tests/test_spawn_partial_arms.py` qualifies both directly. **2,151 tests
+pass in about 256 s**; the **82,161-frame cold comparison passes** with zero
+restores at `artifacts/spawn-tile-cap/` (frames 82,161, 91,882 candidate
+hits, 2,977 fallbacks, down from 3,714). Next frontier: 1B67C2 (211, a
+double-spawn shape calling 1B3032/1B5256/1B6794 twice), 1B6756 (157, a
+CMPI.B FF7E26 guard whose clear arm is a plain reverse-pool spawn with a
+shared unconditional-RTS tail; the guard-set arm is unrecorded and nests a
+second guard plus a second 1B2650 VDP call), 1B6FAE (132, the same
+FFF175/1B2650 shape as 1B6C0E, but every recorded fixture hits a third,
+fully RAM-only arm -- CMPI.B FF7E26,#5 -- that writes one fixed word at
+record+0x1E; only the unrecorded FF7E26-mismatch arm reaches the VDP call),
+1B71C4 (125, a closure-plus-Y-offset shape identical to
+`spawn_closure_guard_caller`'s own tail -- `finish` write at +0x20 then
+`game.offset_spawn_position`/`_sub_sr` -- just without that entry's FFF12A
+guard prefix, and fully recoverable with no decline), then the rest of the
+spawn dispatcher census by fallback count.
+
 ## 1AEE40 clear arm and six spawn dispatcher plain-wrapper children recovered
 
 1AEE40 (kinds 2C/2D/2E/31/6D) closes out the contact-family TARGETS list:
