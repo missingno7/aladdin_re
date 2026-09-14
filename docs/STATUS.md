@@ -6,6 +6,40 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B6F4A, 1B6F34 and 1B65C0 recovered (spawn dispatcher family, three more leaves)
+
+1B6F4A and 1B6F34 are pure `SPAWN_CLOSURE_CALLER_FACTS` table additions
+sharing template `0x1B8264`: reverse-pool allocation plus a record+0x20
+script write, no type retag, differing only by the script value
+(`0x125A88`/`0x125A68`) -- zero new boundary code beyond the table facts
+and two new `game.finish_reverse_script_{a,b}_spawn` functions. 1B65C0 is
+a new standalone planner: reverse-pool allocation (template `0x1B7D14`)
+plus an unsigned `ADDI.W #$A` to the Y coordinate only -- no script write,
+no X adjustment, unlike every prior closure/offset shape -- reusing the
+already-proven `game.offset_spawn_position`. All three have no declining
+arm and no guard dependency, so they join `oracle_witness`'s generic
+`CLOSURE_WRAPPERS`/`CALLER_POOLS` coverage directly with zero bespoke test
+code. The pre-existing `tests/test_spawn_oracle.py` constants
+`ROW_UNKNOWN`/`SETUP_UNKNOWN` had used `0x1B6F34` as an example of an
+*unrecovered* callback for an unrelated walker-decline test; both were
+repointed to the still-unrecovered `0x1B67C2`. **2,245 tests pass in about
+263 s**; the **82,161-frame cold comparison passes** with zero restores at
+`artifacts/spawn-closures4/` (frames 82,161, 91,806 candidate hits, 2,266
+fallbacks, down from 2,563). Next frontier: 1B67C2 (211, a three-call
+shape with an embedded PRNG subroutine at `1B3032` gating a double spawn,
+still deferred pending its own characterization), 1B6EEE (84, upper-pool
+creation whose success tail clears record+0xA, writes a script pointer at
++0x20, then a type byte at offset 0 -- a `SPAWN_CLOSURE_CALLER_FACTS`
+row), 1B6FEE (79, primary-pool creation whose tail is an unconditional
+`ST.B` at record+9 with no CCR effect -- does not fit the closure table's
+always-applied `_logic_sr` and needs its own standalone planner), 1B7158
+(79, an FFF128 guard gating a lower-pool spawn identical in shape to
+`spawn_closure_guard_caller`, just with different guard/script constants),
+then the rest of the census (1B6836 and 1B7018 read-only characterized
+too -- a guard+type+script+XY-offset combination and a `finish_type_4c_spawn`
+clone with a different type byte -- but low-value, single-digit recorded
+counts) by fallback count.
+
 ## 1B71C4, 1B6FAE and 1B6756 recovered (spawn dispatcher family, three more leaves)
 
 1B71C4 (kind 02) is a closure-plus-Y-offset shape identical to
