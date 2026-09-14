@@ -15,6 +15,7 @@ from aladdin_sega.boundary import (COLLECTION_DISPATCH_ENTRY,
 RECORD = 0xFF6000
 SAFE_RETURN = 0x1B65BE
 TARGET_KINDS = {
+    0x1AED86: 0x03,  # recorded D8-zero contact sound wrapper
     0x1AFBF4: 0x65,  # recorded type-66 transition
     0x1AFC4E: 0x4F,  # synthetic on current main history
     0x1AF978: 0x6A,  # recorded contact motion transition
@@ -388,6 +389,51 @@ def test_type15_sibling_wrapper_contact_route_remains_original():
     assert actual.future == expected.future
     assert actual.stats['collection_dispatch_hits'] == 0
     assert actual.stats['fallbacks'] >= 1
+
+
+def test_type03_d8_zero_contact_sound_matches_original_outer_future_and_fresh():
+    state = family_fixture(0x1AED86, active_d8=0, sound=1)
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150, include_raw=True)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle',
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   future_instructions=150, include_raw=True)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['contact_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type03_d8_zero_contact_sound_mutants_diverge_at_outer_boundary(mutant, monkeypatch):
+    state = family_fixture(0x1AED86, active_d8=0, sound=1)
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150)
+    if mutant == 'continuation':
+        # The prefix deliberately enters the native sound request.  Moving
+        # that PC would execute unrelated ROM, so perturb the resumed suffix
+        # instead; this is the observable continuation contract under test.
+        original_mutate = oracle.Candidate._mutate
+
+        def suffix_only(candidate, plan):
+            if candidate.name.endswith('continuation') and plan.registers.get('pc') == 0x1E58B8:
+                return plan
+            return original_mutate(candidate, plan)
+
+        monkeypatch.setattr(oracle.Candidate, '_mutate', suffix_only)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle-mutant-' + mutant,
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
 
 
 def test_type15_sibling_wrapper_matches_original_outer_future_and_fresh():

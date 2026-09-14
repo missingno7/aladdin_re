@@ -23,9 +23,9 @@ family RAM adapters are now selected by the owned scan as well as the standalone
 dispatcher; sound/device branches without a parent contract remain local
 fallbacks.
 
-**1,533 tests pass in 126.14 s.** The final **26,378-frame cold comparison
+**1,537 tests pass in 133.12 s.** The final **26,378-frame cold comparison
 passes** with zero restores, exact state/video/PCM equality and current source
-receipts: `artifacts/blocker-review-qualified/comparison.json`.
+receipts: `artifacts/type03-dispatch-isolated/comparison.json`.
 Against the incoming worktree's cold receipt, parent admissions rise
 18,364 -> 18,411; dispatcher hits fall 202 -> 155; gates fall 29,499 ->
 29,452; fallbacks fall 5,303 -> 5,256. Legacy entries/returns remain 206/187
@@ -36,6 +36,23 @@ The earlier `blocker-review-full` attempt was rejected because implementation
 changed while it ran; it is not qualification evidence. Remaining unsupported
 sound/device paths are explicit recovery frontiers, not a claim of complete
 routine/subsystem ownership.
+
+## Type-03 D8-zero contact sound wrapper
+
+Recorded table callback `1AED86` now admits only its two-instruction,
+D8-zero branch into the existing C6 contact sound wrapper.  Its mutable D8
+arm remains original-owned.  The composed plan preserves the dispatcher A4
+residue, lets the native command-31 request run, proves the saved local frame
+and return slot, then joins the existing suffix through `1ABD74`.  The direct
+entry replaces the unused direct sibling gate so the native 63-PC gate limit
+remains respected; dispatcher ownership is unchanged.
+
+Self-contained original-ROM tests require exact outer state, PCM/timing,
+150-instruction future execution, fresh-process restore, and result/
+continuation/timing negative controls.  The captured current-main Type-03
+state separately reaches the same `1ABD74` observable boundary exactly.
+The full 26,378-frame cold comparison remains strict-PASS with zero restores;
+the candidate reports 26 sibling hits and explicit D8-mutation fallbacks only.
 
 ## Type-79 collection guard return
 

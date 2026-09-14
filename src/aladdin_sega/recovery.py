@@ -25,6 +25,8 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         CONTACT_FAMILY_TYPE1F_ENTRY, begin_contact_family_type1f_inactive_dispatch,
                         CONTACT_FAMILY_TYPE15_ENTRY, begin_contact_family_type15_dispatch,
                         CONTACT_FAMILY_TYPE44_ENTRY, begin_contact_family_type44_dispatch,
+                        CONTACT_FAMILY_TYPE03_ENTRY, begin_contact_family_type03_sound_seam,
+                        begin_contact_family_type03_dispatch_sound_seam,
                         begin_contact_family_type1f_contact_dispatch,
                         begin_contact_family_type1f_contact_dispatch_sound,
                         finish_contact_family_type1f_contact_sound,
@@ -116,7 +118,8 @@ class Candidate:
                                         COLLECTION_DISPATCH_ENTRY, CONTACT_ENTRY,
                                         CONTACT_STEP_ENTRY,
                                         CONTACT_SIBLING_ENTRY, CONTACT_SIBLING_WRAPPER,
-                                        CONTACT_SIBLING_DIRECT, *COLLECTION_ROUTES,
+                                        *COLLECTION_ROUTES,
+                                        CONTACT_FAMILY_TYPE03_ENTRY,
                                         0x1AF516, SPAWN_REVERSE_CALLER_ENTRY, SPAWN_REVERSE_PLAIN_CALLER_ENTRY, SPAWN_UPPER_PLAIN_CALLER_ENTRY, SPAWN_UPPER_STANDARD_CALLER_ENTRY, SPAWN_UPPER_SECONDARY_CALLER_ENTRY, SPAWN_UPPER_TERTIARY_CALLER_ENTRY, SPAWN_UPPER_TYPED_CALLER_ENTRY, SPAWN_UPPER_CALLER_ENTRY, SPAWN_UPPER_GUARD_ENTRY, SPAWN_PRIMARY_DISPATCH_ENTRY, SPAWN_PRIMARY_GUARD_ENTRY, SPAWN_LOWER_DISPATCH_ENTRY, SPAWN_PRIMARY_DOUBLE_GUARD_ENTRY, SPAWN_PRIMARY_INVERSE_GUARD_ENTRY, SPAWN_PRIMARY_MIXED_GUARD_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY, SPAWN_UPPER_SCRIPTED_CALLER_ENTRY, SPAWN_UPPER_DISPATCH_ENTRY, SPAWN_UPPER_DISPATCH_GUARD_ENTRY, SPAWN_DISPATCH_WALKER_ENTRY, SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_ROW_DISPATCH_WALKER_ENTRY, SPAWN_SETUP_LEFT_ENTRY, SPAWN_SETUP_RIGHT_ENTRY, SPAWN_SETUP_ROW_LOW_ENTRY, SPAWN_SETUP_ROW_HIGH_ENTRY,
                                         *SPAWN_REGION_ENTRIES, *base))) if self.is_lifecycle else base
         if self.is_composed:
@@ -418,6 +421,18 @@ class Candidate:
                         'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
             self.stats['collection_dispatch_hits'] += 1
             return True
+        if entry == CONTACT_FAMILY_TYPE03_ENTRY:
+            try:
+                seam = begin_contact_family_type03_dispatch_sound_seam(
+                    machine, dispatch_registers, prefix)
+                if not self._apply(machine, self._mutate(seam.prefix), target):
+                    return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+            return self._run_sound_seam(
+                machine, target, seam, suffix_transform=self._mutate,
+                on_complete=self._complete_sibling_sound(seam, dispatched=True),
+            )
         if entry in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
             try:
                 plan = begin_contact_sibling_dispatch(machine, dispatch_registers, prefix, entry)
@@ -521,6 +536,18 @@ class Candidate:
             return True
         if self.is_lifecycle and entry == CONTACT_ENTRY:
             return self._contact(machine, target)
+        if self.is_lifecycle and entry == CONTACT_FAMILY_TYPE03_ENTRY:
+            self.stats['gates'] += 1
+            try:
+                seam = begin_contact_family_type03_sound_seam(machine, machine.registers())
+                if not self._apply(machine, self._mutate(seam.prefix), target):
+                    return self._fallback(machine, entry, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, entry, f'unsupported domain: {error}')
+            return self._run_sound_seam(
+                machine, target, seam, suffix_transform=self._mutate,
+                on_complete=self._complete_sibling_sound(seam, dispatched=False),
+            )
         if self.is_lifecycle and entry in (CONTACT_SIBLING_ENTRY, CONTACT_SIBLING_WRAPPER,
                                            CONTACT_SIBLING_DIRECT):
             self.stats['gates'] += 1

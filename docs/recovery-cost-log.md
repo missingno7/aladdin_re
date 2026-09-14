@@ -508,3 +508,20 @@ gates 29,499 -> 29,452; fallbacks 5,303 -> 5,256. Legacy entries/returns
 The interrupted earlier-source comparison was rejected on implementation
 identity, not counted as a behavioral pass. Existing strict family adapters
 remain available for original callers while more recorded parent work owns them.
+
+
+## Type-03 D8-zero C6 sound composition
+
+Recorded `1AED86` has a finite D8-zero path: TST.B/BEQ.W (26 cycles, two
+instructions) into C6.  Reused the measured C6 command-31 SoundSeam without
+replaying pre-sound writes, preserved the dispatcher A4 overlay, and retained
+the native frame/return proof before its existing `1ABD74` suffix.  The
+non-zero record-mutation arm remains a deliberate fallback.  Direct Type-03
+entry replaces the unused direct sibling gate, holding the lifecycle gate set
+at the native limit of 62.
+
+Qualification: captured current-main state exact at `1ABD74`; self-contained
+original-ROM outer state/PCM/timing, 150-instruction future, fresh process and
+result/continuation/timing mutants; focused 186 tests PASS; full 1,537 tests
+PASS in 133.12 s; fresh 26,378-frame cold comparison PASS with zero restores
+and matching source receipts at `artifacts/type03-dispatch-isolated/`.

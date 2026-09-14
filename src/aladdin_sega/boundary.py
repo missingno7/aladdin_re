@@ -47,6 +47,7 @@ CONTACT_FAMILY_TYPE79_ENTRY = 0x1AEB7C
 CONTACT_FAMILY_TYPE1F_ENTRY = 0x1AE796
 CONTACT_FAMILY_TYPE15_ENTRY = 0x1AE978
 CONTACT_FAMILY_TYPE44_ENTRY = 0x1AEF12
+CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
@@ -1560,6 +1561,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE1F_ENTRY,
                       CONTACT_FAMILY_TYPE15_ENTRY,
                       CONTACT_FAMILY_TYPE44_ENTRY,
+                      CONTACT_FAMILY_TYPE03_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
@@ -3487,6 +3489,60 @@ def begin_contact_family_type15_dispatch(machine, registers, dispatch):
                       dispatch.instructions + callback.instructions,
                       tuple(dict((*dispatch.writes, *callback.writes)).items()), final,
                       callback.last_pc, dispatch.direct_calls + callback.direct_calls)
+
+
+def begin_contact_family_type03_sound_seam(machine, registers):
+    """1AED86's D8-zero branch joined to C6's measured contact sound seam.
+
+    Type 03 does no durable work before entering the wrapper: TST.B FFF0D8
+    followed by the taken BEQ.W.  Its non-zero arm mutates the record and is
+    deliberately outside this candidate.  The zero arm preserves the caller's
+    stack exactly, so C6 owns the only local BSR and sound frame.
+    """
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type03 record/stack')
+    _spans_disjoint([('type03 record', record, 66),
+                     ('type03 frame', sp - 10, 14),
+                     *CONTACT_SIBLING_GLOBALS])
+    d8 = _read(machine, 0xFFF0D8, 1)
+    if d8:
+        raise UnsupportedCandidate('type03 D8 mutation arm is not recovered')
+    prefix = AtomicPlan(26, 2, (),
+                        {**registers, 'pc': CONTACT_SIBLING_WRAPPER,
+                         'sr': _logic_sr(registers['sr'], d8, 1)},
+                        CONTACT_FAMILY_TYPE03_ENTRY)
+    sound = begin_contact_sibling_wrapper_sound_seam(
+        dispatch_plan_view(machine, prefix), prefix.registers, CONTACT_SIBLING_WRAPPER)
+    combined = AtomicPlan(prefix.cycles + sound.prefix.cycles,
+                          prefix.instructions + sound.prefix.instructions,
+                          tuple(dict((*prefix.writes, *sound.prefix.writes)).items()),
+                          sound.prefix.registers, sound.prefix.last_pc,
+                          prefix.direct_calls + sound.prefix.direct_calls)
+    return SoundSeam(combined, sound.stack_basis, sound.resume_pc, sound.return_slot,
+                     sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, sound.suffix)
+
+
+def begin_contact_family_type03_dispatch_sound_seam(machine, registers, dispatch):
+    """Compose the table callback prefix with Type 03's bounded sound seam."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE03_ENTRY or \
+            dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('type03 dispatch prefix identity')
+    callback_registers = {**registers, **dispatch.registers}
+    sound = begin_contact_family_type03_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                    callback_registers)
+    final = dict(dispatch.registers)
+    final.update(sound.prefix.registers)
+    combined = AtomicPlan(dispatch.cycles + sound.prefix.cycles,
+                          dispatch.instructions + sound.prefix.instructions,
+                          tuple(dict((*dispatch.writes, *sound.prefix.writes)).items()),
+                          final, sound.prefix.last_pc,
+                          dispatch.direct_calls + sound.prefix.direct_calls)
+    return SoundSeam(combined, sound.stack_basis, sound.resume_pc, sound.return_slot,
+                     sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, sound.suffix)
 
 
 def begin_contact_family_type44(machine, registers):
