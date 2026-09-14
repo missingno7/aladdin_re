@@ -244,6 +244,19 @@ def finish_reverse_script_c_spawn(record):
             for offset, byte in enumerate(bytes.fromhex('00125aa8'))]
 
 
+def finish_type_47_spawn(record):
+    """Apply callback 1B7018's object type, script, cleared field, and mode."""
+    return [(record, 0x47), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00123e36'))),
+            *((record + 0x0A + offset, 0) for offset in range(4)), (record + 0x29, 1)]
+
+
+def finish_type_6c_spawn(record):
+    """Apply callback 1B6836's object type and script pointer."""
+    return [(record, 0x6C), *((record + 0x20 + offset, byte)
+              for offset, byte in enumerate(bytes.fromhex('00124034')))]
+
+
 def finish_reverse_script_spawn(record):
     """Apply callback 1B6696's successful object script pointer (no retype)."""
     return [(record + 0x20 + offset, byte)

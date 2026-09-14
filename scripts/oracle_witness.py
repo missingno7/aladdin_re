@@ -89,6 +89,7 @@ CLOSURE_WRAPPERS = {
     0x1B6F34: (0x1B5256,),  # reverse, script-only (no retype), template 0x125a68
     0x1B6EEE: (0x1B5266,),  # upper, type 0x22, cleared +0xA field, script 0x1238b2
     0x1B6F60: (0x1B5256,),  # reverse, script-only (no retype), template 0x125aa8
+    0x1B7018: (0x1B525E,),  # lower, type 0x47, script 0x123e36 (finish_type_4c_spawn clone), template 0x1b79b8
 }
 CALLER_POOLS.update({entry: callee for entry, (callee,) in CLOSURE_WRAPPERS.items()})
 CALLER_POOLS[SAFE_RETURN] = 0x1B5266
@@ -100,6 +101,7 @@ CALLER_POOLS[0x1B65C0] = 0x1B5256  # spawn_reverse_y_offset_caller: SPAWN_REGION
 CALLER_POOLS[0x1B6FEE] = 0x1B524E  # spawn_primary_flag_caller: SPAWN_REGION_ENTRY
 CALLER_POOLS[0x1B7158] = 0x1B525E  # spawn_closure_guard_two_caller: SPAWN_REGION_LOWER_ENTRY (both guard states recover)
 CALLER_POOLS[0x1B717C] = 0x1B525E  # spawn_closure_guard_three_caller: SPAWN_REGION_LOWER_ENTRY (both guard states recover)
+CALLER_POOLS[0x1B6836] = 0x1B5256  # spawn_reverse_guard_type_offset_caller: SPAWN_REGION_REVERSE_ENTRY (both guard states recover)
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,
