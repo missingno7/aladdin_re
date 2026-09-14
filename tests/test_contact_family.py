@@ -36,6 +36,7 @@ TARGET_KINDS = {
     0x1AE9A8: 0x0C,  # recorded FFF0D8 gate, own-buffer release and 1B7CC4 re-template
     0x1AEBDC: 0x78,  # recorded FFF0D8 gate, +/-8 window guard, BSR into shared 1AE4F8 (also kind 0x7A)
     0x1AF81C: 0x63,  # recorded bounded-distance guard (limit 0xA) + self-kind check (also kind 0x62)
+    0x1AEE40: 0x2D,  # recorded FFF0D8 gate, own-buffer release (1AE372) + BSR into shared 1AE4F8 (also 2C/2E/31/6D)
 }
 
 

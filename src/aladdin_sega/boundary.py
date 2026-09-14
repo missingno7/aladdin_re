@@ -63,6 +63,7 @@ CONTACT_FAMILY_TYPE0D_ENTRY = 0x1AEB7A
 CONTACT_FAMILY_TYPE14_ENTRY = 0x1AEBFE
 CONTACT_FAMILY_TYPE0C_ENTRY = 0x1AE9A8
 CONTACT_FAMILY_TYPE78_ENTRY = 0x1AEBDC
+CONTACT_FAMILY_TYPE2C_ENTRY = 0x1AEE40
 CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
@@ -1940,6 +1941,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE14_ENTRY,
                       CONTACT_FAMILY_TYPE0C_ENTRY,
                       CONTACT_FAMILY_TYPE78_ENTRY,
+                      CONTACT_FAMILY_TYPE2C_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
                       COLLECTION_TYPE3A_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
@@ -2153,6 +2155,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
         CONTACT_FAMILY_TYPE78_ENTRY: begin_contact_family_type78_dispatch,
         CONTACT_FAMILY_TYPE63_ENTRY: begin_contact_family_type63_dispatch,
+        CONTACT_FAMILY_TYPE2C_ENTRY: begin_contact_family_type2c_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -2232,6 +2235,7 @@ def _contact_scan_resume(machine, registers):
         CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
         CONTACT_FAMILY_TYPE78_ENTRY: begin_contact_family_type78_dispatch,
         CONTACT_FAMILY_TYPE63_ENTRY: begin_contact_family_type63_dispatch,
+        CONTACT_FAMILY_TYPE2C_ENTRY: begin_contact_family_type2c_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -2549,6 +2553,105 @@ def finish_contact_family_type78_sound(machine, registers):
     final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
     return AtomicPlan(contact.cycles + 16, contact.instructions + 1,
                       contact.writes, final, 0x1AEBFC, contact.direct_calls)
+
+
+def _contact_family_type2c_prefix(machine, registers, record, sp, sr):
+    """1AEE40's own FFF0D8-clear prefix: self-retype, the already-proven
+    1AE372 buffer release, then the BSR frame into CONTACT_ENTRY."""
+    clear_cycles, clear_instructions, clear_writes, linked = _clear_objects(
+        machine, registers, sp=sp - 4, pair=False,
+        extra_spans=(('type2c return', sp, 4), ('type2c gate', 0xFFF0D8, 1)))
+    writes = (*_bytes(record, 0, 1), *clear_writes, *_bytes(sp - 4, 0x1AEEC8, 4))
+    cycles = 56 + clear_cycles + 18   # TST.B/BEQ/CLR.B/BSR(1AE372) + BSR(1AE4F8)
+    instructions = 4 + clear_instructions + 1
+    return AtomicPlan(cycles, instructions, writes,
+                      {**registers, 'a7': sp - 4, 'pc': CONTACT_ENTRY,
+                       'sr': _logic_sr(sr, 0, 1)},
+                      0x1AEEC8, direct_calls=2)
+
+
+def begin_contact_family_type2c(machine, registers):
+    """1AEE40's FFF0D8 gate: clear, self-retype plus the already-proven
+    1AE372 buffer release, then a BSR into the shared 1AE4F8 contact root
+    through ``begin_contact``.
+
+    Active (FFF0D8 set) continues into a pool-scan-and-spawn arm behind a
+    new subroutine 1AE2DA that is not recovered here.  Cost table
+    (``factcheck``), exclusive of ``_clear_objects``/``begin_contact``
+    themselves:
+
+        own prefix (TST.B/BEQ/CLR.B/BSR to 1AE372, BSR to 1AE4F8)  74
+        extra local RTS that unwinds this wrapper's own frame      16
+
+    The extra local RTS mirrors ``begin_contact_dispatch``'s own
+    adjustment for its nested BSR: ``begin_contact`` accounts for exactly
+    one RTS (landing at this wrapper's own local return), so a second,
+    explicit RTS here unwinds back to the true caller.
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type2c record/stack')
+    gate = _read(machine, 0xFFF0D8, 1)
+    if gate:
+        raise UnsupportedCandidate('type2c pool-scan-and-spawn arm is not recovered')
+    return_pc = _read(machine, sp, 4) & 0xFFFFFF
+    callback = _contact_family_type2c_prefix(machine, registers, record, sp, sr)
+    contact = begin_contact(dispatch_plan_view(machine, callback), callback.registers)
+    final = dict(callback.registers)
+    final.update(contact.registers)
+    final.update(a7=sp + 4, pc=return_pc)
+    return AtomicPlan(callback.cycles + contact.cycles + 16, callback.instructions + contact.instructions + 1,
+                      tuple(dict((*callback.writes, *contact.writes)).items()), final,
+                      0x1AEEC8, callback.direct_calls + contact.direct_calls)
+
+
+def begin_contact_family_type2c_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE2C_ENTRY, begin_contact_family_type2c)
+
+
+def begin_contact_family_type2c_sound(machine, registers):
+    """Enter 1AEE40's own contact root through command 31 (FFF0D8 clear only)."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type2c sound record/stack')
+    gate = _read(machine, 0xFFF0D8, 1)
+    if gate:
+        raise UnsupportedCandidate('type2c pool-scan-and-spawn arm is not recovered')
+    callback = _contact_family_type2c_prefix(machine, registers, record, sp, sr)
+    sound = begin_contact_sound(dispatch_plan_view(machine, callback), callback.registers)
+    final = dict(callback.registers)
+    final.update(sound.registers)
+    return AtomicPlan(callback.cycles + sound.cycles, callback.instructions + sound.instructions,
+                      tuple(dict((*callback.writes, *sound.writes)).items()), final,
+                      sound.last_pc, callback.direct_calls + sound.direct_calls)
+
+
+def begin_contact_family_type2c_dispatch_sound(machine, registers, dispatch):
+    """Compose collection dispatch with type-2C's sound-seam arm."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE2C_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type2c sound dispatch identity')
+    sound = begin_contact_family_type2c_sound(dispatch_plan_view(machine, dispatch), callback_registers)
+    final = dict(callback_registers)
+    final.update(sound.registers)
+    return AtomicPlan(dispatch.cycles + sound.cycles, dispatch.instructions + sound.instructions,
+                      tuple(dict((*dispatch.writes, *sound.writes)).items()), final,
+                      sound.last_pc, dispatch.direct_calls + sound.direct_calls)
+
+
+def finish_contact_family_type2c_sound(machine, registers):
+    """Restore command 31, then type-2C's own BSR/RTS pair to the dispatcher."""
+    contact = finish_contact_sound(machine, registers)
+    local_sp = contact.registers['a7']
+    if (contact.registers.get('pc') != 0x1AEEC8
+            or _read(machine, local_sp, 4) != COLLECTION_DISPATCH_RETURN):
+        raise UnsupportedCandidate('contact type2c sound local return identity')
+    final = dict(contact.registers)
+    final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
+    return AtomicPlan(contact.cycles + 16, contact.instructions + 1,
+                      contact.writes, final, 0x1AEEC8, contact.direct_calls)
 
 
 CONTACT_ACTIVATION_GLOBALS = tuple((name, address, size) for name, address, size in (
