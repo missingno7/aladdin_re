@@ -6,6 +6,37 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1AEE40 clear arm and six spawn dispatcher plain-wrapper children recovered
+
+1AEE40 (kinds 2C/2D/2E/31/6D) closes out the contact-family TARGETS list:
+its FFF0D8-clear arm composes the already-proven `_clear_objects(pair=False)`
+own-buffer release (1AE372) with a nested BSR into the shared 1AE4F8
+CONTACT_ENTRY root, the same composition shape as Type-78's own nested call;
+the FFF0D8-set arm (a pool-scan-and-spawn behind a new subroutine 1AE2DA)
+is not the entry's primary recorded path in any fixture and declines
+explicitly. The frontier then moves to the spawn dispatcher family: a
+census pass over the dispatcher's JSR at 1AE46C (`--parent 1AE46C`, 169
+path rows over 40 targets) retained `artifacts/evidence/spawn`, and its
+highest six by fallback count -- 1B668A, 1B688A, 1B6864, 1B674A, 1B7000
+and 1B673E -- turn out to be zero-new-code table additions: each target's
+ROM bytes exactly match the already-proven LEA/BSR/RTS plain-wrapper shape
+that `_plain_wrapper_shape` validates byte-for-byte, with its BSR
+displacement resolving to one of the four known `spawn_region` allocators,
+so `spawn_plain_caller` (extended with six new `SPAWN_PLAIN_CALLER_FACTS`
+rows) already handles all six. **2,106 tests pass in about 263 s**; the
+**82,161-frame cold comparison passes** with zero restores at
+`artifacts/spawn-plain6/` (frames 82,161, 91,935 candidate hits, 3,714
+fallbacks, down from 4,762). Next frontier: the remaining spawn dispatcher
+census targets by fallback count -- 1B6C0E (520, calls the shared upper
+allocator then a conditional VDP tile upload through 1B2650, inside the
+`1B263C..1B26D0` command-stream engine range: the allocation-only arms
+recover, the VDP arm declines), 1B6696 (460, a pure `SPAWN_CLOSURE_CALLER_FACTS`
+table addition: reverse-pool allocation plus a fixed script-pointer write,
+no type retag), 1B72FC (295, an FFEFE0 cap guard whose recorded arm returns
+directly; the unrecorded cap-reached arm is a four-slot spawn sequence with
+no fixture and declines), then 1B67C2, 1B6756, 1B6FAE, 1B71C4 and the rest
+of the census.
+
 ## 1AEBDC, 1AF81C and 1AF228 recovered (contact-family and collection-route, three leaves)
 
 1AEBDC (kinds 0x78/0x7A) gates on FFF0D8: clear, it falls straight into a
