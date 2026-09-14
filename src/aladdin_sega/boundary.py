@@ -154,6 +154,11 @@ SPAWN_PRIMARY_MIXED_GUARD_ENTRY = 0x1B73F2
 SPAWN_PRIMARY_MIXED_GUARD_LAST_PC = 0x1B7428
 SPAWN_UPPER_DISPATCH_ENTRY = 0x1B7454
 SPAWN_UPPER_DISPATCH_LAST_PC = 0x1B7472
+SPAWN_UPPER_TILE_CALLER_ENTRY = 0x1B6C0E
+SPAWN_UPPER_TILE_CALLER_LAST_PC = 0x1B6C2C
+SPAWN_UPPER_TILE_CALLER_TEMPLATE = 0x1B7A80
+SPAWN_CAP_GUARD_TWO_ENTRY = 0x1B72FC
+SPAWN_CAP_GUARD_TWO_LAST_PC = 0x1B7330
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -790,6 +795,81 @@ def spawn_lower_dispatch_caller(machine, registers: dict[str, int]) -> AtomicPla
     return spawn_plain_caller(machine, registers, SPAWN_LOWER_DISPATCH_ENTRY)
 
 
+def _upper_tile_wrapper_shape(machine):
+    raw = machine.peek_rom(SPAWN_UPPER_TILE_CALLER_ENTRY, 32)
+    if raw != bytes.fromhex(
+            '4df9001b7a806100e65066124a3900fff175660a41f9001292b26100ba264e75'):
+        raise UnsupportedCandidate('upper tile spawn caller ROM shape')
+
+
+def spawn_upper_tile_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B6C0E``'s upper-pool creation and its FFF175 tile-upload guard.
+
+    A failed allocation, and a successful one with ``FFF175`` set, both
+    return locally with no further writes -- the same LEA/BSR upper-pool
+    prefix as ``spawn_upper_caller``, with a plain RTS tail instead of a
+    coordinate-correction suffix.  A successful allocation with ``FFF175``
+    clear continues into ``1B2650``'s VDP tile-data upload: a MOVE.L to the
+    VDP control port ``$C00004`` followed by a 16-word transfer through the
+    data port ``$C00000``, inside the ``1B263C..1B26D0`` command-stream
+    engine range.  No RAM-domain recipe reaches a device port, so that arm
+    declines.
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper tile spawn caller stack')
+    _upper_tile_wrapper_shape(machine)
+    _spans_disjoint([('upper tile spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('upper tile spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, SPAWN_UPPER_TILE_CALLER_ENTRY + 10, 4),
+                        {**registers, 'a6': SPAWN_UPPER_TILE_CALLER_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY},
+                        SPAWN_UPPER_TILE_CALLER_ENTRY + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    if not (final['sr'] & 4):
+        final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_UPPER_TILE_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    planned = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    guard = _read(planned, 0xFFF175, 1)
+    if guard == 0:
+        raise UnsupportedCandidate('upper tile spawn caller requires the 1B2650 VDP tile upload')
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF, sr=_logic_sr(final['sr'], guard, 1))
+    return AtomicPlan(prefix.cycles + selected.cycles + 50,
+                      prefix.instructions + selected.instructions + 4, writes, final,
+                      SPAWN_UPPER_TILE_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls)
+
+
+def spawn_cap_guard_two(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B72FC``'s FFEFE0 cap comparison against ``$3030``.
+
+    A clear (mismatched) cap takes the direct RTS recovered here.  An exact
+    match falls into an unrecorded four-slot allocation sequence (no
+    retained fixture exercises it); that arm declines.
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned spawn cap guard stack')
+    outer = _read(machine, sp, 4)
+    cap = _read(machine, 0xFFEFE0, 2)
+    compare_sr = (_sub_sr(registers['sr'], cap, 0x3030, 2) & ~0x10) | (registers['sr'] & 0x10)
+    if compare_sr & 4:
+        raise UnsupportedCandidate(
+            'spawn cap guard reached 0x3030: unrecorded four-slot spawn sequence')
+    return AtomicPlan(46, 3, (), {**registers, 'a7': sp + 4,
+                      'pc': outer & 0xFFFFFF, 'sr': compare_sr},
+                      SPAWN_CAP_GUARD_TWO_LAST_PC)
+
+
 def spawn_reverse_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B7232``'s direct reverse-pool allocator wrapper."""
     return spawn_plain_caller(machine, registers, SPAWN_REVERSE_PLAIN_CALLER_ENTRY)
@@ -1123,6 +1203,8 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_UPPER_DISPATCH_ENTRY: spawn_upper_dispatch_caller,
         SPAWN_CLOSURE_GUARD_ENTRY: spawn_closure_guard_caller,
         SPAWN_CLOSURE_SAFE_RETURN_ENTRY: spawn_closure_safe_return,
+        SPAWN_UPPER_TILE_CALLER_ENTRY: spawn_upper_tile_caller,
+        SPAWN_CAP_GUARD_TWO_ENTRY: spawn_cap_guard_two,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
