@@ -6,6 +6,28 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1AEB7A, 1AEBFE and 1AE9A8 recovered (contact-family, three more leaves)
+
+1AEB7A (kind 0x0D) and 1AEBFE (kind 0x14, and also reached by the kind
+0x2B collection-dispatch slot) are each a single instruction -- RTS, with
+no gate, no write, no flag change -- backed by a shared
+`_begin_contact_family_noop` helper.  1AE9A8 (kind 0x0C) is the same
+FFF0D8-gated pair-release-and-re-template shape as 1AE9E0 (recovered in
+the prior milestone) but simpler: it releases only the triggering
+record's own attached buffer (`_clear_objects` with `pair=False`, the
+adapter already proven for `clear_auxiliary_buffer`) with no linked
+record at all, then re-expands a different fixed template (1B7CC4, the
+one `begin_contact_family_type23`'s own secondary spawn also uses)
+through the same already-proven 1AE30A adapter.  All three entries are
+owned inside the contact scan too.  **1,880 tests pass in about 227 s**;
+the **82,161-frame cold comparison passes** with zero restores at
+`artifacts/type0c-noop/` (frames 82,161, 91,908 candidate hits, 5,136
+fallbacks, down from 5,473).  Next frontier: 1AEBDC (183, calls the
+shared CONTACT_ENTRY contact-check subroutine), 1AF81C (156, a Type-55-
+shaped guard whose kind-mismatch arm needs a single-call sound seam),
+1AF228 and 1AEE40 (80 and 64, two-native-call sound seams matching the
+Type-43 exemplar plus unfamiliar wrapping subroutines).
+
 ## 1AFB36, 1AE9E0 and 1AEECA recovered (contact-family, three leaves)
 
 Three connected contact-family leaves land in one milestone.  1AFB36 (kinds
