@@ -525,3 +525,25 @@ original-ROM outer state/PCM/timing, 150-instruction future, fresh process and
 result/continuation/timing mutants; focused 186 tests PASS; full 1,537 tests
 PASS in 133.12 s; fresh 26,378-frame cold comparison PASS with zero restores
 and matching source receipts at `artifacts/type03-dispatch-isolated/`.
+
+
+## Type-55 review and false verifier blocker
+
+The solo worker's original and isolated Type-55 comparisons both completed
+with cold PASS/current receipts. It blocked prematurely while waiting for the
+second run and failed to recheck the finished result. No emulator deadlock was
+found. Added liveness/exit reporting to the existing dev launcher, with tests
+that observation timeouts do not restart a child or imply PASS. Worker watchdogs
+and exact comparison contracts are unchanged.
+
+Review also found a real game-boundary accounting bug: Type-55's non-borrow
+return was assigned the borrow/NEG path cost. Fixed 180/15 versus 182/16 and
+added self-contained original-ROM coverage of both paths and incoming CCR X,
+transition-domain rejection, future/fresh restore, and executed negative controls.
+The generic result mutant affected dead stack residue; the new control changes
+actual FFF0F5 output instead. The branch remains finite, not a full Type-55 routine.
+No new native API, snapshot state, semantic state authority or recovery framework.
+Final verification is recorded in artifacts/type55-reviewed/.
+
+Validated: 1,561 tests pass in 139.11 s; cold 26,378-frame comparison PASS,
+zero restores/current source. The visible launcher reports exit 0 at 245.9 s.

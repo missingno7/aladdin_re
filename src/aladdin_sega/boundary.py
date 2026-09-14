@@ -49,6 +49,7 @@ CONTACT_FAMILY_TYPE15_ENTRY = 0x1AE978
 CONTACT_FAMILY_TYPE44_ENTRY = 0x1AEF12
 CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
 CONTACT_FAMILY_TYPE46_ENTRY = 0x1AEF5C
+CONTACT_FAMILY_TYPE55_ENTRY = 0x1AF590
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
@@ -1564,6 +1565,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE44_ENTRY,
                       CONTACT_FAMILY_TYPE03_ENTRY,
                       CONTACT_FAMILY_TYPE46_ENTRY,
+                      CONTACT_FAMILY_TYPE55_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
@@ -3614,6 +3616,43 @@ def finish_contact_family_type46_sound(machine, registers):
     final = dict(restored); final.update(tail.registers)
     return AtomicPlan(94 + tail.cycles, 5 + tail.instructions, tail.writes, final,
                       tail.last_pc, tail.direct_calls)
+
+
+def begin_contact_family_type55(machine, registers):
+    """1AF590's recorded bit-4 bounded-distance return through 1AE6B4."""
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type55 record/stack')
+    _spans_disjoint([('type55 record', record, 66), ('type55 return', sp, 4),
+                     ('type55 flags', 0xFFF0BE, 1), ('type55 mode', 0xFFF0C0, 1),
+                     ('type55 motion', 0xFF7DFC, 2), ('type55 player', 0xFF7DF8, 2),
+                     ('type55 tail', 0xFFF0F5, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    if read(0xFFF0BE, 1) or not (read(record + 6, 1) & 0x10):
+        raise UnsupportedCandidate('type55 observed guard arm is not active')
+    delta = (read(record + 4, 2) - read(0xFF7DF8, 2) - 18) & 0xFFFF
+    previous = read(0xFF7DFC, 2)
+    distance = (previous - delta) & 0xFFFF
+    residue = _sub_sr(sr, previous, delta, 2)
+    borrowed = bool(residue & 1)
+    if borrowed:
+        distance = (-distance) & 0xFFFF
+        residue = _sub_sr(residue, 0, (-distance) & 0xFFFF, 2)
+    if distance < 6:
+        raise UnsupportedCandidate('type55 transition arm is not recovered')
+    return AtomicPlan(182 if borrowed else 180, 16 if borrowed else 15, ((0xFFF0F5, 0xFF),),
+                      {'d0': (registers['d0'] & 0xFFFFFF00) | read(record + 6, 1),
+                       'd2': (registers['d2'] & 0xFFFF0000) | delta,
+                       'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                       'a7': sp + 4, 'pc': read(sp, 4) & 0xFFFFFF,
+                       'sr': _cmp_sr(residue, distance, 6, 2)},
+                      0x1AE6BA)
+
+
+def begin_contact_family_type55_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE55_ENTRY,
+                                    begin_contact_family_type55)
 
 
 def begin_contact_family_type44(machine, registers):

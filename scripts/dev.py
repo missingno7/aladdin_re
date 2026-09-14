@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Sequence
 
 
@@ -52,7 +53,31 @@ def child_environment(native: Path, inherited: dict[str, str] | None = None) -> 
     return env
 
 
-def run(argv: Sequence[str], *, runner=subprocess.run) -> int:
+def _visible_verification(command, *, cwd, env, check=False):
+    """Observe one verifier without mistaking a quiet worker for failure.
+
+    The verifier owns worker timeouts and the qualification receipt. This
+    launcher only reports process liveness; it neither restarts nor qualifies.
+    """
+    started = time.monotonic()
+    with subprocess.Popen(command, cwd=cwd, env=env) as process:
+        print(f"[verification] started pid={process.pid}; two sequential workers; "
+              "comparison.json is written at completion", file=sys.stderr, flush=True)
+        while True:
+            try:
+                code = process.wait(timeout=30)
+                break
+            except subprocess.TimeoutExpired:
+                print(f"[verification] RUNNING pid={process.pid} "
+                      f"elapsed={time.monotonic() - started:.0f}s; "
+                      "no final receipt yet is not a failure", file=sys.stderr, flush=True)
+        print(f"[verification] EXIT pid={process.pid} code={code} "
+              f"elapsed={time.monotonic() - started:.1f}s; inspect comparison.json",
+              file=sys.stderr, flush=True)
+    return subprocess.CompletedProcess(command, code)
+
+
+def run(argv: Sequence[str], *, runner=None) -> int:
     selected, forwarded = split_native_option(argv)
     if not forwarded:
         raise ValueError("supply an aladdin-sega command, for example: doctor")
@@ -65,7 +90,8 @@ def run(argv: Sequence[str], *, runner=subprocess.run) -> int:
     with tempfile.TemporaryDirectory(prefix="aladdin-import-") as cache:
         env = child_environment(native)
         env.update(PYTHONPYCACHEPREFIX=cache, PYTHONDONTWRITEBYTECODE="1")
-        result = runner(
+        invoke = runner or (_visible_verification if forwarded[0] == "history-verify" else subprocess.run)
+        result = invoke(
             [sys.executable, "-m", "aladdin_sega", *forwarded],
             cwd=ROOT,
             env=env,

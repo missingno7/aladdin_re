@@ -6,6 +6,23 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Type-55 verifier incident resolved
+
+The apparent blocked verifier completed successfully. Both `type55-full` and
+`type55-isolated` produced exact cold PASS receipts at 10:50/10:51; absence of
+intermediate output was not a failed worker. The duplicate launch was unnecessary.
+`scripts/dev.py history-verify` now emits liveness and exit status on stderr;
+it does not restart workers or alter watchdogs/qualification.
+
+Independent Type-55 branch qualification found a real accounting error hidden
+by the recording: the non-borrow return needs 180 cycles / 15 instructions,
+while the borrow/NEG path needs 182 / 16. Both are now checked against original
+ROM, including CCR variants, future continuation and fresh restore. The finite
+guard remains the only admitted Type-55 path; its transition is still original.
+Final qualification: **1,561 tests pass (139.11 s)**; **26,378 cold frames
+PASS** with zero restores and current source receipts in
+`artifacts/type55-reviewed/`. The visible launcher completed in 245.9 s.
+
 ## Contact integration reviewed and qualified
 
 The reviewed batch combines parent sound composition and the adjacent

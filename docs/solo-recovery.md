@@ -152,3 +152,29 @@ reuse existing recovery rules, compose upward, and track new manual machine
 reasoning per meaningful behavior. Do not optimize raw LOC or instruction count.
 Do not redesign the CPU, scheduler, snapshot format, sound system or state model
 unless a concrete unavoidable blocker has first been demonstrated.
+
+
+## Quiet verifier is not a blocker (Type-55 incident)
+
+`history-verify` runs original and candidate sequentially and writes
+comparison.json only at completion. Five minutes without a final receipt can
+be normal on this host. The Type-55 run started at 10:46 and passed at 10:51;
+its agent incorrectly blocked before completion and launched a duplicate.
+
+Use scripts/dev.py history-verify: it now emits PID/liveness/exit messages on
+stderr every 30 seconds while the existing verifier owns worker watchdogs.
+Keep stdout and stderr available; retain the returned tool session handle.
+A wait timeout is just an observation boundary, not worker failure. Do not
+start another verifier or mark the goal blocked because output/receipt is absent.
+Wait on the same handle and check the final receipt even if the launcher has
+already exited. PID liveness alone is not proof of progress, and an exited PID
+alone is not proof of failure. Inspect exit status and comparison.json.
+
+Before declaring a real failure, distinguish worker TIMEOUT, nonzero exit,
+missing input, stale implementation receipt and actual DIVERGENCE. A live
+worker still inside its configured deadline is a verified wait. If truly past
+the configured watchdog, inspect its process/children and diagnostics; do not
+turn repeated observations of one ongoing run into repeated independent failures.
+When a blocked goal is resumed, recheck artifacts first: completed evidence may
+already resolve the purported blocker. Never dump frame-level JSON into chat;
+parse it and print only status, equality, frames, restores and source mismatches.

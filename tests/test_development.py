@@ -103,3 +103,44 @@ def test_dev_does_not_load_timestamp_cache_after_same_size_same_second_edit(tmp_
         return result
     assert dev.run(["doctor", "--native", str(native)], runner=runner) == 0
     assert outputs == ["edited"]
+
+
+@pytest.mark.parametrize('exit_code', (0, 7))
+def test_verifier_wait_timeout_is_observation_not_restart(monkeypatch, capsys, exit_code):
+    dev = load_script('dev')
+    calls = []
+    class Process:
+        pid = 123
+        waits = 0
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def wait(self, timeout):
+            assert timeout == 30
+            self.waits += 1
+            if self.waits <= 2:
+                raise subprocess.TimeoutExpired('verifier', timeout)
+            return exit_code
+    def start(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Process()
+    monkeypatch.setattr(dev.subprocess, 'Popen', start)
+    result = dev._visible_verification(['verifier'], cwd=ROOT, env={})
+    assert result.returncode == exit_code
+    assert len(calls) == 1
+    output = capsys.readouterr()
+    assert not output.out
+    assert output.err.count('RUNNING') == 2
+    assert f'code={exit_code}' in output.err
+    assert 'PASS' not in output.err
+
+
+def test_history_verification_uses_visible_launcher(tmp_path, monkeypatch):
+    dev = load_script('dev')
+    native = tmp_path / 'native.dll'; native.write_bytes(b'test')
+    calls = []
+    def visible(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(dev, '_visible_verification', visible)
+    assert dev.run(['history-verify', '--native', str(native)]) == 0
+    assert calls[0][-1] == 'history-verify'
