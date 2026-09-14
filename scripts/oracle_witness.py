@@ -88,6 +88,10 @@ CLOSURE_WRAPPERS = {
 }
 CALLER_POOLS.update({entry: callee for entry, (callee,) in CLOSURE_WRAPPERS.items()})
 CALLER_POOLS[SAFE_RETURN] = 0x1B5266
+# Dispatcher-only (no direct-entry recovery.py wiring): reached solely
+# through spawn_dispatch_call's own callbacks map, so this joins the
+# dispatcher-chain suites (DISPATCH_CALLBACKS) but not DIRECT_CALLER_POOLS.
+CALLER_POOLS[0x1B71C4] = 0x1B525E  # spawn_lower_offset_caller: SPAWN_REGION_LOWER_ENTRY
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,

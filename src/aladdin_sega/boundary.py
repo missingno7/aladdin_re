@@ -159,6 +159,8 @@ SPAWN_UPPER_TILE_CALLER_LAST_PC = 0x1B6C2C
 SPAWN_UPPER_TILE_CALLER_TEMPLATE = 0x1B7A80
 SPAWN_CAP_GUARD_TWO_ENTRY = 0x1B72FC
 SPAWN_CAP_GUARD_TWO_LAST_PC = 0x1B7330
+SPAWN_LOWER_OFFSET_CALLER_ENTRY = 0x1B71C4
+SPAWN_LOWER_OFFSET_CALLER_LAST_PC = 0x1B71DE
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -870,6 +872,50 @@ def spawn_cap_guard_two(machine, registers: dict[str, int]) -> AtomicPlan:
                       SPAWN_CAP_GUARD_TWO_LAST_PC)
 
 
+def spawn_lower_offset_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B71C4``'s lower-pool creation and its script/Y-offset tail.
+
+    The same allocator and template as ``spawn_closure_guard_caller``
+    (``SPAWN_REGION_LOWER_ENTRY``, template ``0x1B78F0``) and the same
+    finish-write-plus-Y-offset tail shape, just without that entry's
+    ``FFF12A`` guard prefix.  Every arm is owned: allocation failure and
+    success both return locally with no undeclined branch.
+    """
+    entry, sp = SPAWN_LOWER_OFFSET_CALLER_ENTRY, registers['a7']
+    shape = bytes.fromhex('4df9001b78f06100e092660e2b7c001243320020046d000800044e75')
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('lower offset spawn caller ROM shape')
+    _spans_disjoint([('lower offset spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('lower offset spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': 0x1B78F0, 'a7': sp - 4, 'pc': SPAWN_REGION_LOWER_ENTRY},
+                        entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_LOWER_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    if not (final['sr'] & 4):
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_LOWER_OFFSET_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    view = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    y = _read(view, final['a5'] + 4, 2)
+    suffix = (*game.finish_lower_offset_spawn(final['a5']),
+              *game.offset_spawn_position(lambda address, size: _read(view, address, size),
+                                          final['a5'], 0, -8))
+    final['sr'] = _sub_sr(selected.registers['sr'], y, 8, 2)
+    return AtomicPlan(prefix.cycles + selected.cycles + 68,
+                      prefix.instructions + selected.instructions + 4,
+                      tuple(dict((*writes, *suffix)).items()), final,
+                      SPAWN_LOWER_OFFSET_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls + 2)
+
+
 def spawn_reverse_plain_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover ``1B7232``'s direct reverse-pool allocator wrapper."""
     return spawn_plain_caller(machine, registers, SPAWN_REVERSE_PLAIN_CALLER_ENTRY)
@@ -1205,6 +1251,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_CLOSURE_SAFE_RETURN_ENTRY: spawn_closure_safe_return,
         SPAWN_UPPER_TILE_CALLER_ENTRY: spawn_upper_tile_caller,
         SPAWN_CAP_GUARD_TWO_ENTRY: spawn_cap_guard_two,
+        SPAWN_LOWER_OFFSET_CALLER_ENTRY: spawn_lower_offset_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
