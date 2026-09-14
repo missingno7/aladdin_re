@@ -143,6 +143,8 @@ SPAWN_CLOSURE_REVERSE_ENTRY = 0x1B72AE
 SPAWN_CLOSURE_UPPER_CLEAR_ENTRY = 0x1B70D4
 SPAWN_CLOSURE_GUARD_ENTRY = 0x1B71A0
 SPAWN_CLOSURE_REVERSE_SCRIPT_ENTRY = 0x1B6696
+SPAWN_CLOSURE_REVERSE_SCRIPT_A_ENTRY = 0x1B6F4A
+SPAWN_CLOSURE_REVERSE_SCRIPT_B_ENTRY = 0x1B6F34
 SPAWN_CLOSURE_SAFE_RETURN_ENTRY = 0x1B65BE
 SPAWN_UPPER_DISPATCH_GUARD_ENTRY = 0x1B744A
 SPAWN_UPPER_DISPATCH_GUARD_LAST_PC = 0x1B6EB0
@@ -168,6 +170,9 @@ SPAWN_UPPER_TILE_WORD_CALLER_TEMPLATE = 0x1B81EC
 SPAWN_REVERSE_GUARD_CALLER_ENTRY = 0x1B6756
 SPAWN_REVERSE_GUARD_CALLER_LAST_PC = 0x1B6792
 SPAWN_REVERSE_GUARD_CALLER_TEMPLATE = 0x1B7DDC
+SPAWN_REVERSE_Y_OFFSET_CALLER_ENTRY = 0x1B65C0
+SPAWN_REVERSE_Y_OFFSET_CALLER_LAST_PC = 0x1B65D2
+SPAWN_REVERSE_Y_OFFSET_CALLER_TEMPLATE = 0x1B7D14
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
@@ -637,6 +642,12 @@ SPAWN_CLOSURE_CALLER_FACTS = {
     SPAWN_CLOSURE_REVERSE_SCRIPT_ENTRY: (SPAWN_REGION_REVERSE_ENTRY, 0x1B8084,
         bytes.fromhex('4df9001b80846100ebb866082b7c0012534800204e75'),
         game.finish_reverse_script_spawn, 48, 3, 0x1B66AA, (0x00125348, 4)),
+    SPAWN_CLOSURE_REVERSE_SCRIPT_A_ENTRY: (SPAWN_REGION_REVERSE_ENTRY, 0x1B8264,
+        bytes.fromhex('4df9001b82646100e30466082b7c00125a8800204e75'),
+        game.finish_reverse_script_a_spawn, 48, 3, 0x1B6F5E, (0x00125a88, 4)),
+    SPAWN_CLOSURE_REVERSE_SCRIPT_B_ENTRY: (SPAWN_REGION_REVERSE_ENTRY, 0x1B8264,
+        bytes.fromhex('4df9001b82646100e31a66082b7c00125a6800204e75'),
+        game.finish_reverse_script_b_spawn, 48, 3, 0x1B6F48, (0x00125a68, 4)),
 }
 
 
@@ -921,6 +932,48 @@ def spawn_lower_offset_caller(machine, registers: dict[str, int]) -> AtomicPlan:
                       tuple(dict((*writes, *suffix)).items()), final,
                       SPAWN_LOWER_OFFSET_CALLER_LAST_PC,
                       prefix.direct_calls + selected.direct_calls + 2)
+
+
+def spawn_reverse_y_offset_caller(machine, registers: dict[str, int]) -> AtomicPlan:
+    """Recover ``1B65C0``'s reverse-pool creation and its +10 Y-only offset.
+
+    Reverse-pool allocation (template ``0x1B7D14``) then, on success only,
+    an unsigned ``ADDI.W #$A`` to the record's own Y coordinate -- no
+    script write, no X adjustment, unlike the closure/offset table shapes.
+    Both allocation failure and success are owned.
+    """
+    entry, sp = SPAWN_REVERSE_Y_OFFSET_CALLER_ENTRY, registers['a7']
+    shape = bytes.fromhex('4df9001b7d146100ec8e6606066d000a00044e75')
+    if sp & 1 or machine.peek_rom(entry, len(shape)) != shape:
+        raise UnsupportedCandidate('reverse Y-offset spawn caller ROM shape')
+    _spans_disjoint([('reverse Y-offset spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('reverse Y-offset spawn caller frame', sp - 8, 12), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, entry + 10, 4),
+                        {**registers, 'a6': SPAWN_REVERSE_Y_OFFSET_CALLER_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_REVERSE_ENTRY}, entry + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_REVERSE_ENTRY)
+    writes = tuple(dict((*prefix.writes, *selected.writes)).items())
+    final = dict(selected.registers)
+    final.update(a7=sp + 4, pc=outer & 0xFFFFFF)
+    if not (final['sr'] & 4):
+        return AtomicPlan(prefix.cycles + selected.cycles + 26,
+                          prefix.instructions + selected.instructions + 2, writes, final,
+                          SPAWN_REVERSE_Y_OFFSET_CALLER_LAST_PC,
+                          prefix.direct_calls + selected.direct_calls)
+    view = dispatch_plan_view(machine, AtomicPlan(
+        prefix.cycles + selected.cycles, prefix.instructions + selected.instructions,
+        writes, final, selected.last_pc, prefix.direct_calls + selected.direct_calls))
+    y = _read(view, final['a5'] + 4, 2)
+    offsets = tuple(game.offset_spawn_position(
+        lambda address, size: _read(view, address, size), final['a5'], 0, 10))
+    final['sr'] = _add_sr(selected.registers['sr'], y, 10, 2)
+    return AtomicPlan(prefix.cycles + selected.cycles + 44,
+                      prefix.instructions + selected.instructions + 3,
+                      tuple(dict((*writes, *offsets)).items()), final,
+                      SPAWN_REVERSE_Y_OFFSET_CALLER_LAST_PC,
+                      prefix.direct_calls + selected.direct_calls + 1)
 
 
 def _upper_tile_word_wrapper_shape(machine):
@@ -1371,6 +1424,7 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_LOWER_OFFSET_CALLER_ENTRY: spawn_lower_offset_caller,
         SPAWN_UPPER_TILE_WORD_CALLER_ENTRY: spawn_upper_tile_word_caller,
         SPAWN_REVERSE_GUARD_CALLER_ENTRY: spawn_reverse_guard_caller,
+        SPAWN_REVERSE_Y_OFFSET_CALLER_ENTRY: spawn_reverse_y_offset_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \

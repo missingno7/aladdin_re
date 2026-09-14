@@ -85,6 +85,8 @@ CLOSURE_WRAPPERS = {
     0x1B70D4: (0x1B5266,),  # upper type 0x4C, template 0x123E36
     0x1B71A0: (0x1B525E,),  # guarded lower, template 0x124318
     0x1B6696: (0x1B5256,),  # reverse, script-only (no retype), template 0x125348
+    0x1B6F4A: (0x1B5256,),  # reverse, script-only (no retype), template 0x125a88
+    0x1B6F34: (0x1B5256,),  # reverse, script-only (no retype), template 0x125a68
 }
 CALLER_POOLS.update({entry: callee for entry, (callee,) in CLOSURE_WRAPPERS.items()})
 CALLER_POOLS[SAFE_RETURN] = 0x1B5266
@@ -92,6 +94,7 @@ CALLER_POOLS[SAFE_RETURN] = 0x1B5266
 # through spawn_dispatch_call's own callbacks map, so this joins the
 # dispatcher-chain suites (DISPATCH_CALLBACKS) but not DIRECT_CALLER_POOLS.
 CALLER_POOLS[0x1B71C4] = 0x1B525E  # spawn_lower_offset_caller: SPAWN_REGION_LOWER_ENTRY
+CALLER_POOLS[0x1B65C0] = 0x1B5256  # spawn_reverse_y_offset_caller: SPAWN_REGION_REVERSE_ENTRY
 DISPATCH_CALLBACKS = (
     *CALLER_POOLS,
     SPAWN_REVERSE_CALLER_ENTRY, SPAWN_UPPER_VARIANT_CALLER_ENTRY,

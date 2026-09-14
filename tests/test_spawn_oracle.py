@@ -20,6 +20,8 @@ CLOSURE_OUTPUTS = {
     0x1B72AE: ((0, 0x84), (6, 0x21), (0x20, 0x00123E7A), (0x29, 2)),
     0x1B70D4: ((0, 0x4C), (0x20, 0x00123E36), (0x0A, 0), (0x29, 1)),
     0x1B6696: ((0x20, 0x00125348),),
+    0x1B6F4A: ((0x20, 0x00125A88),),
+    0x1B6F34: ((0x20, 0x00125A68),),
 }
 
 
@@ -373,7 +375,7 @@ def test_whole_walker_negative_controls(mutant):
 
 ROW_KNOWN_A = 0x1B72D4
 ROW_KNOWN_B = 0x1B6802
-ROW_UNKNOWN = 0x1B6F34
+ROW_UNKNOWN = 0x1B67C2
 ROW_CASES = (
     ("empty", (None,) * 23),
     ("single", (ROW_KNOWN_A,) + (None,) * 22),
@@ -634,7 +636,7 @@ def test_guarded_spawn_success_installs_its_script(free):
 
 SETUP_KNOWN_A = 0x1B72D4
 SETUP_KNOWN_B = 0x1B6802
-SETUP_UNKNOWN = 0x1B6F34
+SETUP_UNKNOWN = 0x1B67C2
 
 
 def _setup_callbacks(entry, case):

@@ -206,6 +206,18 @@ def finish_upper_tile_word_spawn(record):
             for offset, byte in enumerate(bytes.fromhex('6000'))]
 
 
+def finish_reverse_script_a_spawn(record):
+    """Apply callback 1B6F4A's successful object script pointer."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('00125a88'))]
+
+
+def finish_reverse_script_b_spawn(record):
+    """Apply callback 1B6F34's successful object script pointer."""
+    return [(record + 0x20 + offset, byte)
+            for offset, byte in enumerate(bytes.fromhex('00125a68'))]
+
+
 def finish_reverse_script_spawn(record):
     """Apply callback 1B6696's successful object script pointer (no retype)."""
     return [(record + 0x20 + offset, byte)
