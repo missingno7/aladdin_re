@@ -6,6 +6,32 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## 1B712C, 1B70F8 and 1B6654 recovered (spawn dispatcher family, three more leaves)
+
+1B712C and 1B70F8 generalize the `closure_guard` family to two and three
+chained flags respectively (`FFF127`/`FFF128`, and `FFF126`/`FFF127`/
+`FFF128`), otherwise the identical lower-pool/template/script/-8-Y-offset
+tail shape; every guard combination for both recovers, including 1B70F8's
+previously-unobserved three-flag decline arm (caught by a `--vary` sweep
+before qualification, not guessed). 1B6654 is a new standalone shape:
+lower-pool creation plus a type write, a flag byte at record+9, and a
++0x10 Y-only offset -- no script pointer, no X adjustment. **2,394 tests
+pass in about 275 s**; the **82,161-frame cold comparison passes** with
+zero restores at `artifacts/spawn-guardpair7/` (frames 82,161, 91,772
+candidate hits, 1,689 fallbacks, down from 1,913). Next frontier: 1B75D6
+(72, unconditional VDP, only pool-exhaustion recoverable), 1B6C2E (47, the
+same FFF175/1B2650 VDP-decline shape as 1B6C0E/1B6FAE), 1B65F4 (46, calls
+a fifth allocator entry `1B52A0` that `_SPAWN_REGION_ARMS` does not yet
+name -- deferred, blocker package to follow), 1B6E86 (44, an unusual
+word-form `BEQ.W` guard with no closure-style suffix at all, needs its own
+trace), 1B7060 (44) and 1B703C (previously characterized: pure
+`finish_type_4c_spawn`-shaped clones, upper pool, types `0x49`/`0x48`),
+1B7084 (32, the same clone shape behind an `FFF179` guard, type `0x4A`),
+1B6636 (27, an offset-only variant of `1B6654` -- both X and Y +0x10, no
+flag byte), 1B70B0 (previously characterized, type `0x4B`), then the rest
+of the census. 1B67C2 (211) remains escalated per
+`docs/blockers/2026-09-14-1B67C2.md`.
+
 ## 1B717C, 1B6F60, 1B7018 and 1B6836 recovered (spawn dispatcher family, four more leaves)
 
 1B717C and 1B6F60 are further clones of already-established shapes:
