@@ -29,6 +29,8 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         begin_contact_family_type03_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE46_ENTRY, begin_contact_family_type46_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE55_ENTRY, begin_contact_family_type55_dispatch,
+                        CONTACT_COLLECTION_RELOCATION_ENTRY,
+                        begin_contact_collection_relocation_dispatch,
                         begin_contact_family_type1f_contact_dispatch,
                         begin_contact_family_type1f_contact_dispatch_sound,
                         finish_contact_family_type1f_contact_sound,
@@ -333,6 +335,7 @@ class Candidate:
             CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
             CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
             CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
+            CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
             CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
         }.get(entry)
         if family_planner is not None:

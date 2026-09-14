@@ -6,6 +6,15 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Type-20 relocation composed inside contact scan
+
+Recorded Type-36 callbacks at `1AF516` now compose the existing secondary-pool
+relocation inside the complete scan and resumed tail. Found/full-pool paths,
+outer/future/fresh checks, and result/return/timing mutants pass. **1,568 tests
+pass in 135.70 s**; the current **26,378-frame cold comparison passes** with
+zero restores at `artifacts/type20-parent-history/`. Five scan fallbacks and
+four child dispatcher crossings are removed.
+
 ## Type-55 verifier incident resolved
 
 The apparent blocked verifier completed successfully. Both `type55-full` and

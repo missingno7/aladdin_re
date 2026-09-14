@@ -547,3 +547,12 @@ Final verification is recorded in artifacts/type55-reviewed/.
 
 Validated: 1,561 tests pass in 139.11 s; cold 26,378-frame comparison PASS,
 zero restores/current source. The visible launcher reports exit 0 at 245.9 s.
+
+## Type-20 relocation inside the contact scan
+
+Reused complete-record secondary-pool relocation and dispatcher composition for
+recorded Type-36 `1AF516`. No new semantic source or machine mechanism.
+Parent ownership, original-ROM found/full-pool, future/fresh and mutations pass.
+1,568 tests pass in 135.70s; cold 26,378-frame PASS/zero restores at
+`artifacts/type20-parent-history/`. Scan fallbacks fall 5,249 -> 5,245;
+dispatcher hits 165 -> 161.

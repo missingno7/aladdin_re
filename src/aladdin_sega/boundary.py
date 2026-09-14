@@ -50,6 +50,7 @@ CONTACT_FAMILY_TYPE44_ENTRY = 0x1AEF12
 CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
 CONTACT_FAMILY_TYPE46_ENTRY = 0x1AEF5C
 CONTACT_FAMILY_TYPE55_ENTRY = 0x1AF590
+CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
@@ -1566,6 +1567,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE03_ENTRY,
                       CONTACT_FAMILY_TYPE46_ENTRY,
                       CONTACT_FAMILY_TYPE55_ENTRY,
+                      CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
         raise UnsupportedCandidate(f'collection dispatch target {target:06X} is not recovered')
@@ -1765,6 +1767,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE1F_ENTRY: _contact_type1f_ram_dispatch,
         CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
         CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
+        CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
         CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
@@ -1832,6 +1835,7 @@ def _contact_scan_resume(machine, registers):
                         CONTACT_FAMILY_TYPE1F_ENTRY: _contact_type1f_ram_dispatch,
                         CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
                         CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
+                        CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
                         CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
@@ -4106,6 +4110,13 @@ def relocate_collection(machine, registers):
         {'d0': (d0 & 0xFFFF0000) | (5-index), 'd7': registers['d7'] | 0xFFFF,
          'a5': destination+66, 'sr': _logic_sr(sr, 0, 1),
                       'a7': sp+4, 'pc': read(sp, 4) & 0xFFFFFF}, 0x1AF53C, direct_calls=2)
+
+
+def begin_contact_collection_relocation_dispatch(machine, registers, dispatch):
+    """Compose Type20's callback JSR with the existing secondary relocation."""
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_COLLECTION_RELOCATION_ENTRY,
+                                    relocate_collection)
 
 
 def _spawn_collection(machine, registers):
