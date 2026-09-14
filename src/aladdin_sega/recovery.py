@@ -18,6 +18,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         CONTACT_FAMILY_66_ENTRY, begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY, begin_contact_family_motion_dispatch,
                         CONTACT_FAMILY_SOUND_ENTRY, begin_contact_family_sound_dispatch,
+                        COLLECTION_TYPE3A_ENTRY, begin_collection_type3a_dispatch,
                         CONTACT_FAMILY_SECONDARY_MOTION_ENTRY, begin_contact_family_secondary_dispatch,
                         CONTACT_FAMILY_TYPE79_ENTRY, begin_contact_family_type79_dispatch,
                         begin_contact_family_type79_dispatch_sound,
@@ -473,6 +474,21 @@ class Candidate:
         if entry == CONTACT_FAMILY_SOUND_ENTRY:
             try:
                 result = begin_contact_family_sound_dispatch(machine, dispatch_registers, prefix)
+                plan = result.prefix if isinstance(result, SoundSeam) else result
+                if not self._apply(machine, self._mutate(plan), target):
+                    return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+            except UnsupportedCandidate as error:
+                return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, f'unsupported domain: {error}')
+            if isinstance(result, SoundSeam):
+                return self._run_sound_seam(
+                    machine, target, result, suffix_transform=self._mutate,
+                    on_complete=lambda: self.stats.__setitem__(
+                        'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
+            self.stats['collection_dispatch_hits'] += 1
+            return True
+        if entry == COLLECTION_TYPE3A_ENTRY:
+            try:
+                result = begin_collection_type3a_dispatch(machine, dispatch_registers, prefix)
                 plan = result.prefix if isinstance(result, SoundSeam) else result
                 if not self._apply(machine, self._mutate(plan), target):
                     return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')

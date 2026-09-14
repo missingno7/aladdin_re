@@ -22,6 +22,7 @@ REPLACE_ENTRY = 0x1AF4C6
 REPLACE_LAST_PC = 0x1AF4D6
 TRANSITION_ENTRY = 0x1AF468
 SOUND_RETURN = 0x1AF498
+COLLECTION_TYPE3A_ENTRY = 0x1AF228
 COLLECTION_DISPATCH_ENTRY = 0x1ABC82
 COLLECTION_DISPATCH_RETURN = 0x1ABCA0
 CONTACT_COMPLETION_EXIT = 0x1ABD74
@@ -1760,6 +1761,85 @@ def finish_object_transition(machine, registers: dict[str, int]) -> AtomicPlan:
                       tail.last_pc, direct_calls=1 + tail.direct_calls)
 
 
+def begin_collection_type3a_dispatch(machine, registers, dispatch):
+    """Compose 1AF228: the shared FFEFE2/FFEFE3 counter (1B0394), an optional
+    command-0x0D sound seam, and the already-proven 1AF4C2 replace tail.
+
+    FFEFE2 reaching the 0x3939 sentinel is not recovered here: original
+    continues through 1AE6DE's own table-write arm, which is exactly the
+    ``game.collection_state('secondary', ...)`` formula ``begin_collection``
+    already reuses for kinds 'primary'/'secondary' -- but that arm is not
+    observed on the recorded history for this entry, so it declines here.
+    Short of the cap, the counter's own advance is exactly
+    ``game.collection_state(..., 'secondary')`` (``game.increment_counter``
+    shifted +2, to FFEFE2/FFEFE3 instead of FFEFE0/FFEFE1) -- the same
+    arithmetic 1B0394 performs with raw ADDQ/CMPI rather than an
+    ASCII-boundary test.  A pass always joins the already-proven
+    ``replace_object(increment_total=True)`` tail (0x1AF4C2..0x1AF4D6,
+    template 0x1B7ABC) after an optional command-0x0D sound seam, the same
+    24-byte-saved-frame/28-byte-return-delta ABI shape as
+    ``begin_object_transition``'s own command-11 seam.  Cost table
+    (``factcheck``), each row exclusive of ``replace_object`` itself:
+
+        own gate (CMPI/BNE/BSR) plus 1B0394, no rollover       48 + 94
+        own gate plus 1B0394, rollover (FFEFE3 wraps to '0')  48 + 132
+        no-sound suffix (TST.B/BEQ taken/BRA)                         36
+        sound prefix through the native request entry (TST.B/
+        BEQ not-taken/MOVEM/PEA/JSR)                                 108
+    """
+    callback = {**registers, **dispatch.registers}
+    record, sp, sr = (callback[key] for key in ('a1', 'a7', 'sr'))
+    if callback['pc'] != COLLECTION_TYPE3A_ENTRY or sp != registers['a7'] - 4:
+        raise UnsupportedCandidate('type3a dispatch identity')
+    view = dispatch_plan_view(machine, dispatch)
+    read = lambda address, size: _read(view, address, size)
+    _spans_disjoint([('type3a return', sp, 4), ('type3a counter', 0xFFEFE2, 2),
+                     ('type3a sound', 0xFFF57D, 1)])
+    digits = read(0xFFEFE2, 2)
+    if digits == 0x3939:
+        raise UnsupportedCandidate('type3a capped counter arm is not recovered')
+    try:
+        counter_writes = list(game.collection_state(read, record, 'secondary'))
+    except ValueError as error:
+        raise UnsupportedCandidate(str(error)) from error
+    rollover = digits & 0xFF == 0x39
+    gate_cycles = dispatch.cycles + 48 + (132 if rollover else 94)
+    gate_instructions = dispatch.instructions + 3 + (8 if rollover else 6)
+    sound = read(0xFFF57D, 1)
+    sr = _logic_sr(sr & ~0x10, sound, 1)
+    if not sound:
+        tail = replace_object(view, {**callback, 'sr': sr}, increment_total=True,
+                              extra_spans=(('type3a counter', 0xFFEFE2, 2),))
+        writes = tuple(dict((*dispatch.writes, *counter_writes, *tail.writes)).items())
+        final = {**callback, **tail.registers}
+        return AtomicPlan(gate_cycles + 36 + tail.cycles, gate_instructions + 3 + tail.instructions,
+                          writes, final, tail.last_pc,
+                          direct_calls=dispatch.direct_calls + 2 + tail.direct_calls)
+    writes = [*dispatch.writes, *counter_writes]
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index * 4, callback[name], 4))
+    writes.extend(_bytes(sp - 24, 0xD, 4))
+    writes.extend(_bytes(sp - 28, 0x1AF252, 4))
+    plan = AtomicPlan(gate_cycles + 108, gate_instructions + 5, tuple(dict(writes).items()),
+                      {**callback, 'a7': sp - 28, 'pc': 0x1E58B8, 'sr': sr}, 0x1AF24C,
+                      direct_calls=dispatch.direct_calls + 2)
+    return SoundSeam(plan, sp, 0x1AF258, 0x1AF258, 24, 28, 28,
+                     suffix=finish_collection_type3a)
+
+
+def finish_collection_type3a(machine, registers):
+    """Restore Type-3A's MOVEM frame, then join the 1AF4C2 replace tail."""
+    sp = registers['a7'] + 24
+    restored = dict(registers, a7=sp)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        restored[name] = _read(machine, sp - index * 4, 4)
+    tail = replace_object(machine, restored, increment_total=True)
+    final = {name: restored[name] for name in ('d0', 'd1', 'a0', 'a1')}
+    final.update(tail.registers)
+    return AtomicPlan(70 + tail.cycles, 3 + tail.instructions, tail.writes, final,
+                      tail.last_pc, direct_calls=1 + tail.direct_calls)
+
+
 def detach_object(machine, registers: dict[str, int]) -> AtomicPlan:
     """1AD0FC: script detach and exact overridden-return boundary."""
     a0, a1, a2, sp, d0, sr = (registers[key] for key in ("a0", "a1", "a2", "a7", "d0", "sr"))
@@ -1861,6 +1941,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE0C_ENTRY,
                       CONTACT_FAMILY_TYPE78_ENTRY,
                       CONTACT_FAMILY_TYPE43_ENTRY,
+                      COLLECTION_TYPE3A_ENTRY,
                       CONTACT_COLLECTION_RELOCATION_ENTRY,
                       CONTACT_TYPE7E_ENTRY,
                       CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
