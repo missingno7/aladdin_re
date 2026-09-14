@@ -424,6 +424,60 @@ def contact_type58_pass(delta):
     return _word(0xFF7DFC, delta)
 
 
+def contact_type63_guard(read, record):
+    """Select 1AF81C's arm from live RAM and name its distance facts.
+
+    Same shape as ``contact_type58_guard`` (the same ``FFF0BE``/``FFF0C0``
+    family selector, the same record-plus-6 bit-4 activity test, the same
+    shared 1AE6B4 tail), but this entry's own guard adds nothing to the
+    delta and its limit is 0xA.  A guard pass rewrites FF7DFC with the
+    delta, then reads the record's own kind byte: a match against the
+    fixed 0x63 constant returns locally at once; a mismatch retypes the
+    record to 0x63 (``contact_type63_retype``) and continues into the
+    shared 1AE5B0/1E58B8 reset-sound seam when FFF57D is set, or returns
+    locally when it is clear.  Returns ``(arm, facts)`` with ``arm`` one
+    of ``direct``, ``inactive``, ``guard_fail``, ``kind_match``,
+    ``kind_mismatch`` or ``kind_mismatch_sound``.
+    """
+    selector = read(0xFFF0BE, 1)
+    facts = {'selector': selector}
+    if selector and not read(0xFFF0C0, 1):
+        return 'direct', facts
+    facts['flags'] = read(record + 6, 1)
+    if not facts['flags'] & 0x10:
+        return 'inactive', facts
+    delta = (read(record + 4, 2) - read(0xFF7DF8, 2)) & 0xFFFF
+    previous = read(0xFF7DFC, 2)
+    difference = (previous - delta) & 0xFFFF
+    borrowed = previous < delta
+    distance = (-difference) & 0xFFFF if borrowed else difference
+    facts.update(delta=delta, previous=previous, difference=difference,
+                 borrowed=borrowed, distance=distance)
+    if distance >= 0xA:
+        return 'guard_fail', facts
+    facts['kind'] = read(record, 1)
+    if facts['kind'] == 0x63:
+        return 'kind_match', facts
+    facts['sound'] = read(0xFFF57D, 1)
+    return ('kind_mismatch_sound' if facts['sound'] else 'kind_mismatch'), facts
+
+
+def contact_type63_fail():
+    """The tail flag every recovered Type-63 direct/guard-fail return publishes through 1AE6B4."""
+    return [(0xFFF0F5, 0xFF)]
+
+
+def contact_type63_pass(delta):
+    """The motion word a Type-63 guard-pass return publishes locally through FF7DFC."""
+    return _word(0xFF7DFC, delta)
+
+
+def contact_type63_retype(record):
+    """1AF864/1AF868's self-retype from a mismatched kind to 0x63, publishing a
+    fixed record+0xA pointer."""
+    return [(record, 0x63), *_long(record + 0xA, 0x121598)]
+
+
 def contact_type74_guard(read, record):
     """Select 1AFA84's arm from live RAM and name its distance facts.
 

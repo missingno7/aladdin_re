@@ -51,6 +51,7 @@ CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
 CONTACT_FAMILY_TYPE46_ENTRY = 0x1AEF5C
 CONTACT_FAMILY_TYPE55_ENTRY = 0x1AF590
 CONTACT_FAMILY_TYPE58_ENTRY = 0x1AF5F0
+CONTACT_FAMILY_TYPE63_ENTRY = 0x1AF81C
 CONTACT_FAMILY_TYPE74_ENTRY = 0x1AFA84
 CONTACT_TYPE74_POOL = 0xFF7F06
 CONTACT_TYPE74_POOL_COUNT = 20
@@ -1850,6 +1851,7 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE46_ENTRY,
                       CONTACT_FAMILY_TYPE55_ENTRY,
                       CONTACT_FAMILY_TYPE58_ENTRY,
+                      CONTACT_FAMILY_TYPE63_ENTRY,
                       CONTACT_FAMILY_TYPE74_ENTRY,
                       CONTACT_FAMILY_TYPE6E_ENTRY,
                       CONTACT_FAMILY_TYPE1A_ENTRY,
@@ -2069,6 +2071,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
         CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
         CONTACT_FAMILY_TYPE78_ENTRY: begin_contact_family_type78_dispatch,
+        CONTACT_FAMILY_TYPE63_ENTRY: begin_contact_family_type63_dispatch,
         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -2147,6 +2150,7 @@ def _contact_scan_resume(machine, registers):
         CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
         CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
         CONTACT_FAMILY_TYPE78_ENTRY: begin_contact_family_type78_dispatch,
+        CONTACT_FAMILY_TYPE63_ENTRY: begin_contact_family_type63_dispatch,
                         CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
                         CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
@@ -4272,6 +4276,197 @@ def begin_contact_family_type58_dispatch(machine, registers, dispatch):
     return _contact_family_dispatch(machine, registers, dispatch,
                                     CONTACT_FAMILY_TYPE58_ENTRY,
                                     begin_contact_family_type58)
+
+
+def begin_contact_family_type63(machine, registers):
+    """1AF81C's bit-4 bounded-distance guard (limit 0xA) plus a self-kind check.
+
+    Same shape as ``begin_contact_family_type58`` (the same ``FFF0BE``/
+    ``FFF0C0`` family selector, the same record-plus-6 bit-4 activity
+    test, the same shared 1AE6B4 tail), but this entry's own guard adds
+    nothing to the delta and its limit is 0xA rather than 0xC.  A guard
+    pass publishes the delta through FF7DFC exactly as Type-58's own pass
+    does, then continues into a kind check: a match against the fixed
+    0x63 constant returns locally at once; a mismatch retypes the record
+    to 0x63 (``game.contact_type63_retype``) and, when ``FFF57D`` is
+    clear, also returns locally -- when it is set the mismatch instead
+    continues into a command-0x45 sound seam, recovered separately by
+    ``begin_contact_family_type63_sound_seam``.  Cost table
+    (``factcheck``):
+
+        direct return  (FFF0BE set, FFF0C0 clear)                    86 /  6
+        guard fail,  no borrow, reached via FFF0BE clear             172 / 14
+        guard fail,  borrowed and negated, via FFF0BE clear          174 / 15
+        kind match,  no borrow, reached via FFF0BE clear             192 / 16
+        kind match,  borrowed and negated, via FFF0BE clear          194 / 17
+        kind mismatch, no sound, no borrow, via FFF0BE clear         252 / 20
+        kind mismatch, no sound, borrowed and negated, via FFF0BE clear  254 / 21
+        every guard arm reached through FFF0BE and FFF0C0 both set  +26 /  +2
+
+    The guard's own SUB/NEG discards every incoming CCR bit it does not
+    set; a guard fail's final flags are the CMPI's own (ST never touches
+    CCR).  A kind check's final flags are its own CMPI.B's (0x63), fed by
+    the local MOVE.W that publishes delta (N/Z/V/C from delta, X carried
+    from the SUB/NEG); a no-sound mismatch's final flags are instead the
+    trailing TST.B FFF57D's own (clear, since this arm requires it clear).
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type63 record/stack')
+    _spans_disjoint([('type63 record', record, 66), ('type63 return', sp, 4),
+                     ('type63 flags', 0xFFF0BE, 1), ('type63 mode', 0xFFF0C0, 1),
+                     ('type63 motion', 0xFF7DFC, 2), ('type63 player', 0xFF7DF8, 2),
+                     ('type63 tail', 0xFFF0F5, 1), ('type63 sound', 0xFFF57D, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    arm, facts = game.contact_type63_guard(read, record)
+    return_pc = read(sp, 4) & 0xFFFFFF
+    fail_writes = tuple(game.contact_type63_fail())
+    if arm == 'direct':
+        return AtomicPlan(86, 6, fail_writes,
+                          {'a7': sp + 4, 'pc': return_pc, 'sr': _logic_sr(sr, 0, 1)},
+                          0x1AE6BA)
+    if arm == 'inactive':
+        raise UnsupportedCandidate('type63 observed guard arm is not active')
+    if arm == 'kind_mismatch_sound':
+        raise UnsupportedCandidate('type63 kind-mismatch sound arm is not recovered here')
+    delta, previous, distance, borrowed = (facts[key] for key in ('delta', 'previous', 'distance', 'borrowed'))
+    residue = _sub_sr(sr, previous, delta, 2)
+    if borrowed:
+        residue = _sub_sr(residue, 0, facts['difference'], 2)
+    extra_cycles, extra_instructions = (26, 2) if facts['selector'] else (0, 0)
+    base_registers = {'d0': (registers['d0'] & 0xFFFFFF00) | facts['flags'],
+                      'd2': (registers['d2'] & 0xFFFF0000) | delta,
+                      'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                      'a7': sp + 4, 'pc': return_pc}
+    if arm == 'guard_fail':
+        base_cycles, base_instructions = (174, 15) if borrowed else (172, 14)
+        return AtomicPlan(base_cycles + extra_cycles, base_instructions + extra_instructions, fail_writes,
+                          {**base_registers, 'sr': _cmp_sr(residue, distance, 0xA, 2)},
+                          0x1AE6BA)
+    # kind_match or kind_mismatch (no sound): both first publish the delta
+    # locally exactly as a Type-58 guard pass does, then run their own
+    # CMPI.B #$63 against the record's own kind byte.
+    pass_writes = tuple(game.contact_type63_pass(delta))
+    stage_sr = _logic_sr(residue, delta, 2)
+    kind_sr = _cmp_sr(stage_sr, facts['kind'], 0x63, 1)
+    if arm == 'kind_match':
+        base_cycles, base_instructions = (194, 17) if borrowed else (192, 16)
+        return AtomicPlan(base_cycles + extra_cycles, base_instructions + extra_instructions, pass_writes,
+                          {**base_registers, 'sr': kind_sr}, 0x1AF892)
+    # kind_mismatch, no sound: also retype the record, then TST.B FFF57D
+    # (clear, since this arm requires it clear) sets the truly final flags.
+    retype_writes = tuple(game.contact_type63_retype(record))
+    base_cycles, base_instructions = (254, 21) if borrowed else (252, 20)
+    return AtomicPlan(base_cycles + extra_cycles, base_instructions + extra_instructions,
+                      pass_writes + retype_writes,
+                      {**base_registers, 'sr': _logic_sr(kind_sr, facts['sound'], 1)}, 0x1AF892)
+
+
+def begin_contact_family_type63_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE63_ENTRY,
+                                    begin_contact_family_type63)
+
+
+def begin_contact_family_type63_sound_seam(machine, registers):
+    """1AF81C's kind-mismatch arm, continued into its own command-0x45 seam.
+
+    Reached only when ``game.contact_type63_guard`` names
+    ``kind_mismatch_sound`` (the guard passed, the record's own kind byte
+    did not match 0x63, and FFF57D is set).  The delta publish and the
+    retype (``game.contact_type63_pass``/``game.contact_type63_retype``)
+    are the same writes the RAM-only mismatch arm makes; here they are
+    followed by a MOVEM.L d0-d1/a0-a1/a6 save, a fixed command-0x45 word
+    and a JSR into the shared request entry -- a private 24-byte saved
+    frame plus a 4-byte return slot, the same ABI shape as Type-46's own
+    seam.  Cost table (``factcheck``): relative to the RAM-only no-sound
+    mismatch arm's own total (252/20 no borrow, 254/21 borrowed, +26/+2
+    when the selector is set), swap its closing TST.B/BEQ(taken)/RTS (42
+    cycles / 3 instructions) for the MOVEM/PEA/JSR frame that instead
+    lands at the native request entry (108 cycles / 5 instructions) -- a
+    net +66 cycles / +2 instructions (318/22 no borrow, 320/23 borrowed,
+    before the native sound-request entry).
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type63 sound record/stack')
+    _spans_disjoint([('type63 sound record', record, 66),
+                     ('type63 sound frame', sp - 28, 28),
+                     ('type63 sound flags', 0xFFF0BE, 1), ('type63 sound mode', 0xFFF0C0, 1),
+                     ('type63 sound motion', 0xFF7DFC, 2), ('type63 sound player', 0xFF7DF8, 2),
+                     ('type63 sound gate', 0xFFF57D, 1)])
+    read = lambda address, size: _read(machine, address, size)
+    arm, facts = game.contact_type63_guard(read, record)
+    if arm != 'kind_mismatch_sound':
+        raise UnsupportedCandidate('type63 sound seam outside the kind-mismatch sound arm')
+    delta, previous, distance, borrowed = (facts[key] for key in ('delta', 'previous', 'distance', 'borrowed'))
+    residue = _sub_sr(sr, previous, delta, 2)
+    if borrowed:
+        residue = _sub_sr(residue, 0, facts['difference'], 2)
+    extra_cycles, extra_instructions = (26, 2) if facts['selector'] else (0, 0)
+    base_cycles, base_instructions = (254, 21) if borrowed else (252, 20)
+    # Relative to the RAM-only no-sound-mismatch arm's own total: swap its
+    # closing TST.B/BEQ(taken)/RTS (42 cycles / 3 instructions) for the
+    # MOVEM/PEA/JSR frame that instead lands at the native request entry
+    # (108 cycles / 5 instructions) -- a net +66 cycles / +2 instructions.
+    prefix_cycles = base_cycles + extra_cycles + 66
+    prefix_instructions = base_instructions + extra_instructions + 2
+    saved_d0 = (registers['d0'] & 0xFFFFFF00) | facts['flags']
+    writes = (*game.contact_type63_pass(delta), *game.contact_type63_retype(record),
+              *_bytes(sp - 4, registers['a6'], 4), *_bytes(sp - 8, registers['a1'], 4),
+              *_bytes(sp - 12, registers['a0'], 4), *_bytes(sp - 16, registers['d1'], 4),
+              *_bytes(sp - 20, saved_d0, 4),
+              *_bytes(sp - 24, 0x45, 4), *_bytes(sp - 28, 0x1AF886, 4))
+    return AtomicPlan(prefix_cycles, prefix_instructions, writes,
+                      {**registers, 'd0': saved_d0,
+                       'd2': (registers['d2'] & 0xFFFF0000) | delta,
+                       'd7': (registers['d7'] & 0xFFFF0000) | distance,
+                       'a7': sp - 28, 'pc': 0x1E58B8,
+                       'sr': _logic_sr(residue, facts['sound'], 1)}, 0x1AF880, direct_calls=1)
+
+
+def begin_contact_family_type63_dispatch_sound_seam(machine, registers, dispatch):
+    """Compose collection dispatch with Type-63's exact command-0x45 seam."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE63_ENTRY or \
+            dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('type63 dispatch prefix identity')
+    callback_registers = {**registers, **dispatch.registers}
+    sound = begin_contact_family_type63_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                    callback_registers)
+    final = dict(dispatch.registers)
+    final.update(sound.registers)
+    prefix = AtomicPlan(dispatch.cycles + sound.cycles, dispatch.instructions + sound.instructions,
+                        tuple(dict((*dispatch.writes, *sound.writes)).items()),
+                        final, sound.last_pc, dispatch.direct_calls + sound.direct_calls)
+    # The MOVEM/PEA/JSR frame is built relative to the callback's own SP
+    # (post the outer collection-dispatch JSR), not the true caller's SP:
+    # the seam's stack_basis must match that same frame of reference.
+    return SoundSeam(prefix, callback_registers['a7'], 0x1AF88C, 0x1AF88C, 24, 28, 28,
+                     suffix=finish_contact_family_type63_sound)
+
+
+def finish_contact_family_type63_sound(machine, registers):
+    """Restore Type-63's local MOVEM frame, then its own RTS to the dispatcher.
+
+    ``registers`` stands at the local resume 0x1AF88C, past both native
+    sound calls; A7 is the pushed command-word slot (the pea already
+    consumed by the pair of JSRs' own matched pops).  ADDQ.L #4,A7 then
+    the MOVEM.L restore sit at fixed offsets above it, exactly as
+    1AF88C..1AF892 reads them back.
+    """
+    if registers.get('pc') != 0x1AF88C:
+        raise UnsupportedCandidate('foreign type63 sound return')
+    base = registers['a7'] + 4
+    restored = dict(registers)
+    for name, offset in (('d0', 0), ('d1', 4), ('a0', 8), ('a1', 12), ('a6', 16)):
+        restored[name] = _read(machine, base + offset, 4)
+    local_sp = base + 20
+    ret = _read(machine, local_sp, 4) & 0xFFFFFF
+    if ret != COLLECTION_DISPATCH_RETURN:
+        raise UnsupportedCandidate('type63 sound local return identity')
+    restored.update(a7=local_sp + 4, pc=ret)
+    return AtomicPlan(76, 3, (), restored, 0x1AF892)
 
 
 def begin_contact_family_type74(machine, registers):

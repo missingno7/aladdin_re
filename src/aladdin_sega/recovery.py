@@ -30,6 +30,8 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         CONTACT_FAMILY_TYPE46_ENTRY, begin_contact_family_type46_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE55_ENTRY, begin_contact_family_type55_dispatch,
                         CONTACT_FAMILY_TYPE58_ENTRY, begin_contact_family_type58_dispatch,
+                        CONTACT_FAMILY_TYPE63_ENTRY, begin_contact_family_type63_dispatch,
+                        begin_contact_family_type63_dispatch_sound_seam, finish_contact_family_type63_sound,
                         CONTACT_FAMILY_TYPE74_ENTRY, begin_contact_family_type74_dispatch,
                         CONTACT_FAMILY_TYPE6E_ENTRY, begin_contact_family_type6e_dispatch,
                         CONTACT_FAMILY_TYPE1A_ENTRY, begin_contact_family_type1a_dispatch,
@@ -351,6 +353,7 @@ class Candidate:
             CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
             CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
             CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
+            CONTACT_FAMILY_TYPE63_ENTRY: begin_contact_family_type63_dispatch,
             CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
             CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
             CONTACT_FAMILY_TYPE1A_ENTRY: begin_contact_family_type1a_dispatch,
@@ -445,6 +448,20 @@ class Candidate:
                     seam = SoundSeam(sound, dispatch_registers['a7'] - 8,
                                      0x1AE5B6, 0x1AE5B6, 24, 28, 28, True,
                                      finish_contact_family_type78_sound)
+                    return self._run_sound_seam(
+                        machine, target, seam,
+                        suffix_transform=self._mutate,
+                        on_complete=lambda: self.stats.__setitem__(
+                            'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
+                if entry == CONTACT_FAMILY_TYPE63_ENTRY:
+                    try:
+                        seam = begin_contact_family_type63_dispatch_sound_seam(
+                            machine, dispatch_registers, prefix)
+                        if not self._apply(machine, self._mutate(seam.prefix), target):
+                            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                    except UnsupportedCandidate:
+                        return self._fallback(machine, COLLECTION_DISPATCH_ENTRY,
+                                              f'unsupported domain: {error}')
                     return self._run_sound_seam(
                         machine, target, seam,
                         suffix_transform=self._mutate,
