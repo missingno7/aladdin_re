@@ -80,12 +80,24 @@ reading the ROM by eye or counting cycles by hand.
      `begin_contact_family_type55_dispatch` and the `family_planner` map in
      `recovery.py`, plus the two callback maps in `contact_scan_plan` and
      `_contact_scan_resume` when the caller is the contact scan.
-   - *Branch with one sound call*: copy the shape of
-     `begin_contact_family_type46_sound_seam`, its `_dispatch_sound_seam`
+   - *Branch with one native call*: the callee is one of the native seam
+     routines in `pathfacts.NATIVE_ENTRIES` (the sound request 1E58B8, its
+     helper 1E58F4, the flush 1E589A, and the VDP tile upload 1B2650, a
+     39-instruction routine that writes VRAM through the VDP ports and
+     returns).  The prefix plan ends with the PC at the callee and the
+     frame pushed; the seam runs the original through the callee to the
+     resume PC; the suffix plan continues from live state.  Copy the shape
+     of `begin_contact_family_type46_sound_seam`, its `_dispatch_sound_seam`
      wrapper and `finish_contact_family_type46_sound` (boundary),
      `contact_type46_request` (semantics) and the `TYPE46` arm in
      `recovery.py`.  `begin_contact_family_type43_sound_seam` is the second
-     exemplar (a longer prefix, a second native call inside the seam).
+     exemplar (a longer prefix, a second native call inside the seam).  A
+     device access inside the callee is the callee's business; a device
+     access in your own prefix or suffix is an escalation.
+   - *A call to the random number generator* (`1B3032`): compose
+     `rng_step` from boundary.py into your plan the way `initialize_object`
+     is composed; its semantics are `game.advance_rng`.  Sweep the seed with
+     `--vary FF7DEA.l=...` to reach arms the recording never took.
    - Anything else is UNSUPPORTED: raise `UnsupportedCandidate` for that arm
      and write the blocker package.
 3. **SEMANTICS FIRST.** In `src/aladdin_sega/game/objects/contact.py` (or the
@@ -121,7 +133,8 @@ reading the ROM by eye or counting cycles by hand.
    `guards` line: a removed refusal or assertion is a widening you must be
    able to justify from facts, or revert.
 9. **MILESTONE GATES** (after three leaves or about ninety minutes of recovery
-   work, whichever comes first, and always before a push): full suite, then
+   work, whichever comes first, and always before a push): full suite with
+   `-n 8`, then
    the cold comparison into a fresh `artifacts\NAME`, started in the
    background.  While it runs, touch nothing under `src/` or `tests/`; do the
    read-only preparation of the next row instead.  Read the result only
@@ -142,7 +155,7 @@ reading the ROM by eye or counting cycles by hand.
 |---|---|
 | after each edit | the test module you are writing (`pytest tests\test_<name>.py -q -p no:cacheprovider`) |
 | after `check` matches, before each local commit | `leaf_review.py` (focused suites, about 30 s), then `segment_verify.py` on the class's child and parent fixtures (seconds) |
-| at a milestone: after three leaves or about ninety minutes of recovery work, whichever comes first, and always before a push | full suite (about 3 min), then the cold comparison started in the background (about 8 min for 82,000 frames); while it runs, do read-only preparation for the next row (`frontier_ledger`, `facts`, `branches`, `segments`) and touch nothing under `src/` or `tests/` |
+| at a milestone: after three leaves or about ninety minutes of recovery work, whichever comes first, and always before a push | full suite with `-n 8` (`pytest -q -p no:cacheprovider -n 8`, about a minute), then the cold comparison started in the background (about 8 min for 82,000 frames); while it runs, do read-only preparation for the next row (`frontier_ledger`, `facts`, `branches`, `segments`) and touch nothing under `src/` or `tests/` |
 | after a milestone PASS | copy its `reference.json` into `artifacts/evidence/main`, run `frontier_ledger.py --index` on the new artifacts, update the current section of `docs/STATUS.md`, push; rerun the census only after a history extension |
 
 Do not run the full suite or the cold comparison after exploratory edits.
@@ -177,7 +190,7 @@ on one fact.
 
 | Code | Condition |
 |---|---|
-| `NEW_MACHINE_MECHANISM` | the arm needs something no recipe provides: two native calls in one prefix, a device register, an interrupt, a loop without a RAM-named bound, the command-stream engine (1ACD54 / 1B249E / 1B263C) |
+| `NEW_MACHINE_MECHANISM` | the arm needs something no recipe provides: two native calls in one prefix with writes between them, a device register in your own prefix or suffix (not inside a `NATIVE_ENTRIES` callee), an interrupt, a loop without a RAM-named bound, the command-stream engine (1ACD54 / 1B249E / 1B263C), a native callee outside `NATIVE_ENTRIES` |
 | `NEW_SUBSYSTEM` | the entry is not a collection dispatcher child or contact-tick callee, or its caller is not an existing gate |
 | `AMBIGUOUS_ARCHITECTURE` | two existing recipes both almost fit and choosing one changes what the parent owns |
 | `DATA_STRUCTURE` | the facts show a record layout, table or pointer domain no existing semantic function names |

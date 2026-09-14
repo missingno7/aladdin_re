@@ -14,6 +14,7 @@ from .game.objects.contact import (activate_contact, begin_contact_launch, finis
                                    contact_script_selector, transition_contact_66, transition_contact_6b,
                                    publish_contact_record, transition_contact_77, finish_contact_type7e)
 from .game.objects.contact import contact_scan_collision
+from .game.rng import advance_rng, rng_writes
 from .game.objects.contact import (contact_type55_guard, contact_type55_return,
                                    contact_type46_request, contact_type43_update)
 from .game.objects.contact import (contact_type58_guard, contact_type58_fail,
@@ -85,6 +86,8 @@ __all__ = [
     "activate_collection",
     "activate_contact",
     "contact_scan_collision",
+    "advance_rng",
+    "rng_writes",
     "contact_type55_guard",
     "contact_type55_return",
     "contact_type46_request",

@@ -30,7 +30,12 @@ CCR = (('X', 0x10), ('N', 0x08), ('Z', 0x04), ('V', 0x02), ('C', 0x01))
 _MD = capstone.Cs(capstone.CS_ARCH_M68K, capstone.CS_MODE_M68K_000)
 _BRANCHES = {'bra', 'bsr', 'bhi', 'bls', 'bcc', 'bcs', 'bne', 'beq', 'bvc', 'bvs',
              'bpl', 'bmi', 'bge', 'blt', 'bgt', 'ble'}
-SOUND_ENTRIES = {0x1E58B8: 'sound-request', 0x1E58F4: 'sound-fixed-helper', 0x1E589A: 'sound-flush'}
+# Native routines a seam may call: bounded, self-contained, return to their
+# caller, and touch devices the plan itself may not.  A JSR to one of these is
+# collapsed to a NATIVE segment; the caller's code around it stays PYTHON.
+NATIVE_ENTRIES = {0x1E58B8: 'sound-request', 0x1E58F4: 'sound-fixed-helper', 0x1E589A: 'sound-flush',
+                  0x1B2650: 'vdp-tile-upload'}
+SOUND_ENTRIES = NATIVE_ENTRIES  # historical name
 STACK_WINDOW = (128, 8)  # bytes below and above the entry A7 that belong to the activation's stack
 
 

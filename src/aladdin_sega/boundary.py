@@ -66,6 +66,8 @@ CONTACT_FAMILY_TYPE78_ENTRY = 0x1AEBDC
 CONTACT_FAMILY_TYPE2C_ENTRY = 0x1AEE40
 CONTACT_TYPE74_TEMPLATE = 0x1B7E7C
 CONTACT_FAMILY_TYPE43_ENTRY = 0x1AE64C
+RNG_ENTRY = 0x1B3032
+RNG_LAST_PC = 0x1B3062
 CONTACT_COLLECTION_RELOCATION_ENTRY = 0x1AF516
 CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
@@ -5333,6 +5335,35 @@ def finish_contact_family_type43_sound(machine, registers):
     old_secondary = _read(machine, base + 24, 2)
     restored.update(a7=base + 30, pc=_read(machine, base + 26, 4) & 0xFFFFFF)
     return AtomicPlan(96, 4, _bytes(0xFF7DFA, old_secondary, 2), restored, 0x1AE6B2)
+
+
+def rng_step(machine, registers):
+    """One call of the game's random number generator, ``1B3032``.
+
+    Semantics are ``game.advance_rng``; this boundary owns the MOVEM residue
+    (D1-D3 saved below the entry stack pointer and restored), the seed
+    store, the returned word in D7, and the fixed cost: 17 instructions,
+    194 cycles.  The only flag the routine leaves is X from its last ADD.L
+    (the carry of ``4 * seed + (seed + 7 + 8 * seed)``) and the MOVE.W
+    result flags on the output word.  Compose it inside a caller's plan the
+    way ``initialize_object`` is composed: it is a helper, not a gate.
+    """
+    sp, sr = registers['a7'], registers['sr']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned rng stack')
+    _spans_disjoint([('rng frame', sp - 12, 16), ('rng seed', game.rng_writes(0)[0][0], 4)])
+    seed = _read(machine, 0xFF7DEA, 4)
+    new_seed, output = game.advance_rng(seed)
+    partial = (9 * seed + 7) & 0xFFFFFFFF          # after ADD.L D2,D1: 8*seed + (seed + 7)
+    carry = partial + ((4 * seed) & 0xFFFFFFFF) >= (1 << 32)   # the last ADD.L D3,D1 sets X
+    writes = (*_bytes(sp - 12, registers['d1'], 4), *_bytes(sp - 8, registers['d2'], 4),
+              *_bytes(sp - 4, registers['d3'], 4), *game.rng_writes(new_seed))
+    residue = (sr & ~0x10) | (0x10 if carry else 0)
+    return AtomicPlan(194, 17, writes,
+                      {'d7': (registers['d7'] & 0xFFFF0000) | output,
+                       'a7': sp + 4, 'pc': _read(machine, sp, 4) & 0xFFFFFF,
+                       'sr': _logic_sr(residue, output, 2)},
+                      RNG_LAST_PC)
 
 
 def begin_contact_family_type55(machine, registers):

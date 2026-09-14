@@ -64,7 +64,7 @@ PortForge checkout described in [third_party/README.md](third_party/README.md).
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install cmake==4.4.3 ninja==1.13.2 scikit-build-core==1.0.3 pygame==2.6.1 pytest==9.1.1 capstone==5.0.7
+.\.venv\Scripts\python.exe -m pip install cmake==4.4.3 ninja==1.13.2 scikit-build-core==1.0.3 pygame==2.6.1 pytest==9.1.1 pytest-xdist==3.6.1 capstone==5.0.7
 .\.venv\Scripts\cmake.exe -S . -B build -G Ninja `
   -DPORTFORGE_ROOT=D:/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge `
   -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe `
@@ -94,7 +94,7 @@ Windows x64 is the supported platform.
 
 ```powershell
 $env:ALADDIN_NATIVE_LIBRARY = "$PWD/build/libaladdin_native.dll"
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q -n 8
 .\.venv\Scripts\python.exe scripts\check_architecture.py
 ```
 

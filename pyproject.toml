@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 
 [project.optional-dependencies]
 play = ["pygame==2.6.1"]
-test = ["pytest==9.1.1", "capstone==5.0.7"]
+test = ["pytest==9.1.1", "pytest-xdist==3.6.1", "capstone==5.0.7"]
 
 [project.scripts]
 aladdin-sega = "aladdin_sega.cli:main"
