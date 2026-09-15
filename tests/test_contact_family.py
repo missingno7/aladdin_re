@@ -37,6 +37,7 @@ TARGET_KINDS = {
     0x1AEBDC: 0x78,  # recorded FFF0D8 gate, +/-8 window guard, BSR into shared 1AE4F8 (also kind 0x7A)
     0x1AF81C: 0x63,  # recorded bounded-distance guard (limit 0xA) + self-kind check (also kind 0x62)
     0x1AEE40: 0x2D,  # recorded FFF0D8 gate, own-buffer release (1AE372) + BSR into shared 1AE4F8 (also 2C/2E/31/6D)
+    0x1AE9C6: 0x13,  # recorded C6 sibling wrapper: the type-13 decrement bridges command 8 to 1AECBE
 }
 
 
@@ -602,6 +603,60 @@ def test_type15_sibling_wrapper_early_and_decrement_paths_match_original(values)
     assert actual.future == expected.future
     assert actual.stats['collection_dispatch_hits'] == 1
     assert actual.stats['fallbacks'] == 0
+
+
+@pytest.mark.parametrize('values', [
+    {'direction': 0, 'player_x': 99, 'object_x': 100, 'record_counter': 2},
+    {'direction': 1, 'player_x': 100, 'object_x': 100, 'record_counter': 1},
+    {'direction': 0, 'player_x': 99, 'object_x': 100, 'record_counter': 3},
+])
+def test_type15_sibling_wrapper_decrement_sound_seams_match_original(values):
+    """Sound on: the sibling's command-8 decrement seam, then 1AE97C's D8 tail."""
+    state = family_fixture(0x1AE978, active_d8=1, sound=1, **values)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 1
+    assert actual.stats['legacy_returns'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('direction,player_x', [(0, 99), (1, 100)], ids=['forward', 'reversed'])
+def test_type13_sibling_decrement_bridges_to_its_rts(direction, player_x):
+    """Kind 13 requests command 6A after the selector: the machine bridges to 1AECBE."""
+    state = family_fixture(0x1AE9C6, active_d8=1, sound=1, direction=direction,
+                           player_x=player_x, object_x=100, record_counter=4)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 1
+    assert actual.stats['legacy_returns'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type13_sibling_bridge_mutants_diverge_at_outer_boundary(mutant, monkeypatch):
+    state = family_fixture(0x1AE9C6, active_d8=1, sound=1, direction=0,
+                           player_x=99, object_x=100, record_counter=4)
+    expected = qualify(state, None)
+    if mutant == 'continuation':
+        original_mutate = oracle.Candidate._mutate
+
+        def suffix_only(candidate, plan):
+            if candidate.name.endswith('continuation') and plan.registers.get('pc') == 0x1E58B8:
+                return plan
+            return original_mutate(candidate, plan)
+
+        monkeypatch.setattr(oracle.Candidate, '_mutate', suffix_only)
+    actual = qualify(state, 'lifecycle-mutant-' + mutant, stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
 
 
 def _poke(state, writes):

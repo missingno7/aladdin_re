@@ -73,6 +73,7 @@ CONTACT_TYPE7E_ENTRY = 0x1AFE1C
 CONTACT_TYPE13_ENTRY = 0x1AF1AC
 CONTACT_TYPE13_FIXED_RETURN = 0x1AF1F6
 CONTACT_TYPE13_RETURN = 0x1AECEE
+CONTACT_SIBLING_TYPE13_RETURN = 0x1AECBE  # 1AEC00's own RTS after the type-13 command-6A request
 SPAWN_REGION_ENTRY = 0x1B524E
 SPAWN_REGION_REVERSE_ENTRY = 0x1B5256
 SPAWN_REGION_LOWER_ENTRY = 0x1B525E
@@ -5177,7 +5178,7 @@ def _contact_sibling_decrement_sound(machine, registers):
     record, sp = registers['a1'], registers['a7']
     read = lambda address, size: _read(machine, address, size)
     counter = read(record + 1, 1)
-    if not counter or read(record, 1) == 0x13:
+    if not counter:
         raise UnsupportedCandidate('contact sibling command8 decrement domain')
     if not read(0xFFF57D, 1):
         raise UnsupportedCandidate('contact sibling command8 is sound-disabled')
@@ -5217,6 +5218,13 @@ def begin_contact_sibling_sound_seam(machine, registers):
     prefix = AtomicPlan(outer.cycles + sound.cycles, outer.instructions + sound.instructions,
                         tuple(dict((*outer.writes, *sound.writes)).items()), sound.registers,
                         sound.last_pc, outer.direct_calls + sound.direct_calls)
+    if read(record, 1) == 0x13:
+        # The type-13 arm requests a second command (6A) after the selector,
+        # so the machine bridges from command 8 to this activation's own RTS
+        # at 1AECBE; the suffix is that RTS.  The return slot at SP is the
+        # activation identity the runner checks on arrival.
+        return SoundSeam(prefix, sp, CONTACT_SIBLING_TYPE13_RETURN, read(sp, 4), 0, 4, 0,
+                         suffix=finish_contact_sibling_sound)
     return SoundSeam(prefix, sp, 0x1AEC52, 0x1AEC52, 24, 28, 28,
                      suffix=finish_contact_sibling_sound)
 
@@ -5229,6 +5237,13 @@ def finish_contact_sibling_sound(machine, registers):
     """Resume command 8 or the type-13 fixed helper at its local return."""
     if registers.get('pc') == CONTACT_TYPE13_FIXED_RETURN:
         return finish_contact_sibling_type13_sound(machine, registers)
+    if registers.get('pc') == CONTACT_SIBLING_TYPE13_RETURN:
+        sp = registers['a7']
+        if sp & 1:
+            raise UnsupportedCandidate('unaligned contact sibling type13 return stack')
+        return AtomicPlan(16, 1, (), {'a7': sp + 4, 'pc': _read(machine, sp, 4) & 0xFFFFFF,
+                                      'sr': registers['sr'], 'd0': registers['d0']},
+                          CONTACT_SIBLING_TYPE13_RETURN)
     if registers['pc'] != 0x1AEC52 or registers['a7'] & 1:
         raise UnsupportedCandidate('foreign contact sibling command8 return')
     sp = registers['a7'] + 24
@@ -5524,6 +5539,57 @@ def _contact_family_type15_inactive_tail(machine, registers, callback, sibling):
                       {**current.registers, 'a7': sp + 4, 'pc': _read(machine, sp, 4) & 0xFFFFFF,
                        'sr': _logic_sr(current.registers['sr'], 0, 1)}, 0x1AE9A6)
     return _join_plans(current, tail)
+
+
+def begin_contact_family_type15_sound_seam(machine, registers):
+    """1AE978 whose sibling takes the command-8 decrement (or type-13) seam.
+
+    The callback's BSR frame joins ``begin_contact_sibling_sound_seam``'s
+    prefix exactly as the C6 wrapper does; the suffix finishes the sibling
+    and then the shared FFF0D8 tail (TST/BNE taken/RTS, 42/3) at 1AE97C.
+    """
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type15 sibling sound stack')
+    _spans_disjoint([('type15 sibling frame', sp - 10, 14),
+                     ('type15 sibling record', record, 66),
+                     *CONTACT_SIBLING_GLOBALS])
+    callback = AtomicPlan(18, 1, _bytes(sp - 4, 0x1AE97C, 4),
+                          {**registers, 'a7': sp - 4, 'pc': CONTACT_SIBLING_ENTRY},
+                          CONTACT_FAMILY_TYPE15_ENTRY, direct_calls=1)
+    sound = begin_contact_sibling_sound_seam(dispatch_plan_view(machine, callback), callback.registers)
+    return SoundSeam(_join_plans(callback, sound.prefix), sound.stack_basis, sound.resume_pc,
+                     sound.return_slot, sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, finish_contact_family_type15_sound)
+
+
+def finish_contact_family_type15_sound(machine, registers):
+    """Finish the sibling's sound suffix, then 1AE97C's D8 tail to the caller."""
+    sibling = finish_contact_sibling_sound(machine, registers)
+    local_sp, local_pc = sibling.registers['a7'], sibling.registers['pc']
+    if local_pc != 0x1AE97C:
+        raise UnsupportedCandidate('type15 sibling sound return identity')
+    d8 = _read(machine, 0xFFF0D8, 1)
+    if not d8:
+        raise UnsupportedCandidate('type15 sibling sound D8 tail does not return')
+    final = dict(sibling.registers)
+    final.update(a7=local_sp + 4, pc=_read(machine, local_sp, 4) & 0xFFFFFF,
+                 sr=_logic_sr(sibling.registers['sr'], d8, 1))
+    return AtomicPlan(sibling.cycles + 42, sibling.instructions + 3, sibling.writes, final,
+                      0x1AE9A6, sibling.direct_calls)
+
+
+def begin_contact_family_type15_dispatch_sound_seam(machine, registers, dispatch):
+    """Compose the table callback prefix with type15's sibling sound seam."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE15_ENTRY or \
+            dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('type15 sibling sound dispatch prefix identity')
+    sound = begin_contact_family_type15_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                    {**registers, **dispatch.registers})
+    return SoundSeam(_join_plans(dispatch, sound.prefix), sound.stack_basis, sound.resume_pc,
+                     sound.return_slot, sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, sound.suffix)
 
 
 def begin_contact_family_type15_dispatch(machine, registers, dispatch):
@@ -6880,7 +6946,7 @@ def begin_contact_sibling_wrapper_sound(machine, registers, entry):
 
 def finish_contact_sibling_wrapper_sound(machine, registers):
     """Finish C6/DA's admitted contact or decrement sound suffix and RTS."""
-    if registers['pc'] in (0x1AEC52, CONTACT_TYPE13_FIXED_RETURN):
+    if registers['pc'] in (0x1AEC52, CONTACT_TYPE13_FIXED_RETURN, CONTACT_SIBLING_TYPE13_RETURN):
         sibling = finish_contact_sibling_sound(machine, registers)
         local_sp, local_pc = sibling.registers['a7'], sibling.registers['pc']
         if local_pc == 0x1AE9CA:
