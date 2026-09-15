@@ -874,7 +874,7 @@ def test_type43_collection_dispatch_sound_matches_original_outer_future_and_fres
     assert oracle.fresh_process_future(actual.outer_state) == actual.future
 
 
-@pytest.mark.parametrize('values', [{'fff0c1': 0}, {'sound': 0}])
+@pytest.mark.parametrize('values', [{'sound': 0}])
 def test_type43_unsupported_arms_decline_to_original(values):
     state = type43_fixture(**values)
     expected = qualify(state, None)
@@ -883,6 +883,39 @@ def test_type43_unsupported_arms_decline_to_original(values):
     assert actual.future == expected.future
     assert actual.stats['collection_dispatch_hits'] == 0
     assert actual.stats['fallbacks'] >= 1
+
+
+def test_type43_inactive_matches_original_outer_future_and_fresh():
+    """FFF0C1 clear is a direct RTS: TST.B FFF0C1/BEQ, no writes at all."""
+    state = type43_fixture(fff0c1=0)
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150, include_raw=True)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle',
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   future_instructions=150, include_raw=True)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type43_inactive_mutants_diverge_at_outer_boundary(mutant):
+    state = type43_fixture(fff0c1=0)
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                     candidate=None,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle-mutant-' + mutant,
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
 
 
 @pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])

@@ -5555,15 +5555,21 @@ def finish_contact_family_type46_sound(machine, registers):
 
 
 def begin_contact_family_type43_sound_seam(machine, registers):
-    """1AE64C's motion/template update and its command-63 sound request.
+    """1AE64C's inactive early return, or its motion/template update and
+    command-63 sound request.
 
-    The publication itself is ``game.contact_type43_update``.  This boundary
-    owns the saved secondary-motion word at ``sp-2``, the five-register MOVEM
-    frame, the request argument/command words and the JSR return to 1AE6A0,
-    then hands the original machine the request at 1E58B8.  The resume point
-    1AE6A6 lies past a second native call (JSR 1E589A) that the free-running
+    The publication itself is ``game.contact_type43_update``.  Inactive
+    (``TST.B FFF0C1``/``BEQ``) is a direct RTS with no writes at all: 42
+    cycles / 3 instructions, from ``factcheck facts`` on both recorded
+    fixtures (1AE64C-kind43-p0 active, -p1 inactive).  Active owns the saved
+    secondary-motion word at ``sp-2``, the five-register MOVEM frame, the
+    request argument/command words and the JSR return to 1AE6A0, then hands
+    the original machine the request at 1E58B8.  The resume point 1AE6A6
+    lies past a second native call (JSR 1E589A) that the free-running
     original executes inside the same seam.  Cost table (original machine):
-    510 cycles / 32 instructions for the active, sound-on arm.
+    510 cycles / 32 instructions for the active, sound-on arm.  Returns a
+    plain ``AtomicPlan`` for the inactive arm, a ``SoundSeam`` otherwise --
+    mirroring ``begin_contact_family_sound_dispatch``'s own either/or return.
     """
     record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
     if (record | sp) & 1:
@@ -5578,7 +5584,9 @@ def begin_contact_family_type43_sound_seam(machine, registers):
     read = lambda address, size: _read(machine, address, size)
     update, facts = game.contact_type43_update(read, record)
     if not facts['active']:
-        raise UnsupportedCandidate('type43 inactive early return is not recovered')
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4,
+                          'pc': read(sp, 4) & 0xFFFFFF, 'sr': _logic_sr(sr, 0, 1)},
+                          0x1AE6B2)
     if not facts['sound']:
         raise UnsupportedCandidate('type43 sound-off request arm is not recovered')
     vertical_span = facts['vertical_span']
@@ -5602,24 +5610,28 @@ def begin_contact_family_type43_sound_seam(machine, registers):
 
 
 def begin_contact_family_type43_dispatch_sound_seam(machine, registers, dispatch):
-    """Compose the table prefix with Type 43's exact command-63 seam."""
+    """Compose the table prefix with Type 43's inactive return or its
+    exact command-63 seam."""
     sp = registers['a7']
     if (dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE43_ENTRY
             or dispatch.registers.get('a7') != sp - 4):
         raise UnsupportedCandidate('type43 dispatch prefix identity')
     callback_registers = {**registers, **dispatch.registers}
-    sound = begin_contact_family_type43_sound_seam(dispatch_plan_view(machine, dispatch),
-                                                    callback_registers)
+    result = begin_contact_family_type43_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                     callback_registers)
+    plan = result.prefix if isinstance(result, SoundSeam) else result
     final = dict(dispatch.registers)
-    final.update(sound.prefix.registers)
-    prefix = AtomicPlan(dispatch.cycles + sound.prefix.cycles,
-                        dispatch.instructions + sound.prefix.instructions,
-                        tuple(dict((*dispatch.writes, *sound.prefix.writes)).items()),
-                        final, sound.prefix.last_pc,
-                        dispatch.direct_calls + sound.prefix.direct_calls)
-    return SoundSeam(prefix, sound.stack_basis, sound.resume_pc, sound.return_slot,
-                     sound.saved_frame, sound.frame_size, sound.return_delta,
-                     sound.counts_contact, sound.suffix)
+    final.update(plan.registers)
+    combined = AtomicPlan(dispatch.cycles + plan.cycles,
+                          dispatch.instructions + plan.instructions,
+                          tuple(dict((*dispatch.writes, *plan.writes)).items()),
+                          final, plan.last_pc,
+                          dispatch.direct_calls + plan.direct_calls)
+    if not isinstance(result, SoundSeam):
+        return combined
+    return SoundSeam(combined, result.stack_basis, result.resume_pc, result.return_slot,
+                     result.saved_frame, result.frame_size, result.return_delta,
+                     result.counts_contact, result.suffix)
 
 
 def finish_contact_family_type43_sound(machine, registers):
