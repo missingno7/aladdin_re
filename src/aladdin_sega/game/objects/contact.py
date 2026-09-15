@@ -714,3 +714,27 @@ def _overlay(read, writes, address, size):
     if size == 1:
         return values.get(address, read(address, size))
     return int.from_bytes(bytes(values.get(address + i, (read(address + i, 1))) for i in range(size)), 'big')
+
+
+def decrement_decimal_counter(read):
+    """1B0360: decrement the two ASCII digits at FFEFE0/FFEFE1 with a borrow.
+
+    Returns ``(arm, writes)``.  ``'zero'`` leaves "00" alone; ``'plain'``
+    lowers the ones digit; ``'borrow'`` wraps it to '9' and lowers the tens
+    digit unless that digit is already '0' (``'borrow_floor'``).
+    """
+    tens, ones = read(0xFFEFE0, 1), read(0xFFEFE1, 1)
+    if tens == 0x30 and ones == 0x30:
+        return 'zero', []
+    ones = (ones - 1) & 0xFF
+    if ones >= 0x30:
+        return 'plain', [(0xFFEFE1, ones)]
+    if tens == 0x30:
+        return 'borrow_floor', [(0xFFEFE1, 0x39)]
+    return 'borrow', [(0xFFEFE1, 0x39), (0xFFEFE0, (tens - 1) & 0xFF)]
+
+
+def contact_type03_retype(record, player):
+    """1AED86's FFF0D8-set arm: retype the record to 84 with script 122E16."""
+    return [(record, 0x84), *_long(record + 0x20, 0x122E16), (record + 0x37, 0),
+            (player + 0x34, 0)]

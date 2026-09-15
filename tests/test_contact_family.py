@@ -550,14 +550,99 @@ def test_type15_sibling_wrapper_early_and_decrement_paths_match_original(values)
     assert actual.stats['fallbacks'] == 0
 
 
-def test_type15_sibling_wrapper_contact_route_remains_original():
-    state = family_fixture(0x1AE978, active_d8=0, sound=0)
+def _poke(state, writes):
+    """Return ``state`` with extra work-RAM bytes written at the dispatch gate."""
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000, cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY, writes=list(writes),
+                              registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
+@pytest.mark.parametrize('digits', [(0x33, 0x35), (0x33, 0x30), (0x30, 0x30), (0x31, 0x30),
+                                    (0x30, 0x32), (0x00, 0x00)],
+                         ids=['plain', 'borrow', 'zero', 'borrow-to-zero-tens', 'floor-then-zero',
+                              'non-digit'])
+def test_type15_sibling_wrapper_inactive_tail_matches_original(digits):
+    """FFF0D8 clear: the sibling returns at once and 1AE97C runs three 1B0360 decrements."""
+    state = _poke(family_fixture(0x1AE978, active_d8=0, sound=0),
+                  [(0xFFEFE0, digits[0]), (0xFFEFE1, digits[1])])
     expected = qualify(state, None)
     actual = qualify(state, 'lifecycle')
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats['collection_dispatch_hits'] == 0
-    assert actual.stats['fallbacks'] >= 1
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type15_inactive_tail_mutants_diverge_at_outer_boundary(mutant):
+    state = _poke(family_fixture(0x1AE978, active_d8=0, sound=0),
+                  [(0xFFEFE0, 0x33), (0xFFEFE1, 0x30)])
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle-mutant-' + mutant, stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
+
+
+def test_type03_d8_set_retype_matches_original_outer_future_and_fresh():
+    state = family_fixture(0x1AED86, active_d8=1, sound=1)
+    overrides = {'a2': 0xFF7E40}
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY, candidate=None,
+                                     register_overrides=overrides,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150, include_raw=True)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY, candidate='lifecycle',
+                                   register_overrides=overrides,
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   future_instructions=150, include_raw=True)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('values', [
+    {'sound': 1, 'gate_f2': 0x28},   # the recorded arm: sound on, contact root exits early
+    {'sound': 0, 'gate_f2': 0x28},
+    {'sound': 0, 'blocked': 1},
+])
+def test_type03_d8_zero_plain_contact_route_matches_original(values):
+    """FFF0D8 clear and the contact root on a RAM-only route: no seam is needed."""
+    state = family_fixture(0x1AED86, active_d8=0, **values)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 0
+    assert actual.stats['fallbacks'] == 0
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type03_d8_set_retype_mutants_diverge_at_outer_boundary(mutant):
+    state = family_fixture(0x1AED86, active_d8=1, sound=1)
+    overrides = {'a2': 0xFF7E40}
+    expected = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY, candidate=None,
+                                     register_overrides=overrides,
+                                     expected_return=CONTACT_COMPLETION_EXIT,
+                                     future_instructions=150, include_raw=True)
+    actual = oracle.execute_region(state, entry=COLLECTION_DISPATCH_ENTRY,
+                                   candidate='lifecycle-mutant-' + mutant,
+                                   register_overrides=overrides,
+                                   expected_return=CONTACT_COMPLETION_EXIT,
+                                   future_instructions=150, include_raw=True,
+                                   stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
 
 
 def test_type03_d8_zero_contact_sound_matches_original_outer_future_and_fresh():

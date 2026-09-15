@@ -3469,6 +3469,7 @@ def _contact_scan_callbacks():
         CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
         CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch,
         CONTACT_FAMILY_TYPE43_ENTRY: begin_contact_family_type43_scan_dispatch,
+        CONTACT_FAMILY_TYPE03_ENTRY: begin_contact_family_type03_dispatch,
     }
 
 
@@ -5422,6 +5423,39 @@ def begin_contact_sibling_wrapper(machine, registers, entry):
                       0x1A91C4, callback.direct_calls + sibling.direct_calls)
 
 
+DECIMAL_COUNTER_ENTRY = 0x1B0360
+DECIMAL_COUNTER_LAST_PC = 0x1B0392
+
+
+def _decimal_counter_call(machine, registers, return_pc):
+    """One BSR.W 1B0360 from ``registers['pc']`` through the helper's RTS.
+
+    The helper is a bounded two-digit ASCII counter decrement over
+    FFEFE0/FFEFE1 (``game.decrement_decimal_counter``); every arm is finite
+    and RAM-only.  Cycle table on the original machine, BSR included:
+    zero 64/4, plain 112/7, borrow 178/11, borrow at the tens floor 160/10.
+    """
+    sp, sr = registers['a7'], registers['sr']
+    read = lambda address, size: _read(machine, address, size)
+    arm, writes = game.decrement_decimal_counter(read)
+    tens, ones = read(0xFFEFE0, 1), read(0xFFEFE1, 1)
+    if arm == 'zero':
+        cycles, instructions = 64, 4
+        final_sr = _cmp_sr(sr, (tens << 8) | ones, 0x3030, 2)
+    elif arm == 'plain':
+        cycles, instructions = 112, 7
+        final_sr = _cmp_sr(_subq_byte_sr(sr, ones), (ones - 1) & 0xFF, 0x30, 1)
+    elif arm == 'borrow_floor':
+        cycles, instructions = 160, 10
+        final_sr = _cmp_sr(_logic_sr(sr, 0x39, 1), tens, 0x30, 1)
+    else:
+        cycles, instructions = 178, 11
+        final_sr = _subq_byte_sr(_cmp_sr(_logic_sr(sr, 0x39, 1), tens, 0x30, 1), tens)
+    return AtomicPlan(cycles, instructions, (*_bytes(sp - 4, return_pc, 4), *writes),
+                      {**registers, 'a7': sp, 'pc': return_pc, 'sr': final_sr},
+                      DECIMAL_COUNTER_LAST_PC, direct_calls=1)
+
+
 def begin_contact_family_type15(machine, registers):
     """1AE978: type-15 sibling call followed by the shared D8/RTS tail."""
     record, sp = registers['a1'], registers['a7']
@@ -5438,7 +5472,7 @@ def begin_contact_family_type15(machine, registers):
     sibling = begin_contact_sibling(dispatch_plan_view(machine, callback),
                                     callback.registers)
     if _read(machine, 0xFFF0D8, 1) == 0:
-        raise UnsupportedCandidate('type15 sibling D8 tail does not return')
+        return _contact_family_type15_inactive_tail(machine, registers, callback, sibling)
     final = dict(sibling.registers)
     final.update(a7=sp + 4, pc=_read(machine, sp, 4) & 0xFFFFFF,
                  sr=_logic_sr(sibling.registers['sr'], _read(machine, 0xFFF0D8, 1), 1))
@@ -5446,6 +5480,31 @@ def begin_contact_family_type15(machine, registers):
                       callback.instructions + sibling.instructions + 3,
                       tuple(dict((*callback.writes, *sibling.writes)).items()), final,
                       0x1A91C4, callback.direct_calls + sibling.direct_calls)
+
+
+def _contact_family_type15_inactive_tail(machine, registers, callback, sibling):
+    """1AE97C with FFF0D8 clear: three counter decrements, retype 14, RTS.
+
+    TST.B/BNE not taken (28/2), three BSR.W 1B0360 calls composed through
+    ``_decimal_counter_call``, then MOVE.B #14,(A1), MOVE.L #1226CE,FF7E60,
+    CLR.B FF7E77 and the RTS (76/4).  Recorded on main at frames 32415,
+    32422 and 32492 (kind 15, both the plain and the borrow arms).
+    """
+    sp, record = registers['a7'], registers['a1']
+    _spans_disjoint([('type15 inactive frame', sp - 4, 8), ('type15 inactive record', record, 66),
+                     ('type15 decimal counter', 0xFFEFE0, 2), ('type15 script', 0xFF7E60, 4),
+                     ('type15 script flag', 0xFF7E77, 1)])
+    current = _join_plans(callback, sibling)
+    current = _join_plans(current, AtomicPlan(28, 2, (), {**current.registers, 'pc': 0x1AE986,
+                                                          'sr': _logic_sr(current.registers['sr'], 0, 1)},
+                                              0x1AE982))
+    for return_pc in (0x1AE98A, 0x1AE98E, 0x1AE992):
+        call = _decimal_counter_call(dispatch_plan_view(machine, current), current.registers, return_pc)
+        current = _join_plans(current, call)
+    tail = AtomicPlan(76, 4, ((record, 0x14), *_bytes(0xFF7E60, 0x1226CE, 4), (0xFF7E77, 0)),
+                      {**current.registers, 'a7': sp + 4, 'pc': _read(machine, sp, 4) & 0xFFFFFF,
+                       'sr': _logic_sr(current.registers['sr'], 0, 1)}, 0x1AE9A6)
+    return _join_plans(current, tail)
 
 
 def begin_contact_family_type15_dispatch(machine, registers, dispatch):
@@ -5461,6 +5520,40 @@ def begin_contact_family_type15_dispatch(machine, registers, dispatch):
                       dispatch.instructions + callback.instructions,
                       tuple(dict((*dispatch.writes, *callback.writes)).items()), final,
                       callback.last_pc, dispatch.direct_calls + callback.direct_calls)
+
+
+def begin_contact_family_type03(machine, registers):
+    """1AED86 without a sound seam: the retype arm, or C6's plain contact route.
+
+    FFF0D8 set: MOVE.B #84,(A1), MOVE.L #122E16,20(A1), CLR.B 37(A1),
+    CLR.B 34(A2), RTS (112/7 with the TST/BEQ).  FFF0D8 clear: TST/BEQ
+    taken (26/2) into the 1AE9C6 wrapper, which composes the sibling's
+    contact route and the direct contact root exactly as
+    ``begin_contact_sibling_wrapper`` already does; its sound reset arm
+    stays with ``begin_contact_family_type03_sound_seam``.
+    """
+    record, player, sp, sr = (registers[key] for key in ('a1', 'a2', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type03 record/stack')
+    _spans_disjoint([('type03 record', record, 66), ('type03 frame', sp - 10, 14),
+                     *CONTACT_SIBLING_GLOBALS])
+    d8 = _read(machine, 0xFFF0D8, 1)
+    if d8:
+        _spans_disjoint([('type03 record', record, 66), ('type03 frame', sp, 4),
+                         ('type03 player flag', player + 0x34, 1)])
+        return AtomicPlan(112, 7, tuple(game.contact_type03_retype(record, player)),
+                          {'a7': sp + 4, 'pc': _read(machine, sp, 4) & 0xFFFFFF,
+                           'sr': _logic_sr(sr, 0, 1)}, 0x1AEDA4)
+    prefix = AtomicPlan(26, 2, (), {**registers, 'pc': CONTACT_SIBLING_WRAPPER,
+                                    'sr': _logic_sr(sr, d8, 1)}, CONTACT_FAMILY_TYPE03_ENTRY)
+    wrapper = begin_contact_sibling_wrapper(dispatch_plan_view(machine, prefix), prefix.registers,
+                                            CONTACT_SIBLING_WRAPPER)
+    return _join_plans(prefix, wrapper)
+
+
+def begin_contact_family_type03_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch,
+                                    CONTACT_FAMILY_TYPE03_ENTRY, begin_contact_family_type03)
 
 
 def begin_contact_family_type03_sound_seam(machine, registers):
