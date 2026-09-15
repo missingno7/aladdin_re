@@ -23,7 +23,7 @@ def test_the_supported_revision_is_the_inspected_cartridge():
     assert data[0x100:0x110] == b"SEGA GENESIS    "
     assert data[0x120:0x124] == b"GODS" and data[0x180:0x18E] == b"GM T87016  -00"
     assert data[0x1F0:0x1F1] == b"U" and int.from_bytes(data[4:8], "big") == 0x200
-    assert GODS.profile_id == "gods-usa-ntsc-v1" and GODS.candidate is None
+    assert GODS.profile_id == "gods-usa-ntsc-v1" and GODS.candidate is not None
     assert GODS.history_root["root"] == "gods-usa-new"
 
 

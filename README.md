@@ -8,7 +8,7 @@ and one recovery project per game.  Two games are registered:
 | game | package | supported revision | state |
 |---|---|---|---|
 | Aladdin (USA) | `src/aladdin_sega` | `aladdin-usa-ntsc-v1` | a large recovered frontier, a native runtime from power-on; see [docs/STATUS.md](docs/STATUS.md) |
-| Gods (USA) | `src/gods_sega` | `gods-usa-ntsc-v1` | runs as the original through the shared machine; no recovered code yet; see [docs/gods/STATUS.md](docs/gods/STATUS.md) |
+| Gods (USA) | `src/gods_sega` | `gods-usa-ntsc-v1` | two player recordings verified cold; the first recovered region (the camera follow step) passes the full replay; see [docs/gods/STATUS.md](docs/gods/STATUS.md) |
 
 The shared infrastructure is `src/genesis_re`.  The ownership boundary, how
 game selection works and what a third game would add are in

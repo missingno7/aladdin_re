@@ -6,10 +6,11 @@
 
 Run a scope by path (``pytest tests/common tests/games/gods``) or by marker
 (``pytest -m "common or gods"``); ``scripts/run_tests.py SCOPE`` composes both
-with the checkout's native library.  The paths below make the checkout's
-``src``, ``scripts`` and each game's script directory importable, for this
-process and for the fresh workers the verification tests spawn, so no
-PYTHONPATH is needed to run the suite from the checkout.
+with the checkout's native library.  Test module basenames must be unique
+across scopes (pytest's default import mode).  The paths below make the
+checkout's ``src``, ``scripts`` and each game's script directory importable,
+for this process and for the fresh workers the verification tests spawn, so
+no PYTHONPATH is needed to run the suite from the checkout.
 """
 import os
 from pathlib import Path
