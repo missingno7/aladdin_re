@@ -6,6 +6,64 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Walker batching fixed, 1B67C2 and 1B65F4 recovered; fallbacks 1,481 -> 718
+
+Three leaves this stint. First, a planner change (not a new mechanism): the
+batched spawn dispatcher walker (`spawn_dispatch_walker`, both column and
+row shapes) used to discard its whole in-progress batch whenever any
+iteration's child needed the 1B2650 VDP seam, the ledger's largest row at
+574 fallbacks. It now truncates at the first seam-needing iteration,
+admitting the already-composed prefix as one plan ending at the loop head
+with the same registers/stack the resumed original loop expects; the
+single-iteration gate still owns the seam slot exactly as before, just
+without discarding the prefix. `spawn_setup_dispatch` (which composes the
+walker's plan directly, not through its own gate) needed a matching fix: it
+assumed the walker's result always reached its RTS-ready exit and read a
+return address off the stack unconditionally -- a real DIVERGENCE caught on
+a recorded production fixture before qualification, not guessed. This drops
+the row to 68 (a residual cascade at i=0 that still correctly declines to
+the single-iteration gate).
+
+Second, `1B67C2` (211, the ledger's second-largest row) recovers as
+`begin_spawn_reverse_double_cap`: an RNG-gated reverse-pool spawn attempt,
+up to two, composing `rng_step` at each `BSR 1B3032` (proven earlier this
+stint but unused until now) and the proven `spawn_region` reverse arm at
+each allocation. The blocker's one open question -- the bit-1-clear
+continuation no recorded fixture ever took -- resolved by sweeping the seed
+to reach it directly: one `ST.B` before the shared RTS, nothing more.
+
+Third, `1B65F4` (46) recovers as `spawn_upper_fifth_caller`: a guarded,
+template-selecting entry that turned out to be its own separate ROM copy of
+the same upper-pool allocator `spawn_region`'s `SPAWN_REGION_UPPER_ENTRY`
+arm already proves (same `1AE262` selector, same `1AE30A` initializer) with
+its own coordinate tail that omits the shared tail's indexed clear --
+composed directly from the same lower-level pure adapters rather than
+extending `spawn_region` itself, which hardcodes the shared tail's return
+address for its four existing arms.
+
+**2,601 tests pass in about 64 s** (`-n 8`); the **82,161-frame cold
+comparison passes** with zero restores at `artifacts/spawn-walkertruncrng12/`
+(91,803 candidate hits, 718 fallbacks, down from 1,481). `leaf_review`
+guards flagged one production refusal's message widened from unconditional
+to a ternary covering the walker's own truncation exit, justified by
+`factcheck check` MATCH and equivalent-or-stronger tests; the other two
+leaves' guards checks were clean.
+
+Next frontier, largest rows first: `_contact_type1f_ram_dispatch`'s device/
+sound fallthrough (121, needs a device-access mechanism this recipe set
+does not cover), `begin_contact_family_type1f_inactive`'s non-inactive-tail
+arm (99, likely needs the same), `begin_contact_family_type44`'s
+command-98 seam (38, a new sound-seam shape), `begin_contact_sibling`'s
+decrement+sound arm (33, curiously already composes a seam in
+`begin_contact_sibling_sound_seam` -- the residual decline needs tracing to
+find what actually still fails), and the "synchronous reset seam" contact
+reset rows (20+17+6, a mechanism not yet designed). `type43`'s own inactive
+early return (16, a plain `TST.B FFF0C1`/`BEQ` RTS, fully characterized via
+`factcheck facts` on both recorded fixtures) is the next queued leaf.
+`1B6C5A` (5) was rechecked directly and confirmed inadmissible: it chains
+three native calls (1E58F4, 1E58B8, 1E589A) with writes between them,
+matching the existing `EMPTY_FRONTIER` blocker for the spawn family.
+
 ## VDP tile-upload arms of five spawn children recovered as seams
 
 1B2650 (the VDP tile-data upload, 39 instructions, writes VRAM through the
