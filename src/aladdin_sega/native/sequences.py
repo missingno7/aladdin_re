@@ -1111,7 +1111,9 @@ def story_page(state, services, picture, line0, line1, text, column, row, print_
 
 
 STORY_PICTURE_A = (0x12DD76, 0x129952, 0x129A92)     # 1B49DA
+STORY_PICTURE_B = (0x12DA04, 0x129932, 0x129AB2)     # 1B49B2
 STORY_PICTURE_NONE = (None, BLACK_PALETTE, BLACK_PALETTE)   # 1B4A7A: text over the plate alone
+PRINT_CHECKPOINTS = (0x1B4C40, 0x1B4C66, 0x1B4C8C, 0x1B4CB2, 0x1B4E36, 0x1B4E82, 0x1B4ECE)   # the pages' printer calls
 
 
 def _story_level_5(state, services):
@@ -1140,7 +1142,33 @@ def _story_level_3(state, services):
     story_page(state, services, *STORY_PICTURE_A, 0x127207, 0x11, 0x5, 0x1B4C1A)            # 1B4C02
 
 
-STORIES = {3: _story_level_3, 5: _story_level_5}
+def _story_level_0(state, services):
+    """1B0FA4."""
+    sound_if_enabled(state, services, 0x55, flag=0xFFF57F)
+    story_plate(state, services, 0x132F8E, 0x1299D2, plane_b=0x12E4BE)                      # 1B48C4
+    if latched(state):
+        return
+    story_page(state, services, *STORY_PICTURE_A, 0x127338, 0x13, 0x5, 0x1B4C40)            # 1B4C28
+
+
+def _story_level_4(state, services):
+    """1B109A."""
+    sound_if_enabled(state, services, 0x56, flag=0xFFF57F)
+    story_plate(state, services, 0x132F8E, 0x129A12, plane_b=0x12E7EA)                      # 1B4920
+    story_page(state, services, *STORY_PICTURE_NONE, 0x127BD2, 0x3, 0xB, 0x1B4E82)          # 1B4E6A
+    if latched(state):
+        return
+    story_plate(state, services, 0x132F8E, 0x129A12, plane_b=0x12E7EA)                      # 1B4920
+    if latched(state):
+        return
+    story_page(state, services, *STORY_PICTURE_B, 0x1273E9, 0x13, 0x3, 0x1B4C66)            # 1B4C4E
+    if latched(state):
+        return
+    story_plate(state, services, 0x132F8E, 0x1298D2)                                        # 1B494E
+    story_page(state, services, *STORY_PICTURE_NONE, 0x127CB4, 0x3, 0xB, 0x1B4ECE)          # 1B4EB6
+
+
+STORIES = {0: _story_level_0, 3: _story_level_3, 4: _story_level_4, 5: _story_level_5}
 
 
 def story_screen(state, services):
@@ -1207,7 +1235,8 @@ def level_intro(state, services):
         sound_if_enabled(state, services, 0x18, flag=0xFFF57D)
         sound_if_enabled(state, services, 0x0A, flag=0xFFF57D)
     fade_to(state, services, 0x129AD2)
-    for _ in range(0x1C1 + 1):
+    services.checkpoint(0x1B1370)          # once, before the loop head 1B1374: the message and its objects' first
+    for _ in range(0x1C1 + 1):             # frame took the original more than a frame of work
         mini_frame(state, services)
         hscroll_wave(state)
         if any_button(state):

@@ -90,7 +90,7 @@ def _report(f, diff, native_ram, oracle, label=''):
 
 def step_diff(rom, first, target, pads, recording=None):
     """Replay to the frame before ``target`` on both sides, then diff after every step of that frame."""
-    from aladdin_sega.native.frame import NativeServices
+    from aladdin_sega.native.frame import NativeServices, ResumeFrame
     from aladdin_sega.native.oracle import run_to_exits, trace_port_writes
     m = Machine(rom); m.audio_policy('discard')
     if recording is None:
@@ -108,7 +108,12 @@ def step_diff(rom, first, target, pads, recording=None):
         if m.info['pc'] != step.entry:
             run_to_exits(m, (step.entry,), m.info['tick'] + 3 * nr.FRAME_TICKS)
         m.gate(step.entry, bypass_once=True)
-        step.run(state, services)
+        try:
+            step.run(state, services)
+        except ResumeFrame:
+            print(f'frame {target}: step {step.name} ran a transition that resumes the loop elsewhere; '
+                  f'compare its checkpoints with verify_sequence.py')
+            m.close(); return
         if step.ports:
             trace_port_writes(m, step.exits)
         else:

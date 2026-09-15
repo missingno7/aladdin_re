@@ -33,8 +33,8 @@ from aladdin_sega.native import NativeGap, run_frame
 def known_checkpoints():
     """Every checkpoint pc the sequences can make (their source literals): the order contract's alphabet."""
     source = (Path(__file__).resolve().parents[1] / 'src' / 'aladdin_sega' / 'native' / 'sequences.py').read_text(encoding='utf-8')
-    return sorted({int(h, 16) for h in re.findall(r'checkpoint\(0x([0-9A-F]{6})\)', source)}
-                  | {int(h, 16) for h in re.findall(r'0x(1B4C8C|1B4CB2|1B4E36|1B4C1A)', source)})
+    from aladdin_sega.native.sequences import PRINT_CHECKPOINTS
+    return sorted({int(h, 16) for h in re.findall(r'checkpoint\(0x([0-9A-F]{6})\)', source)} | set(PRINT_CHECKPOINTS))
 
 
 class ComparingClock(nr.OracleClock):
