@@ -6,6 +6,25 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Contact scan now owns type43's inactive arm too; fallbacks 702 -> 686
+
+1AE64C (type43) was never registered in either `contact_scan_plan`'s or
+`_contact_scan_resume`'s own callback map, so the batched 24-slot contact
+scan always declined its whole pass whenever it reached a type43 record --
+a plumbing gap, not a missing recipe, since both of type43's own arms were
+already recovered as direct-dispatch leaves.  A new scan-safe wrapper,
+`begin_contact_family_type43_scan_dispatch`, composes the existing dispatch
+function and declines cleanly whenever it would return a `SoundSeam` (the
+scan's own batched composition reads `callback.registers` directly with no
+`isinstance` check anywhere, so registering the raw dispatch function
+would have crashed on the active+sound-on arm instead of declining it --
+the same limitation the spawn dispatcher walker had before this stint's
+truncation fix, just with no per-slot gate to fall back to).  Registered
+in both callback maps.  **2,606 tests pass** (`-n 8`); the **82,161-frame
+cold comparison passes** with zero restores at `artifacts/spawn-scan43-14/`
+(91,819 candidate hits, 686 fallbacks, down from 702).  `leaf_review`
+guards were clean (a pure addition, no widening).
+
 ## Contact family type43's inactive early return recovered; fallbacks 718 -> 702
 
 `begin_contact_family_type43_sound_seam` raised unconditionally for the
