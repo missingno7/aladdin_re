@@ -6,6 +6,38 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Contact family type43's inactive early return recovered; fallbacks 718 -> 702
+
+`begin_contact_family_type43_sound_seam` raised unconditionally for the
+inactive (`FFF0C1` clear) arm, deferring everything to its own command-63
+sound seam.  `factcheck facts` on both recorded fixtures shows it is a
+plain `TST.B FFF0C1`/`BEQ` direct RTS with no writes at all (42 cycles / 3
+instructions) -- not a seam.  The function now returns a plain
+`AtomicPlan` for that arm and a `SoundSeam` only for the active+sound-on
+arm, mirroring `begin_contact_family_sound_dispatch`'s own either/or
+return; `begin_contact_family_type43_dispatch_sound_seam` and
+`recovery.py`'s `CONTACT_FAMILY_TYPE43_ENTRY` block moved to the same
+`isinstance(result, SoundSeam)` pattern `COLLECTION_TYPE3A_ENTRY` already
+uses. **2,604 tests pass** (`-n 8`, about 62 s); the **82,161-frame cold
+comparison passes** with zero restores at `artifacts/spawn-type43-13/`
+(91,819 candidate hits, 702 fallbacks, down from 718).
+
+A synthetic probe (sound-on decrement route through the type-15 sibling
+wrapper) shows `begin_contact_sibling_sound_seam` *does* compose and run
+its command-8 seam successfully for that shape, matching the original
+exactly -- the 33 recorded fallbacks under `begin_contact_sibling`'s own
+refusal site are not (at least not entirely) a missing recipe; the
+residual failure mode needs tracing against real recorded fixtures to
+isolate, since none currently exist for this entry.  Next frontier
+unchanged in ranking: `_contact_type1f_ram_dispatch`'s device/sound
+fallthrough (121) and `begin_contact_family_type1f_inactive`'s
+non-inactive-tail arm (99) both need a device-access mechanism this
+recipe set does not cover; `begin_contact_family_type44`'s command-98 seam
+(38) needs a new sound-seam shape; the "synchronous reset seam" contact
+reset rows (20+17+6) need a mechanism not yet designed; the contact-scan
+callback registration for 1AE64C (34, spread across many scan slots) is a
+plumbing gap, not a missing recipe, and worth trying next.
+
 ## Walker batching fixed, 1B67C2 and 1B65F4 recovered; fallbacks 1,481 -> 718
 
 Three leaves this stint. First, a planner change (not a new mechanism): the
