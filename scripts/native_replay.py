@@ -232,6 +232,9 @@ class OracleDriver:
         limit = m.info['tick'] + (TRANSITION_LIMIT if self.by_waits else 3 * FRAME_TICKS)
         while True:
             if self.by_waits:
+                # the guard is against a hang, not a long screen: a cold boot to its first boundary (the title's
+                # timeouts, the demo, the prologue) passes thousands of waits, so it is renewed at every gate
+                limit = m.info['tick'] + TRANSITION_LIMIT
                 result = 'gate' if m.run(target=limit) == 'gate' else 'limit'
             else:
                 result = run_with_pads(m, self.pads, limit)

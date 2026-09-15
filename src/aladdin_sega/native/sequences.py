@@ -1023,10 +1023,10 @@ def level_card(state, services):
         mini_frame(state, services)
         if read(PALETTE_CYCLING, 1):
             cycle_palette(state)
-        if any_button(state):
+        if any_button(state):                       # 1B161A: in the demo, a button ends it here
+            if read(pad.GAME_MODE, 1) == 1:
+                raise AttractExit()
             break
-    if read(pad.GAME_MODE, 1) == 1:
-        raise NativeGap('level_card', 0x1B3182, 'the attract mode exit is not recovered', state.frame)
     clear_cram(state.vdp)
     services.sound_command(0x16)
 
@@ -1067,8 +1067,8 @@ def level_1_title(state, services):
         if any_button(state):
             break
     fade_to(state, services, BLACK_PALETTE)
-    if state.read(pad.GAME_MODE, 1) == 1:
-        raise NativeGap('level_1_title', 0x1B3182, 'the attract mode exit is not recovered', state.frame)
+    if state.read(pad.GAME_MODE, 1) == 1:           # 1B2108: the demo ends after the level-1 title, button or not
+        raise AttractExit()
 
 
 def story_plate(state, services, source, palette, plane_b=None):
@@ -1377,8 +1377,8 @@ def level_intro(state, services):
         mini_frame(state, services)
         hscroll_wave(state)
         if any_button(state):
-            if read(pad.GAME_MODE, 1) == 1:
-                raise NativeGap('level_intro', 0x1B3182, 'the attract mode exit is not recovered', state.frame)
+            if read(pad.GAME_MODE, 1) == 1:         # 1B1412
+                raise AttractExit()
             break
     fade_to(state, services, BLACK_PALETTE)
     state.vdp.control(0x8B00)
@@ -1685,13 +1685,24 @@ def game_over(state, services):
     return boot.new_game(state, services)
 
 
-def attract_exit(state, services):
+class AttractExit(Exception):
+    """The demo's prologue left for 1B3182 (the original pops its return address and branches): the title entry
+    catches it and runs ``attract_exit_tail`` before showing the title again."""
+
+
+def attract_exit_tail(state, services):
     """1B3182: a button ended the attract demo, or its recorded input ran out; retire the objects, fade to
-    black, clear the sprite table, force level 1, then the title entry (1A8B24)."""
+    black, clear the sprite table, force level 1.  The title entry (1A8B24) follows."""
+    services.checkpoint(0x1B3182)
     retire_pool(state, services, 0, 32)
     fade_to(state, services, BLACK_PALETTE)
     sprite_terminator(state)
     state.write(player.LEVEL_INDEX, 1, 1)
+
+
+def attract_exit(state, services):
+    """The demo's main loop ended (a button, or its input stream ran out): 1B3182, then the title entry."""
+    attract_exit_tail(state, services)
     from . import boot
     return boot.title_entry(state, services)
 

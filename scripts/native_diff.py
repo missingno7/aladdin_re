@@ -80,7 +80,9 @@ def main(frame, count, every=1, recording=None, independent=False, native_boot=F
               + (f' of recording {recording}' if recording else ''))
     for i in range(count):
         f = state.frame
-        before = len(state.events)
+        # the independent driver's first run from reset passes the whole boot: its sound calls are the native
+        # boot's events (the aligned clock compared those as it drove the boot)
+        before = 0 if i == 0 and native_boot and independent else len(state.events)
         driver.begin_frame(state.replay)
         try:
             run_frame(state, start_step=start_step)

@@ -214,13 +214,33 @@ returns to 1A8B24; a declined continue goes to 1A8A58; the game over is
 | title, logos, attract timeout, Start / Options menu 1B3B96..~1B4800 with 1B3B4A, 1B43C4.., 1B477C.., 1B4410.., 1B4802, 1B4836, 1B3548, 1B0BA6 | 3 | recovered (`native/title.py`); byte-exact from reset on the three power-on recordings (`--boot`: 44223150 to frame 1001, 24c70ffc to 2196, 2dddf860 through the options screen to 1310) and on the post-game title witness; the hidden button-sequence reader 1B0BA6/1B0BBE is modelled, its completion 1B0C82 a NativeGap |
 | level-1 title 1B202A | 3 | recovered (`sequences.level_1_title`), verified on 44223150 and 24c70ffc |
 | story pages of levels 1, 7, 9, A, B | 3 (1, 7 partly composition) | level 1 verified on the cold-start recordings; levels 7, 9, A, B unreachable by any recording: listing-only until a recording reaches them |
-| attract exit 1B3182 and the demo run | 1 | composition: a transition kind 'attract_end' back to the title entry (grinder) |
+| attract exit 1B3182 and the demo run | 1 | composed: from the demo's main loop a transition 'attract_end' (`attract_exit`), from inside the demo's prologue `AttractExit` caught by `boot.title_entry` (the original pops the return address at 1B161A / 1B2114 / 1B141E); the level card only leaves on a button (a mis-composition fixed: it raised after the countdown too). Witness: `verify_sequence.py --boot --pad 0-2400 00 --pad 2400-2404 40 ...` (A during the demo's level card): byte-exact at 1B3182 and the title's re-entry; the native player runs the level-1 demo from power-on with no input |
+| the demo table's second entry: level 8 (init routine 1B64D0) | 4 | no recording plays level 8; NativeGap at the demo's level init (native player, frame 8136 with no input) |
 | game over 1B0558 | 3 | `sequences.game_over` (two loops, the palette cycle 1B07D0, the second picture with its object), verified against the original on a constructed witness: the level-5 death of 44223150 with `--poke FF7E3F=00 --poke FF7E3C=30` (no continues, the last life), both with the recorded buttons (the first loop cut short) and with `--pad 75120-75700 00` (both loops run out); byte-exact at every checkpoint through the new game, the title and the prologue to the resumed loop. The button variant found one missing VBlank wait per step (the RAM checkpoints resync the frame count, so only an input-timed route exposes a wait count) |
 | declined continue -> 1A8A58 -> title | 1 | verified on the same witness with `--pad 75200-75330 04 --pad 75330-77000 00` (Left declines, then no button): byte-exact through the new game, the title and the prologue to the resumed loop. With the buttons held on into the title (`--pad 75200-75900 04`, then the recording's gameplay buttons) 78 transient bytes differ at 1B3EA2 (FF7DF4, FF8805-FF8849, FF8860-FF887D; equal again at 1A8B50): the title's input handling under a held direction / button, with the title's grinder |
 | video: the boot's VDP port-write stream | verification | `verify_ports.py --boot`: the native power-on's port words from 1AA344 to the title's first frame (1B3C64) against the original single-stepped from reset: identical, 30,606 words (the register table, the font and HUD tiles, the plane clears, the scroll table, the title's decompressions and palettes). Found and fixed a tracer defect on the way: an interrupt taken in front of a port write counted the write twice (the exception entry counts as an instruction); a write now counts only when the PC moved to the next instruction |
 | options screen 1B4056..1B430A (difficulty, music, sound, control scheme, exit) | 3 | recovered in `title.py` (`_options_screen`), verified on 2dddf860; the button-remap sub-screen 1B4436 is a NativeGap |
 | ending 1B4F7C | 4 | not on the path to the milestone |
 | sound output | 4 | the driver's calls are events; audible playback needs the Z80 driver as a service, later |
+
+### 3c. The native player, end to end (15 September, night)
+
+`scripts/play_native.py` from power-on, headless, with an authored native
+history (Start at game frame 700 to skip the logo intro, Start at 1200 on
+the menu, then walking, a jump and a sword swing in level 1): the title,
+the prologue and level-1 play run natively, the main loop starting at
+game frame 3932; the same history reproduced in the oracle from reset
+under the independent contract (`native_diff.py --cold NODE 4000
+--native-history --store DIR --independent --native-boot`) is byte- and
+sound-exact for 4,000 frames.  With no input at all the player runs the
+title, the attract timeout and the level-1 demo (rendered: the bazaar
+with the demo's inputs), the demo's exit back to the title, and fails
+loud at the second demo's level init (level 8, 1B64D0).  Two things the
+authored route exposed that no recording had: the sound command 1E58F4
+after the logo fade (1B3CC8; every recording pressed a button before the
+fade), and the by-waits driver's hang guard, which spanned a whole
+run_frame and could not cover a cold boot's thousands of waits (now
+renewed at every gate).
 
 ## 4. The loop, as it now runs
 

@@ -446,6 +446,7 @@ def title_screen(state, services):
         write(sequences.FADE_MINI_FRAMES, 0xFF, 1)
         sequences.fade_to(state, services, LOGO_PALETTE_A)
         write(sequences.FADE_MINI_FRAMES, 0, 1)
+        services.sound_command(0x16)                     # 1B3CC8 (1E58F4 is always command 16)
         sequences.sound_if_enabled(state, services, STOP_MUSIC_CODE, flag=0xFFF57F)
         write(0xFFF119, 0xFF, 1)
         sequences.retire_pool(state, services, 0, 32)

@@ -108,19 +108,24 @@ def new_game(state: GameState, services) -> str:
 def title_entry(state: GameState, services) -> str:
     """1A8B24: the title and its menu, the session counters, then the level prologue."""
     write = state.write
-    write(0xFFF57C, 0, 1)
-    services.checkpoint(0x1A8B2C)
-    outcome, level = title.title_screen(state, services)
-    if outcome == 'attract' and level is not None:
-        write(0xFF7E26, level, 1)
-    sequences.plane_size_64(state)          # 1B02EA, 1B0022 are RTS
-    sequences.reset_score(state)
-    sequences.lives_by_difficulty(state)
-    sequences.reset_apples(state)
-    write(0xFFEFE2, 0x3030, 2)
-    services.checkpoint(0x1A8B50)
-    sequences.level_prologue(state, services)
-    return 'frame_counter'
+    while True:
+        write(0xFFF57C, 0, 1)
+        services.checkpoint(0x1A8B2C)
+        outcome, level = title.title_screen(state, services)
+        if outcome == 'attract' and level is not None:
+            write(0xFF7E26, level, 1)
+        sequences.plane_size_64(state)          # 1B02EA, 1B0022 are RTS
+        sequences.reset_score(state)
+        sequences.lives_by_difficulty(state)
+        sequences.reset_apples(state)
+        write(0xFFEFE2, 0x3030, 2)
+        services.checkpoint(0x1A8B50)
+        try:
+            sequences.level_prologue(state, services)
+        except sequences.AttractExit:           # the demo ended inside its prologue: 1B3182, then the title again
+            sequences.attract_exit_tail(state, services)
+            continue
+        return 'frame_counter'
 
 
 def start(state: GameState, services) -> str:
