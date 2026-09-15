@@ -1,13 +1,15 @@
 """Play the recovered game natively: power-on, the frame loop, live input, the native VDP rendered, no original CPU.
 
-  play_native.py [--resume NODE] [--store DIR] [--scale N] [--replay NODE] [--frames N] [--headless]
+  play_native.py [--resume NODE] [--store DIR] [--scale N] [--replay NODE] [--frames N] [--headless] [--wav FILE] [--mute]
 
 The game runs from native power-on (aladdin_sega.native.boot) through the
 native frame loop with the keyboard as the controller (arrows, Z = A,
 X = B, C = C, Return = Start; Escape or closing the window exits, F5
 journals a checkpoint).  Every frame the VDP model's memories are rendered
-(aladdin_sega.native.render) and shown; sound requests are journaled as
-events (no audio output yet).
+(aladdin_sega.native.render) and shown; the game's sound driver calls go
+to the ROM's Z80 driver on a dedicated machine (aladdin_sega.native
+.sound_service) whose PCM is played (--mute: not), or written to --wav
+FILE when headless.
 
 Input is journaled as an immutable history in the native history store
 (--store, default history_native; the same model as the original
@@ -126,11 +128,48 @@ class Player:
             self.next_time = time.perf_counter()
 
 
+class Sound:
+    """The driver service fed the session's sound events, its PCM to the speakers or a WAV file."""
+
+    def __init__(self, rom, wav=None, output=True):
+        from aladdin_sega.native.sound_service import SoundDriver
+        self.driver = SoundDriver(rom)
+        self.seen = 0
+        self.output = None
+        self.wav = None
+        if output:
+            from aladdin_sega.audio import AudioOutput
+            self.output = AudioOutput()
+        if wav:
+            import wave
+            from aladdin_sega.audio import SAMPLE_RATE
+            self.wav = wave.open(str(wav), 'wb'); self.wav.setnchannels(2); self.wav.setsampwidth(2); self.wav.setframerate(SAMPLE_RATE)
+
+    def frame(self, state):
+        events = state.events
+        for e in events[self.seen:]:
+            if e[0] in ('sound', 'sound_flush', 'sound_command'):
+                self.driver.event(e)
+        self.seen = len(events)
+        pcm = self.driver.advance()
+        if self.output is not None:
+            self.output.push(pcm)
+        if self.wav is not None:
+            self.wav.writeframes(pcm)
+
+    def close(self):
+        if self.wav is not None:
+            self.wav.close()
+        if self.output is not None:
+            self.output.close()
+        self.driver.close()
+
+
 class Session:
     """One native playthrough: power-on (or a resumed history), the journal, the presenter, the gap record."""
 
-    def __init__(self, rom, store, player=None):
-        self.rom, self.store, self.player = rom, store, player
+    def __init__(self, rom, store, player=None, sound=None):
+        self.rom, self.store, self.player, self.sound = rom, store, player, sound
         self.state = boot.power_on(rom)
         self.journal = Journal()
         self.replay = None            # (events by frame, end_frame) while a history is being replayed
@@ -154,6 +193,8 @@ class Session:
         return mask
 
     def on_frame(self, state):
+        if self.sound is not None:
+            self.sound.frame(state)
         if self.replay is not None and state.frame < self.replay[1]:
             return                                    # replaying: no presentation, no pacing
         if self.replay is not None:
@@ -265,20 +306,25 @@ def resume(session: Session, node: str):
 def main(argv):
     if '--help' in argv or '-h' in argv:
         print(__doc__); return 0
-    flags = [a for a in argv if a in ('--headless',)]
+    flags = [a for a in argv if a in ('--headless', '--mute')]
     argv = [a for a in argv if a not in flags]
     args = dict(zip(argv[::2], argv[1::2])) if len(argv) % 2 == 0 else {}
     store = HistoryStore(Path(args.get('--store', 'history_native')), root=NATIVE_ROOT)
     rom = read_rom()
     headless = '--replay' in args or '--headless' in flags
     player = None if headless else Player(store, scale=int(args.get('--scale', 3)))
-    session = Session(rom, store, player)
+    sound = None
+    if '--wav' in args or (not headless and '--mute' not in flags):
+        sound = Sound(rom, wav=args.get('--wav'), output=not headless and '--mute' not in flags)
+    session = Session(rom, store, player, sound)
     node = args.get('--resume') or args.get('--replay')
     if node:
         resume(session, node)
     frames = int(args['--frames']) if '--frames' in args else None
     session.run(frames)
     session.record()
+    if sound is not None:
+        sound.close()
     return 1 if session.gap else 0
 
 

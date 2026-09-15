@@ -221,7 +221,7 @@ returns to 1A8B24; a declined continue goes to 1A8A58; the game over is
 | video: the boot's VDP port-write stream | verification | `verify_ports.py --boot`: the native power-on's port words from 1AA344 to the title's first frame (1B3C64) against the original single-stepped from reset: identical, 30,606 words (the register table, the font and HUD tiles, the plane clears, the scroll table, the title's decompressions and palettes). Found and fixed a tracer defect on the way: an interrupt taken in front of a port write counted the write twice (the exception entry counts as an instruction); a write now counts only when the PC moved to the next instruction |
 | options screen 1B4056..1B430A (difficulty, music, sound, control scheme, exit) | 3 | recovered in `title.py` (`_options_screen`), verified on 2dddf860; the button-remap sub-screen 1B4436 is a NativeGap |
 | ending 1B4F7C | 4 | not on the path to the milestone |
-| sound output | 4 | the driver's calls are events; audible playback needs the Z80 driver as a service, later |
+| sound output | platform service | `native/sound_service.py`: the ROM's Z80 driver (YM2612, PSG) runs on a dedicated Machine with its 68000 parked in a self-branch after the driver's initialisation; the native runtime's sound events are made as the game's own entry-point calls (1E58B8 request, 1E589A flush, the fixed commands) on that 68000, one frame of the machine per game frame gives the PCM (`play_native.py`, `--wav FILE`, `--mute`). Nothing feeds back into the game |
 
 ### 3c. The native player, end to end (15 September, night)
 
