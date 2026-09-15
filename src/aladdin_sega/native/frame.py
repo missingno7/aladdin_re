@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from .state import GameState, NativeGap
 from ..game.objects.script_engine import Engine, Services, Trace
-from ..game import pad, hud, player, video
+from ..game import pad, hud, player, video, scroll, level, spawn, pause
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class Step:
     exits: tuple = ()
     run: object = None          # callable(state, services) or None when not recovered
     note: str = ''
+    ports: bool = False         # the step writes the VDP ports: verification traces them in the oracle
 
 
 class NativeServices(Services):
@@ -31,6 +32,12 @@ class NativeServices(Services):
 
     def sound(self, slot, sound_id, flush=True):
         self.state.events.append(('sound', self.state.frame, sound_id, flush))
+
+    def spawned(self, flag, record, kind):
+        self.state.events.append(('spawn', self.state.frame, flag, (record - 0xFF7E40) // 66, kind))
+
+    def sound_command(self, code):
+        self.state.events.append(('sound_command', self.state.frame, code))
 
     def frame_changed(self, slot, descriptor):
         self.state.events.append(('frame_upload', self.state.frame, slot, descriptor))
@@ -50,15 +57,50 @@ def attract_input(state: GameState, services):
 
 
 def vram_upload_flush(state: GameState, services):
-    video.flush_upload_queue(state.read, state.write, lambda kind, data: state.events.append((kind, state.frame, data)))
+    video.flush_upload_queue(state.read, state.write, state.vdp)
 
 
 def sprite_table_upload(state: GameState, services):
-    video.upload_sprite_table(state.read, lambda kind, data: state.events.append((kind, state.frame, data)))
+    video.upload_sprite_table(state.read, state.rom, state.vdp)
 
 
 def tile_stream(state: GameState, services):
-    video.stream_tiles(state.read, state.write, state.rom, lambda kind, data: state.events.append((kind, state.frame, data)))
+    video.stream_tiles(state.read, state.write, state.rom, state.vdp)
+
+
+def camera_scroll_and_spawn_strips(state: GameState, services):
+    try:
+        scroll.run(state.read, state.write, state.rom, state.vdp, services)
+    except LookupError as error:
+        raise NativeGap('camera_scroll_and_spawn_strips', 0x1AAA80, str(error), state.frame) from None
+
+    def walk(row, far):
+        try:
+            spawn.walk_strip(state.read, state.write, state.rom, state.vdp, services, row=row, far=far)
+        except spawn.SpawnGap as error:
+            raise NativeGap('camera_scroll_and_spawn_strips', 0x1AE44A, str(error), state.frame) from None
+    level.draw_pending_strips(state.read, state.write, state.rom, state.vdp, walk)
+
+
+def pause_check(state: GameState, services):
+    if pause.pause_requested(state.read, state.write):
+        raise NativeGap('pause_check', 0x1A91E4, 'Start pressed: the pause loop is not recovered', state.frame)
+
+
+def player_wall_collision(state: GameState, services):
+    player.wall_sensors(state.read, state.write)
+
+
+def player_ground_collision(state: GameState, services):
+    player.ground_collision(state.read, state.write, state.rom)
+
+
+def player_vertical_input(state: GameState, services):
+    player.vertical_input(state.read, state.write, state.rom)
+
+
+def player_attack_input(state: GameState, services):
+    player.attack_input(state.read, state.write, state.rom)
 
 
 def frame_counter(state: GameState, services):
@@ -87,19 +129,23 @@ def motion_pass(state: GameState, services):
 
 STEPS = (
     # after the VBlank wait (the frame boundary), in the original's call order (main loop at 1A8C16)
-    Step('vram_upload_flush', 0x1AC726, (0x1AC782,), vram_upload_flush, 'recovered: game.video.flush_upload_queue (events)'),
-    Step('sprite_table_upload', 0x1AB776, (0x1AB7A0, 0x1AB7A2), sprite_table_upload, 'recovered: game.video.upload_sprite_table (events)'),
-    Step('tile_stream', 0x1AE0F6, (0x1AE19E,), tile_stream, 'recovered: game.video.stream_tiles (events)'),
-    Step('camera_scroll_and_spawn_strips', 0x1AAA2A, note='FF7DA4 scroll routine; FFF0B9..BC -> spawn strips 1AE3FC/1AE406/...'),
+    Step('vram_upload_flush', 0x1AC726, (0x1AC782,), vram_upload_flush, 'recovered: game.video.flush_upload_queue', ports=True),
+    Step('sprite_table_upload', 0x1AB776, (0x1AB7A0, 0x1AB7A2), sprite_table_upload, 'recovered: game.video.upload_sprite_table', ports=True),
+    Step('tile_stream', 0x1AE0F6, (0x1AE19E,), tile_stream, 'recovered: game.video.stream_tiles', ports=True),
+    Step('camera_scroll_and_spawn_strips', 0x1AAA2A, (0x1AAA7E,), camera_scroll_and_spawn_strips,
+         'recovered: game.scroll (per-level parallax), game.level (map strips), game.spawn (spawn sites)', ports=True),
     Step('attract_input', 0x1B315C, (0x1B317E,), attract_input, 'recovered: game.pad.attract_input (the demo pad stream)'),
     Step('pad_read', 0x1A8CEE, (0x1A8C16,), pad_read, 'recovered: game.pad.read_pad'),
     Step('frame_counter', 0x1A8C16, (0x1A8C1C,), frame_counter, 'recovered: game.player.advance_frame_counter'),
-    Step('vdp_queue', 0x1A91C6, note='1B3208'),
+    Step('pause_check', 0x1A91C6, (0x1A92D2, 0x1A92DA), pause_check, 'recovered: game.pause.pause_requested (the pause loop itself is a gap)'),
     Step('publish_player_position', 0x1A8E0C, (0x1A8E3C,), publish_player_position, 'recovered: game.player.publish_position'),
-    Step('player_ground_collision', 0x1AD7B4),
-    Step('player_wall_collision', 0x1AD632),
-    Step('player_jump_input', 0x1A986E),
-    Step('player_attack_input', 0x1A99F0),
+    Step('player_ground_collision', 0x1AD7B4, (0x1AD9CC, 0x1ADA3A, 0x1ADA96, 0x1ADB20, 0x1ADB28, 0x1ADB30, 0x1A91C4),
+         player_ground_collision, 'recovered: game.player.ground_collision'),
+    Step('player_wall_collision', 0x1AD632, (0x1AD7B2,), player_wall_collision, 'recovered: game.player.wall_sensors'),
+    Step('player_vertical_input', 0x1A986E, (0x1A98D0, 0x1A9928, 0x1A9970, 0x1A9978), player_vertical_input,
+         'recovered: game.player.vertical_input'),
+    Step('player_attack_input', 0x1A99F0, (0x1A9A48, 0x1A9B2E, 0x1A9B36), player_attack_input,
+         'recovered: game.player.attack_input'),
     Step('object_motion', 0x1ADE36, (0x1AE0AE,), motion_pass, 'recovered: game.objects.script_engine.Engine.motion_pass'),
     Step('object_level_collision', 0x1ADB5C),
     Step('contact_scan', 0x1ABB40, note='player-vs-object collision and the per-kind callbacks'),

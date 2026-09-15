@@ -10,6 +10,7 @@ address tables in :mod:`aladdin_sega.game.objects.script_engine`.
 from __future__ import annotations
 from ..game.objects.record import RecordView, RECORD_TABLE, RECORD_SIZE, RECORD_COUNT
 from ..game.objects.script_engine import Memory
+from .vdp import Vdp
 
 
 class NativeGap(Exception):
@@ -27,6 +28,13 @@ class GameState:
         self.frame = frame
         self.buttons = 0
         self.events = []          # platform-facing event stream: ('sound', id), ('frame_upload', slot, descriptor), ...
+        self.vdp = Vdp(self.bus_read)
+
+    def bus_read(self, address: int, size: int = 1) -> int:
+        """A read on the 68k bus as the VDP's DMA sees it: ROM below 400000, work RAM at FF0000."""
+        if address < 0x400000:
+            return int.from_bytes(self.rom[address:address + size], 'big')
+        return self.read(address, size)
 
     @classmethod
     def from_machine(cls, machine, frame: int, rom: bytes) -> 'GameState':

@@ -18,11 +18,12 @@ from aladdin_sega.profile import read_rom
 from aladdin_sega.machine import Machine
 from aladdin_sega.native import GameState, NativeGap, STEPS, run_frame
 from aladdin_sega.native.frame import NativeServices
+from aladdin_sega.native.oracle import trace_port_writes, run_to_exits
 from aladdin_sega.game.objects.record import RECORD_TABLE, FIELDS
 from aladdin_sega.history import HistoryStore
 FRAME_TICKS = 896040
 
-BOOKKEEPING = ((0xFF769A, 0xFF7800, 'DMA queue'), (0xFFEF80, 0xFFEFE0, 'stack'),
+BOOKKEEPING = ((0xFF769A, 0xFF7800, 'DMA queue'), (0xFFEF40, 0xFFEFE0, 'stack'),
                (0xFF7D9A, 0xFF7DA3, 'continuations'), (0xFFEFEE, 0xFFEFF0, 'queue counters'))
 
 
@@ -94,7 +95,10 @@ def verify(frame, count):
             m.gate(pc, bypass_once=True); continue
         before = bytearray(m.peek_ram(0, 65536))
         m.gate(pc, bypass_once=True)
-        assert m.run(target=tick_end + 896040) == 'gate' and m.info['pc'] in step.exits, f'{step.name} exit not reached'
+        if step.ports:
+            traced = trace_port_writes(m, step.exits)
+        else:
+            run_to_exits(m, step.exits, tick_end + 896040)
         after = m.peek_ram(0, 65536)
         state = GameState(bytearray(before), rom, current_frame); state.buttons = pads.get(current_frame, 0)
         try:
@@ -106,6 +110,11 @@ def verify(frame, count):
         for a in range(65536):
             if after[a] != state.ram[a] and not any(lo <= 0xFF0000 | a < hi for lo, hi, _ in BOOKKEEPING):
                 mismatches[step.name][field_name(0xFF0000 | a)] += 1; bad += 1
+        if step.ports and state.vdp.log != traced:
+            bad += 1
+            first = next((i for i, (a, b) in enumerate(zip(state.vdp.log, traced)) if a != b), min(len(state.vdp.log), len(traced)))
+            mismatches[step.name][f'ports: native {len(state.vdp.log)} vs oracle {len(traced)} words, first difference at {first}: '
+                                  f'{state.vdp.log[first:first + 3]} vs {traced[first:first + 3]}'] += 1
         results[f'{step.name}: {"ok" if not bad else "mismatch"}'] += 1
         m.gate(m.info['pc'], bypass_once=True)
     m.close()

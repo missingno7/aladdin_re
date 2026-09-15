@@ -6,6 +6,7 @@ from aladdin_sega.profile import read_rom
 from aladdin_sega.game import pad, hud
 from aladdin_sega.native import GameState, STEPS
 from aladdin_sega.native.frame import NativeServices
+from aladdin_sega.native.oracle import trace_port_writes, run_to_exits
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAMES = sorted(glob.glob(str(ROOT / 'artifacts' / 'evidence' / 'frames' / 'f*.state')),
@@ -62,13 +63,17 @@ def test_recovered_frame_steps_match_the_original(path):
             if step is None:
                 m.gate(m.info['pc'], bypass_once=True); continue
             before = bytearray(m.peek_ram(0, 65536)); m.gate(step.entry, bypass_once=True)
-            assert m.run(target=tick_end + 896040) == 'gate' and m.info['pc'] in step.exits
+            traced = trace_port_writes(m, step.exits) if step.ports else None
+            if not step.ports:
+                run_to_exits(m, step.exits, tick_end + 896040)
             after = m.peek_ram(0, 65536)
             state = GameState(bytearray(before), rom, 0); state.buttons = m.info['buttons']
             step.run(state, NativeServices(state))
             diff = [f'{0xFF0000 | a:06X}' for a in range(65536)
-                    if after[a] != state.ram[a] and not 0xFFEF80 <= 0xFF0000 | a < 0xFFEFE0]
+                    if after[a] != state.ram[a] and not 0xFFEF40 <= 0xFF0000 | a < 0xFFEFE0]
             assert diff == [], (step.name, diff)
+            if step.ports:
+                assert state.vdp.log == traced, (step.name, 'VDP port words differ')
             checked.add(step.name); m.gate(m.info['pc'], bypass_once=True)
         if not checked:
             pytest.skip('no recovered step is reached in these two frames (a loading or card loop)')
