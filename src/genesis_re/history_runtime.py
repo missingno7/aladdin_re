@@ -26,17 +26,21 @@ class GenesisRun:
         self.frame_ticks = game.board.frame_ticks
         self.observation_offset_ticks = game.observation_offset_ticks
         self.machine = Machine(rom)
-        if self.machine.profile is not None and self.machine.profile is not game:
-            raise ValueError(f"These bytes are the {self.machine.profile.title} cartridge, not {game.title}")
-        self.frame, self.buttons = 0, 0
-        self.pcm_digest, self.pcm_bytes = EMPTY_PCM, 0
-        self.candidate = None
-        if candidate != "original":
-            if game.candidate is None:
-                raise ValueError(f"{game.title} has no recovered code; only the original runs")
-            self.candidate = game.candidate(candidate)
-            self.candidate.arm(self.machine)
-        receipt = execution_receipt(game, candidate=candidate)
+        try:
+            if self.machine.profile is not None and self.machine.profile is not game:
+                raise ValueError(f"These bytes are the {self.machine.profile.title} cartridge, not {game.title}")
+            self.frame, self.buttons = 0, 0
+            self.pcm_digest, self.pcm_bytes = EMPTY_PCM, 0
+            self.candidate = None
+            if candidate != "original":
+                if game.candidate is None:
+                    raise ValueError(f"{game.title} has no recovered code; only the original runs")
+                self.candidate = game.candidate(candidate)
+                self.candidate.arm(self.machine)
+            receipt = execution_receipt(game, candidate=candidate)
+        except BaseException:
+            self.machine.close()     # one native machine per process: never leak it on a refused run
+            raise
         self.implementation = {"backend": "genesis", "cache_contract": 3, "game": game.id,
                                "native": receipt["native_binary_sha256"],
                                "source": receipt["python_modules_sha256"],
