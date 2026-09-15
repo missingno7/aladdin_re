@@ -95,7 +95,18 @@ Record.  The player is object slot 0 at `FF7E40` (66 bytes, kind byte
 | FFF0D7 | attacking (sword) | CONFIRMED | `1A99F0` sets it; opcode F8 selects script 121964 when set |
 | FFF0D8 | sword hit-box active | CONFIRMED | written only by the interpreter (opcode ED in the attack scripts); every enemy callback branches on it (hit vs touch) |
 | FFF0CD, FFF0D3 | hanging / ledge state | TENTATIVE | 1ABB40 writes both; control skips when FFF0D3 == 0x5E |
-| FFF0DB, FFF0DE/DF, FFF0ED | special-tile and push states | TENTATIVE | written by 1B1E38 / 1A9716 |
+| FFF0DB, FFF0DC | special-tile poses (the sink pose, the grab pose's four-frame hold) | STRONG | `game.tiles` |
+| FFF0DE / FFF0DF | crouching / looking up | CONFIRMED | `game.control` (1A9FBE / 1AA060 set them with scripts 1222D2 / 122236) |
+| FFF0ED | pushing against a wall or object (the push pose 121FA6 is up) | STRONG | `game.control` |
+| FFF0BF | frames the jump button has been held, 1..10 (10 = full height) | CONFIRMED | 1A9716 |
+| FFF11F / FFEFFF | throw / sword cooldown frames (14 / 10) | CONFIRMED | 1A9304 / 1A9502 |
+| FFF0C5..FFF0CB | wall sensors: left near/far/farther, right near/far/farther, ceiling | CONFIRMED | 1AD632 (`game.player.wall_sensors`) |
+| FFF0C3 | the collision class of the cell under the player (0x47 = the layer switch, 0xB0 = wall-stand) | CONFIRMED | 1B1E38 |
+| FFF0A4 | which attribute byte carries the ground (the layer switch toggles it) | CONFIRMED | 1B5470 / 1B5492 / 1B549C |
+| FFF0EE | hurt walk timer (speed 1 while set) | STRONG | 1AE722, 1A9D98 |
+| FFF0F0 / FFF0EF | blocked right / left by an object this frame | STRONG | contact callbacks, 1A9D98 |
+| FFF0D6 / FFF0CE / FFF0CF | attack allowed / climbable / climb-up blocked, from the tile under the player | STRONG | 1B1E38 handlers |
+| FFF15A / FF7286 / FF728A | message code, callback, pen advance | CONFIRMED | 1B2238 (`game.messages`) |
 | FFF0F2 | invulnerability frames after damage (set to 0x28) | CONFIRMED | `1B03F2`; timeline shows 0x28 decaying |
 | FFF0E6 | dying (set to 0x0A when health hits zero) | CONFIRMED | `1B03F2`, `1A8F0C` fall check |
 | FFF0E9 | death sequence countdown | STRONG | `1A8E3E` decrements it and plays the death sound |
@@ -294,78 +305,111 @@ behavior; the ones marked "ask" are extracted but not yet named.
 
 ## 8. Recovered structure (code and data, verified)
 
-`src/aladdin_sega/game/`:
+`src/aladdin_sega/game/` is the game as semantic modules; every module
+names the RAM fields it owns and the ROM routine it was recovered from.
 
-- `objects/record.py`: the 66-byte record as named fields (`RecordView`),
-  32 records from FF7E40, `ObjectTemplate` (the 19 bytes 1AE30A copies)
-  and the 85 template sites.
-- `scripts.py`: the opcode table as data (21 named opcodes with operand
-  decoders), `decode_animation` / `decode_motion` into `Frame`, `Op`,
-  `MotionStep` items and branch-target blocks.
-- `assets.py`: `SpriteFrame` (descriptor header + 12-byte pieces),
-  `SpritePiece` (0x80-biased offsets, DMA source, tile advance),
-  `TileRecord` (DMA length, VRAM advance, OAM size, width/height), plain
-  4bpp tile decoding and `render_frame`.  Every template's first frame
-  renders from ROM (`artifacts/cartography/template_sheet.png`).
-- `objects/script_engine.py`: the engine over a `Memory` adapter: the
-  animation channel (1AC784: frame resolution, delay, opcode loop), the
-  motion channel and velocity integration (1ADE36: friction 0x28/0x3C,
-  gravity 0x78, despawn window, rider propagation), all 21 opcodes, the
-  player selector (1AD150), VRAM slot allocation (1AD3E8) and release
-  (1AE372), retirement (1ABE6E), destroy (F6) and despawn (1AE0B0).
-  Spawning (F5) and native calls (FB) are reported as handoffs.
-- `pad.py`, `hud.py`, `player.py`: pad bytes from the recorded mask, the
-  four direction flags, the score tally with the extra-life rule, the
-  frame counter and the player position publish.
+- `objects/record.py`, `scripts.py`, `assets.py`: the 66-byte record as
+  named fields (`RecordView`), templates (the 19 bytes 1AE30A copies,
+  85 sites), the 21-opcode script language as data (`decode_op`, with
+  opcode FC's call / return forms and the compare-branch's "anything
+  else is below" default), sprite frames, pieces and tile records.
+- `objects/script_engine.py`: the animation and motion channels (1AC784,
+  1ADE36), all opcodes including spawn (F5: six pools, rider links),
+  the VRAM allocator with its exact scan budget (1AD3E8), the odd-frame
+  prologue (the sword and stance flags, the upload queue count), the
+  tile-upload queue the flush step drains (1AC6D0), and a registry of
+  the native routines scripts call through FB (flag bits, companion
+  spawns, random sounds and velocities, the vertical scroll streams,
+  the homing helpers, the kind-89 transforms).
+- `objects/ground.py`: objects against the level (1ADB5C: landing,
+  bouncing, the splat effect 1ABE8A, leaving the map).
+- `objects/contact_scan.py`, `objects/contacts.py`: the player-versus-
+  object and projectile-versus-object scans (hit boxes from the frame
+  descriptors, 0x80-biased and mirrored by facing), and the callbacks by
+  ROM address: 50 of the 74 player callbacks (sword hits and deaths,
+  collectibles, platforms, ropes, the pushable block, the spring, the
+  shop, the sword clash with its one-frame white flash) and 11 of the 31
+  projectile callbacks.
+- `spawn.py`, `level.py`, `scroll.py`, `camera.py`: the spawn-caller
+  table 0x4154 decoded into spawn sites (all 127 callers decode; pools,
+  guards, adjustments, palette loads, sounds), the level map in RAM (row
+  table FF9884, cell tiles FF7DBE, attributes FFAE84, spawn flags
+  FFAE87) with the strip drawing into plane A, the nine per-level
+  scroll routines, and the camera's eased follow with the strip debts.
+- `player.py`, `control.py`, `tiles.py`: the wall sensors, ground
+  collision, landing and gravity; hurt and health loss (1AE4F8 /
+  1B03F2); walking, the velocity integrator, jumping, throwing, the
+  sword (1A9D98, 1A9B90, 1A9716, 1A9304, 1A9502); the special tiles
+  under the player (33 handlers: conveyors, springs, climbables, the
+  layer switch, quicksand, kill and damage tiles, the progress flags).
+- `hud.py`, `flow.py`, `sprites.py`, `messages.py`, `video.py`,
+  `pad.py`, `pause.py`: the counters (score tally, apples, gems, health,
+  the token digits), the fall check, the transition countdown, the 13
+  per-level tick routines, the sprite attribute table builder (HUD
+  pieces and every object's pieces, culled and flipped), the in-game
+  message language (glyph objects, tile boxes, palette lines), the three
+  VDP upload steps and palette loads, the pad and attract stream, the
+  pause decision.
 
-Asset graph (`scripts/cartography/asset_graph.py` ->
-`artifacts/cartography/asset_graph.json`): 85 templates, 122 scripts, 461
-distinct frames, 2,356 tile sources of which 62 are shared between
-frames.  Animations are the maximal frame runs between control opcodes
-of each script block; a template's identity is (kind, animation script,
-motion script, attributes, VRAM slots).
+## 9. The native runtime
 
-Verification (`tests/test_script_engine.py`, `tests/test_frame_steps.py`,
-`scripts/native_replay.py --verify`): each recovered step runs over a copy
-of the original's RAM at that step's entry and is compared byte for byte
-at its exit, ignoring only the stack, the DMA upload queue and the two
-continuation pointers.  Over the saved frame states and 40 consecutive
-frames of play, every recovered step matches; the engine's only
-non-matching passes are the ones that hit a spawn or native-call opcode,
-which it reports instead of guessing.
+`src/aladdin_sega/native/`: `GameState` (the original's 64 KB work RAM as
+the backing store, the ROM, the VBlank-count frame clock, an event
+stream, a `Vdp` model with VRAM / CRAM / VSRAM and 68k-to-VDP DMA) and
+`frame.STEPS`, the original main loop 1A8C16..1A8CEE as 36 ordered steps
+(33 distinct entries; each step's exit is the next call's entry, so the
+main loop itself brackets every step).  Every step is native; nothing in
+the native path executes original code.  Effects the runtime cannot own
+yet raise `NativeGap` with the ROM address: the pause loop, the
+Start-release wait, the level transitions (a life lost, a level change,
+the bonus stages), message commands that wait for frames, and the
+callbacks or native routines not yet in a registry.
 
-## 9. The native runtime and its gaps
+Verification rises with the abstraction:
 
-`src/aladdin_sega/native/`: a `GameState` (the original's 64 KB work RAM
-as the backing store, the ROM, the frame clock, an event stream) and a
-frame defined as the original main loop's ordered steps (`frame.STEPS`,
-33 steps from the VBlank wait).  `scripts/native_replay.py --native`
-seeds the state from an oracle snapshot and runs frames until a step that
-is not recovered raises `NativeGap`; `--verify` proves each recovered step
-against the oracle in place.  Nothing in the native path executes
-original code.
+- `scripts/native_replay.py --verify FRAME COUNT` proves each step in
+  place: the semantic step runs over a copy of the oracle's RAM at the
+  step's entry and is compared byte for byte at its exit; steps that
+  write the VDP are also compared word for word against the port writes
+  the oracle makes (`native/oracle.py` single-steps the original and
+  evaluates every `move` to C00000 / C00004).
+- `scripts/verify_step.py STEP FRAME COUNT ...` does the same for one
+  step over long windows and tallies the events it produced.
+- `scripts/native_diff.py FRAME COUNT` is the whole-frame boundary: the
+  native runtime and the oracle run side by side from the same frame
+  boundary with the recorded pads applied per VBlank, and the whole work
+  RAM is compared after every frame; a divergence is attributed to the
+  step that produced it.  From the seven recorded states the native
+  runtime matches the oracle on every byte of every frame until a
+  declared gap: 3,400 to 5,700 frames from each of levels 0, 1, 3, 4 and
+  5, stopping at the first level change (frame 10018 from level 1,
+  48930 from level 0), a life lost (75278 in level 5), or one of the
+  callbacks still to recover.
 
-Recovered natively: pad read, frame counter, position publish, motion
-pass, button decode, score tally, animation pass.  The first gap is the
-VRAM upload flush (a platform service: the queued frame uploads become
-`frame_upload` events), then the sprite-table upload (platform), the sound
-queue and driver (platform), camera scroll with the spawn strips, the VDP
-queue, the player collision and control cluster, the object level
-collision, the contact scan, the HUD pieces, the fall and death steps and
-the sprite table builder.  That ordered list is the recovery queue.
+Three defects the whole-frame comparison found that the per-step
+comparison could not: the odd-frame prologue that clears the sword
+flags, opcode FC's call form (the per-step check re-seeds the saved
+script pointer from the oracle), and the compare-branch default mode.
 
 ## 10. What to recover next
 
-1. The script engine (`1AC784`, `1ADE36`, the 21 handlers, `1AC6D0`) as
-   one Python module with the opcode table as data.  It is bounded, RAM
-   plus five services, and it makes every object's behavior legible.
-2. The player control cluster (`1A9D98`, `1A9B90`, `1A986E`, `1A99F0`,
-   `1A9716`, `1A9304`, `1A9502`, `1AA8FA`) over the named fields above.
-3. The HUD tally and health routines (`1B00CA`, `1B03F2`, `1B0434`,
-   `1B0360`, `1B03BE`) as `game.hud` / `game.player` with the ASCII
-   counters named.
+1. The transitions, as sequences of nested frames over the same steps:
+   the life-lost respawn (1A902E / 1A8F82: fade, re-initialisation,
+   screen redraw through the strip and object passes, fade in), the
+   level change (1A8E5C: the end-of-level tally 1B0D70, the level
+   sequence stream FFF572, the level loader 1AA484 with its two
+   decompressors 1B35D0 / 1B3818, the level init routines and the
+   intro screens), and the bonus stages.  The fade (1B278A / 1B29B0) is
+   47 nested VBlank frames of CRAM interpolation; the VDP model already
+   keeps CRAM.
+2. The 24 player callbacks and 20 projectile callbacks not yet met by
+   the recording (kind 3E at 1AF2B0 is the next one it meets).
+3. The level event streams of levels 2, 6 and 8 (1B634E over the table
+   at 20C0) and the carpet ride (1B6066).
+4. Then the outer game: boot, title, attract, the options and the
+   game-over screens, so the whole recording runs from power-on.
 
-## 9. Tools
+## 11. Tools
 
 `scripts/cartography/`: `ram_activity.py` (per-frame RAM change activity,
 instruction counts and snapshots every 32 frames), `frame_sampler.py`

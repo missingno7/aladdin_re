@@ -22,24 +22,15 @@ def main(frame, count, every=1):
     first = frame
     m = Machine(rom); m.audio_policy('discard'); m.restore(nr.load(frame))
     boundary = next(s for s in STEPS if s.name == 'wait_vblank').exits[0]
-    m.gates([boundary])
-    m.pad(pads.get(frame, 0))
-    if m.run(target=m.info['tick'] + 3 * nr.FRAME_TICKS) != 'gate':
-        print('the snapshot did not reach a frame boundary'); return 2
-    frame = m.info['tick'] // nr.FRAME_TICKS
-    state = GameState.from_machine(m, frame, rom)      # seeded at the frame boundary, both sides aligned
-    m.gate(boundary, bypass_once=True)
+    state, frame = nr.seed_at_boundary(m, frame, pads, rom)
     for i in range(count):
-        f = frame + i
+        f = state.frame
         try:
             run_frame(state, pads.get(f, 0))
         except NativeGap as gap:
             print(f'frame {f}: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
             return 1
-        m.pad(pads.get(f, 0))
-        if m.run(target=m.info['tick'] + 3 * nr.FRAME_TICKS) != 'gate':
-            print(f'frame {f}: the oracle did not reach the frame boundary'); return 2
-        m.gate(boundary, bypass_once=True)
+        nr.run_oracle_frame(m, pads)
         if (i + 1) % every:
             continue
         oracle = m.peek_ram(0, 65536)
@@ -70,15 +61,11 @@ def step_diff(rom, first, target, pads):
     from aladdin_sega.native.frame import NativeServices
     from aladdin_sega.native.oracle import run_to_exits, trace_port_writes
     m = Machine(rom); m.audio_policy('discard'); m.restore(nr.load(first))
-    boundary = next(s for s in STEPS if s.name == 'wait_vblank').exits[0]
-    m.gates([boundary]); m.pad(pads.get(first, 0))
-    assert m.run(target=m.info['tick'] + 3 * nr.FRAME_TICKS) == 'gate'
-    frame = m.info['tick'] // nr.FRAME_TICKS
-    state = GameState.from_machine(m, frame, rom); m.gate(boundary, bypass_once=True)
-    for f in range(frame, target):
-        run_frame(state, pads.get(f, 0)); m.pad(pads.get(f, 0))
-        assert m.run(target=m.info['tick'] + 3 * nr.FRAME_TICKS) == 'gate'; m.gate(boundary, bypass_once=True)
-    m.gates(sorted({s.entry for s in STEPS} | {e for s in STEPS for e in s.exits}))
+    state, frame = nr.seed_at_boundary(m, first, pads, rom)
+    while state.frame < target:
+        run_frame(state, pads.get(state.frame, 0))
+        nr.run_oracle_frame(m, pads)
+    m.gates(sorted({s.entry for s in STEPS} | {e for s in STEPS for e in s.exits} | {nr.VBLANK_HANDLER}))
     m.pad(pads.get(target, 0)); state.buttons = pads.get(target, 0)
     services = NativeServices(state)
     for step in STEPS:

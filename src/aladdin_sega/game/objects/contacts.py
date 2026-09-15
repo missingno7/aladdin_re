@@ -27,6 +27,7 @@ from ..pad import HELD_LEFT, HELD_RIGHT, HELD_UP
 from ..rng import SEED_ADDRESS, advance_rng
 from .. import player as P
 from .. import hud
+from .. import video
 from ..control import CROUCHING, PUSHING, BLOCKED_LEFT, BLOCKED_RIGHT
 
 PUFF, SPARKLE, DUST, SPLASH, HIT_TEMPLATE, GEM_DROP = 0x1B7940, 0x1B7ABC, 0x1B7CC4, 0x1B7E40, 0x1B7CD8, 0x1B8368
@@ -192,7 +193,7 @@ def sword_enemy(read, write, rom, services, memory, record):
     """1AE796 (kinds 1E/1F/21/22): a sword-fighting enemy: hit it from the front, or be hurt by its parry."""
     if _player_side_ok(read, record) and read(P.SWORD_ACTIVE, 1):
         if read(record + 0x3C, 1) & 0x20:
-            raise ContactFrameGap('the sword clash (1AE7CA) flashes the palette and waits a frame')
+            return _sword_clash(read, write, rom, services, record)
         kind = read(record, 1)
         if kind in DEATH_SCRIPTS_1AE872:
             write(record + 0x20, DEATH_SCRIPTS_1AE872[kind], 4)
@@ -204,6 +205,23 @@ def sword_enemy(read, write, rom, services, memory, record):
         return
     if read(record + 0x3C, 1) & 0x20:
         P.hurt(read, write, services)
+
+
+def _sword_clash(read, write, rom, services, record):
+    """1AE7CA: the enemy parries: a white flash for one frame, both fighters recoil."""
+    vdp = services.state.vdp
+    video.flash_white(vdp)
+    services.vblank()
+    video.restore_palettes(read, write, rom, vdp)
+    if read(P.ON_GROUND, 1) and not read(P.ATTACKING, 1):
+        P.set_script(write, 0x1227C2 if read(P.SWORD_ACTIVE, 1) == 1 else 0x1228A0)
+    write(P.SWORD_ACTIVE, 0, 1)
+    write(record + 0x3C, read(record + 0x3C, 1) & ~0x20, 1)
+    write(record + 0x37, 0, 1)
+    write(P.WALKING, 0, 1)
+    script = PARRY_SCRIPTS.get(read(record, 1))
+    if script:
+        write(record + 0x20, script, 4)
 
 
 def _enemy_hit_or_die(read, write, memory, services, record):
@@ -536,6 +554,29 @@ def bonus_flag_item(read, write, rom, services, memory, record):
     _template(write, rom, record, HIT_TEMPLATE)
 
 
+def sword_breaks_kind_03(read, write, rom, services, memory, record):
+    """1AED86 (kind 03): the sword breaks it (script 122E16) and clears the player's +34; otherwise as 1AE9C6."""
+    if not read(P.SWORD_ACTIVE, 1):
+        return sword_or_hurt(read, write, rom, services, memory, record)
+    write(record, 0x84, 1)
+    write(record + 0x20, 0x122E16, 4)
+    write(record + 0x37, 0, 1)
+    write(RECORD_TABLE + 0x34, 0, 1)
+
+
+def pot_2f(read, write, rom, services, memory, record):
+    """1AEDA8 (kind 2F): it breaks (script 123A96); with the sword out a splash effect, otherwise the player is hurt."""
+    write(record, 0x84, 1)
+    write(record + 0x20, 0x123A96, 4)
+    write(record + 0x37, 0, 1)
+    if not read(P.SWORD_ACTIVE, 1):
+        return P.hurt(read, write, services)
+    _sound(read, services, 0x21)
+    splash = _find_free(read, _record(1), 24)
+    if splash is not None:
+        _spawn_at(read, write, rom, SPLASH, splash, read(record + 2, 2), read(record + 4, 2))
+
+
 def carried_object(read, write, rom, services, memory, record):
     """1AF516 (kind 36): moves to the extra pool as kind 82 with script 125710."""
     extra = _find_free(read, _record(25), 6)
@@ -605,6 +646,35 @@ def platform_sink(read, write, rom, services, memory, record):
         write(record, 0x63, 1)
         write(record + 0xA, 0x121598, 4)
         _sound(read, services, 0x45)
+
+
+def platform_lift_switch(read, write, rom, services, memory, record):
+    """1AF978 (kinds 69/6A/...): stood on, kinds 6A and 69 become kind 6B with their lift scripts."""
+    if not _platform(read, write, record, -8, 0xC):
+        return
+    kind = read(record, 1)
+    if kind in (0x6A, 0x69):
+        write(record, 0x6B, 1)
+        write(record + 0x20, 0x12408E if kind == 0x6A else 0x12404E, 4)
+        write(record + 0x37, 0, 1)
+        _restore_spawn_flag(read, write, record)
+
+
+def platform_tilt(read, write, rom, services, memory, record):
+    """1AF9F6 (kinds 76/77): a platform that carries the player sideways and tilts (kind 77) under them."""
+    if not _platform(read, write, record, -0xB, 6):
+        return
+    dx = read(record + 0x1C, 1)
+    write(P.SCREEN_X, _w(read(P.SCREEN_X, 2) + (dx - 0x100 if dx & 0x80 else dx)), 2)
+    if read(record, 1) != 0x76:
+        return
+    x, ox = read(P.WORLD_X, 2), read(record + 2, 2)
+    if x >= _w(ox + 8):
+        write(record + 0x20, 0x1241C8, 4)
+        write(record, 0x77, 1)
+    elif x < _w(ox - 8):
+        write(record + 0x20, 0x124198, 4)
+        write(record, 0x77, 1)
 
 
 def platform_break(read, write, rom, services, memory, record):
@@ -696,7 +766,9 @@ def shop(read, write, rom, services, memory, record):
             return _shop_refuse(read, write, services, memory)
         write(SHOP_LATCH, 0xFF, 1)
         if read(LIVES, 1) == 0x39:
-            raise ContactFrameGap('the shop message 16 (1B2238) is not recovered')
+            services.show_message(0x16)
+            write(SHOP_LATCH, 0xFF, 1)
+            return
         for _ in range(5):
             hud.remove_gem(read, write)
         _sound(read, services, 0x48)
@@ -709,7 +781,9 @@ def shop(read, write, rom, services, memory, record):
             hud.remove_gem(read, write)
         _sound(read, services, 0x48)
         write(CONTINUES, read(CONTINUES, 1) + 1, 1)
-    raise ContactFrameGap('the shop message 14 (1B2238) is not recovered')
+    write(hud.MESSAGE, 0x14, 1)
+    services.show_message(0x14)
+    _shop_camera(write)
 
 
 def _shop_camera(write):
@@ -722,7 +796,9 @@ def _shop_refuse(read, write, services, memory):
     for slot in range(1, 25):
         if read(_record(slot), 1) == 0x85:
             return
-    raise ContactFrameGap('the shop message 11 (1B2238) is not recovered')
+    write(hud.MESSAGE, 0x11, 1)
+    services.show_message(0x11)
+    write(SHOP_LATCH, 0xFF, 1)
 
 
 PLAYER_CALLBACKS = {
@@ -731,13 +807,14 @@ PLAYER_CALLBACKS = {
     0x1AE9E0: _flag_on_sword(0xFFF10E), 0x1AEA00: _flag_on_sword(0xFFF10F, (0x4F, 0xFE)),
     0x1AEA24: _flag_on_sword(0xFFF110, (0x4E, 0xFD)), 0x1AEA48: lamp_or_pot, 0x1AEB7A: nothing,
     0x1AEB7C: hurt_unless_armed, 0x1AEBA4: deadly_or_cutscene, 0x1AEBDC: deadly_centre, 0x1AEBFE: nothing,
-    0x1AED24: stomp_or_hurt, 0x1AEE18: burst, 0x1AEE40: apple_thrower, 0x1AEECA: cut_rope_object, 0x1AEEDE: nothing,
+    0x1AED24: stomp_or_hurt, 0x1AED86: sword_breaks_kind_03, 0x1AEDA6: nothing, 0x1AEDA8: pot_2f, 0x1AEE18: burst, 0x1AEE40: apple_thrower, 0x1AEECA: cut_rope_object, 0x1AEEDE: nothing,
     0x1AEEE0: health_full, 0x1AEF12: health_up, 0x1AEF5C: extra_life,
     0x1AEFB0: _progress(0xFFF126), 0x1AEFDC: _progress(0xFFF127), 0x1AF008: _progress(0xFFF128),
     0x1AF034: _progress(0xFFF129), 0x1AF060: _progress(0xFFF116), 0x1AF08C: _progress(0xFFF12A),
     0x1AF228: gem, 0x1AF384: bonus_1000, 0x1AF3C2: bonus_flag_item, 0x1AF468: apple, 0x1AF4A0: points_item, 0x1AF4D8: scarab,
     0x1AF516: carried_object, 0x1AF53E: _layer(0), 0x1AF54A: _layer(1), 0x1AF556: _clear_kind(8), 0x1AF562: _clear_kind(9),
-    0x1AF590: platform_switch, 0x1AF5F0: platform_2, 0x1AF81C: platform_sink, 0x1AFA84: platform_break,
+    0x1AF590: platform_switch, 0x1AF5F0: platform_2, 0x1AF81C: platform_sink, 0x1AF978: platform_lift_switch,
+    0x1AF9F6: platform_tilt, 0x1AFA84: platform_break,
     0x1AFB36: rope, 0x1AFD84: spring, 0x1AFE1C: shop,
 }
 
@@ -813,6 +890,27 @@ def apple_hit_gem_enemy(read, write, rom, services, memory, projectile, target):
         services.sound(0, 0x14, flush=True)
 
 
+def apple_hit_boss_10(read, write, rom, services, memory, projectile, target):
+    """1AC2BC (kind 10): the apple splats; a hit point lost plays script 1239A0, none left kills it."""
+    write(projectile, 0, 1)
+    _release(memory, services, projectile)
+    _splat(read, write, rom, services, (projectile - RECORD_TABLE) // RECORD_SIZE, projectile)
+    if read(target + 1, 1):
+        write(target + 1, read(target + 1, 1) - 1, 1)
+        write(target + 0x20, 0x1239A0, 4)
+        write(target + 0x37, 0, 1)
+        return
+    _apple_kill(read, write, rom, services, memory, target)
+
+
+def apple_hit_kind_03(read, write, rom, services, memory, projectile, target):
+    """1AC0EE (kind 03): script 122E16, the spawn flag byte cleared, then the shared hit."""
+    write(target + 0x20, 0x122E16, 4)
+    write(target + 0x37, 0, 1)
+    write(target + 0x34, 0, 1)
+    apple_hit(read, write, rom, services, memory, projectile, target)
+
+
 def apple_hit_or_stun(read, write, rom, services, memory, projectile, target):
     """1AC350 (kinds 1D/20): a spent apple kills; a fresh one stuns the object three times in four."""
     if read(projectile, 1) == 0x82:
@@ -847,6 +945,8 @@ PROJECTILE_CALLBACKS = {
     0x1AC458: apple_hit, 0x1AC1B4: apple_hit_with_script(0x1252A8, 0x120D4C),
     0x1AC318: apple_hit_with_script(0x1234BE, kind=0x84), 0x1AC334: apple_hit_with_script(0x12350C, kind=0x84),
     0x1AC350: apple_hit_or_stun, 0x1AC1D0: apple_hit_gem_enemy, 0x1AC6A2: apple_caught,
+    0x1AC0EE: apple_hit_kind_03, 0x1AC2BC: apple_hit_boss_10,
+    0x1AC2E0: apple_hit_with_script(0x12384A, kind=0x84), 0x1AC2FC: apple_hit_with_script(0x12387A, kind=0x84),
 }
 
 PLAYER_CONTACTS.update(PLAYER_CALLBACKS)

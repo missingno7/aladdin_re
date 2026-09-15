@@ -22,6 +22,37 @@ from aladdin_sega.native.oracle import trace_port_writes, run_to_exits
 from aladdin_sega.game.objects.record import RECORD_TABLE, FIELDS
 from aladdin_sega.history import HistoryStore
 FRAME_TICKS = 896040
+VBLANK_HANDLER = 0x1B246E
+FRAME_BOUNDARY = 0x1AC726        # the first main-loop call after the VBlank wait
+
+
+def seed_at_boundary(m, frame, pads, rom):
+    """Run the oracle from a snapshot to the next frame boundary and seed a native state there."""
+    m.gates([FRAME_BOUNDARY, VBLANK_HANDLER])
+    m.pad(pads.get(frame, 0))
+    while True:
+        assert m.run(target=m.info['tick'] + 3 * FRAME_TICKS) == 'gate', 'no frame boundary after the snapshot'
+        pc = m.info['pc']
+        m.gate(pc, bypass_once=True)
+        if pc == VBLANK_HANDLER:
+            m.pad(pads.get(m.info['tick'] // FRAME_TICKS, 0))
+            continue
+        break
+    frame = m.info['tick'] // FRAME_TICKS
+    return GameState.from_machine(m, frame, rom), frame
+
+
+def run_oracle_frame(m, pads):
+    """Run the oracle to its next frame boundary, applying the recorded pad at every VBlank it passes."""
+    while True:
+        assert m.run(target=m.info['tick'] + 3 * FRAME_TICKS) == 'gate', 'the oracle did not reach the frame boundary'
+        pc = m.info['pc']
+        m.gate(pc, bypass_once=True)
+        if pc == VBLANK_HANDLER:
+            m.pad(pads.get(m.info['tick'] // FRAME_TICKS, 0))
+            continue
+        if pc == FRAME_BOUNDARY:
+            return
 
 BOOKKEEPING = ((0xFF769A, 0xFF7A00, 'DMA queue'), (0xFFEF40, 0xFFEFDC, 'stack'),
                (0xFF7D9A, 0xFF7DA3, 'continuations'), (0xFFEFEE, 0xFFEFF0, 'queue counters'))
@@ -58,9 +89,9 @@ def load(frame):
 
 def native(frame, count):
     rom = read_rom()
-    m = Machine(rom); m.restore(load(frame))
-    state = GameState.from_machine(m, frame, rom); m.close()
+    m = Machine(rom); m.audio_policy('discard'); m.restore(load(frame))
     pads = masks()
+    state, frame = seed_at_boundary(m, frame, pads, rom); m.close()
     try:
         for _ in range(count):
             run_frame(state, pads.get(state.frame, 0))

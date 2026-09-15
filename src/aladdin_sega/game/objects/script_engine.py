@@ -249,6 +249,27 @@ def _drop_rider(engine, obj, pc):
     return pc
 
 
+def _transform_first_89(motion):
+    def routine(engine, obj, pc):
+        """1ACDD0 / 1ACE30: the first kind-89 object from the top of the main pool becomes an 84 effect."""
+        m = engine.mem
+        for i in range(24):
+            record = RECORD_TABLE + RECORD_SIZE * (24 - i)
+            if m.u8(record) != 0x89:
+                continue
+            seed, roll = advance_rng(m.u32(RNG_SEED)); m.write(RNG_SEED, seed, 4)
+            m.write(record + 0x18, ((roll & 7) - 3) & 0xFF, 1)
+            m.write(record, 0x84, 1)
+            m.write(record + 0xA, motion, 4)
+            m.write(record + 0x20, 0x124208, 4)
+            m.write(record + 6, m.u8(record + 6) | 0x40, 1)
+            flag = m.u8(record + 0x34)
+            m.write(SPAWN_BITMAP + m.u16(record + 0x32), flag, 1)
+            break
+        return pc
+    return routine
+
+
 def _set_target(engine, obj, pc):
     """1B58BA: the target point for the homing routines."""
     engine.mem.write(0xFFF094, (obj.x - 0x20) & 0xFFFF, 2)
@@ -284,7 +305,8 @@ NATIVE_ROUTINES = {
     0x1B52D6: _vertical_stream(0x693E), 0x1B52E2: _vertical_stream(0x6952), 0x1B52EE: _vertical_stream(0x695A),
     0x1B57C4: _home_to_target(3, -2, 0x68, 0x7C, True), 0x1B5850: _home_to_target(1, -2, 0x68, 0x7C, False),
     0x1B58BA: _set_target, 0x1ACFBC: _spawn_companion(0x73, 0x1208D8), 0x1ACF80: _spawn_companion(0x72, 0x120868),
-    0x1ACFF8: _drop_rider,
+    0x1ACF08: _spawn_companion(0x70, 0x120664), 0x1ACF44: _spawn_companion(0x71, 0x12070E),
+    0x1ACFF8: _drop_rider, 0x1ACDD0: _transform_first_89(0x1209F0), 0x1ACE30: _transform_first_89(0x1209F8),
     0x1B0336: _lazy_counter('add_apple'), 0x1B0360: _lazy_counter('remove_apple'),
     0x1B0394: _lazy_counter('add_gem'), 0x1B03BE: _lazy_counter('remove_gem'),
 }

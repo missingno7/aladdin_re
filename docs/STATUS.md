@@ -1570,3 +1570,33 @@ a comparison result into independent-console proof.  The native binding still
 owns Genesis CPU/device execution; editable Python owns history, orchestration,
 and recovered semantic islands.  Dependency and license details remain in
 [third_party/README.md](../third_party/README.md).
+
+## The native runtime runs whole levels (15 September, later still)
+
+The phase that followed the semantic map recovered the main loop as game
+code rather than as leaves.  Every call of the original loop
+(1A8C16..1A8CEE) is now a native step over the same RAM layout
+(`src/aladdin_sega/native/frame.py`, 36 steps), backed by semantic modules
+under `src/aladdin_sega/game/` (the script engine with all opcodes, the
+spawn sites, the level map and scroll routines, the player's physics and
+control, the tiles under the player, the two contact scans with their
+callbacks, the HUD, the level flow, the sprite table, the messages) and a
+VDP model.  Nothing on the native path executes original code; what is
+not recovered raises `NativeGap` with the ROM address.
+
+Verification: each step byte-exact at its own entry / exit against the
+oracle, VDP steps word-exact against the oracle's port writes
+(`native/oracle.py` single-steps the original), and the whole frame:
+`scripts/native_diff.py` runs native and oracle side by side and compares
+the entire work RAM after every frame.  From the seven recorded states the
+native runtime matches the oracle on every byte of every frame until a
+declared gap -- 3,400 to 5,700 frames from each of levels 0, 1, 3, 4 and 5
+-- stopping at the first level change, a life lost, or a callback not yet
+met by the recording.  The whole-frame comparison found three defects the
+per-step comparison could not (docs/semantic-map.md section 9).
+
+Next: the transitions (respawn, level change with the level loader and its
+decompressors, the bonus stages) as nested-frame sequences, then the outer
+game (boot, title, attract) so the 82,161-frame recording runs from
+power-on in the native runtime.
+

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from .state import GameState, NativeGap
 from ..game.objects.script_engine import Engine, Services, Trace
-from ..game import pad, hud, player, video, scroll, level, spawn, pause, camera, tiles, control, flow, sprites
+from ..game import pad, hud, player, video, scroll, level, spawn, pause, camera, tiles, control, flow, sprites, messages
 from ..game.objects import ground, contact_scan, contacts  # noqa: F401  (contacts registers the callbacks)
 
 
@@ -33,6 +33,17 @@ class NativeServices(Services):
 
     def sound(self, slot, sound_id, flush=True):
         self.state.events.append(('sound', self.state.frame, sound_id, flush))
+
+    def vblank(self):
+        """A nested VBlank wait inside a step (1B249E from a callback): one recorded frame passes."""
+        _vblank_boundary(self.state)
+        self.state.frame += 1
+
+    def show_message(self, code):
+        try:
+            messages.show(self.state.read, self.state.write, self.state.rom, self.state.vdp, self.state.memory(), self, code)
+        except messages.MessageGap as gap:
+            raise NativeGap('message', 0x1B2238, str(gap), self.state.frame) from None
 
     def spawned(self, flag, record, kind):
         self.state.events.append(('spawn', self.state.frame, flag, (record - 0xFF7E40) // 66, kind))
@@ -150,9 +161,7 @@ def hud_health(state: GameState, services):
 
 
 def token_counter(state: GameState, services):
-    def message(code):
-        raise NativeGap('token_counter', 0x1B2236, f'the message overlay {code:02X} is not recovered', state.frame)
-    hud.token_counter(state.read, state.write, lambda sound_id: services.sound(0, sound_id), message)
+    hud.token_counter(state.read, state.write, lambda sound_id: services.sound(0, sound_id), lambda code: None)   # 1B2236 is an RTS
 
 
 def _flow(name, entry):
@@ -172,13 +181,18 @@ def sprite_table(state: GameState, services):
     sprites.build_sprite_table(state.read, state.write, state.rom, state.bus_read)
 
 
-def wait_vblank(state: GameState, services):
-    """1B249E and the VBlank handler 1B246E: the frame boundary and the any-button latch."""
-    if state.read(pause.PAUSE_INHIBITED, 1):
-        raise NativeGap('wait_vblank', 0x1B24AC, 'the Start-release wait is not recovered', state.frame)
+def _vblank_boundary(state: GameState):
+    """The VBlank handler 1B246E: the flag the wait spins on, and the any-button latch."""
     state.write(0xFF7E1E, 0xFF, 1)
     if state.read(0xFF7E23, 1) and any(f(state.read) for f in (pad.button_start, pad.button_a, pad.button_b, pad.button_c)):
         state.write(0xFF7E22, 0xFF, 1)
+
+
+def wait_vblank(state: GameState, services):
+    """1B249E: the frame boundary."""
+    if state.read(pause.PAUSE_INHIBITED, 1):
+        raise NativeGap('wait_vblank', 0x1B24AC, 'the Start-release wait is not recovered', state.frame)
+    _vblank_boundary(state)
 
 
 def frame_counter(state: GameState, services):

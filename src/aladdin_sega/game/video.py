@@ -28,8 +28,8 @@ LAST_DMA_DESTINATION = 0xFF8880  # bookkeeping written by every flush
 GAME_MODE = 0xFFF57C             # 1 attract demo, 2 (no streaming), otherwise play
 SPRITE_TABLE_COMMAND = 0x1CB2    # ROM long: the VRAM write command for the sprite attribute table
 DMA_ENABLED, DMA_DISABLED = 0x8174, 0x8164   # register 1 with and without M1
-PALETTE_SOURCES = (0xFF7262, 0xFF7266, 0xFF726A)          # 1B2678 / 1B2664 / 1B2650 remember their source here
-PALETTE_COMMANDS = (0xC0000000, 0xC0200000, 0xC0400000)  # CRAM lines 0..2
+PALETTE_SOURCES = (0xFF7262, 0xFF7266, 0xFF726A, 0xFF726E)          # 1B2678 / 1B2664 / 1B2650 / 1B263C remember their source
+PALETTE_COMMANDS = (0xC0000000, 0xC0200000, 0xC0400000, 0xC0600000)  # CRAM lines 0..3
 
 
 def flush_upload_queue(read, write, vdp) -> None:
@@ -80,8 +80,21 @@ def stream_tiles(read, write, rom, vdp) -> None:
     vdp.control(DMA_DISABLED)
 
 
+def flash_white(vdp) -> None:
+    """1B26D0: every CRAM entry becomes white (the sword clash flash)."""
+    vdp.control_long(PALETTE_COMMANDS[0])
+    for _ in range(64):
+        vdp.data(0xEEE)
+
+
+def restore_palettes(read, write, rom, vdp) -> None:
+    """1ACDA2: the four remembered palette lines are loaded again."""
+    for index, source in enumerate(PALETTE_SOURCES):
+        load_palette(write, rom, vdp, index, read(source, 4))
+
+
 def load_palette(write, rom, vdp, index, source) -> None:
-    """1B2650 (index 2) / 1B2664 (1) / 1B2678 (0): one 16-colour line from ROM into CRAM."""
+    """1B2678 (line 0) / 1B2664 (1) / 1B2650 (2) / 1B263C (3): one 16-colour line from ROM into CRAM."""
     write(PALETTE_SOURCES[index], source, 4)
     vdp.control_long(PALETTE_COMMANDS[index])
     for i in range(16):
