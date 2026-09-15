@@ -605,3 +605,46 @@ the evidence was regenerated under the new boundary); cold 82,161-frame
 comparison PASS, zero restores, at `artifacts/decoupled-baseline-main/`.
 Scheduler refusals 15,691 -> 103, fallbacks 37,458 -> 21,840, contact ticks
 owned 53,342 -> 65,338 (+22 percent), instructions replaced 12.64M -> 15.41M.
+
+
+## Supervised Sonnet grind, 14-15 September: phase review
+
+Seven Sonnet stints over about eleven hours, lightly supervised, on the
+82,161-frame `main`: 69 commits, 23 milestone cold comparisons, every one
+PASS with zero restores and current receipts, no verifier failure, three
+blocker packages (two resolved by the supervisor as recipes, one an empty
+frontier).  Fallbacks 21,840 -> 379.  Owned execution 15.41M -> 18.11M
+instructions (1.83 -> 2.15 percent of the recording's 842M); contact ticks
+owned 65,338 -> 74,100; spawn walker batches 8,430 -> 8,506; seam entries
+547 -> 628.  Tests 1,641 -> about 2,600 (51 modules); boundary plus semantic
+source 6,894 -> 9,371 lines.
+
+What converged naturally: later leaves were compositions of proven adapters
+or table rows (six spawn children in one leaf; 1B67C2 as two RNG-gated
+spawns over proven pieces; 1B65F4 as selector plus initializer); parents
+absorbed children without being forced (the dispatcher's direct hits fell
+to about a hundred as the scan took its children).  What repeated: a
+recovered parent that batches iterations (spawn walker, contact scan)
+declined when one child needed a native island; both were fixed by the
+same planner truncation at the loop head, no new mechanism.  What did not
+move: the spawn family's 34 children reduced fallbacks by 3,200 but owned
+execution by only 0.06M instructions, because they are rare on this
+recording; the fallback count is coverage evidence, not ownership.
+
+Remaining on this history (379 fallbacks): 105 scheduler refusals in
+overrun frames (residue); about 150 in regions with two or more native
+calls separated by recovered writes (contact reset 54 fixtures, sibling
+27, type1f 22, type44 2, 1AF21E, 1B6C5A, 1B6D1E), which the seam cannot
+express because its suffix must be a plan, not another seam; the
+command-stream engine (kind 21 and 7E, 8,000-instruction ticks); and the
+Type-1F arms that call a second VDP helper at 1B26D2 next to the sound
+request.  The measured obstacle is therefore one shape: chained native
+islands inside one recovered region.
+
+Decision: the bottom-up process converged on everything this recording
+exercises that one seam can express.  Two next levers, in order: a chained
+seam (the runner lets a suffix planner return another SoundSeam and loops;
+about ten lines plus tests, a generalization of the existing mechanism
+rather than a new one) followed by one more stint on the 150; and a longer
+recording, because coverage arrives in level-sized chunks and 1AF5F0,
+1AFA84, 1AE9A8, 1AEB7A and 1AF81C did not exist before frame 51,000.

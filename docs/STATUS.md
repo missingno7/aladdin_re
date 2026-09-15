@@ -6,6 +6,19 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Supervised grind: phase review (15 September)
+
+Seven Sonnet stints on the 82,161-frame `main` took fallbacks from 21,840 to
+379 across 23 milestone cold comparisons, all PASS with zero restores; owned
+execution rose from 1.83 to 2.15 percent of the recording's instructions.
+The review in `docs/recovery-cost-log.md` records what converged (adapter
+composition, parents absorbing children), what repeated (batching parents
+declining at a native island, fixed twice by loop-head truncation) and what
+remains: scheduler residue, the command-stream engine, and about 150
+fallbacks in regions with two or more native calls separated by recovered
+writes, which one seam cannot express.  Next levers: a chained seam, then a
+longer recording.
+
 ## Contact scan truncates at the first seam-needing callback; fallbacks 686 -> 379
 
 `contact_scan_plan` and `_contact_scan_resume` used to raise
