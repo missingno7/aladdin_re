@@ -6,6 +6,74 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Contact scan truncates at the first seam-needing callback; fallbacks 686 -> 379
+
+`contact_scan_plan` and `_contact_scan_resume` used to raise
+`UnsupportedCandidate` for the *whole* 24-slot batched contact scan
+whenever a single slot's callback would need a native seam (device or
+sound access) -- the ledger's largest rows ("contact scan type1f requires
+original sound/device path" 121 fallbacks, "contact scan type43 requires
+original sound path" 18, plus the same shape behind type44's command98
+seam, the contact sibling's command8 seam and the contact reset seams).
+Ownership of the seam slot itself was already correct (the per-slot
+`COLLECTION_DISPATCH_ENTRY` gate already recovers any individual slot's
+callback, seam included) but the whole batch's own already-composed prefix
+was discarded and re-derived piecemeal one native instruction at a time --
+the same shape the spawn dispatcher walker had before this stint's earlier
+truncation fix (`fd777e3`).
+
+This leaf applies the identical planner change: when a slot's callback
+processing raises `UnsupportedCandidate`, both functions now truncate
+their batch there, admitting the slots already composed before it as one
+plan ending at the loop head (`0x1ABBE0`) with the original's A1 cursor,
+D4 remaining count and stack -- `COLLECTION_DISPATCH_ENTRY` then owns the
+seam slot directly once native execution reaches it, exactly as a fresh
+(non-scan) dispatch to the same target already does. `contact_step_plan`
+and `finish_contact_step_sound` compose the scan's result and, like
+`spawn_setup_dispatch` before `fd777e3`, assumed it always reached
+`CONTACT_SCAN_EXIT`; both now share a new `_pop_contact_scan_return`
+helper that leaves a truncated (loop-head) result as-is instead of
+misreading it as a pushed return address.
+
+`CONTACT_COMPLETION_EXIT` (1ABD74) was deliberately **not** armed as a new
+top-level production gate for a batched `_contact_scan_resume` resume of
+everything after a truncation point, even though that reads as the
+literal completion of "the dispatcher gate owns the seam slot and
+`_contact_scan_resume` owns the rest": the native machine hard-caps the
+armed gate set at 64 (`native/machine.cpp:166`), the lifecycle candidate
+is already at 62, and the qualification test harness
+(`oracle_witness.execute_region`) adds up to 2 more on top of that for
+whatever it is qualifying -- confirmed by an immediate `Invalid gate set`
+`NativeError` against several existing tests when this was tried. Slots
+after a truncation point still recover individually through the
+already-armed `COLLECTION_DISPATCH_ENTRY` gate as native execution reaches
+each one in turn; a genuine per-remainder Python batch through 1ABD74
+would need either a gate-budget reduction elsewhere or a temporary
+narrow-arm/restore around it like `_run_sound_seam`'s own pattern, and is
+left for a follow-up leaf. Lifecycle gate count stays 62.
+
+segment_verify PASS on all 142 recorded child+parent fixtures of the
+type1f (1AE796), type43 (1AE64C) and type44 (1AEF12) classes. **2,606
+tests pass** (`-n 8`); the **82,161-frame cold comparison passes** with
+zero restores at `artifacts/contact-scan-truncate15/` (92,573 candidate
+hits, 379 fallbacks, down from 686 -- a bigger drop than the truncation
+itself accounts for, since it also exposes several already-recovered
+`COLLECTION_DISPATCH_ENTRY` targets, e.g. 1AF21E/1AF228/1AED86, that a
+whole-scan decline previously hid entirely). A read-only census also ran
+for the contact sibling family (`--entry 1AEC00 --entry 1AE4F8 --entry
+1AF21E --parent 1ABB40` into `artifacts/evidence/contact2`), giving real
+recorded fixtures for `CONTACT_SIBLING_ENTRY` (1AEC00) for the first time.
+
+Next frontier by fallback count: `begin_contact_family_type1f_inactive`'s
+non-inactive-tail-rts arm (99, needs a device-access mechanism); contact
+sibling decrement command8 seam (23, now with real fixtures in
+`artifacts/evidence/contact2`); the two contact-reset rows (20, "outside
+the recorded sound seam" -- needs a "synchronous reset seam" mechanism not
+yet designed); type44 command98 seam (19, needs a new sound-seam shape);
+type2c pool-scan-and-spawn arm (8, a composition of the proven 1AE262
+selector and initializer); 1B6D1E/1B6C5A stay inadmissible (chained native
+calls with writes between them).
+
 ## Contact scan now owns type43's inactive arm too; fallbacks 702 -> 686
 
 1AE64C (type43) was never registered in either `contact_scan_plan`'s or
