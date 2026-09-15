@@ -3,7 +3,7 @@ from pathlib import Path
 import hashlib
 import pytest
 
-from aladdin_sega.machine import Machine
+from genesis_re.machine import Machine
 from test_recovery import native_replace_rom, native_write
 from aladdin_sega.recovery import Candidate
 from aladdin_sega.boundary import begin_collection, finish_collection, relocate_collection, ROM_SHA256, UnsupportedCandidate

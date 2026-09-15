@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import native_replay as nr
-from aladdin_sega.machine import Machine
+from genesis_re.machine import Machine
 from aladdin_sega.native import NativeGap, run_frame
 
 

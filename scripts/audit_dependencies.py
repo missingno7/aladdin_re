@@ -27,7 +27,7 @@ def audit(build, donor, ninja):
     uses = {}
     for obj, paths in objects.items():
         for path in paths:
-            uses.setdefault(path, set()).add("runtime" if "aladdin_native.dir/" in obj else "test")
+            uses.setdefault(path, set()).add("runtime" if "genesis_native.dir/" in obj else "test")
     # Quote-include edges among the files the compiler actually reported.
     def resolve(name):
         return (donor if name.startswith("donor/") else ROOT) / name.split("/", 1)[1]

@@ -16,7 +16,7 @@ The native runtime's events ('sound', 'sound_flush', 'sound_command')
 are its input; nothing here feeds back into the game.
 """
 from __future__ import annotations
-from ..machine import Machine
+from genesis_re.machine import Machine
 
 from ..profile import FRAME_TICKS
 PARK = 0x2630                       # bra.s *

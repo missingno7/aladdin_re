@@ -89,7 +89,7 @@ def test_incremental_build_rechecks_dependencies_and_refreshes_identity(tmp_path
     build_command = [str(TOOLS["cmake"]), "--build", str(build)]
     require_success(build_command, cwd=project)
 
-    dll = build / "libaladdin_native.dll"
+    dll = build / "libgenesis_native.dll"
     assert dll.is_file()
     original_dll_hash = sha256(dll)
     initial_source_id = source_id_from_fresh_process(dll)

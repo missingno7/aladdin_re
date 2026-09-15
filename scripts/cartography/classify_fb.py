@@ -2,8 +2,8 @@
 import collections, json, os, sys
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[2] / 'src'))
 sys.path.insert(0, 'D:/Prog/aladdin_re/scripts')
-os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libaladdin_native.dll')
-from aladdin_sega.machine import Machine
+os.environ.setdefault('GENESIS_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libgenesis_native.dll')
+from genesis_re.machine import Machine
 from aladdin_sega.profile import read_rom
 from aladdin_sega.game.objects.contact import contact_route, contact_sibling_route
 

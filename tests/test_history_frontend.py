@@ -1,11 +1,22 @@
 """The frontend chooses immutable history nodes before opening a live session."""
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from aladdin_sega import frontend
-from aladdin_sega import history
-from aladdin_sega import history_runtime
+from genesis_re import frontend
+from genesis_re import history
+from genesis_re import history_runtime
+from genesis_re.profile import GameProfile
+
+GAME = GameProfile(id="test", title="Test Game", package="genesis_re", profile_id="test-v1",
+                   rom_sha256="0" * 64, rom_size=1, rom_filename="test.md",
+                   history_root={"format": "input-history-1", "root": "test-new", "clock": "simulation-frame",
+                                 "input": "three-button-pad-1", "initial_buttons": 0})
+OTHER = GameProfile(id="other", title="Other Game", package="genesis_re", profile_id="other-v1",
+                    rom_sha256="1" * 64, rom_size=1, rom_filename="other.md",
+                    history_root={"format": "input-history-1", "root": "other-new", "clock": "simulation-frame",
+                                  "input": "three-button-pad-1", "initial_buttons": 0})
 
 
 class _Window:
@@ -41,8 +52,8 @@ def _pygame(monkeypatch):
 class _Session:
     instances = []
 
-    def __init__(self, store, rom, node=None):
-        self.store, self.rom, self.node = store, rom, node
+    def __init__(self, game, store, rom, node=None):
+        self.game, self.store, self.rom, self.node = game, store, rom, node
         self.machine = SimpleNamespace(frame=lambda: (1, 1, b"\0\0\0"))
         self.steps, self.checkpoints = [], []
         self.frame = 0
@@ -67,9 +78,11 @@ class _Session:
 
 class _Store:
     root_id = "root"
+    instances = []
 
-    def __init__(self, _):
-        pass
+    def __init__(self, path, root=None):
+        self.path, self.root = path, root
+        self.__class__.instances.append(self)
 
     def resolve(self, ref="main"):
         return "main-node" if ref == "main" else ref
@@ -84,6 +97,7 @@ class _Store:
 
 def _install_runtime(monkeypatch):
     _Session.instances = []
+    _Store.instances = []
     monkeypatch.setattr(history, "HistoryStore", _Store)
     monkeypatch.setattr(history_runtime, "Session", _Session)
     monkeypatch.setattr(frontend, "AudioOutput", lambda: None)
@@ -94,19 +108,67 @@ def test_frame_automation_bypasses_timeline_and_chooses_cold_root(monkeypatch, t
     _pygame(monkeypatch)
     _install_runtime(monkeypatch)
 
-    frontend.play(b"rom", frames=1, history_path=tmp_path / "history", mute=True)
+    frontend.play(GAME, b"rom", frames=1, history_path=tmp_path / "history", mute=True)
 
     session = _Session.instances[0]
     assert session.node is None
+    assert session.game is GAME
     assert session.steps == [0]
     assert session.checkpoints == [("session_exit", None)]
+
+
+def test_history_store_defaults_to_the_games_own_directory_and_root(monkeypatch, tmp_path):
+    _pygame(monkeypatch)
+    _install_runtime(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    frontend.play(GAME, b"rom", frames=1, mute=True)
+
+    store = _Store.instances[0]
+    assert store.path == Path("history") / "test"
+    assert store.root == GAME.history_root
+    assert store.root != OTHER.history_root
+
+
+def test_automation_without_a_game_is_refused(monkeypatch, tmp_path):
+    _pygame(monkeypatch)
+    _install_runtime(monkeypatch)
+    with pytest.raises(ValueError, match="explicit game"):
+        frontend.play(None, frames=1, mute=True)
+    assert _Session.instances == []
+
+
+def test_game_chooser_returns_the_clicked_game(monkeypatch):
+    pygame = _pygame(monkeypatch)
+    pygame.MOUSEBUTTONDOWN = 9
+    games = {GAME.id: GAME, OTHER.id: OTHER}
+    layout = frontend._game_layout(games, width=960)
+    left, top, width, height = layout[OTHER.id]
+    pygame.event.get = lambda: [SimpleNamespace(type=9, button=1, pos=(left + width // 2, top + height // 2))]
+    monkeypatch.setattr(frontend.time, "sleep", lambda _: None)
+
+    assert frontend._choose_game(pygame, _Window(), _Font(), games) is OTHER
+
+    pygame.event.get = lambda: [SimpleNamespace(type=pygame.QUIT)]
+    assert frontend._choose_game(pygame, _Window(), _Font(), games) is None
+
+
+def test_closing_the_game_chooser_opens_no_session(monkeypatch, tmp_path):
+    pygame = _pygame(monkeypatch)
+    _install_runtime(monkeypatch)
+    pygame.event.get = lambda: [SimpleNamespace(type=pygame.QUIT)]
+
+    frontend.play(None)
+
+    assert _Session.instances == []
+    assert _Store.instances == []
 
 
 def test_resumed_history_releases_held_input_on_its_next_step(monkeypatch, tmp_path):
     _pygame(monkeypatch)
     _install_runtime(monkeypatch)
 
-    frontend.play(b"rom", frames=1, history_path=tmp_path / "history", node="prior", mute=True)
+    frontend.play(GAME, b"rom", frames=1, history_path=tmp_path / "history", node="prior", mute=True)
 
     session = _Session.instances[0]
     assert session.node == "prior"
@@ -134,7 +196,7 @@ def test_timeline_new_button_selects_a_cold_start(monkeypatch):
     pygame.event.get = lambda: [SimpleNamespace(type=9, button=1, pos=(20, 20))]
     monkeypatch.setattr(frontend.time, "sleep", lambda _: None)
 
-    selected, cold = frontend._choose_history(pygame, _Window(), _Font(), _Store("unused"))
+    selected, cold = frontend._choose_history(pygame, _Window(), _Font(), _Store("unused"), GAME)
 
     assert selected is None
     assert cold is True
@@ -148,7 +210,7 @@ def test_timeline_checkpoint_marker_starts_that_checkpoint(monkeypatch):
     pygame.event.get = lambda: [SimpleNamespace(type=9, button=1, pos=point)]
     monkeypatch.setattr(frontend.time, "sleep", lambda _: None)
 
-    selected, cold = frontend._choose_history(pygame, _Window(), _Font(), store)
+    selected, cold = frontend._choose_history(pygame, _Window(), _Font(), store, GAME)
 
     assert selected == "main-node"
     assert cold is False
@@ -188,7 +250,7 @@ def test_session_failure_still_closes_audio_and_pygame(monkeypatch, tmp_path):
     created = []
     monkeypatch.setattr(frontend, "AudioOutput", lambda: created.append(Audio()) or created[-1])
     with pytest.raises(StepFailure, match="step") as raised:
-        frontend.play(b"rom", frames=1, history_path=tmp_path / "history")
+        frontend.play(GAME, b"rom", frames=1, history_path=tmp_path / "history")
 
     assert created[0].closed
     assert calls == ["pygame"]
@@ -211,6 +273,6 @@ def test_pause_before_first_frame_does_not_read_unconfigured_vdp(monkeypatch, tm
             self.machine.frame = lambda: pytest.fail('VDP not initialized at cold root')
 
     monkeypatch.setattr(history_runtime, 'Session', ColdSession)
-    frontend.play(b'rom', new=True, mute=True, history_path=tmp_path)
+    frontend.play(GAME, b'rom', new=True, mute=True, history_path=tmp_path)
     assert _Session.instances[0].steps == []
     assert _Session.instances[0].checkpoints == [('session_exit', None)]

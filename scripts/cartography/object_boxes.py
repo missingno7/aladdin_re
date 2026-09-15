@@ -5,10 +5,11 @@ Camera hypothesis: screen_x = X - w(FFF080), screen_y = Y - w(FFF082).
 """
 import json, os, sys
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[2] / 'src'))
-os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libaladdin_native.dll')
-from aladdin_sega.history import HistoryStore
+os.environ.setdefault('GENESIS_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libgenesis_native.dll')
+from genesis_re.history import HistoryStore
 from aladdin_sega.profile import read_rom
-from aladdin_sega.history_runtime import GenesisRun
+from genesis_re.history_runtime import GenesisRun
+from aladdin_sega.profile import ALADDIN
 from PIL import Image, ImageDraw
 
 out = 'D:/Prog/aladdin_re/artifacts/cartography/frames'
@@ -16,7 +17,7 @@ os.makedirs(out, exist_ok=True)
 frames = [int(x) for x in sys.argv[1].split(',')]
 crop = len(sys.argv) > 2 and sys.argv[2] == 'crop'
 YOFF = int(sys.argv[3]) if len(sys.argv) > 3 else 192
-store = HistoryStore('D:/Prog/aladdin_re/history')
+store = HistoryStore('D:/Prog/aladdin_re/history/aladdin', ALADDIN.history_root)
 rom = read_rom()
 path = store.flatten(store.resolve('main'))
 events = path['events']
@@ -39,7 +40,7 @@ def objects(m):
     return cam, out
 
 
-with GenesisRun(rom, 'original') as run:
+with GenesisRun(ALADDIN, rom, 'original') as run:
     for f in sorted(frames):
         run.advance(f, [e for e in events if e['frame'] >= run.frame], lambda r: None)
         m = run.machine

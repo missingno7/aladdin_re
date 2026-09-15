@@ -62,7 +62,7 @@ def test_record_view_names_the_fields():
 
 
 def _machine_at(path):
-    from aladdin_sega.machine import Machine
+    from genesis_re.machine import Machine
     m = Machine(rom); m.restore(Path(path).read_bytes()); return m
 
 

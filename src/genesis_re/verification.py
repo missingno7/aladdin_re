@@ -12,10 +12,8 @@ import tempfile
 from typing import Any
 
 from . import artifacts
-from .machine import Machine
-from .history import HistoryStore, ROOT_ID, digest, encoded, write_json
+from .history import HistoryStore, write_json
 from .history_runtime import GenesisRun
-from .profile import read_rom
 from .receipt import execution_receipt
 
 
@@ -183,18 +181,20 @@ def compare_observations(reference, candidate):
 
 
 
-def execute_history(store, rom, *, node=None, candidate="original", tree=False, use_cache=False):
+def execute_history(game, store, rom, *, node=None, candidate="original", tree=False, use_cache=False):
     """Execute logical paths; traversal caches belong to this implementation only.
 
     Tree verification starts cold and caches only states just computed in that
     traversal. Persistent player caches are used only when explicitly requested.
     """
+    if store.root != game.history_root:
+        raise ValueError(f"History store {store.path} is not a {game.title} original-machine history")
     nodes = store.nodes() if tree else None
     selected = store.resolve(node or "main")
-    start = execution_receipt(candidate=candidate)
+    start = execution_receipt(game, candidate=candidate)
     observations, endpoints = {}, {}
     executed_frames = restores = 0
-    with GenesisRun(rom, candidate) as run:
+    with GenesisRun(game, rom, candidate) as run:
         if tree:
             children = {key: [] for key in nodes}
             for key, value in nodes.items():
@@ -202,11 +202,11 @@ def execute_history(store, rom, *, node=None, candidate="original", tree=False, 
                     children[value["parent"]].append(key)
             # An explicit traversal stack avoids a Python recursion limit on
             # a long playthrough with many manual checkpoints.
-            stack = [(ROOT_ID, run.save())]
+            stack = [(store.root_id, run.save())]
             while stack:
                 key, saved = stack.pop()
                 run.restore(saved)
-                if key != ROOT_ID:
+                if key != store.root_id:
                     restores += 1
                     branch = nodes[key]
                     edge = []
@@ -223,7 +223,7 @@ def execute_history(store, rom, *, node=None, candidate="original", tree=False, 
             restored = False
             if use_cache:
                 for key, _ in reversed(store.ancestry(selected)):
-                    if key != ROOT_ID and run.restore_cache(store, key):
+                    if key != store.root_id and run.restore_cache(store, key):
                         restored = True
                         restores = 1
                         break
@@ -236,10 +236,10 @@ def execute_history(store, rom, *, node=None, candidate="original", tree=False, 
             endpoints[selected] = run.observable()
         stats = dict(run.candidate.stats) if run.candidate else {}
         implementation = run.implementation
-    end = execution_receipt(candidate=candidate)
+    end = execution_receipt(game, candidate=candidate)
     if any(start[k] != end[k] for k in ("python_modules_sha256", "native_binary_sha256")):
         raise RuntimeError("Implementation changed during history execution")
-    return {"status": "COMPLETED", "compared": False, "root": ROOT_ID,
+    return {"status": "COMPLETED", "compared": False, "root": store.root_id, "game": game.id,
             "history_id": selected, "mode": "tree" if tree else "cached" if use_cache else "cold",
             "observations": observations, "endpoints": endpoints,
             "executed_frames": executed_frames, "restores": restores,
@@ -247,9 +247,9 @@ def execute_history(store, rom, *, node=None, candidate="original", tree=False, 
 
 
 def _validate_execution(payload, store, selected, tree, candidate, receipt):
-    if (payload.get("status"), payload.get("compared"), payload.get("root"),
+    if (payload.get("status"), payload.get("compared"), payload.get("root"), payload.get("game"),
             payload.get("history_id"), payload.get("mode")) != (
-            "COMPLETED", False, ROOT_ID, selected, "tree" if tree else "cold"):
+            "COMPLETED", False, store.root_id, receipt["game"], selected, "tree" if tree else "cold"):
         raise ValueError("Worker history/execution contract mismatch")
     actual_receipt = payload.get("receipt", {})
     for key in ("python_modules_sha256", "native_binary_sha256"):
@@ -260,7 +260,7 @@ def _validate_execution(payload, store, selected, tree, candidate, receipt):
     nodes = store.nodes() if tree else {selected: store.node(selected)}
     if set(payload.get("endpoints", {})) != set(nodes):
         raise ValueError("Worker omitted a history endpoint")
-    observed = set(nodes) - {ROOT_ID} if tree else set(nodes)
+    observed = set(nodes) - {store.root_id} if tree else set(nodes)
     if set(payload.get("observations", {})) != observed:
         raise ValueError("Worker omitted a history input segment")
     required = {"frame", "buttons", "state_sha256", "frame_sha256", "pcm_sha256", "pcm_bytes",
@@ -306,18 +306,18 @@ def _run_workers(roles, commands, *, timeout_seconds, parallel, runner=None):
             raise errors[role]
 
 
-def compare_history(store_path, rom_path, *, node=None, candidate="lifecycle", tree=False,
+def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecycle", tree=False,
                     output=Path("artifacts/comparison"), timeout_seconds=120, parallel=True,
                     runner=None):
     """Separate fresh workers, strict per-frame state/video/PCM and final equality."""
-    store = HistoryStore(store_path)
+    store = HistoryStore(store_path, game.history_root)
     selected = store.resolve(node or "main")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     identities = {key: store.flatten(key) for key in store.nodes()} if tree else store.flatten(selected)
     payloads = {}
-    receipt = execution_receipt()
-    report = {"history_id": selected, "tree": tree, "candidate": candidate,
+    receipt = execution_receipt(game)
+    report = {"game": game.id, "history_id": selected, "tree": tree, "candidate": candidate,
               "contract": "strict-genesis-every-canonical-frame", "status": "ERROR",
               "workers": "parallel" if parallel else "sequential"}
     try:
@@ -325,7 +325,7 @@ def compare_history(store_path, rom_path, *, node=None, candidate="lifecycle", t
         commands = {}
         for role, choice in roles:
             result_path = output / (role + ".json")
-            command = [sys.executable, "-m", "aladdin_sega", "history-run", selected,
+            command = [sys.executable, "-m", "genesis_re", "history-run", selected, "--game", game.id,
                        "--history", str(Path(store_path).resolve()), "--rom", str(Path(rom_path).resolve()),
                        "--candidate", choice, "--output", str(result_path.resolve())]
             if tree:

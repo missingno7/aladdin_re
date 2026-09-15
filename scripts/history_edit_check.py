@@ -23,7 +23,7 @@ def main():
     parser.add_argument('--replacement', required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    native = ROOT / 'build/libaladdin_native.dll'
+    native = ROOT / 'build/libgenesis_native.dll'
     before_hash = hashlib.sha256(native.read_bytes()).hexdigest()
     args.output.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -32,7 +32,7 @@ def main():
         shutil.copytree(ROOT / 'src/aladdin_sega', source, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         target = (source / args.source).resolve()
         target.relative_to(source.resolve())
-        env = dict(os.environ, PYTHONPATH=temporary, PYTHONDONTWRITEBYTECODE='1', ALADDIN_NATIVE_LIBRARY=str(native))
+        env = dict(os.environ, PYTHONPATH=temporary, PYTHONDONTWRITEBYTECODE='1', GENESIS_NATIVE_LIBRARY=str(native))
         for label in ('baseline', 'mutated'):
             if label == 'mutated':
                 text = target.read_text()
@@ -41,7 +41,7 @@ def main():
                 target.write_text(text.replace(args.needle, args.replacement))
             start = time.perf_counter()
             out = (args.output / label).resolve()
-            result = subprocess.run([sys.executable, '-m', 'aladdin_sega', 'history-verify', args.node,
+            result = subprocess.run([sys.executable, '-m', 'genesis_re', 'history-verify', args.node,
                                      '--history', str(args.history.resolve()), '--candidate', args.candidate,
                                      '--output', str(out)], env=env, capture_output=True, text=True, timeout=180)
             report = json.loads((out / 'comparison.json').read_text())

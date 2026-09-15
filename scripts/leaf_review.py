@@ -40,7 +40,7 @@ def _git(*args):
 def _environment():
     env = dict(os.environ)
     env['PYTHONPATH'] = os.pathsep.join(str(ROOT / part) for part in ('src', 'scripts', 'tests'))
-    env.setdefault('ALADDIN_NATIVE_LIBRARY', str(ROOT / 'build' / 'libaladdin_native.dll'))
+    env.setdefault('GENESIS_NATIVE_LIBRARY', str(ROOT / 'build' / 'libgenesis_native.dll'))
     return env
 
 

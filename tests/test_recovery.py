@@ -8,7 +8,7 @@ from aladdin_sega.recovery import (clear_auxiliary_buffer, clear_object_pair, de
                                     INIT_ENTRY, FINISH_ENTRY, COUNTED_REPLACE_ENTRY, REPLACE_ENTRY,
                                     initialize_object, finish_object, replace_object)
 
-from aladdin_sega.machine import Machine
+from genesis_re.machine import Machine
 from aladdin_sega.recovery import (
     CALLER_ENTRY, LEAF_ENTRY, ROM_SHA256, Candidate, UnsupportedCandidate,
 )

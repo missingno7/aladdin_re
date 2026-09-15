@@ -22,8 +22,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / 'src'))
 
 import capstone
 
-from aladdin_sega.machine import Machine
-from aladdin_sega.profile import read_rom
+from genesis_re.machine import Machine
 
 REGS = [f'd{i}' for i in range(8)] + [f'a{i}' for i in range(8)] + ['pc', 'sr']
 CCR = (('X', 0x10), ('N', 0x08), ('Z', 0x04), ('V', 0x02), ('C', 0x01))
@@ -33,9 +32,8 @@ _BRANCHES = {'bra', 'bsr', 'bhi', 'bls', 'bcc', 'bcs', 'bne', 'beq', 'bvc', 'bvs
 # Native routines a seam may call: bounded, self-contained, return to their
 # caller, and touch devices the plan itself may not.  A JSR to one of these is
 # collapsed to a NATIVE segment; the caller's code around it stays PYTHON.
-NATIVE_ENTRIES = {0x1E58B8: 'sound-request', 0x1E58F4: 'sound-fixed-helper', 0x1E589A: 'sound-flush',
-                  0x1B2650: 'vdp-tile-upload'}
-SOUND_ENTRIES = NATIVE_ENTRIES  # historical name
+# They are the game's (GameProfile.tracer_native_entries); a fact report
+# carries the set it was traced with under ``natives``.
 STACK_WINDOW = (128, 8)  # bytes below and above the entry A7 that belong to the activation's stack
 
 
@@ -59,10 +57,10 @@ def disasm(rom, ram, pc):
     return '??', 2
 
 
-def park(state, at_pc, *, rom=None, max_instructions=200000):
+def park(state, at_pc, *, game, rom=None, max_instructions=200000):
     """Run the original from a parked state until it stands on at_pc; return snapshot."""
-    rom = rom or read_rom()
-    with Machine(rom) as m:
+    rom = rom or game.read_rom()
+    with Machine(rom, game) as m:
         m.restore(state)
         if m.info['pc'] == at_pc:
             return m.snapshot()
@@ -83,8 +81,9 @@ class Tracer:
     harmless to the trace.
     """
 
-    def __init__(self, machine, rom, *, track_ram=True, detail=True):
+    def __init__(self, machine, rom, *, natives, track_ram=True, detail=True):
         self.machine, self.rom, self.track_ram, self.detail = machine, rom, track_ram, detail
+        self.natives = dict(natives)
         self.regs, self.info = machine.registers(), dict(machine.info)
         self.ram = ram_bytes(machine) if track_ram else None
         self.entry_regs, self.entry_info, self.entry_ram = dict(self.regs), dict(self.info), self.ram
@@ -184,16 +183,16 @@ class Tracer:
             'ccr_exit': {name: bool(exit_regs['sr'] & bit) for name, bit in CCR},
             'ccr_last_changed_step': self.ccr_last,
             'ram_writes_final': self.writes, 'ram_write_counts': self.write_counts,
-            'calls': self.calls, 'steps': self.steps,
+            'calls': self.calls, 'steps': self.steps, 'natives': self.natives,
         }
 
 
-def trace(state, *, entry=None, stop_pc=None, max_instructions=20000, rom=None, detail=True, track_ram=True):
-    rom = rom or read_rom()
-    with Machine(rom) as m:
+def trace(state, *, game, entry=None, stop_pc=None, max_instructions=20000, rom=None, detail=True, track_ram=True):
+    rom = rom or game.read_rom()
+    with Machine(rom, game) as m:
         m.restore(state)
         m.gates([])
-        tracer = Tracer(m, rom, track_ram=track_ram, detail=detail)
+        tracer = Tracer(m, rom, natives=game.tracer_native_entries, track_ram=track_ram, detail=detail)
         entry = tracer.entry if entry is None else entry
         if tracer.entry != entry:
             raise ValueError('state stands at %06X, not %06X' % (tracer.entry, entry))
@@ -228,7 +227,7 @@ def split_at_native(facts, callees=None):
     RAM writes and register file at its boundaries, which is exactly the
     prefix/seam/suffix contract a SoundSeam needs.
     """
-    callees = SOUND_ENTRIES if callees is None else callees
+    callees = facts['natives'] if callees is None else callees
     steps = facts['steps']
     segments, start, index = [], 0, 0
     calls = {c['step']: c for c in facts['calls'] if 'callee' in c and c['callee'] in callees}
@@ -296,9 +295,10 @@ def path_signature(facts):
                 if sp - STACK_WINDOW[0] <= address <= sp + STACK_WINDOW[1]:
                     continue
                 writes.add('rec+%02X' % (address - record) if record <= address < record + 66 else '%06X' % address)
-    calls = ['%06X%s' % (c['callee'], '*' if c['callee'] in SOUND_ENTRIES else '')
+    known = facts['natives']
+    calls = ['%06X%s' % (c['callee'], '*' if c['callee'] in known else '')
              for c in facts['calls'] if 'callee' in c and c['depth'] == 0]
-    natives = ['%06X' % c['callee'] for c in facts['calls'] if 'callee' in c and c['callee'] in SOUND_ENTRIES]
+    natives = ['%06X' % c['callee'] for c in facts['calls'] if 'callee' in c and c['callee'] in known]
     ccr = sum(bit for name, bit in CCR if facts['ccr_exit'][name])
     return {'exit': '%06X' % facts['exit_pc'], 'path': digest.hexdigest()[:16], 'calls': calls,
             'changed': sorted(k for k in facts['changed_registers'] if k not in ('pc', 'sr')),
@@ -317,13 +317,13 @@ def signature_key(signature):
     return '%s:%s' % (signature['path'], ','.join(signature['calls']))
 
 
-def report_segments(segments):
+def report_segments(segments, natives=None):
     lines = []
     for i, seg in enumerate(segments):
         head = '%s segment %d: %06X..%06X  %d instructions / %d cycles' % (
             seg['kind'].upper(), i, seg['entry_pc'], seg['last_pc'], seg['instructions'], seg['cycles'])
         if seg['kind'] == 'native':
-            head += '  (callee %06X %s)' % (seg['callee'], SOUND_ENTRIES.get(seg['callee'], ''))
+            head += '  (callee %06X %s)' % (seg['callee'], (natives or {}).get(seg['callee'], ''))
         lines.append(head)
         ra, rb = seg['registers_before'], seg['registers_after']
         changed = ', '.join('%s %08X->%08X' % (k, ra[k], rb[k]) for k in REGS if k != 'pc' and ra.get(k) != rb.get(k))

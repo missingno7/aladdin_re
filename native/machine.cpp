@@ -49,9 +49,11 @@ struct Handle {
     std::vector<std::int16_t> pcm;
     bool failed = false;
     bool pcm_overflow = false, discard_pcm = false;
-    Handle(std::vector<std::uint8_t> rom, const char* profile)
+    // The adapter holds no game facts: the snapshot identity is the cartridge's
+    // hash plus the profile id/hash the caller declares (genesis_re.machine).
+    Handle(std::vector<std::uint8_t> rom, const char* profile_id, const char* profile_sha256)
         : machine(rom, pf::genesis::ntsc_profile()), executor(machine), engine(machine, executor),
-          identity{pf::Sha256::of(rom.data(), rom.size()), "aladdin-usa-ntsc-v1", profile} {
+          identity{pf::Sha256::of(rom.data(), rom.size()), profile_id, profile_sha256} {
         identity.validate();
         machine.pcm_trace = {this, [](void* p, std::int32_t left, std::int32_t right, std::uint64_t) {
             auto& h = *static_cast<Handle*>(p);
@@ -118,16 +120,16 @@ std::uint64_t snapshot_tick(Handle& h, const std::uint8_t* data, std::uint64_t s
 // Project state contract, independent of source/build provenance. Bump when
 // persisted state or continuation semantics change; early artifacts regenerate.
 AL_API std::uint32_t al_state_version() noexcept { return 1; }
-AL_API std::uint32_t al_abi() noexcept { return 1; }
+AL_API std::uint32_t al_abi() noexcept { return 2; }
 AL_API const char* al_source_id() noexcept { return AL_SOURCE_ID; }
 AL_API const char* al_build_info() noexcept { return AL_BUILD_INFO; }
 AL_API const char* al_error() noexcept { return error.c_str(); }
-AL_API int al_create(const std::uint8_t* rom, std::uint64_t size, const char* profile, void** out) noexcept {
+AL_API int al_create(const std::uint8_t* rom, std::uint64_t size, const char* profile_id, const char* profile_sha256, void** out) noexcept {
     return protect([&] {
         require(out, "Missing handle output"); *out = nullptr;
         require(!active, "Only one active machine per process is supported");
-        require(rom && size >= 256 && size <= 0x400000 && profile, "Invalid ROM or profile");
-        auto h = std::make_unique<Handle>(std::vector<std::uint8_t>(rom, rom + size), profile);
+        require(rom && size >= 256 && size <= 0x400000 && profile_id && profile_sha256, "Invalid ROM or profile identity");
+        auto h = std::make_unique<Handle>(std::vector<std::uint8_t>(rom, rom + size), profile_id, profile_sha256);
         active = h.release(); *out = active;
     });
 }

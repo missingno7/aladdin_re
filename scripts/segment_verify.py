@@ -1,7 +1,7 @@
 """segment_verify: verify a candidate over a few frames from a retained real state.
 
-    python scripts/segment_verify.py FIXTURE.state [--frames 120] [--candidate lifecycle]
-                                     [--reference DIR-or-reference.json] [--history history] [--json]
+    python scripts/segment_verify.py FIXTURE.state --game GAME [--frames 120] [--candidate lifecycle]
+                                     [--reference DIR-or-reference.json] [--history history/GAME] [--json]
 
 Restores a census fixture (a complete machine state captured on the canonical
 replay at a known frame) into a fresh candidate run, advances it ``--frames``
@@ -31,8 +31,8 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / 'src'))
 FIELDS = ('state_sha256', 'frame_sha256', 'pcm_sha256', 'pcm_bytes')
 
 
-def _load_reference(reference, history_id):
-    from aladdin_sega.receipt import execution_receipt
+def _load_reference(reference, history_id, game):
+    from genesis_re.receipt import execution_receipt
     path = Path(reference)
     if path.is_dir():
         path = path / 'reference.json'
@@ -42,7 +42,7 @@ def _load_reference(reference, history_id):
     if data.get('history_id') != history_id:
         return None, 'reference is for history %s, fixture is from %s' % (str(data.get('history_id'))[:12], history_id[:12])
     native = data.get('implementation', {}).get('native')
-    if native != execution_receipt()['native_binary_sha256']:
+    if native != execution_receipt(game)['native_binary_sha256']:
         return None, 'reference was produced by a different native binary'
     observations = data.get('observations', {}).get(history_id)
     if not observations:
@@ -50,7 +50,7 @@ def _load_reference(reference, history_id):
     return observations, None
 
 
-def _segment(rom, candidate, state, frame, buttons, events, frames, pcm_seed, pcm_bytes, reseed=None):
+def _segment(game, rom, candidate, state, frame, buttons, events, frames, pcm_seed, pcm_bytes, reseed=None):
     """Advance a restored state; ``reseed`` re-anchors the PCM chain after the first frame.
 
     A machine snapshot does not carry the audio samples produced since the
@@ -60,9 +60,9 @@ def _segment(rom, candidate, state, frame, buttons, events, frames, pcm_seed, pc
     Only a state saved at a frame boundary right after the drain (marked
     ``frame_boundary`` in its metadata) has its first frame's PCM compared.
     """
-    from aladdin_sega.history_runtime import GenesisRun
+    from genesis_re.history_runtime import GenesisRun
     observations = []
-    with GenesisRun(rom, candidate) as run:
+    with GenesisRun(game, rom, candidate) as run:
         run.restore((state, frame, buttons, pcm_seed, pcm_bytes))
 
         def observe(r):
@@ -74,16 +74,17 @@ def _segment(rom, candidate, state, frame, buttons, events, frames, pcm_seed, pc
     return observations, stats
 
 
-def check(fixture, *, frames=120, candidate='lifecycle', reference=None, history='history'):
+def check(fixture, *, game, frames=120, candidate='lifecycle', reference=None, history=None):
     """Return a report dict; ``status`` is PASS, DIVERGENCE or ERROR."""
-    from aladdin_sega.history import HistoryStore
-    from aladdin_sega.history_runtime import EMPTY_PCM
-    from aladdin_sega.profile import read_rom
+    from genesis_re.games import game as select_game
+    from genesis_re.history import HistoryStore
+    from genesis_re.history_runtime import EMPTY_PCM
+    game = select_game(game) if isinstance(game, str) else game
     fixture = Path(fixture)
     meta = json.loads(fixture.with_suffix('.json').read_text(encoding='utf-8'))
     frame = meta['parent_frame'] if 'parent_frame' in meta else meta['frame']
     history_id = meta['history_id']
-    store = HistoryStore(history)
+    store = HistoryStore(game.history_path() if history is None else history, game.history_root)
     path = store.flatten(store.resolve(history_id))
     if frame + frames > path['end_frame']:
         frames = path['end_frame'] - frame
@@ -100,11 +101,11 @@ def check(fixture, *, frames=120, candidate='lifecycle', reference=None, history
             buttons = event['buttons']
     events = [event for event in path['events'] if event['frame'] >= frame]
     state = fixture.read_bytes()
-    rom = read_rom()
+    rom = game.read_rom()
     reference_observations, problem = (None, None)
     if reference is None:
         reference = fixture.parent
-    reference_observations, problem = _load_reference(reference, history_id)
+    reference_observations, problem = _load_reference(reference, history_id, game)
     started = time.perf_counter()
     mid_frame = not meta.get('frame_boundary', False)
     if reference_observations is not None:
@@ -118,10 +119,10 @@ def check(fixture, *, frames=120, candidate='lifecycle', reference=None, history
         oracle = 'reference observations'
     else:
         pcm_seed, pcm_bytes = EMPTY_PCM, 0
-        expected, _ = _segment(rom, 'original', state, frame, buttons, events, frames, pcm_seed, pcm_bytes)
+        expected, _ = _segment(game, rom, 'original', state, frame, buttons, events, frames, pcm_seed, pcm_bytes)
         reseed = None
         oracle = 'original run (%s)' % problem
-    actual, stats = _segment(rom, candidate, state, frame, buttons, events, frames, pcm_seed, pcm_bytes, reseed)
+    actual, stats = _segment(game, rom, candidate, state, frame, buttons, events, frames, pcm_seed, pcm_bytes, reseed)
     first = None
     for index, (got, want) in enumerate(zip(actual, expected)):
         fields = FIELDS
@@ -166,11 +167,12 @@ def main(argv=None):
     parser.add_argument('--frames', type=int, default=120)
     parser.add_argument('--candidate', default='lifecycle')
     parser.add_argument('--reference', default=None, help='history-verify output directory or its reference.json')
-    parser.add_argument('--history', default='history')
+    parser.add_argument('--history', default=None, help='history store; default history/<game>')
+    parser.add_argument('--game', required=True)
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
     report = check(args.fixture, frames=args.frames, candidate=args.candidate, reference=args.reference,
-                   history=args.history)
+                   history=args.history, game=args.game)
     if args.json:
         print(json.dumps(report, indent=1))
     else:

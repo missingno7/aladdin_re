@@ -2,7 +2,7 @@
 from collections import deque
 import threading
 
-from .profile import MASTER_HZ
+from .profile import MASTER_HZ   # the NTSC board's master clock; PCM is emitted at master/1008
 
 SAMPLE_RATE = round(MASTER_HZ / 1008)
 FRAME_BYTES = 4  # little-endian signed 16-bit stereo

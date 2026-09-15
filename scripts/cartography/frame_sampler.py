@@ -6,18 +6,19 @@ calling routine), routine attribution (nearest preceding call target), and memor
 """
 import json, os, re, sys, time, collections
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[2] / 'src')); sys.path.insert(0, 'D:/Prog/aladdin_re/scripts')
-os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libaladdin_native.dll')
+os.environ.setdefault('GENESIS_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libgenesis_native.dll')
 import pathfacts
-from aladdin_sega.history import HistoryStore
+from genesis_re.history import HistoryStore
 from aladdin_sega.profile import read_rom, FRAME_TICKS
-from aladdin_sega.history_runtime import GenesisRun
+from genesis_re.history_runtime import GenesisRun
+from aladdin_sega.profile import ALADDIN
 from PIL import Image
 
 out = sys.argv[3] if len(sys.argv) > 3 else 'D:/Prog/aladdin_re/artifacts/cartography/samples'
 os.makedirs(out, exist_ok=True)
 frames = list(range(*[int(x) for x in sys.argv[1].split(':')])) if ':' in sys.argv[1] else [int(x) for x in sys.argv[1].split(',')]
 span = int(sys.argv[2]) if len(sys.argv) > 2 else 2   # frames per sample
-store = HistoryStore('D:/Prog/aladdin_re/history')
+store = HistoryStore('D:/Prog/aladdin_re/history/aladdin', ALADDIN.history_root)
 rom = read_rom()
 path = store.flatten(store.resolve('main'))
 events = [e for e in path['events']]
@@ -107,7 +108,7 @@ def sample(run, start_frame, count, tag):
     print(tag, 'steps', steps, 'seconds', round(time.time() - started, 1), flush=True)
 
 
-with GenesisRun(rom, 'original') as run:
+with GenesisRun(ALADDIN, rom, 'original') as run:
     for f in sorted(frames):
         run.advance(f, [e for e in events if e['frame'] >= run.frame], lambda r: None)
         sample(run, f, span, f'f{f}')

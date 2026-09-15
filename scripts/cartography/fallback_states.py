@@ -1,17 +1,18 @@
 """Rerun the lifecycle candidate and save one gate-time snapshot per (reason, frame) fallback."""
 import json, os, re, sys, time
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[2] / 'src'))
-os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libaladdin_native.dll')
-from aladdin_sega.history import HistoryStore
+os.environ.setdefault('GENESIS_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libgenesis_native.dll')
+from genesis_re.history import HistoryStore
 from aladdin_sega.profile import read_rom
-from aladdin_sega.history_runtime import GenesisRun
+from genesis_re.history_runtime import GenesisRun
 from aladdin_sega import recovery
+from aladdin_sega.profile import ALADDIN
 
 out_dir = 'D:/Prog/aladdin_re/artifacts/grinder/scratch/fb'
 os.makedirs(out_dir, exist_ok=True)
 WANT = ('type1f', 'sibling', 'reset is outside', 'type44', 'type2c', '1B6D1E', '1B6C5A',
         'cannot batch', 'type03', 'type15', 'type7E')
-store = HistoryStore('D:/Prog/aladdin_re/history')
+store = HistoryStore('D:/Prog/aladdin_re/history/aladdin', ALADDIN.history_root)
 rom = read_rom()
 orig = recovery.Candidate._fallback
 current = {'run': None}
@@ -39,7 +40,7 @@ def hooked(self, machine, pc, reason):
 recovery.Candidate._fallback = hooked
 path = store.flatten(store.resolve('main'))
 started = time.time()
-with GenesisRun(rom, 'lifecycle') as run:
+with GenesisRun(ALADDIN, rom, 'lifecycle') as run:
     current['run'] = run
     events = [event for event in path['events'] if event['frame'] >= run.frame]
     run.advance(path['end_frame'], events, lambda r: None)

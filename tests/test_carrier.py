@@ -1,8 +1,8 @@
 """Concrete sound-frame continuation, original-ROM branches, and save integrity."""
 import pytest
 
-from aladdin_sega.history_runtime import safe_state
-from aladdin_sega.machine import Machine
+from genesis_re.history_runtime import safe_state
+from genesis_re.machine import Machine
 from aladdin_sega.recovery import TRANSITION_ENTRY, SOUND_RETURN, begin_object_transition
 from aladdin_sega.recovery import Candidate
 from test_recovery import leaf_machine, native_replace_rom, native_write, put

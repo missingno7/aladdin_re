@@ -1,17 +1,18 @@
 """Isolate each on-screen object's sprite by deactivating it in a scratch copy and diffing two frames."""
 import json, os, sys
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[2] / 'src'))
-os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libaladdin_native.dll')
+os.environ.setdefault('GENESIS_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libgenesis_native.dll')
 import numpy as np
-from aladdin_sega.history import HistoryStore
+from genesis_re.history import HistoryStore
 from aladdin_sega.profile import read_rom, FRAME_TICKS
-from aladdin_sega.history_runtime import GenesisRun
+from genesis_re.history_runtime import GenesisRun
+from aladdin_sega.profile import ALADDIN
 from PIL import Image
 
 out = 'D:/Prog/aladdin_re/artifacts/cartography/masks'
 os.makedirs(out, exist_ok=True)
 frames = list(range(*[int(x) for x in sys.argv[1].split(':')])) if ':' in sys.argv[1] else [int(x) for x in sys.argv[1].split(',')]
-store = HistoryStore('D:/Prog/aladdin_re/history')
+store = HistoryStore('D:/Prog/aladdin_re/history/aladdin', ALADDIN.history_root)
 rom = read_rom()
 path = store.flatten(store.resolve('main'))
 events = path['events']
@@ -35,7 +36,7 @@ def render_after(m, saved, frames_ahead, poke=None):
     return np.frombuffer(px, dtype=np.uint8).reshape(h, w, 3)
 
 
-with GenesisRun(rom, 'original') as run:
+with GenesisRun(ALADDIN, rom, 'original') as run:
     for f in frames:
         run.advance(f, [e for e in events if e['frame'] >= run.frame], lambda r: None)
         m = run.machine

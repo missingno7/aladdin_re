@@ -1,7 +1,7 @@
 """Real Z80 window accesses cannot silently cross an atomic RAM operation."""
 import pytest
 
-from aladdin_sega.machine import Machine, NativeError
+from genesis_re.machine import Machine, NativeError
 
 
 def sound_bank_rom(*, read_window):

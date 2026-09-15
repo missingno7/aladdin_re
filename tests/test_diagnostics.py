@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from aladdin_sega import diagnostics as d, verification as v
-from aladdin_sega.machine import Machine
+from genesis_re import diagnostics as d, verification as v
+from genesis_re.machine import Machine
 from test_machine import synthetic_rom
 
 

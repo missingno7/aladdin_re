@@ -77,7 +77,7 @@ def test_type3a_capped_counter_declines_to_original():
 
 
 def test_type3a_declines_via_boundary_directly():
-    from aladdin_sega.machine import Machine
+    from genesis_re.machine import Machine
     from aladdin_sega.profile import read_rom
     from aladdin_sega import boundary
     with prepared(COLLECTION_DISPATCH_ENTRY, sound=1, digits=0x3939) as machine:

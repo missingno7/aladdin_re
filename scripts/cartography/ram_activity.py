@@ -2,14 +2,15 @@
 import json, os, sys, time
 import numpy as np
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[2] / 'src'))
-os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libaladdin_native.dll')
-from aladdin_sega.history import HistoryStore
+os.environ.setdefault('GENESIS_NATIVE_LIBRARY', 'D:/Prog/aladdin_re/build/libgenesis_native.dll')
+from genesis_re.history import HistoryStore
 from aladdin_sega.profile import read_rom
-from aladdin_sega.history_runtime import GenesisRun
+from genesis_re.history_runtime import GenesisRun
+from aladdin_sega.profile import ALADDIN
 
 out = 'D:/Prog/aladdin_re/artifacts/cartography'
 os.makedirs(out, exist_ok=True)
-store = HistoryStore('D:/Prog/aladdin_re/history')
+store = HistoryStore('D:/Prog/aladdin_re/history/aladdin', ALADDIN.history_root)
 rom = read_rom()
 path = store.flatten(store.resolve('main'))
 end = path['end_frame']
@@ -48,7 +49,7 @@ def observe(run):
         print('frame', f, round(time.time() - started), 's', flush=True)
 
 
-with GenesisRun(rom, 'original') as run:
+with GenesisRun(ALADDIN, rom, 'original') as run:
     run.advance(end, [e for e in path['events'] if e['frame'] >= run.frame], observe)
 
 np.savez_compressed(os.path.join(out, 'ram_activity.npz'), change_counts=change_counts,

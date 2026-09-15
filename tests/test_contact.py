@@ -1,6 +1,6 @@
 from aladdin_sega.game.objects.contact import contact_decay, contact_path, contact_reaction, contact_reset
 from aladdin_sega.boundary import CONTACT_ENTRY, COLLECTION_DISPATCH_ENTRY, COLLECTION_DISPATCH_RETURN, CONTACT_COMPLETION_EXIT
-from aladdin_sega.machine import Machine
+from genesis_re.machine import Machine
 from aladdin_sega.recovery import Candidate
 from test_recovery import native_replace_rom, native_write
 from pathlib import Path

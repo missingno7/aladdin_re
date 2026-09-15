@@ -9,12 +9,13 @@ whose processing handed off to a native effect are reported separately.
 import os, sys, collections
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
-os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', str(Path(__file__).resolve().parents[2] / 'build' / 'libaladdin_native.dll'))
-from aladdin_sega.history import HistoryStore
+os.environ.setdefault('GENESIS_NATIVE_LIBRARY', str(Path(__file__).resolve().parents[2] / 'build' / 'libgenesis_native.dll'))
+from genesis_re.history import HistoryStore
 from aladdin_sega.profile import read_rom
-from aladdin_sega.history_runtime import GenesisRun
+from genesis_re.history_runtime import GenesisRun
 from aladdin_sega.game.objects.record import RECORD_TABLE, RECORD_SIZE, FIELDS
 from aladdin_sega.game.objects.script_engine import Engine, Memory, Services, Trace
+from aladdin_sega.profile import ALADDIN
 
 ANIM = (0x1AC784, (0x1AC84E, 0x1B0334))   # 1B0334 is the even-frame RTS
 MOTION = (0x1ADE36, (0x1AE0AE,))
@@ -86,10 +87,10 @@ def compare(before, after, mine, trace):
 def main():
     frames = [int(x) for x in sys.argv[1].split(',')] if len(sys.argv) > 1 else [1000, 8500, 16266, 22200, 44827, 57289, 69586, 82000]
     which = sys.argv[2] if len(sys.argv) > 2 else 'anim'
-    store = HistoryStore(str(root / 'history')); rom = read_rom()
+    store = HistoryStore(str(root / 'history' / 'aladdin'), ALADDIN.history_root); rom = read_rom()
     path = store.flatten(store.resolve('main')); events = path['events']
     totals = collections.Counter()
-    with GenesisRun(rom, 'original') as run:
+    with GenesisRun(ALADDIN, rom, 'original') as run:
         for f in frames:
             run.advance(f, [e for e in events if e['frame'] >= run.frame], lambda r: None)
             m = run.machine

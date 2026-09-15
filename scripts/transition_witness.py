@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import native_replay as nr
-from aladdin_sega.machine import Machine
+from genesis_re.machine import Machine
 
 ENTRIES = {0x1A8F82: 'life_lost', 0x1A902E: 'fell'}
 WAIT = 0x1B249E

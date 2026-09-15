@@ -1,7 +1,7 @@
 """Atomic native-operation admission is checked against the existing engine."""
 import pytest
 
-from aladdin_sega.machine import Machine, NativeError
+from genesis_re.machine import Machine, NativeError
 from aladdin_sega.profile import FRAME_TICKS
 
 

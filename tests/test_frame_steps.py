@@ -50,7 +50,7 @@ def test_score_tally_moves_one_unit_with_carry_and_awards_the_extra_life():
 @pytest.mark.parametrize('path', FRAMES[:6], ids=[os.path.basename(p)[:-6] for p in FRAMES[:6]])
 def test_recovered_frame_steps_match_the_original(path):
     """Each RAM-only step reproduces the original's writes at its exit during two frames of play."""
-    from aladdin_sega.machine import Machine
+    from genesis_re.machine import Machine
     m = Machine(rom); m.restore(Path(path).read_bytes())
     try:
         entries = {s.entry: s for s in RECOVERED}

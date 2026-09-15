@@ -1,7 +1,7 @@
 """Original-only entry census using the canonical input-history runner.
 
-    python scripts/recovery_census.py OUTPUT_DIR --entry PC [--entry PC ...]
-                                      [--parent PC] [--node main] [--history history]
+    python scripts/recovery_census.py OUTPUT_DIR --game GAME --entry PC [--entry PC ...]
+                                      [--parent PC] [--node main] [--history history/GAME]
                                       [--max-classes 32] [--plain] [--retain 3]
 
 Replays one cold input history on the ORIGINAL machine and, at every
@@ -39,10 +39,10 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / 'src'))
 sys.path.insert(0, str(_Path(__file__).resolve().parent))
 
-from aladdin_sega.artifacts import digest
-from aladdin_sega.history import HistoryStore
-from aladdin_sega.history_runtime import GenesisRun
-from aladdin_sega.profile import read_rom
+from genesis_re.artifacts import digest
+from genesis_re.games import game as select_game
+from genesis_re.history import HistoryStore
+from genesis_re.history_runtime import GenesisRun
 
 STEP_CAP = 12000        # instructions stepped inside one occurrence before it is classified offline
 CUT_STATES = 512        # deadline-cut entry states kept in memory for offline classification
@@ -135,9 +135,10 @@ class _Evidence:
             row['ccr_variants'][ccr] = facts['fixture']
 
 
-def capture_entries(entries, classify, output, *, history='history', node='main', retain=2,
+def capture_entries(entries, classify, output, *, game, history=None, node='main', retain=2,
                     parent=None, signatures=False, max_classes=32):
     import pathfacts
+    game = select_game(game) if isinstance(game, str) else game
     entries = tuple(dict.fromkeys(entries))
     if not entries or not 1 <= retain <= 10:
         raise ValueError('Provide entry PCs and retain between one and ten fixtures per class')
@@ -147,10 +148,10 @@ def capture_entries(entries, classify, output, *, history='history', node='main'
     output.mkdir(parents=True, exist_ok=True)
     if (output / 'report.json').exists() or any(output.glob('*.state')):
         raise ValueError('Use an empty output directory to avoid mixing census evidence')
-    store = HistoryStore(history)
+    store = HistoryStore(game.history_path() if history is None else history, game.history_root)
     selected = store.resolve(node)
     path = store.flatten(selected)
-    rom = read_rom()
+    rom = game.read_rom()
     counts, first, parents = Counter(), defaultdict(list), defaultdict(list)
     evidence = _Evidence(output, path, parent, max_classes)
     pending = []  # deadline-cut occurrences classified after the replay
@@ -194,7 +195,7 @@ def capture_entries(entries, classify, output, *, history='history', node='main'
                 machine.run(instructions=1)
                 return
             entry_state, registers, info, frame = machine.snapshot(), machine.registers(), dict(machine.info), run.frame
-            tracer = pathfacts.Tracer(machine, rom, track_ram=False, detail=True)
+            tracer = pathfacts.Tracer(machine, rom, natives=game.tracer_native_entries, track_ram=False, detail=True)
             cut = None
             while not tracer.at_exit():
                 if tracer.n > 0 and machine.info['tick'] >= target:
@@ -217,7 +218,7 @@ def capture_entries(entries, classify, output, *, history='history', node='main'
                                     registers=registers, info=info, parent_state=None, parent_frame=None, cut=cut)
 
     started = time.monotonic()
-    with GenesisRun(rom) as run:
+    with GenesisRun(game, rom) as run:
         run.candidate = Probe()
         run.machine.gates(list(entries) + ([parent] if parent is not None else []))
         run.advance(path['end_frame'], path['events'])
@@ -228,7 +229,7 @@ def capture_entries(entries, classify, output, *, history='history', node='main'
     # classify them from their entry state now that the replay machine is closed.
     for pc, branch, facts, frame, entry_state, registers, info, parent_state, parent_frame, cut in pending:
         try:
-            traced = pathfacts.trace(entry_state, max_instructions=STEP_CAP * 4, track_ram=False)
+            traced = pathfacts.trace(entry_state, game=game, max_instructions=STEP_CAP * 4, track_ram=False)
             signature = pathfacts.path_signature(traced)
             key_text = pathfacts.signature_key(signature)
         except (RuntimeError, ValueError):
@@ -239,7 +240,7 @@ def capture_entries(entries, classify, output, *, history='history', node='main'
     if signatures:
         counts = Counter({key: cls['count'] for key, cls in evidence.classes.items()})
         first, parents = evidence.first, evidence.parents
-        index = _build_index(evidence, path, parent, entries, pathfacts)
+        index = _build_index(evidence, path, parent, entries, pathfacts, game)
         (output / 'index.json').write_text(json.dumps(index, indent=1) + '\n', encoding='utf-8')
     report = {
         'status': 'CAPTURED', 'origin': 'canonical original cold input history',
@@ -260,7 +261,7 @@ def capture_entries(entries, classify, output, *, history='history', node='main'
     return report
 
 
-def _build_index(evidence, path, parent, entries, pathfacts):
+def _build_index(evidence, path, parent, entries, pathfacts, game):
     """One evidence row per retained signature, with facets traced from the fixture.
 
     The offline trace of the retained state (RAM tracked, no deadline) supplies
@@ -275,7 +276,7 @@ def _build_index(evidence, path, parent, entries, pathfacts):
             writes = None
             if row['fixture']:
                 try:
-                    traced = pathfacts.trace((evidence.output / row['fixture']).read_bytes(), max_instructions=STEP_CAP * 4)
+                    traced = pathfacts.trace((evidence.output / row['fixture']).read_bytes(), game=game, max_instructions=STEP_CAP * 4)
                     offline = pathfacts.path_signature(traced)
                     writes = offline['writes']
                     if pathfacts.signature_key(offline) != pathfacts.signature_key(signature):
@@ -307,11 +308,12 @@ def main(argv=None):
     parser.add_argument('--retain', type=int, default=3, help='fixtures per class in --plain mode')
     parser.add_argument('--max-classes', type=int, default=32, help='signatures retained per (entry, kind) class')
     parser.add_argument('--plain', action='store_true', help='group by (entry, kind) only; retain the first --retain')
-    parser.add_argument('--history', default='history')
+    parser.add_argument('--game', required=True)
+    parser.add_argument('--history', default=None, help='history store; default history/<game>')
     args = parser.parse_args(argv)
     entries = [int(value, 16) for value in args.entry]
     parent = int(args.parent, 16) if args.parent else None
-    report = capture_entries(entries, kind_classifier, args.output, history=args.history,
+    report = capture_entries(entries, kind_classifier, args.output, game=args.game, history=args.history,
                              node=args.node, retain=args.retain, parent=parent,
                              signatures=not args.plain, max_classes=args.max_classes)
     print('census of %s (%d frames) took %s s (replay %s s)' % (

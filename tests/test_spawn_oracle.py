@@ -32,7 +32,7 @@ CLOSURE_OUTPUTS = {
 
 
 def _outer_record_bytes(state: bytes, fields):
-    from aladdin_sega.machine import Machine
+    from genesis_re.machine import Machine
     from aladdin_sega.profile import DEFAULT_ROM, read_rom
 
     machine = Machine(read_rom(DEFAULT_ROM))

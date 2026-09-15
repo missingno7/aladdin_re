@@ -6,7 +6,7 @@ if not exist ".venv\Scripts\python.exe" (
     popd
     exit /b 2
 )
-if not exist "build\libaladdin_native.dll" (
+if not exist "build\libgenesis_native.dll" (
     echo Build the native DLL first using the commands in README.md.
     popd
     exit /b 2
@@ -16,8 +16,8 @@ if defined PYTHONPATH (
 ) else (
     set "PYTHONPATH=%CD%\src"
 )
-set "ALADDIN_NATIVE_LIBRARY=%CD%\build\libaladdin_native.dll"
-".venv\Scripts\python.exe" -m aladdin_sega play %*
+set "GENESIS_NATIVE_LIBRARY=%CD%\build\libgenesis_native.dll"
+".venv\Scripts\python.exe" -m genesis_re play %*
 set "playerExitCode=%ERRORLEVEL%"
 popd
 exit /b %playerExitCode%

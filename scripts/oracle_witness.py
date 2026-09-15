@@ -16,11 +16,11 @@ import subprocess
 import sys
 import tempfile
 
-from aladdin_sega import artifacts
-from aladdin_sega.machine import Machine, library_path
-from aladdin_sega.profile import DEFAULT_ROM, FRAME_TICKS, read_rom
+from genesis_re import artifacts
+from genesis_re.machine import Machine, library_path
+from aladdin_sega.profile import ALADDIN, DEFAULT_ROM, FRAME_TICKS, read_rom
 from aladdin_sega.recovery import Candidate
-from aladdin_sega.receipt import execution_receipt
+from genesis_re.receipt import execution_receipt
 from aladdin_sega.boundary import (SPAWN_REGION_ENTRIES, SPAWN_DISPATCH_ITERATION_ENTRY,
                                    SPAWN_ROW_DISPATCH_WALKER_ENTRY,
                                    SPAWN_ROW_DISPATCH_WALKER_LAST_PC,
@@ -897,7 +897,7 @@ def main(argv=None):
     result = {"status": "PASS" if all(row["equal_outer"] and row["equal_future"]
                                         and row.get("fresh_process_150") is not False for row in rows) else "FAIL",
               "native_library": str(library_path()), "frame_ticks": FRAME_TICKS,
-              "receipt": execution_receipt(candidate="lifecycle"), "rows": rows}
+              "receipt": execution_receipt(ALADDIN, candidate="lifecycle"), "rows": rows}
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n")

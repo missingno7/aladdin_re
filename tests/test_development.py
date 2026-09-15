@@ -42,10 +42,10 @@ def test_dev_uses_fresh_source_tree_process_and_preserves_cli_arguments(tmp_path
     assert dev.run(["history-run", "main", "--output", "result.json", "--native", str(native)], runner=runner) == 17
     assert len(calls) == 1
     (command,), options = calls[0]
-    assert command == [sys.executable, "-m", "aladdin_sega", "history-run", "main", "--output", "result.json"]
+    assert command == [sys.executable, "-m", "genesis_re", "history-run", "main", "--output", "result.json"]
     assert options["cwd"] == ROOT
     assert options["check"] is False
-    assert options["env"]["ALADDIN_NATIVE_LIBRARY"] == str(native.resolve())
+    assert options["env"]["GENESIS_NATIVE_LIBRARY"] == str(native.resolve())
     assert options["env"]["PYTHONPATH"].split(";")[0] == str((ROOT / "src").resolve())
 
 
@@ -84,7 +84,7 @@ def test_export_rejects_rom_like_roots_even_if_a_lock_names_them(tmp_path):
 
 def test_dev_does_not_load_timestamp_cache_after_same_size_same_second_edit(tmp_path, monkeypatch):
     dev = load_script("dev")
-    package = tmp_path / "src/aladdin_sega"
+    package = tmp_path / "src/genesis_re"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("")
     entry = package / "__main__.py"

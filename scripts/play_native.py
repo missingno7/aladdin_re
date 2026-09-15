@@ -13,13 +13,13 @@ to the ROM's Z80 driver on a dedicated machine (aladdin_sega.native
 FILE when headless.
 
 Input is journaled as an immutable history in the native history store
-(--store, default history_native; the same model as the original
+(--store, default history_native/aladdin; the same model as the original
 recordings, with the game-frame clock: the mask for game frame W applies
 when the game returns from its W-th VBlank wait).  At a NativeGap or at
 exit the session becomes a node of that store, with a screenshot, the gap
 (subsystem, address, detail, frame) and the source identity in
-history_native/gaps/<node>.json, and a cache of the native state in
-history_native/cache/<node>.pkl (acceleration only: deleting it and
+history_native/aladdin/gaps/<node>.json, and a cache of the native state in
+history_native/aladdin/cache/<node>.pkl (acceleration only: deleting it and
 replaying the history from power-on is always valid).
 
 --resume NODE replays the node's history from power-on (or from its cache
@@ -36,7 +36,8 @@ import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from aladdin_sega.profile import read_rom
-from aladdin_sega.history import HistoryStore, NATIVE_ROOT
+from genesis_re.history import HistoryStore
+from aladdin_sega.profile import NATIVE_HISTORY_ROOT as NATIVE_ROOT
 from aladdin_sega.native import boot, render, run_frame
 from aladdin_sega.native.frame import NativeServices
 from aladdin_sega.native.state import NativeGap
@@ -139,11 +140,11 @@ class Sound:
         self.output = None
         self.wav = None
         if output:
-            from aladdin_sega.audio import AudioOutput
+            from genesis_re.audio import AudioOutput
             self.output = AudioOutput()
         if wav:
             import wave
-            from aladdin_sega.audio import SAMPLE_RATE
+            from genesis_re.audio import SAMPLE_RATE
             self.wav = wave.open(str(wav), 'wb'); self.wav.setnchannels(2); self.wav.setsampwidth(2); self.wav.setframerate(SAMPLE_RATE)
 
     def frame(self, state):
@@ -310,7 +311,7 @@ def main(argv):
     flags = [a for a in argv if a in ('--headless', '--mute')]
     argv = [a for a in argv if a not in flags]
     args = dict(zip(argv[::2], argv[1::2])) if len(argv) % 2 == 0 else {}
-    store = HistoryStore(Path(args.get('--store', 'history_native')), root=NATIVE_ROOT)
+    store = HistoryStore(Path(args.get('--store', 'history_native/aladdin')), NATIVE_ROOT)
     rom = read_rom()
     headless = '--replay' in args or '--headless' in flags
     player = None if headless else Player(store, scale=int(args.get('--scale', 3)))

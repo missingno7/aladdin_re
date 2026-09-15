@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(aladdin_sega LANGUAGES C CXX)
+project(genesis_re LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(PORTFORGE_ROOT "" CACHE PATH "Pinned PortForge checkout; see third_party/README.md")
@@ -26,15 +26,15 @@ add_custom_target(check_native_sources ALL
     --receipt "${CMAKE_CURRENT_BINARY_DIR}/native-build-receipt.json"
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated/build_identity.hpp"
   VERBATIM)
-add_library(aladdin_native SHARED native/machine.cpp
+add_library(genesis_native SHARED native/machine.cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nuked_opn2/ym3438.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nuked_psg/ympsg.c")
-add_dependencies(aladdin_native check_native_sources)
-target_include_directories(aladdin_native PRIVATE "${PORTFORGE_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_dependencies(genesis_native check_native_sources)
+target_include_directories(genesis_native PRIVATE "${PORTFORGE_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/generated")
 if(MINGW)
-  target_link_options(aladdin_native PRIVATE -static -static-libgcc -static-libstdc++)
+  target_link_options(genesis_native PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
-install(TARGETS aladdin_native LIBRARY DESTINATION aladdin_sega RUNTIME DESTINATION aladdin_sega)
+install(TARGETS genesis_native LIBRARY DESTINATION genesis_re RUNTIME DESTINATION genesis_re)
 if(BUILD_TESTING)
   foreach(test_name m68k_units z80_units genesis_device_units genesis_render_units genesis_nuked_machine_units genesis_snapshot_codec_units genesis_scheduler_continuation_units)
     add_executable(${test_name} "${PORTFORGE_ROOT}/tests/${test_name}.cpp"

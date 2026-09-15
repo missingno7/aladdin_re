@@ -2,7 +2,7 @@
 import collections, json, os, re, subprocess, sys
 fb = 'D:/Prog/aladdin_re/artifacts/grinder/scratch/fb'
 py = 'D:/Prog/aladdin_re/.venv/Scripts/python.exe'
-env = dict(os.environ, ALADDIN_NATIVE_LIBRARY='D:/Prog/aladdin_re/build/libaladdin_native.dll')
+env = dict(os.environ, GENESIS_NATIVE_LIBRARY='D:/Prog/aladdin_re/build/libgenesis_native.dll')
 index = json.load(open(os.path.join(fb, 'index.json')))
 want = sys.argv[1] if len(sys.argv) > 1 else ''
 stop = sys.argv[2] if len(sys.argv) > 2 else None

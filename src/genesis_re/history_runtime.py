@@ -4,9 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import artifacts
-from .history import ROOT_ID, digest, encoded, natural
+from .history import digest, encoded, natural
 from .machine import Machine
-from .profile import FRAME_TICKS, OBSERVATION_OFFSET_TICKS, PROFILE_SHA256
 from .receipt import execution_receipt
 
 
@@ -21,21 +20,28 @@ def safe_state(machine):
 
 
 class GenesisRun:
-    def __init__(self, rom, candidate="original"):
+    """One game's cartridge stepping in canonical frames, original or with a candidate armed."""
+    def __init__(self, game, rom, candidate="original"):
+        self.game = game
+        self.frame_ticks = game.board.frame_ticks
+        self.observation_offset_ticks = game.observation_offset_ticks
         self.machine = Machine(rom)
+        if self.machine.profile is not None and self.machine.profile is not game:
+            raise ValueError(f"These bytes are the {self.machine.profile.title} cartridge, not {game.title}")
         self.frame, self.buttons = 0, 0
         self.pcm_digest, self.pcm_bytes = EMPTY_PCM, 0
         self.candidate = None
         if candidate != "original":
-            from .recovery import Candidate
-            self.candidate = Candidate(candidate)
+            if game.candidate is None:
+                raise ValueError(f"{game.title} has no recovered code; only the original runs")
+            self.candidate = game.candidate(candidate)
             self.candidate.arm(self.machine)
-        receipt = execution_receipt(candidate=candidate)
-        self.implementation = {"backend": "genesis", "cache_contract": 2,
+        receipt = execution_receipt(game, candidate=candidate)
+        self.implementation = {"backend": "genesis", "cache_contract": 3, "game": game.id,
                                "native": receipt["native_binary_sha256"],
                                "source": receipt["python_modules_sha256"],
                                "state_version": self.machine.state_version,
-                               "rom": self.machine.rom_sha256, "profile": PROFILE_SHA256,
+                               "rom": self.machine.rom_sha256, "profile": game.profile_sha256,
                                "candidate": candidate}
         # The original's trajectory is fixed by the ROM, the native binary, the
         # profile and the state contract; recovered Python source never runs in
@@ -76,8 +82,8 @@ class GenesisRun:
     def step(self, buttons):
         if type(buttons) is not int or not 0 <= buttons <= 255:
             raise ValueError("Invalid input mask")
-        wrap = self.frame * FRAME_TICKS
-        observed = wrap + OBSERVATION_OFFSET_TICKS
+        wrap = self.frame * self.frame_ticks
+        observed = wrap + self.observation_offset_ticks
         # The controller mask for interval [frame, frame + 1) is set at the
         # first operation boundary at or after the interval's nominal tick, as
         # it always was.  The interval is observed, and recovered operations
@@ -176,15 +182,17 @@ class GenesisRun:
 
 class Session:
     """One live authority, with implicit input journaling and natural branching."""
-    def __init__(self, store, rom, node=None):
+    def __init__(self, game, store, rom, node=None):
+        if store.root != game.history_root:
+            raise ValueError(f"History store {store.path} is not a {game.title} original-machine history")
         self.store = store
-        self.parent = store.resolve(node) if node else ROOT_ID
-        self.run = GenesisRun(rom)
+        self.parent = store.resolve(node) if node else store.root_id
+        self.run = GenesisRun(game, rom)
         self.machine = self.run.machine
         self.events = []
         self.used_cache = False
         try:
-            if self.parent != ROOT_ID:
+            if self.parent != store.root_id:
                 self.used_cache = self.run.restore_cache(store, self.parent)
                 if not self.used_cache:
                     path = store.flatten(self.parent)

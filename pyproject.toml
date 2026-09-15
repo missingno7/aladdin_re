@@ -3,9 +3,9 @@ requires = ["scikit-build-core==1.0.3"]
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "aladdin-sega"
-version = "0.9.0"
-description = "Inspectable, deterministic Aladdin Genesis development environment"
+name = "genesis-re"
+version = "0.10.0"
+description = "Inspectable, deterministic Genesis recovery environment (Aladdin, Gods)"
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
@@ -13,10 +13,10 @@ play = ["pygame==2.6.1"]
 test = ["pytest==9.1.1", "pytest-xdist==3.6.1", "capstone==5.0.7"]
 
 [project.scripts]
-aladdin-sega = "aladdin_sega.cli:main"
+genesis-re = "genesis_re.cli:main"
 
 [tool.scikit-build]
-wheel.packages = ["src/aladdin_sega"]
+wheel.packages = ["src/genesis_re", "src/aladdin_sega", "src/gods_sega"]
 cmake.build-type = "Release"
 
 [tool.pytest.ini_options]

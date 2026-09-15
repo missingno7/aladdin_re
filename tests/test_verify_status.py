@@ -3,7 +3,7 @@ import json
 import os
 
 import verify_status
-from aladdin_sega.receipt import execution_receipt
+from genesis_re.receipt import execution_receipt
 
 
 def write(tmp_path, report):

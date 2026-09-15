@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import segment_verify
+from aladdin_sega.profile import ALADDIN
 
 EVIDENCE = Path('artifacts/evidence/main')
 pytestmark = pytest.mark.skipif(
@@ -26,7 +27,7 @@ def parent_rows():
 def test_every_retained_parent_segment_matches_the_reference():
     failures = []
     for row in parent_rows():
-        report = segment_verify.check(EVIDENCE / row['parent_fixture'], frames=2, reference=EVIDENCE)
+        report = segment_verify.check(EVIDENCE / row['parent_fixture'], game=ALADDIN, frames=2, reference=EVIDENCE)
         if report['status'] != 'PASS':
             failures.append((row['entry'], row['branch'], row['path_class'], report.get('first_difference')))
     assert failures == []
@@ -37,6 +38,6 @@ def test_recorded_type55_parents_own_the_child():
     if not rows:
         pytest.skip('no recorded Type-55 parent in this evidence')
     for row in rows:
-        report = segment_verify.check(EVIDENCE / row['parent_fixture'], frames=2, reference=EVIDENCE)
+        report = segment_verify.check(EVIDENCE / row['parent_fixture'], game=ALADDIN, frames=2, reference=EVIDENCE)
         assert report['status'] == 'PASS', report
         assert report['ownership'] != 'declined', report

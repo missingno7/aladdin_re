@@ -3,7 +3,6 @@ from pathlib import Path
 import time
 
 from .audio import AudioOutput, FramePacer
-from .profile import FRAME_TICKS, MASTER_HZ
 
 
 _WINDOW = (960, 736)
@@ -71,13 +70,50 @@ def _checkpoint_preview(pygame, store, node_id):
         return None
 
 
-def _choose_history(pygame, window, font, store):
+def _game_layout(games, *, width):
+    """One button per registered game, centred; the order is the registry's."""
+    button = (260, 56)
+    top = 236
+    return {game_id: ((width - button[0]) // 2, top + index * (button[1] + 24), *button)
+            for index, game_id in enumerate(games)}
+
+
+def _choose_game(pygame, window, font, games):
+    """Return the chosen game profile, or ``None`` when the window is closed."""
+    layout = _game_layout(games, width=_WINDOW[0])
+    hovered = None
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return None
+            if event.type == getattr(pygame, "MOUSEMOTION", object()):
+                hovered = next((game_id for game_id, rect in layout.items() if _inside(event.pos, rect)), None)
+            elif event.type == getattr(pygame, "MOUSEBUTTONDOWN", object()) and getattr(event, "button", 1) == 1:
+                chosen = next((game_id for game_id, rect in layout.items() if _inside(event.pos, rect)), None)
+                if chosen is not None:
+                    return games[chosen]
+        window.fill((15, 18, 24))
+        draw = getattr(pygame, "draw", None)
+        window.blit(font.render("Choose game", True, (235, 239, 245)), (16, 23))
+        window.blit(font.render("Each game keeps its own immutable input history.", True, (184, 194, 206)), (16, 62))
+        for game_id, rect in layout.items():
+            if draw:
+                draw.rect(window, (84, 110, 138) if game_id == hovered else (58, 78, 99), rect, border_radius=6)
+            title = games[game_id].title
+            missing = "" if games[game_id].rom_path.is_file() else "   (ROM missing)"
+            window.blit(font.render(title + missing, True, (240, 244, 248)), (rect[0] + 16, rect[1] + 18))
+        pygame.display.set_caption("Genesis RE | Choose game")
+        pygame.display.flip()
+        time.sleep(1 / 60)
+
+
+def _choose_history(pygame, window, font, store, game):
     """Return ``(node, new)`` before a simulation session is opened."""
     nodes = store.nodes()
     selected = store.resolve("main")
     hovered = None
     new_rect, main_rect = (16, 16, 104, 34), (128, 16, 104, 34)
-    clock = FRAME_TICKS / MASTER_HZ
+    clock = game.board.frame_ticks / game.board.master_hz
     while True:
         layout = _history_layout(nodes, store.root_id, width=_WINDOW[0], height=_WINDOW[1])
         for event in pygame.event.get():
@@ -110,7 +146,7 @@ def _choose_history(pygame, window, font, store):
             for rect, label in ((new_rect, "New"), (main_rect, "Main")):
                 draw.rect(window, (58, 78, 99), rect, border_radius=4)
                 window.blit(font.render(label, True, (240, 244, 248)), (rect[0] + 8, rect[1] + 8))
-        window.blit(font.render("Immutable input history", True, (235, 239, 245)), (252, 23))
+        window.blit(font.render(f"{game.title}: immutable input history", True, (235, 239, 245)), (252, 23))
         window.blit(font.render("Click a checkpoint to start; branches share their input prefix.", True, (184, 194, 206)), (16, 62))
         target = hovered or selected
         if target:
@@ -122,14 +158,19 @@ def _choose_history(pygame, window, font, store):
             preview = _checkpoint_preview(pygame, store, target)
             if preview:
                 window.blit(pygame.transform.scale(preview, (240, 168)), (704, 16))
-        pygame.display.set_caption("Aladdin RE | History")
+        pygame.display.set_caption(f"{game.title} | History")
         pygame.display.flip()
         time.sleep(1 / 60)
 
 
-def play(rom, *, frames=0, mute=False, history_path=Path("history"), node=None, new=False, audio_report=None):
-    """Play a cold-start input-history branch, checkpointing only immutable inputs."""
+def play(game=None, rom=None, *, frames=0, mute=False, history_path=None, node=None, new=False, audio_report=None):
+    """Play a cold-start input-history branch, checkpointing only immutable inputs.
+
+    Without ``game`` the window first asks which registered game to play; the
+    ROM is read after that choice.  ``history_path`` defaults to ``history/<game>``.
+    """
     import pygame
+    from .games import GAMES
     from .history import HistoryStore
     from .history_runtime import Session
 
@@ -154,7 +195,15 @@ def play(rom, *, frames=0, mute=False, history_path=Path("history"), node=None, 
         pygame.font.init()
         window = pygame.display.set_mode(_WINDOW)
         font = pygame.font.Font(None, 22)
-        store = HistoryStore(Path(history_path))
+        if game is None:
+            if frames or new or node is not None or rom is not None or history_path is not None:
+                raise ValueError("Automated play needs an explicit game")
+            game = _choose_game(pygame, window, font, GAMES)
+            if game is None:
+                return
+        if rom is None:
+            rom = game.read_rom()
+        store = HistoryStore(game.history_path() if history_path is None else Path(history_path), game.history_root)
         # Frame-limited runs are deterministic automation: they never wait for the panel.
         if frames:
             selected, cold_start = (node, new) if node is not None else (None, True)
@@ -163,7 +212,7 @@ def play(rom, *, frames=0, mute=False, history_path=Path("history"), node=None, 
         elif node is not None:
             selected, cold_start = store.resolve(node), False
         else:
-            selected, cold_start = _choose_history(pygame, window, font, store)
+            selected, cold_start = _choose_history(pygame, window, font, store, game)
             if selected is None and not cold_start:
                 return
 
@@ -175,9 +224,9 @@ def play(rom, *, frames=0, mute=False, history_path=Path("history"), node=None, 
         one_step = False
         count = 0
         message = "Cold start" if cold_start else f"Resumed {selected[:12]}"
-        pacer = FramePacer(time.perf_counter(), FRAME_TICKS / MASTER_HZ)
+        pacer = FramePacer(time.perf_counter(), game.board.frame_ticks / game.board.master_hz)
 
-        with Session(store, rom, node=None if cold_start else selected) as session:
+        with Session(game, store, rom, node=None if cold_start else selected) as session:
             try:
                 audio = AudioOutput() if not mute else None
                 pacer.reset(time.perf_counter())
@@ -222,7 +271,7 @@ def play(rom, *, frames=0, mute=False, history_path=Path("history"), node=None, 
                     window.fill((15, 18, 24))
                     window.blit(pygame.transform.scale(picture, (960, _GAME_HEIGHT)), (0, 0))
                     state = "PAUSED" if paused else "RUNNING"
-                    pygame.display.set_caption(f"Aladdin RE | {state} | history")
+                    pygame.display.set_caption(f"{game.title} | {state} | history")
                     window.blit(font.render("Arrows: move | Z/X/C: A/B/C | Enter: Start | F5/F6: checkpoint | F7: pause | F8: step", True, (230, 230, 235)), (12, 682))
                     window.blit(font.render(message, True, (255, 195, 85)), (12, 710))
                     pygame.display.flip()

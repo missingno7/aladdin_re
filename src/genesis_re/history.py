@@ -7,12 +7,11 @@ from pathlib import Path
 import re
 
 
-ROOT = {"format": "input-history-1", "root": "aladdin-usa-new",
-        "clock": "simulation-frame", "input": "three-button-pad-1", "initial_buttons": 0}
-# The native runtime's histories: the same immutable model, but a frame is one of the game's own VBlank waits
-# (the mask for game frame W applies when the game returns from its W-th wait), never elapsed console time.
-NATIVE_ROOT = {"format": "input-history-1", "root": "aladdin-usa-native",
-               "clock": "game-frame", "input": "three-button-pad-1", "initial_buttons": 0}
+# A store's root record names the game and the clock, e.g. aladdin_sega.profile.HISTORY_ROOT
+# {"format": "input-history-1", "root": "aladdin-usa-new", "clock": "simulation-frame",
+#  "input": "three-button-pad-1", "initial_buttons": 0}.  It enters every node id, so two
+# games' histories can never share a node, and a store is refused for the wrong game.
+ROOT_FIELDS = {"format", "root", "clock", "input", "initial_buttons"}
 
 
 def encoded(value):
@@ -21,9 +20,6 @@ def encoded(value):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
-
-
-ROOT_ID = digest(encoded(ROOT))
 
 
 def natural(value):
@@ -58,15 +54,25 @@ def write_json(path, value):
 
 
 class HistoryStore:
-    def __init__(self, path=Path("history"), root=None):
+    """One game's immutable input-history DAG below ``path``.
+
+    ``root`` is the game's root record; there is no default, so a store can only
+    be opened for the game it belongs to.  An existing store whose manifest names
+    another root is refused, never reinterpreted.
+    """
+    def __init__(self, path, root):
+        if not isinstance(root, dict) or set(root) != ROOT_FIELDS or root["format"] != "input-history-1":
+            raise ValueError("A history store needs its game's root record")
         self.path = Path(path)
-        self.root = ROOT if root is None else root
+        self.root = dict(root)
         self.root_id = digest(encoded(self.root))
         self.path.mkdir(parents=True, exist_ok=True)
         manifest = self.path / "manifest.json"
         if manifest.exists():
-            if read_json(manifest) != self.root:
-                raise ValueError("Unsupported history root/format")
+            found = read_json(manifest)
+            if found != self.root:
+                raise ValueError(f"History at {self.path} belongs to root "
+                                 f"{found.get('root') if isinstance(found, dict) else found!r}, not {self.root['root']!r}")
         else:
             write_json(manifest, self.root)
 

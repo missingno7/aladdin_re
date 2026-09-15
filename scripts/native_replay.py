@@ -13,15 +13,15 @@ import os, sys, collections
 from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root / 'src'))
-os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', str(root / 'build' / 'libaladdin_native.dll'))
+os.environ.setdefault('GENESIS_NATIVE_LIBRARY', str(root / 'build' / 'libgenesis_native.dll'))
 from aladdin_sega.profile import read_rom
-from aladdin_sega.machine import Machine
+from genesis_re.machine import Machine
 from aladdin_sega.native import GameState, NativeGap, STEPS, run_frame
 from aladdin_sega.native.replay import ReplayClock, ReplayMismatch
 from aladdin_sega.native.frame import NativeServices
 from aladdin_sega.native.oracle import trace_port_writes, run_to_exits
 from aladdin_sega.game.objects.record import RECORD_TABLE, FIELDS
-from aladdin_sega.history import HistoryStore
+from genesis_re.history import HistoryStore
 FRAME_TICKS = 896040
 VBLANK_HANDLER = 0x1B246E
 FRAME_BOUNDARY = 0x1AC726        # the first main-loop call after the VBlank wait
@@ -344,9 +344,9 @@ def masks(recording=None, store_path=None, native=False):
     ``native`` reads the native player's store (history_native by default): its frame is a game frame (one of
     the game's VBlank waits), so such masks belong to the by-waits driver, never to the faithful one.
     """
-    from aladdin_sega.history import NATIVE_ROOT
-    store = HistoryStore(str(store_path or (root / ('history_native' if native else 'history'))),
-                         root=NATIVE_ROOT if native else None)
+    from aladdin_sega.profile import ALADDIN
+    store = HistoryStore(str(store_path or (root / ('history_native' if native else 'history') / 'aladdin')),
+                         ALADDIN.native_history_root if native else ALADDIN.history_root)
     node = history_id() if recording is None else next(
         (n for n in store.nodes() if n.startswith(recording)), recording)
     path = store.flatten(store.resolve(node))

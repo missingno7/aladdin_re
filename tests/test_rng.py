@@ -2,9 +2,10 @@
 import pytest
 import factcheck
 import pathfacts
+from aladdin_sega.profile import ALADDIN
 from aladdin_sega.game.rng import advance_rng, rng_writes
 from aladdin_sega import boundary
-from aladdin_sega.machine import Machine
+from genesis_re.machine import Machine
 from aladdin_sega.profile import read_rom
 from pathlib import Path
 
@@ -20,14 +21,14 @@ def test_advance_rng_matches_the_traced_step():
 
 
 def test_rng_step_matches_the_original_for_carry_and_no_carry_seeds(capsys):
-    code = factcheck.main(['check', str(FIXTURE), 'aladdin_sega.boundary:rng_step', '--park', '1B3032',
+    code = factcheck.main(['check', '--game', 'aladdin', str(FIXTURE), 'aladdin_sega.boundary:rng_step', '--park', '1B3032',
                            '--vary', 'FF7DEA.l=0,1,0x7FFFFFFF,0xFFFFFFFF,0xAFB72295,0x13B13B13'])
     out = capsys.readouterr().out
     assert code == 0 and out.count(chr(10) + 'MATCH') == 6 and 'MISMATCH' not in out
 
 
 def test_rng_step_leaves_the_machine_unchanged_on_an_odd_stack():
-    state = pathfacts.park(FIXTURE.read_bytes(), 0x1B3032)
+    state = pathfacts.park(FIXTURE.read_bytes(), 0x1B3032, game=ALADDIN)
     with Machine(read_rom()) as machine:
         machine.restore(state)
         registers = machine.registers()

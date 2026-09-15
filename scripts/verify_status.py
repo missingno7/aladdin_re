@@ -58,9 +58,11 @@ def pid_alive(pid):
         return False
 
 
-def current_receipt():
-    from aladdin_sega.receipt import execution_receipt
-    receipt = execution_receipt()
+def current_receipt(game_id):
+    """The receipt a PASS must still match: the shared modules and, when the report names a game, its own."""
+    from genesis_re.games import game as select_game
+    from genesis_re.receipt import execution_receipt
+    receipt = execution_receipt(None if game_id is None else select_game(game_id))
     return receipt['python_modules_sha256'], receipt['native_binary_sha256']
 
 
@@ -109,8 +111,8 @@ def classify(directory, pid=None):
     if status == 'NOT_EXERCISED':
         return 'NOT_EXERCISED', 'streams equal but the candidate admitted nothing'
     if status == 'PASS':
-        modules, native = current_receipt()
         receipt = report.get('candidate_receipt', {}).get('receipt', {})
+        modules, native = current_receipt(report.get('game', receipt.get('game')))
         recorded = receipt.get('python_modules_sha256', {})
         changed = sorted(k for k in set(modules) | set(recorded) if modules.get(k) != recorded.get(k))
         native_changed = receipt.get('native_binary_sha256') != native

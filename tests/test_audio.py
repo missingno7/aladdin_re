@@ -2,7 +2,7 @@ import array
 
 import pytest
 
-from aladdin_sega.audio import FramePacer, PcmBuffer
+from genesis_re.audio import FramePacer, PcmBuffer
 
 
 def pcm(values):

@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from aladdin_sega import verification as v
+from genesis_re import verification as v
 
 
 class FakeMachine:

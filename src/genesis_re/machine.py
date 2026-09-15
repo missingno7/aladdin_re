@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sys
 
-from .profile import PROFILE_SHA256
+from .profile import NTSC
 
 U8, U32, U64 = C.c_uint8, C.c_uint32, C.c_uint64
 P8, P32, P64 = C.POINTER(U8), C.POINTER(U32), C.POINTER(U64)
@@ -17,16 +17,16 @@ class NativeError(RuntimeError):
 
 
 def library_path():
-    override = os.environ.get("ALADDIN_NATIVE_LIBRARY")
+    override = os.environ.get("GENESIS_NATIVE_LIBRARY")
     if override:
         return Path(override).resolve()
-    name = "libaladdin_native.dll" if sys.platform == "win32" else "libaladdin_native.so"
+    name = "libgenesis_native.dll" if sys.platform == "win32" else "libgenesis_native.so"
     path = Path(__file__).parent / name
     if not path.is_file():
         built = Path(__file__).resolve().parents[2] / "build" / name    # a source checkout's own build
         if built.is_file():
             return built
-        raise NativeError("Native library missing. Build/install the package as described in README.md, or set ALADDIN_NATIVE_LIBRARY to the built library.")
+        raise NativeError("Native library missing. Build/install the package as described in README.md, or set GENESIS_NATIVE_LIBRARY to the built library.")
     return path
 
 
@@ -35,7 +35,7 @@ def load_library():
     signatures = {
         "abi": (U32, []), "state_version": (U32, []), "error": (C.c_char_p, []), "source_id": (C.c_char_p, []),
         "build_info": (C.c_char_p, []),
-        "create": (C.c_int, [P8, U64, C.c_char_p, C.POINTER(C.c_void_p)]),
+        "create": (C.c_int, [P8, U64, C.c_char_p, C.c_char_p, C.POINTER(C.c_void_p)]),
         "destroy": (C.c_int, [C.c_void_p]),
         "run": (C.c_int, [C.c_void_p, U64, U64, P32]),
         "gate": (C.c_int, [C.c_void_p, U32, U32]),
@@ -58,14 +58,30 @@ def load_library():
         except AttributeError as error:
             raise NativeError("Native library predates the required review API; rebuild/install the current adapter then regenerate artifacts if their contract changed.") from error
         f.restype, f.argtypes = result, args
-    if lib.al_abi() != 1:
+    if lib.al_abi() != 2:
         raise NativeError("Unsupported native ABI")
     return lib
 
 
 class Machine:
-    def __init__(self, rom: bytes):
+    """One Genesis with one cartridge.
+
+    The snapshot identity the adapter embeds is the ROM's hash plus a profile
+    id and hash: the registered game's when the cartridge is a supported
+    revision (``genesis_re.games``), otherwise the board's.  A state from
+    another cartridge or profile is refused natively.  ``profile`` may be
+    given explicitly; it must then be the game these bytes are.
+    """
+    def __init__(self, rom: bytes, profile=None):
         self._rom = bytes(rom)  # Immutable cartridge diagnostics; no mutable shadow state.
+        if profile is None:
+            from .games import registered
+            profile = registered(rom)
+        elif hashlib.sha256(rom).hexdigest() != profile.rom_sha256:
+            raise ValueError(f"These bytes are not the {profile.title} cartridge")
+        self.profile = profile
+        self.board = NTSC if profile is None else profile.board
+        identity = (self.board.id, self.board.sha256) if profile is None else (profile.profile_id, profile.profile_sha256)
         self.candidate_identity = "original"
         self.in_sound_call = False
         self.calls = {}  # Diagnostic API counts, not emulated or persisted state.
@@ -74,7 +90,7 @@ class Machine:
         self.handle = C.c_void_p()
         self.rom_sha256 = hashlib.sha256(rom).hexdigest()
         data = (U8 * len(rom)).from_buffer_copy(rom)
-        self._check(self.lib.al_create(data, len(data), PROFILE_SHA256.encode(), C.byref(self.handle)))
+        self._check(self.lib.al_create(data, len(data), identity[0].encode(), identity[1].encode(), C.byref(self.handle)))
         self._ram_pointer, size = P8(), U64()
         self._call("ram", C.byref(self._ram_pointer), C.byref(size))
         self._ram = (U8 * size.value).from_address(C.addressof(self._ram_pointer.contents))

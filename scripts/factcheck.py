@@ -46,8 +46,8 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / 'src'))
 
 import pathfacts
-from aladdin_sega.machine import Machine
-from aladdin_sega.profile import read_rom
+from genesis_re.games import game as select_game
+from genesis_re.machine import Machine
 
 
 def parse_pc(text):
@@ -78,11 +78,11 @@ def parse_vary(specs):
     return variations
 
 
-def poke(state, writes):
+def poke(game, state, writes):
     """Return a snapshot with the given RAM bytes changed (machine parked as-is)."""
     if not writes:
         return state
-    with Machine(read_rom()) as m:
+    with Machine(game.read_rom(), game) as m:
         m.restore(state)
         pc = m.info['pc']
         m.gates([pc])
@@ -104,19 +104,19 @@ def _label(writes):
 def _load(args):
     state = open(args.fixture, 'rb').read()
     if args.park is not None:
-        state = pathfacts.park(state, args.park)
+        state = pathfacts.park(state, args.park, game=args.game)
     return state
 
 
 def command_facts(args):
-    facts = pathfacts.trace(_load(args), stop_pc=args.stop, max_instructions=args.max)
+    facts = pathfacts.trace(_load(args), game=args.game, stop_pc=args.stop, max_instructions=args.max)
     print(pathfacts.report(facts, path=args.path))
     return 0
 
 
 def command_segments(args):
-    facts = pathfacts.trace(_load(args), stop_pc=args.stop, max_instructions=args.max)
-    print(pathfacts.report_segments(pathfacts.split_at_native(facts)))
+    facts = pathfacts.trace(_load(args), game=args.game, stop_pc=args.stop, max_instructions=args.max)
+    print(pathfacts.report_segments(pathfacts.split_at_native(facts), facts['natives']))
     return 0
 
 
@@ -126,7 +126,7 @@ def command_check(args):
     for writes in _combinations(args.vary):
         if args.vary:
             print('--- variation %s ---' % _label(writes))
-        worst = max(worst, _check_state(poke(state, writes), args))
+        worst = max(worst, _check_state(poke(args.game, state, writes), args))
     return worst
 
 
@@ -135,7 +135,7 @@ def _check_state(state, args):
     from aladdin_sega.boundary import UnsupportedCandidate, SoundSeam
     declined = plan = None
     seam = False
-    with Machine(read_rom()) as m:
+    with Machine(args.game.read_rom(), args.game) as m:
         m.restore(state)
         regs = m.registers()
         try:
@@ -151,7 +151,7 @@ def _check_state(state, args):
         stop = plan.registers.get('pc')
         print('seam: checking the prefix up to native entry %06X; the suffix planner %s is not checked here'
               % (stop, getattr(result.suffix, '__name__', result.suffix)))
-    facts = pathfacts.trace(state, stop_pc=stop, max_instructions=args.max)
+    facts = pathfacts.trace(state, game=args.game, stop_pc=stop, max_instructions=args.max)
     if declined is not None:
         print('DECLINED: %s' % declined)
         print('original facts for the declined state:')
@@ -183,7 +183,7 @@ def command_branches(args):
     state = _load(args)
     groups = {}
     for writes in _combinations(args.vary):
-        facts = pathfacts.trace(poke(state, writes), stop_pc=args.stop, max_instructions=args.max)
+        facts = pathfacts.trace(poke(args.game, state, writes), game=args.game, stop_pc=args.stop, max_instructions=args.max)
         pcs = tuple(s['pc'] for s in facts['steps'])
         key = (facts['instructions'], facts['cycles'], facts['last_pc'], facts['exit_pc'])
         groups.setdefault(pcs, []).append((writes, key, facts))
@@ -210,6 +210,7 @@ def main(argv=None):
         p.add_argument('fixture')
         if name == 'check':
             p.add_argument('planner', help='module:function, e.g. aladdin_sega.boundary:begin_contact_family_type55')
+        p.add_argument('--game', type=select_game, required=True)
         p.add_argument('--park', type=parse_pc, default=None)
         p.add_argument('--stop', type=parse_pc, default=None)
         p.add_argument('--max', type=int, default=20000)

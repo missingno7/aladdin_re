@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import pytest
 
-from aladdin_sega.history import HistoryStore, ROOT_ID, encoded, digest, read_json, write_json
-from aladdin_sega.history_runtime import GenesisRun, Session
-from aladdin_sega import artifacts
+from genesis_re.history import HistoryStore, encoded, digest, read_json, write_json
+from aladdin_sega.profile import ROOT_ID
+from genesis_re.history_runtime import GenesisRun, Session
+from genesis_re import artifacts
 from aladdin_sega.profile import FRAME_TICKS, read_rom
+from aladdin_sega.profile import ALADDIN
 
 
 def synthetic_rom() -> bytes:
@@ -17,7 +19,7 @@ def synthetic_rom() -> bytes:
 
 
 def test_history_identity_is_canonical_and_branches_by_input(tmp_path):
-    store = HistoryStore(tmp_path / "history")
+    store = HistoryStore(tmp_path / "history", ALADDIN.history_root)
     events = [{"frame": 0, "buttons": 1}, {"frame": 2, "buttons": 0}]
     first = store.append(ROOT_ID, events, 4)
     same_path = store.append(ROOT_ID, events, 4)
@@ -34,7 +36,7 @@ def test_history_identity_is_canonical_and_branches_by_input(tmp_path):
 
 
 def test_history_rejects_noncanonical_segment_events(tmp_path):
-    store = HistoryStore(tmp_path / "history")
+    store = HistoryStore(tmp_path / "history", ALADDIN.history_root)
     with pytest.raises(ValueError, match="ordered"):
         store.append(ROOT_ID, [{"frame": 3, "buttons": 1}], 3)
     with pytest.raises(ValueError, match="Redundant"):
@@ -44,7 +46,7 @@ def test_history_rejects_noncanonical_segment_events(tmp_path):
 
 
 def test_history_presentation_is_metadata_only(tmp_path):
-    store = HistoryStore(tmp_path / "history")
+    store = HistoryStore(tmp_path / "history", ALADDIN.history_root)
     node = store.append(ROOT_ID, [{"frame": 0, "buttons": 4}], 1)
     rgb = bytes([17, 34, 51]) * (2 * 1)
     store.present(node, rgb=rgb, width=2, height=1, reason="manual", label="frame-1")
@@ -58,7 +60,7 @@ def test_history_presentation_is_metadata_only(tmp_path):
 
 def test_genesis_run_counts_logical_frames_despite_native_tick_overshoot():
     from aladdin_sega.profile import OBSERVATION_OFFSET_TICKS
-    with GenesisRun(synthetic_rom()) as run:
+    with GenesisRun(ALADDIN, synthetic_rom()) as run:
         run.step(1)
         assert run.frame == 1
         assert run.machine.info["tick"] >= OBSERVATION_OFFSET_TICKS
@@ -81,7 +83,7 @@ def test_input_instant_stays_at_the_frame_wrap_and_operations_are_deadlined_at_t
             machine.gate(machine.info['pc'], bypass_once=True)
             machine.run(instructions=1)
 
-    with GenesisRun(rom) as run:
+    with GenesisRun(ALADDIN, rom) as run:
         run.candidate = Probe()
         run.machine.gates([entry])
         real_pad = run.machine.pad
@@ -96,19 +98,19 @@ def test_input_instant_stays_at_the_frame_wrap_and_operations_are_deadlined_at_t
 
 
 def test_cold_and_cache_continuations_match_full_state_frame_and_pcm(tmp_path):
-    store = HistoryStore(tmp_path / "history")
+    store = HistoryStore(tmp_path / "history", ALADDIN.history_root)
     rom = read_rom()
     prefix = [{"frame": 0, "buttons": 1}]
     suffix = [{"frame": 3, "buttons": 3}]
     node = store.append(ROOT_ID, prefix, 3)
 
-    with GenesisRun(rom) as cold:
+    with GenesisRun(ALADDIN, rom) as cold:
         cold.advance(3, prefix)
         cold.cache(store, node)
         cold.advance(5, suffix)
         expected = cold.observable()
 
-    with GenesisRun(rom) as restored:
+    with GenesisRun(ALADDIN, rom) as restored:
         assert restored.restore_cache(store, node)
         restored.advance(5, suffix)
         actual = restored.observable()
@@ -122,29 +124,29 @@ def test_cold_and_cache_continuations_match_full_state_frame_and_pcm(tmp_path):
 
 
 def test_corrupt_cache_is_ignored_and_can_be_regenerated(tmp_path):
-    store = HistoryStore(tmp_path / "history")
+    store = HistoryStore(tmp_path / "history", ALADDIN.history_root)
     node = store.append(ROOT_ID, [{"frame": 0, "buttons": 1}], 2)
-    with GenesisRun(read_rom()) as writer:
+    with GenesisRun(ALADDIN, read_rom()) as writer:
         writer.advance(2, [{"frame": 0, "buttons": 1}])
         writer.cache(store, node)
         cache_path = next((tmp_path / "history" / "caches").rglob("*.cache"))
 
     cache_path.write_bytes(b"corrupt cache")
 
-    with GenesisRun(read_rom()) as reader:
+    with GenesisRun(ALADDIN, read_rom()) as reader:
         assert reader.restore_cache(store, node) is False
         path = store.flatten(node)
         reader.advance(path["end_frame"], path["events"])
         reader.cache(store, node)
 
-    with GenesisRun(read_rom()) as restored:
+    with GenesisRun(ALADDIN, read_rom()) as restored:
         assert restored.restore_cache(store, node) is True
 
 
 def test_tampered_cache_pcm_accounting_is_ignored(tmp_path):
-    store = HistoryStore(tmp_path / "history")
+    store = HistoryStore(tmp_path / "history", ALADDIN.history_root)
     node = store.append(ROOT_ID, [{"frame": 0, "buttons": 1}], 2)
-    with GenesisRun(read_rom()) as writer:
+    with GenesisRun(ALADDIN, read_rom()) as writer:
         writer.advance(2, [{"frame": 0, "buttons": 1}])
         writer.cache(store, node)
         cache_path = next((tmp_path / "history" / "caches").rglob("*.cache"))
@@ -154,18 +156,18 @@ def test_tampered_cache_pcm_accounting_is_ignored(tmp_path):
     metadata["pcm_bytes"] += 4
     cache_path.write_bytes(artifacts.pack({"cache.json": encoded(metadata), "state.bin": parts["state.bin"]}))
 
-    with GenesisRun(read_rom()) as reader:
+    with GenesisRun(ALADDIN, read_rom()) as reader:
         assert reader.restore_cache(store, node) is False
 
 
 def test_session_resume_records_input_release_at_next_frame(tmp_path):
-    store = HistoryStore(tmp_path / "history")
-    with Session(store, read_rom()) as session:
+    store = HistoryStore(tmp_path / "history", ALADDIN.history_root)
+    with Session(ALADDIN, store, read_rom()) as session:
         session.step(8)
         session.step(8)
         node = session.checkpoint(reason="pause")
 
-    with Session(store, read_rom(), node=node) as resumed:
+    with Session(ALADDIN, store, read_rom(), node=node) as resumed:
         assert resumed.frame == 2
         assert resumed.run.buttons == 8
         resumed.step(0)
@@ -178,7 +180,7 @@ def test_session_resume_records_input_release_at_next_frame(tmp_path):
 
 
 def test_checkpoint_placement_and_presentation_cannot_change_path_identity(tmp_path):
-    left, right = HistoryStore(tmp_path / 'left'), HistoryStore(tmp_path / 'right')
+    left, right = HistoryStore(tmp_path / 'left', ALADDIN.history_root), HistoryStore(tmp_path / 'right', ALADDIN.history_root)
     events = [{'frame': 0, 'buttons': 8}, {'frame': 4, 'buttons': 0}]
     whole = left.append(ROOT_ID, events, 8)
     middle = right.append(ROOT_ID, events[:1], 3)
@@ -194,8 +196,8 @@ def test_checkpoint_placement_and_presentation_cannot_change_path_identity(tmp_p
 
 
 def test_resume_branch_autosave_and_cache_deletion_preserve_ancestry(tmp_path):
-    store = HistoryStore(tmp_path / 'history')
-    with Session(store, read_rom()) as first:
+    store = HistoryStore(tmp_path / 'history', ALADDIN.history_root)
+    with Session(ALADDIN, store, read_rom()) as first:
         first.step(8)
         a = first.checkpoint()
         first.step(0)
@@ -203,7 +205,7 @@ def test_resume_branch_autosave_and_cache_deletion_preserve_ancestry(tmp_path):
         first.step(16)
     c = store.resolve()
     original_path = store.flatten(c)
-    with Session(store, read_rom(), node=b) as resumed:
+    with Session(ALADDIN, store, read_rom(), node=b) as resumed:
         assert resumed.used_cache
         resumed.step(32)
     x = store.resolve()
@@ -214,24 +216,24 @@ def test_resume_branch_autosave_and_cache_deletion_preserve_ancestry(tmp_path):
     assert store.flatten(c) == original_path
     assert store.metadata(x)['reason'] == 'session_exit'
     assert (store.path / store.metadata(x)['screenshot']).exists()
-    with GenesisRun(read_rom()) as cold:
+    with GenesisRun(ALADDIN, read_rom()) as cold:
         path = store.flatten(x)
         cold.advance(path['end_frame'], path['events'])
         expected = cold.observable()
         cold._cache_path(store, x).unlink()
-    with Session(store, read_rom(), node=x) as regenerated:
+    with Session(ALADDIN, store, read_rom(), node=x) as regenerated:
         assert not regenerated.used_cache
         assert regenerated.run.observable() == expected
     assert store.flatten(x) == path
 
 
 def test_implementation_change_invalidates_only_cache(tmp_path):
-    store = HistoryStore(tmp_path / 'history')
-    with Session(store, read_rom()) as session:
+    store = HistoryStore(tmp_path / 'history', ALADDIN.history_root)
+    with Session(ALADDIN, store, read_rom()) as session:
         session.step(0)
     node = store.resolve()
     path = store.flatten(node)
-    with GenesisRun(read_rom()) as changed:
+    with GenesisRun(ALADDIN, read_rom()) as changed:
         changed.implementation['source'] = {'changed.py': '0' * 64}
         changed.implementation_id = digest(encoded(changed.implementation))
         assert not changed.restore_cache(store, node)
@@ -242,12 +244,12 @@ def test_implementation_change_invalidates_only_cache(tmp_path):
 
 
 def test_valid_cache_envelope_with_invalid_native_state_cannot_move_logical_clock(tmp_path):
-    store = HistoryStore(tmp_path / 'history')
-    with Session(store, read_rom()) as session:
+    store = HistoryStore(tmp_path / 'history', ALADDIN.history_root)
+    with Session(ALADDIN, store, read_rom()) as session:
         session.step(8)
         session.step(0)
     node = store.resolve()
-    with GenesisRun(read_rom()) as reader:
+    with GenesisRun(ALADDIN, read_rom()) as reader:
         cache = reader._cache_path(store, node)
         parts = artifacts.unpack(cache.read_bytes(), {'cache.json', 'state.bin'}, {'cache.json', 'state.bin'})
         meta = artifacts.decode_json(parts['cache.json'])
@@ -258,14 +260,14 @@ def test_valid_cache_envelope_with_invalid_native_state_cannot_move_logical_cloc
         before = reader.save()
         assert not reader.restore_cache(store, node)
         assert reader.save() == before
-    with Session(store, read_rom(), node=node) as recovered:
+    with Session(ALADDIN, store, read_rom(), node=node) as recovered:
         assert not recovered.used_cache
         assert recovered.frame == 2
 
 
 @pytest.mark.parametrize('damage', ['cycle', 'missing', 'input'])
 def test_graph_validation_rejects_broken_ancestry(tmp_path, damage):
-    store = HistoryStore(tmp_path / 'history')
+    store = HistoryStore(tmp_path / 'history', ALADDIN.history_root)
     a = store.append(ROOT_ID, [], 2)
     b = store.append(a, [{'frame': 2, 'buttons': 1}], 4)
     path = store.path / 'nodes' / (a + '.json')
@@ -283,27 +285,27 @@ def test_graph_validation_rejects_broken_ancestry(tmp_path, damage):
 
 
 def test_original_caches_survive_a_python_source_edit_but_candidate_caches_do_not(tmp_path, monkeypatch):
-    from aladdin_sega import history_runtime
-    store = HistoryStore(tmp_path / 'history')
-    with Session(store, read_rom()) as session:
+    from genesis_re import history_runtime
+    store = HistoryStore(tmp_path / 'history', ALADDIN.history_root)
+    with Session(ALADDIN, store, read_rom()) as session:
         session.step(0)
     node = store.resolve()
     path = store.flatten(node)
-    with GenesisRun(read_rom(), 'lifecycle') as candidate:
+    with GenesisRun(ALADDIN, read_rom(), 'lifecycle') as candidate:
         candidate.advance(path['end_frame'], path['events'])
         candidate.cache(store, node)
     real = history_runtime.execution_receipt
 
-    def edited(candidate='original'):
-        receipt = dict(real(candidate=candidate))
-        receipt['python_modules_sha256'] = {**receipt['python_modules_sha256'], 'boundary.py': '0' * 64}
+    def edited(game, candidate='original'):
+        receipt = dict(real(game, candidate=candidate))
+        receipt['python_modules_sha256'] = {**receipt['python_modules_sha256'], 'aladdin_sega/boundary.py': '0' * 64}
         return receipt
 
     monkeypatch.setattr(history_runtime, 'execution_receipt', edited)
-    with GenesisRun(read_rom()) as original:
+    with GenesisRun(ALADDIN, read_rom()) as original:
         assert 'source' in original.implementation and 'source' not in original.cache_implementation
         assert original.restore_cache(store, node)
         assert original.frame == path['end_frame']
-    with GenesisRun(read_rom(), 'lifecycle') as changed:
+    with GenesisRun(ALADDIN, read_rom(), 'lifecycle') as changed:
         assert 'source' in changed.cache_implementation
         assert not changed.restore_cache(store, node)

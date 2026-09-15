@@ -17,7 +17,7 @@ from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = ROOT / "src"
-DEFAULT_NATIVE = ROOT / "build" / "libaladdin_native.dll"
+DEFAULT_NATIVE = ROOT / "build" / "libgenesis_native.dll"
 
 
 def split_native_option(argv: Sequence[str]) -> tuple[Path | None, list[str]]:
@@ -49,7 +49,7 @@ def child_environment(native: Path, inherited: dict[str, str] | None = None) -> 
     source = str(SOURCE_ROOT.resolve())
     old_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = source if not old_pythonpath else source + os.pathsep + old_pythonpath
-    env["ALADDIN_NATIVE_LIBRARY"] = str(native.resolve())
+    env["GENESIS_NATIVE_LIBRARY"] = str(native.resolve())
     return env
 
 
@@ -91,19 +91,19 @@ def _visible_verification(command, *, cwd, env, check=False):
 def run(argv: Sequence[str], *, runner=None) -> int:
     selected, forwarded = split_native_option(argv)
     if not forwarded:
-        raise ValueError("supply an aladdin-sega command, for example: doctor")
+        raise ValueError("supply a genesis-re command, for example: doctor, or play --game gods")
     native = (selected or DEFAULT_NATIVE).expanduser().resolve()
     if not native.is_file():
         raise FileNotFoundError(f"Native DLL not found: {native}")
     # Python timestamp caches can hide a same-size edit within one second.
     # An empty cache prefix plus no writes guarantees source imports, including
     # the comparator's child workers, without deleting checkout-owned caches.
-    with tempfile.TemporaryDirectory(prefix="aladdin-import-") as cache:
+    with tempfile.TemporaryDirectory(prefix="genesis-re-import-") as cache:
         env = child_environment(native)
         env.update(PYTHONPYCACHEPREFIX=cache, PYTHONDONTWRITEBYTECODE="1")
         invoke = runner or (_visible_verification if forwarded[0] == "history-verify" else subprocess.run)
         result = invoke(
-            [sys.executable, "-m", "aladdin_sega", *forwarded],
+            [sys.executable, "-m", "genesis_re", *forwarded],
             cwd=ROOT,
             env=env,
             check=False,
