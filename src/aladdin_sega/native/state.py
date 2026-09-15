@@ -27,15 +27,22 @@ class GameState:
         self.rom = rom
         self.frame = frame
         self.buttons = 0
+        self.buttons_low = None   # the mask the second port read (the TH-low byte) saw, when it differs
         self.events = []          # platform-facing event stream: ('sound', id), ('frame_upload', slot, descriptor), ...
         self.vdp = Vdp(self.bus_read)
         self.pads = None          # callable(frame) -> recorded pad mask; the frame clock is the VBlank count
+        self.replay = None        # a replay.ReplayClock when recorded input must line up with the original's timing
+        self.on_vblank = None     # the VBlank handler's RAM effects (frame.py sets it): run once per VBlank passed
 
     def advance_frames(self, count: int = 1) -> None:
-        """VBlanks passed (waited for, or spent working): the pad clock moves with them."""
-        self.frame += count
-        if self.pads is not None:
-            self.buttons = self.pads(self.frame)
+        """VBlanks passed (waited for, or spent working): the handler runs for each, the pad clock moves with them."""
+        for _ in range(count):
+            if self.on_vblank is not None:
+                self.on_vblank(self)
+            self.frame += 1
+            self.buttons_low = None
+            if self.pads is not None:
+                self.buttons = self.pads(self.frame)
 
     def bus_read(self, address: int, size: int = 1) -> int:
         """A read on the 68k bus as the VDP's DMA sees it: ROM below 400000, work RAM at FF0000."""

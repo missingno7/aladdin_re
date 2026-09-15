@@ -12,34 +12,21 @@ the main loop uses; every VBlank the original waits for is one
 sequences call ``services.checkpoint(pc)`` where the original reaches
 ``pc`` so that the verification tools can compare RAM there.
 
-What the native runtime cannot know is how many VBlanks the original's
-*work* took between waits (decompression and screen drawing run longer
-than a frame); that lag is measured on the recording and applied from
-:data:`TRANSITION_TIMING`, and a sequence whose own wait count differs
-from the measurement stops with a NativeGap instead of guessing.
+The sequences never look at the frame clock or a recording: they read
+game state and the pad.  ``services.checkpoint(pc)`` marks where the
+original reaches ``pc``; a replay harness may spend the original's
+work time there so that recorded input lines up (:mod:`replay`), and
+the verification tools compare RAM there.  A standalone game has
+neither and simply runs the sequence without the work time.
 """
 from __future__ import annotations
-from ..game import video, level, spawn, player, control, hud, compress, messages, pad
+from ..game import video, level, spawn, player, control, hud, compress, messages, pad, camera
 from ..game.objects import lifecycle
 from ..game.objects.record import RECORD_TABLE, RECORD_SIZE, RECORD_COUNT, RecordView
 from ..game.objects.script_engine import Engine
 from ..game import sprites, scroll
 from .state import NativeGap
 
-# native frame in which a transition starts -> (kind, VBlank interrupts already taken in that frame when the
-# sequence begins, the frame boundary at which the main loop resumes counted from the start frame, VBlank
-# waits the sequence itself made).  Measured on the recording with the oracle: the 1A8F82 / 1A902E gate
-# frame, the 1AC726 boundary after the 1A8C16 resume, the 1B249E gate count up to the resumed frame's own wait.
-TRANSITION_TIMING = {
-    75278: ('life_lost', 0, 160, 131),
-    76174: ('life_lost', 0, 130, 101),
-    77192: ('life_lost', 0, 147, 118),
-    77641: ('life_lost', 0, 165, 136),
-    77927: ('life_lost', 0, 134, 105),
-    79034: ('life_lost', 0, 130, 101),
-    79293: ('life_lost', 0, 634, 329),
-    81096: ('life_lost', 0, 129, 103),
-}
 
 BLACK_PALETTE = 0x128ED2
 FADE_FRAMES = 0xF + 1                # 1B278A
@@ -49,7 +36,6 @@ FADE_TARGET = 0xFF7DF2
 FADE_STEP = 0xFFEFF6
 PALETTE_SNAPSHOT = 0xFF8800          # 64 CRAM words the fade interpolates from
 LIVES_DISPLAY_FRAMES = 0x103 + 1
-LIVES_DISPLAY_SKIP_AFTER = 0x103 + 1 - 0xD2
 CHECKPOINT = (0xFF7E0A, 0xFF7E0C, 0xFF7E0E, 0xFF7E10)   # screen X/Y and camera X/Y saved by 1B0490
 HISCORE = 0xFF7E30
 HISCORE_BEATEN = 0xFFF0F1
@@ -59,6 +45,20 @@ PLANE_B_CACHE = 0xFF8884
 PLANE_B_ON_A = 0xFFF165
 DEATH_TEMPLATES = ((1, 0x1B788C, 0x16A, 0x18A), (2, 0x1B7878, 0x120, 0x178))
 PLAYER_TEMPLATE = 0x1B7864
+CONTINUES = 0xFF7E3F
+ANY_BUTTON_ARMED = 0xFF7E23          # the VBlank handler latches ...
+ANY_BUTTON = 0xFF7E22                # ... any of Start / A / B / C here while armed
+PAD_HIGH, PAD_LOW = 0xFFF156, 0xFFF155
+HSCROLL_WAVE_TABLE = 0x2080          # ROM: 32 words the level intro sums into a plane B ripple
+LEVEL_CARD_TEMPLATE = 0x1B7B48
+LEVEL_CARD_SCRIPT = 0x1232DC
+CONTINUE_TEMPLATES = ((2, 0x1B8318, 0x134, 0x1B8, 0x121D5A), (1, 0x1B832C, 0x120, 0x1B8, 0x125F18))
+PALETTE_CYCLE_OFFSET = 0xFF7280
+PALETTE_CYCLING = 0xFFF102
+STORY_PLATE_PALETTE = 0xFF7290
+STORY_PAGE_SOURCE = 0xFF7294
+FONT_TILES = 0x129F00                # 1B2E44: the story font into VRAM F800
+HUD_TILES = 0x11F000                 # 1B2E5A: the HUD tiles into VRAM F800
 PLAYER_STAND_SCRIPTS = {'hang': 0x122336, 'cutscene': 0x125C52, 'locked': 0x121D5A, 'stand': 0x121D88}
 LEVEL_TABLE, LEVEL_ENTRY = 0x2C78, 0x42
 
@@ -488,6 +488,513 @@ def fade_in_level_palette(state, services):
     fade_to(state, services, source)
 
 
+def read_pad_bytes(state):
+    """1B34CA: both pad bytes from the ports into FFF156 / FFF155."""
+    high, low = pad.raw_bytes(state.buttons)
+    state.write(PAD_HIGH, high, 1)
+    state.write(PAD_LOW, low, 1)
+
+
+def latched(state) -> bool:
+    return bool(state.read(ANY_BUTTON, 1))
+
+
+def arm_any_button(state):
+    """1B3258: the VBlank handler's any-button latch armed, the low pad byte released."""
+    state.write(ANY_BUTTON_ARMED, 0xFF, 1)
+    state.write(ANY_BUTTON, 0, 1)
+    state.write(PAD_LOW, 0xFF, 1)
+
+
+def disarm_any_button(state):
+    """1B326C."""
+    state.write(ANY_BUTTON_ARMED, 0, 1)
+    state.write(ANY_BUTTON, 0, 1)
+
+
+def hscroll_first_band(vdp, a, b):
+    """1B32F0: the first horizontal scroll words of both planes."""
+    vdp.control_long(scroll.HSCROLL_A); vdp.data(a)
+    vdp.control_long(scroll.HSCROLL_B); vdp.data(b)
+
+
+def palette_line(state, index, source):
+    """1B2678 / 1B2664 / 1B2650 / 1B263C: one palette line from ROM, its source remembered."""
+    video.load_palette(state.write, state.rom, state.vdp, index, source)
+
+
+def free_slot_downward(state, first=20, count=20):
+    """1AE2AA: the first free record scanning down from ``first``; the pointer runs on past the last test."""
+    record = RECORD_TABLE + RECORD_SIZE * first
+    for _ in range(count):
+        if not state.read(record, 1):
+            return record
+        record -= RECORD_SIZE
+    return record
+
+
+def init_template(state, record, template, x=None, y=None):
+    """1AE30A, then the position the callers store."""
+    for address, value in lifecycle.initialize(record, state.rom[template:template + 19]):
+        state.write(address, value, 1)
+    if x is not None:
+        state.write(record + 2, x, 2)
+        state.write(record + 4, y, 2)
+
+
+def clear_bytes(state, address, count):
+    for i in range(count):
+        state.write(address + i, 0, 1)
+
+
+def lives_by_difficulty(state):
+    """1B0046: 5 / 3 / 2 lives (as digits) by FF7E21."""
+    difficulty = state.read(player.DIFFICULTY, 1)
+    state.write(hud.LIVES, 0x35 if difficulty == 0 else 0x33 if difficulty == 1 else 0x32, 1)
+    state.write(hud.LIVES + 1, 0, 1)
+
+
+def reset_score(state):
+    """1B0008: six '0' digits."""
+    for i in range(6):
+        state.write(0xFF7E29 + i, 0x30, 1)
+    state.write(0xFF7E2F, 0, 1)
+
+
+def hiscore_screen(state, services):
+    """1B0CBC: when the high score was beaten, the 660-frame display of it (1B0134 / 1B0136 are RTS)."""
+    if not state.read(HISCORE_BEATEN, 1):
+        return
+    services.sound_command(0x16)
+    state.write(HISCORE_BEATEN, 0, 1)
+    fade_to(state, services, BLACK_PALETTE)
+    sound_if_enabled(state, services, 0x02, flag=0xFFF57F)
+    clear_plane(state.vdp, 0xC000)
+    clear_plane(state.vdp, 0xE000)
+    retire_pool(state, services, 1, 24)
+    state.write(player.INVULNERABLE, 0, 1)
+    state.write(hud.MESSAGE, 4, 1)                  # 1B2236 is an RTS: nothing is shown
+    state.write(player.FRAME_COUNTER, 0xFF, 1)
+    Engine(state.memory(), services).animation_pass(force=True)
+    video.flush_upload_queue(state.read, state.write, state.vdp)
+    sprites.build_sprite_table(state.read, state.write, state.rom, state.bus_read)
+    video.upload_sprite_table(state.read, state.rom, state.vdp)
+    for _ in range(0x294):
+        mini_frame(state, services)
+    fade_to(state, services, BLACK_PALETTE)
+    retire_pool(state, services, 1, 24)
+
+
+def continue_screen(state, services):
+    """1B080E: "CONTINUE?" while continues remain; left declines (the title), right accepts.
+
+    Returns 'title', 'continue', or None when no continue was on offer.
+    """
+    read, write = state.read, state.write
+    if not read(CONTINUES, 1):
+        return None
+    services.sound_command(0x16)
+    fade_to(state, services, BLACK_PALETTE)
+    state.vdp.control(0x8B00)
+    clear_scroll(state.vdp)
+    write(PLANE_B_ON_A, 0, 1)
+    plane_size_64(state)
+    hscroll_first_band(state.vdp, 0, 0)
+    write(player.INVULNERABLE, 0, 1)
+    retire_pool(state, services, 0, 32)
+    clear_plane(state.vdp, 0xE000)
+    decompress_to_vram(state, 0x13046F, 0xC000)
+    decompress_to_vram(state, 0x13C374, 0)
+    for slot, template, x, y, script in CONTINUE_TEMPLATES:
+        record = RECORD_TABLE + RECORD_SIZE * slot
+        init_template(state, record, template, x, y)
+        write(record + 0x20, script, 4)
+        write(record + 0xA, 0, 4)
+    write(hud.MESSAGE, 0x15, 1)
+    services.show_message(0x15)
+    mini_frame(state, services, count=False)
+    palette_line(state, 0, 0x129CAA)                # 1B25FE: two lines
+    palette_line(state, 1, 0x129CCA)
+    palette_line(state, 3, 0x1290B2)
+    sound_if_enabled(state, services, 0x0A, flag=0xFFF57F)
+    services.checkpoint(0x1B0916)          # the polling starts here: the loading above took the original time
+    while True:
+        mini_frame(state, services)
+        write(PAD_HIGH, pad.raw_bytes(state.buttons)[0], 1)
+        left, right = bool(state.buttons & 0x04), bool(state.buttons & 0x08)
+        write(0xFFF07D, 0xFF if left else 0, 1)
+        write(0xFFF07C, 0xFF if right else 0, 1)
+        if left:
+            for slot, template, *_ in CONTINUE_TEMPLATES:
+                record = RECORD_TABLE + RECORD_SIZE * slot
+                init_template(state, record, template)
+                write(record + 9, 0xFF, 1)
+            for _ in range(0x79):
+                mini_frame(state, services)
+            fade_to(state, services, BLACK_PALETTE)
+            services.sound_command(0x16)
+            return 'title'
+        if right:
+            break
+    services.checkpoint(0x1B09DE)
+    for slot, template, *_ in CONTINUE_TEMPLATES:
+        record = RECORD_TABLE + RECORD_SIZE * slot
+        init_template(state, record, template)
+        write(record + 9, 0, 1)
+    lives_by_difficulty(state)
+    reset_score(state)
+    reset_apples(state)
+    write(0xFFF003, 0, 1)
+    write(0xFFEFE2, 0x3030, 2)                      # 1AA664
+    write(CONTINUES, read(CONTINUES, 1) - 1, 1)
+    for _ in range(0x79):
+        mini_frame(state, services)
+    fade_to(state, services, BLACK_PALETTE)
+    services.sound_command(0x16)
+    return 'continue'
+
+
+def cycle_palette(state):
+    """1B1676: CRAM line 0 from a 16-word window that walks back through the table at 129B92."""
+    offset = state.read(PALETTE_CYCLE_OFFSET, 2)
+    source = 0x129B92 + offset
+    state.vdp.control_long(video.PALETTE_COMMANDS[0])
+    for i in range(16):
+        state.vdp.data(int.from_bytes(state.rom[source + 2 * i:source + 2 * i + 2], 'big'))
+    offset = (offset - 2) & 0xFFFF
+    state.write(PALETTE_CYCLE_OFFSET, offset or 0x20, 2)
+
+
+def any_button(state) -> bool:
+    """B, C (the TH-high read), A or Start (the TH-low read) held."""
+    return bool(state.buttons & 0xF0)
+
+
+def level_card(state, services):
+    """1B1486: the level's title card with two decorative objects, up to 86 mini frames or a button."""
+    read, write = state.read, state.write
+    services.sound_command(0x16)
+    clear_cram(state.vdp)
+    state.vdp.control(0x8B00)
+    plane_size_64(state)
+    write(player.INVULNERABLE, 0, 1)
+    clear_scroll(state.vdp)
+    retire_pool(state, services, 0, 32)
+    sprite_terminator(state)
+    clear_records(state)
+    clear_bytes(state, 0xFFF008, 0x126)
+    clear_plane(state.vdp, 0xC000)
+    decompress_to_vram(state, 0x12EA12, 0xE000)
+    decompress_to_vram(state, 0x1319EC, 0)
+    write(RECORD_TABLE, 0, 1)
+    init_template(state, free_slot_downward(state), LEVEL_CARD_TEMPLATE, 0x58, 0x1F0)
+    record = free_slot_downward(state)
+    init_template(state, record, LEVEL_CARD_TEMPLATE, 0x1DC, 0x1F0)
+    write(record + 0x20, LEVEL_CARD_SCRIPT, 4)
+    write(record + 9, 0xFF, 1)
+    write(PALETTE_CYCLE_OFFSET, 0x20, 2)
+    write(PALETTE_CYCLING, 0, 1)
+    mini_frame(state, services, count=False)
+    palette_line(state, 2, 0x129B52)
+    palette_line(state, 3, 0x1290B2)
+    sound_if_enabled(state, services, 0x13, flag=0xFFF57D)
+    services.checkpoint(0x1B1570)
+    for _ in range(0x55 + 1):
+        mini_frame(state, services)
+        if read(PALETTE_CYCLING, 1):
+            cycle_palette(state)
+        if any_button(state):
+            break
+    if read(pad.GAME_MODE, 1) == 1:
+        raise NativeGap('level_card', 0x1B3182, 'the attract mode exit is not recovered', state.frame)
+    clear_cram(state.vdp)
+    services.sound_command(0x16)
+
+
+def level_1_title(state, services):
+    """1B202A: the first level's own title screen; nothing for the other levels."""
+    if state.read(player.LEVEL_INDEX, 1) == 1:
+        raise NativeGap('level_1_title', 0x1B202A, 'the level 1 title screen is not recovered', state.frame)
+
+
+def story_plate(state, source, palette):
+    """1B494E / 1B496C: the story's background tiles and the palette line the pages use."""
+    clear_plane(state.vdp, 0xE000)
+    decompress_to_vram(state, source, 0)
+    state.write(STORY_PLATE_PALETTE, palette, 4)
+
+
+def story_picture(state, services, source, line0, line1):
+    """1B49DA and its siblings: the page's picture into plane A, then 1B4B28: its four palette lines."""
+    state.write(STORY_PAGE_SOURCE, source, 4)
+    decompress_to_vram(state, source, 0xC000)
+    services.vblank()
+    palette_line(state, 0, line0)
+    state.vdp.control_long(video.PALETTE_COMMANDS[0]); state.vdp.data(0)
+    palette_line(state, 1, line1)
+    palette_line(state, 2, state.read(STORY_PLATE_PALETTE, 4))
+    palette_line(state, 3, 0x1298B2)
+
+
+def story_frame(state, services):
+    """1B4B7C: one frame of a story page (the pads read, animation before motion, the counter after)."""
+    read_pad_bytes(state)
+    engine = Engine(state.memory(), services)
+    engine.animation_pass()
+    engine.motion_pass()
+    sprites.build_sprite_table(state.read, state.write, state.rom, state.bus_read, objects_only=True)
+    state.write(player.FRAME_COUNTER, (state.read(player.FRAME_COUNTER, 1) + 1) & 0xFF, 1)
+    services.vblank()
+    video.flush_upload_queue(state.read, state.write, state.vdp)
+    video.upload_sprite_table(state.read, state.rom, state.vdp)
+
+
+def text_wait(state, services):
+    """1B2380: command 06 of a printed text: ``count`` times a VBlank, a mini frame and a pad read, unless latched."""
+    def wait(count):
+        for _ in range(count):
+            services.vblank()
+            mini_frame(state, services)
+            read_pad_bytes(state)
+            if latched(state):
+                return
+    return wait
+
+
+def story_page(state, services, picture, line0, line1, text, column, row, print_pc):
+    """1B4C02..1B4CC0: a picture, its text typed as tiles, then up to 300 frames or a button; fade.
+
+    ``print_pc`` is the page's own call of the text printer (its checkpoint).
+    """
+    story_picture(state, services, picture, line0, line1)
+    state.write(messages.TYPEWRITER, 0xFF, 1)
+    services.checkpoint(print_pc)
+    messages.print_text(state.read, state.write, state.rom, state.vdp, text, column, row,
+                        text_wait(state, services), lambda: latched(state))
+    state.write(messages.TYPEWRITER, 0, 1)
+    services.checkpoint(0x1B4B5E)
+    if not latched(state):
+        for _ in range(0x12B + 1):
+            if latched(state):
+                break
+            story_frame(state, services)
+    fade_to(state, services, BLACK_PALETTE)
+    retire_pool(state, services, 0, 32)
+    sprite_terminator(state)
+
+
+STORY_PICTURE_A = (0x12DD76, 0x129952, 0x129A92)     # 1B49DA
+
+
+def _story_level_5(state, services):
+    """1B10FC: two pages on the same plate; any button after the first page skips to the level intro."""
+    sound_if_enabled(state, services, 0x55, flag=0xFFF57F)
+    story_plate(state, 0x132F8E, 0x1298D2)
+    if latched(state):
+        return
+    story_page(state, services, *STORY_PICTURE_A, 0x127571, 0x12, 0x8, 0x1B4C8C)   # 1B4C74
+    if latched(state):
+        return
+    story_plate(state, 0x132F8E, 0x1298D2)
+    if latched(state):
+        return
+    story_page(state, services, *STORY_PICTURE_A, 0x1275EE, 0x11, 0x7, 0x1B4CB2)   # 1B4C9A
+
+
+STORIES = {5: _story_level_5}
+
+
+def story_screen(state, services):
+    """1B0F66: the level's story pages (by level index), skipped as a whole by a button; 0xC has none."""
+    services.sound_command(0x16)
+    arm_any_button(state)
+    clear_cram(state.vdp)
+    copy_words(state.vdp, state.rom, FONT_TILES, 0xF800, 0x400)
+    clear_scroll(state.vdp)
+    retire_pool(state, services, 0, 32)
+    sprite_terminator(state)
+    level_index = state.read(player.LEVEL_INDEX, 1)
+    if level_index == 0xC:
+        return
+    try:
+        story = STORIES[level_index]
+    except KeyError:
+        raise NativeGap('story_screen', 0x1B0F9A, f'the story pages of level {level_index} are not recovered',
+                        state.frame) from None
+    story(state, services)
+    level_intro(state, services)
+
+
+def hscroll_wave(state):
+    """1B1432: plane B's scroll table rippled from the 32-word table at 2080, phased by the frame counter."""
+    vdp = state.vdp
+    vdp.control_long(scroll.HSCROLL_A)
+    phase = state.read(player.FRAME_COUNTER, 1) & 0x3E
+    value = 0
+    for _ in range(0x80):
+        value = (value + int.from_bytes(state.rom[HSCROLL_WAVE_TABLE + phase:HSCROLL_WAVE_TABLE + phase + 2], 'big')) & 0x1FF
+        phase = (phase + 2) & 0x3E
+        vdp.data(0)
+        vdp.data(value)
+    for _ in range(0x60):
+        vdp.data_long(0)
+
+
+def level_intro(state, services):
+    """1B1260: the level's name card over a rippling backdrop, up to 450 mini frames or a button."""
+    read, write = state.read, state.write
+    disarm_any_button(state)
+    if read(0xFFF57F, 1) and read(0xFFF57D, 1):
+        services.sound(0, 0x17)
+    state.vdp.control(0x8B03)
+    write(player.INVULNERABLE, 0, 1)
+    clear_scroll(state.vdp)
+    retire_pool(state, services, 0, 32)
+    sprite_terminator(state)
+    decompress_to_vram(state, 0x12F39E, 0xE000)
+    decompress_to_vram(state, 0x12F12E, 0xC000)
+    decompress_to_vram(state, 0x136912, 0)
+    write(RECORD_TABLE, 0, 1)
+    services.checkpoint(0x1B12DE)
+    write(hud.MESSAGE, read(player.LEVEL_INDEX, 1), 1)
+    services.show_message(read(player.LEVEL_INDEX, 1))
+    mini_frame(state, services, count=False)
+    hscroll_wave(state)
+    if read(0xFFF57F, 1):
+        for _ in range(5):
+            services.vblank()
+        services.sound_command(0x16)
+        sound_if_enabled(state, services, 0x18, flag=0xFFF57D)
+        sound_if_enabled(state, services, 0x0A, flag=0xFFF57D)
+    fade_to(state, services, 0x129AD2)
+    for _ in range(0x1C1 + 1):
+        mini_frame(state, services)
+        hscroll_wave(state)
+        if any_button(state):
+            if read(pad.GAME_MODE, 1) == 1:
+                raise NativeGap('level_intro', 0x1B3182, 'the attract mode exit is not recovered', state.frame)
+            break
+    fade_to(state, services, BLACK_PALETTE)
+    state.vdp.control(0x8B00)
+
+
+def row_table(state):
+    """1AA6C8: 88 rows of 16 longs, each row's cell pointer into the map at FF0000."""
+    stride = state.read(level.MAP_STRIDE, 2)
+    address = 0xFF0000
+    for row in range(0x58):
+        for i in range(16):
+            state.write(0xFF9884 + 64 * row + 4 * i, address, 4)
+        address = (address + stride) & 0xFFFFFFFF
+
+
+def load_level(state, services):
+    """1AA484: the level's assets from its table entry, then its init routine."""
+    read, write = state.read, state.write
+    clear_plane(state.vdp, 0xE000)
+    state.vdp.control(0x8B00)
+    services.sound_command(0x16)
+    clear_bytes(state, 0xFFF12E, 0x443)
+    clear_bytes(state, 0xFFF008, 0x126)
+    clear_records(state)
+    init_player(state, services)
+    entry = LEVEL_TABLE + LEVEL_ENTRY * read(player.LEVEL_INDEX, 1)
+    rom = state.rom
+    word = lambda offset: int.from_bytes(rom[entry + offset:entry + offset + 2], 'big')
+    long = lambda offset: int.from_bytes(rom[entry + offset:entry + offset + 4], 'big')
+    write(player.CAMERA_X, word(0), 2); write(level.WINDOW_X, word(0), 2)
+    write(player.SCREEN_X, word(4), 2); write(0xFF7DFE, word(4), 2)
+    write(player.CAMERA_Y, word(2), 2); write(level.WINDOW_Y, word(2), 2)
+    write(player.SCREEN_Y, word(6), 2); write(0xFF7E00, word(6), 2)
+    if long(8):
+        decompress_to_ram(state, long(8), player.CELL_ATTRIBUTES)
+    decompress_to_vram(state, long(0xC), 0)
+    write(PLANE_B_ON_A, rom[entry + 0x40], 1)
+    if long(0x1C):
+        decompress_to_ram(state, long(0x1C), PLANE_B_CACHE)
+        restore_plane_b(state)
+    if long(0x10):
+        decompress_to_ram(state, long(0x10), 0xFF0000)
+    write(0xFFF140, long(0x14), 4)
+    write(0xFFF148, word(0x18), 2)
+    write(0xFF7DBE, long(0x24), 4)
+    write(0xFF7DC2, long(0x2C), 4)
+    write(0xFF7DA4, long(0x34), 4)
+    width, height = word(0x30), word(0x32)
+    write(level.MAP_WIDTH, width, 2)
+    write(level.MAP_STRIDE, (width * 2) & 0xFFFF, 2)
+    write(camera.LEVEL_WIDTH, (width * 16) & 0xFFFF, 2)
+    write(0xFF7DBA, height, 2)
+    write(player.LEVEL_HEIGHT, (height * 16) & 0xFFFF, 2)
+    write(player.MAP_END, (read(level.MAP_STRIDE, 2) * height) & 0xFFFF, 2)
+    row_table(state)
+    write(0xFFEFFD, 0xFF, 1)
+    write(control.JUMP_HOLD, 0xFF, 1)
+    write(0xFF7E1A, 0x695E, 4)
+    difficulty = read(player.DIFFICULTY, 1)
+    first, second = ((0x30303600, 0x30303300), (0x30303800, 0x30303600), (0x30313000, 0x30303900))[
+        0 if difficulty == 0 else 1 if difficulty == 1 else 2]
+    write(0xFF7E12, first, 4)
+    write(0xFF7E16, second, 4)
+    level_init(state, services)
+
+
+def save_checkpoint(state):
+    """1B0490: the player's screen offsets and the camera, cell-aligned, as the respawn point."""
+    camera_x, camera_y = state.read(player.CAMERA_X, 2), state.read(player.CAMERA_Y, 2)
+    state.write(CHECKPOINT[0], ((camera_x & 0xF) + state.read(player.SCREEN_X, 2)) & 0xFFFF, 2)
+    state.write(CHECKPOINT[1], ((camera_y & 0xF) + state.read(player.SCREEN_Y, 2)) & 0xFFFF, 2)
+    state.write(CHECKPOINT[2], camera_x & 0xFFF0, 2)
+    state.write(CHECKPOINT[3], camera_y & 0xFFF0, 2)
+
+
+def level_prologue(state, services):
+    """1A8B50: the screens before a level, its loading and first draw; the main loop then starts at 1A8C16."""
+    read, write = state.read, state.write
+    state.vdp.control(0x8C81)
+    clear_plane(state.vdp, 0xC000)
+    clear_plane(state.vdp, 0xE000)
+    if read(player.LEVEL_INDEX, 1) != 0xC:
+        services.checkpoint(0x1A8B70)
+        level_card(state, services)
+    services.checkpoint(0x1A8B76)
+    level_1_title(state, services)
+    services.checkpoint(0x1A8B7C)
+    story_screen(state, services)
+    services.checkpoint(0x1A8B82)
+    retire_pool(state, services, 1, 24)
+    services.checkpoint(0x1A8B86)
+    load_level(state, services)
+    services.checkpoint(0x1A8B8A)
+    save_checkpoint(state)
+    services.checkpoint(0x1A8B8E)
+    draw_screen(state, services)
+    services.checkpoint(0x1A8B92)
+    edge_strips(state, services)
+    services.sound_command(0x16)
+    music(state, services)
+    write(player.FRAME_COUNTER, 0xFF, 1)
+    player.publish_position(read, write)
+    player_start_script(state)
+    if read(player.LEVEL_INDEX, 1) == 8:
+        write(RECORD_TABLE + RECORD_SIZE + 2, read(player.WORLD_X, 2), 2)
+        write(RECORD_TABLE + RECORD_SIZE + 4, read(player.WORLD_Y, 2), 2)
+    services.checkpoint(0x1A8BDE)
+    Engine(state.memory(), services).animation_pass(force=True)
+    sprites.build_sprite_table(read, write, state.rom, state.bus_read)
+    video.flush_upload_queue(read, write, state.vdp)
+    video.upload_sprite_table(read, state.rom, state.vdp)
+    services.checkpoint(0x1A8BEE)
+    scroll.run(read, write, state.rom, state.vdp, services)
+    video.stream_tiles(read, write, state.rom, state.vdp)
+    copy_words(state.vdp, state.rom, HUD_TILES, 0xF800, 0x400)
+    services.checkpoint(0x1A8BFC)
+    fade_in_level_palette(state, services)
+    if read(pad.GAME_MODE, 1) == 1:
+        write(0xFF7DEA, 0xBC614E, 4)
+    services.checkpoint(0x1A8C16)
+
+
 # ---- the sequences ---------------------------------------------------------------------------------
 def respawn(state, services, fell: bool):
     """1A902E (fell below the level) / 1A8F82 (the dying countdown ran out), then 1A9088: a life lost."""
@@ -529,7 +1036,17 @@ def respawn(state, services, fell: bool):
             return
     services.checkpoint(0x1A9088)
     if read(hud.LIVES, 1) == 0x30:
-        raise NativeGap('respawn', 0x1B0CBC, 'the game-over sequence is not recovered', state.frame)
+        hiscore_screen(state, services)
+        services.checkpoint(0x1A9098)
+        choice = continue_screen(state, services)
+        if choice == 'title':
+            raise NativeGap('respawn', 0x1A8A58, 'the title screen after a declined continue is not recovered',
+                            state.frame)
+        if read(hud.LIVES, 1) == 0x30:
+            raise NativeGap('respawn', 0x1B0558, 'the game-over screen is not recovered', state.frame)
+        services.checkpoint(0x1A8B50)
+        level_prologue(state, services)
+        return 'frame_counter'
     if not read(player.INVINCIBLE, 1):
         write(hud.LIVES, read(hud.LIVES, 1) - 1, 1)
     services.checkpoint(0x1A90CA)
@@ -589,21 +1106,17 @@ def respawn(state, services, fell: bool):
 
 
 def run_transition(state, services, kind: str):
-    """Run the sequence for a transition raised inside a frame, then settle the recorded-pad clock."""
-    start = state.frame
-    timing = TRANSITION_TIMING.get(start)
-    if timing is None:
-        raise NativeGap(kind, 0, f'no timing witness for the transition starting in frame {start}', state.frame)
-    witness_kind, interrupts_taken, resume, witness_waits = timing
-    if witness_kind != kind:
-        raise NativeGap(kind, 0, f'the timing witness for frame {start} is for {witness_kind!r}', state.frame)
-    state.advance_frames(interrupts_taken)       # the recorded pad the sequence starts from
-    waits_before = services.waits
+    """Run the sequence for a transition raised inside a frame.
+
+    Returns the main-loop step the frame resumes at when the sequence does not return where it left
+    (the level prologue ends at 1A8C16), else None.  A replay clock, when installed, brackets the run.
+    """
+    if state.replay is not None:
+        state.replay.begin(kind)
     if kind in ('fell', 'life_lost'):
-        respawn(state, services, fell=(kind == 'fell'))
+        resume = respawn(state, services, fell=(kind == 'fell'))
     else:
         raise NativeGap(kind, 0, f'transition {kind!r} is not recovered', state.frame)
-    waits = services.waits - waits_before
-    if witness_waits != waits:
-        raise NativeGap(kind, 0, f'the sequence made {waits} VBlank waits, the original {witness_waits}', state.frame)
-    state.advance_frames(resume - interrupts_taken - waits - 1)   # the frame loop counts the resumed frame's own VBlank
+    if state.replay is not None:
+        state.replay.end()
+    return resume

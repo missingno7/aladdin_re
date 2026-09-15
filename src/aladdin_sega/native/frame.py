@@ -31,10 +31,21 @@ class NativeServices(Services):
     def __init__(self, state: GameState):
         super().__init__(Trace())
         self.state = state
+        state.on_vblank = _vblank_boundary
         self.waits = 0
+        self.checkpoints = None   # the verification tools collect (pc, ram, frame) here when set
 
     def checkpoint(self, pc):
-        """A sequence reached the point the original reaches at ``pc``: a hook for the verification tools."""
+        """A sequence reached the point the original reaches at ``pc``: a progress marker for the platform.
+
+        The game does nothing with it.  A replay clock (``state.replay``) lines the recorded input up with
+        the original's work time here; the verification tools compare RAM here.
+        """
+        state = self.state
+        if state.replay is not None:
+            state.replay.checkpoint(pc)
+        if self.checkpoints is not None:
+            self.checkpoints.append((pc, bytes(state.ram), state.frame))
 
     def sound_flush(self, value):
         """1E589A on its own: the driver's flush command with a value (the level music)."""
@@ -46,8 +57,7 @@ class NativeServices(Services):
     def vblank(self):
         """A nested VBlank wait inside a step (1B249E from a callback or a sequence): one recorded frame passes."""
         self.waits += 1
-        _vblank_boundary(self.state)
-        self.state.advance_frames(1)
+        self.state.advance_frames(1)            # the handler's effects run inside (state.on_vblank)
 
     def show_message(self, code):
         try:
@@ -69,7 +79,7 @@ class NativeServices(Services):
 
 
 def pad_read(state: GameState, services):
-    if pad.read_pad(state.read, state.write, state.buttons):
+    if pad.read_pad(state.read, state.write, state.buttons, state.buttons_low):
         raise NativeGap('game start from attract mode', 0x1B3182, 'a button ended the attract demo', state.frame)
 
 
@@ -183,7 +193,9 @@ def _flow(name, entry):
                 getattr(flow, name)(state.read, state.write)
         except flow.Transition as transition:
             if transition.kind in ('fell', 'life_lost'):
-                sequences.run_transition(state, services, transition.kind)
+                resume = sequences.run_transition(state, services, transition.kind)
+                if resume is not None:
+                    raise ResumeFrame(resume)
             else:
                 raise NativeGap(name, entry, str(transition), state.frame) from None
     step.__name__ = name
@@ -202,10 +214,9 @@ def _vblank_boundary(state: GameState):
 
 
 def wait_vblank(state: GameState, services):
-    """1B249E: the frame boundary."""
+    """1B249E: the frame boundary (the VBlank the loop waits for is the one run_frame's advance passes)."""
     if state.read(pause.PAUSE_INHIBITED, 1):
         raise NativeGap('wait_vblank', 0x1B24AC, 'the Start-release wait is not recovered', state.frame)
-    _vblank_boundary(state)
 
 
 def frame_counter(state: GameState, services):
@@ -283,15 +294,34 @@ STEPS = (
 )
 
 
+class ResumeFrame(Exception):
+    """A sequence re-entered the main loop at ``step`` (the level prologue ends at 1A8C16, not where it left)."""
+    def __init__(self, step):
+        super().__init__(step)
+        self.step = step
+
+
 def run_frame(state: GameState, buttons: int | None = None) -> None:
     """Execute one native frame; raise NativeGap at the first step that is not recovered.
 
     The pad comes from ``state.pads`` (the recorded masks by VBlank frame) when set, else ``buttons``.
     """
-    state.buttons = state.pads(state.frame) if state.pads is not None else (buttons or 0)
+    sampled = state.replay.sample_input() if state.replay is not None else None
+    if sampled is not None:
+        state.buttons, state.buttons_low = sampled[0], sampled[1]
+    else:
+        state.buttons = state.pads(state.frame) if state.pads is not None else (buttons or 0)
+        state.buttons_low = None
     services = NativeServices(state)
-    for step in STEPS:
+    index = 0
+    while index < len(STEPS):
+        step = STEPS[index]
         if step.run is None:
             raise NativeGap(step.name, step.entry, step.note or 'not recovered', state.frame)
-        step.run(state, services)
+        try:
+            step.run(state, services)
+        except ResumeFrame as resume:
+            index = next(i for i, s in enumerate(STEPS) if s.name == resume.step)
+            continue
+        index += 1
     state.advance_frames(1)

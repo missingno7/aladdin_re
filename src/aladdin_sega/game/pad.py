@@ -23,15 +23,18 @@ GAME_MODE = 0xFFF57C            # 1 = attract demo (input comes from the ROM str
 DEMO_STREAM = 0xFFF576          # long: next byte of the attract demo's recorded pad bytes
 
 
-def read_pad(read, write, mask: int) -> bool:
+def read_pad(read, write, mask: int, low_mask: int | None = None) -> bool:
     """The main loop's two port reads (1A8CEE).  In attract mode the pad only starts the game.
 
-    Returns True when the attract demo should end because a button was
-    pressed (B and C, or A and Start, on the recorded mask).
+    ``low_mask`` is the mask the second read (the TH-low byte) sees when the frame's input changed between the
+    two reads; None means the same mask.  Returns True when the attract demo should end because a button was
+    pressed (B and C, or A and Start).
     """
+    if low_mask is None:
+        low_mask = mask
     if read(GAME_MODE, 1) == 1:
-        return bool(mask & 0x30) or bool(mask & 0xC0)
-    th_high, th_low = raw_bytes(mask)
+        return bool(mask & 0x30) or bool(low_mask & 0xC0)
+    th_high, th_low = raw_bytes(mask)[0], raw_bytes(low_mask)[1]
     write(RAW_TH_HIGH, th_high, 1)
     write(RAW_TH_LOW, th_low, 1)
     return False

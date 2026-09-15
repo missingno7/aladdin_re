@@ -17,6 +17,7 @@ os.environ.setdefault('ALADDIN_NATIVE_LIBRARY', str(root / 'build' / 'libaladdin
 from aladdin_sega.profile import read_rom
 from aladdin_sega.machine import Machine
 from aladdin_sega.native import GameState, NativeGap, STEPS, run_frame
+from aladdin_sega.native.replay import ReplayClock, ReplayMismatch
 from aladdin_sega.native.frame import NativeServices
 from aladdin_sega.native.oracle import trace_port_writes, run_to_exits
 from aladdin_sega.game.objects.record import RECORD_TABLE, FIELDS
@@ -27,27 +28,161 @@ FRAME_BOUNDARY = 0x1AC726        # the first main-loop call after the VBlank wai
 MAIN_LOOP_RETURN = 0x1A8CDC      # ... as called from the main loop (1A8CD8); the sequences call it from elsewhere
 
 
-def seed_at_boundary(m, frame, pads, rom):
-    """Run the oracle from a snapshot to the next frame boundary and seed a native state there."""
-    m.gates([FRAME_BOUNDARY, VBLANK_HANDLER])
-    m.pad(pads.get(frame, 0))
+def run_with_pads(m, pads, target):
+    """Run the oracle toward tick ``target`` or the next armed gate, applying the recorded input as the recording's
+    runtime does: the mask for the frame interval [f, f+1) is set at tick f * FRAME_TICKS (history_runtime.step).
+
+    Returns 'gate' (the oracle parked on a gate) or 'limit' (the target tick reached).
+    """
     while True:
-        assert m.run(target=m.info['tick'] + 3 * FRAME_TICKS) == 'gate', 'no frame boundary after the snapshot'
-        pc = m.info['pc']
-        m.gate(pc, bypass_once=True)
-        if pc == VBLANK_HANDLER:
-            m.pad(pads.get(m.info['tick'] // FRAME_TICKS, 0))
-            continue
+        wrap = (m.info['tick'] // FRAME_TICKS + 1) * FRAME_TICKS
+        if m.run(target=min(wrap, target)) == 'gate':
+            return 'gate'
+        if m.info['tick'] >= target:
+            return 'limit'
+        m.pad(pads.get(m.info['tick'] // FRAME_TICKS, 0))
+
+
+def arm(m, pcs):
+    """Gate ``pcs``; when the oracle already stands on one of them, let it leave before gating again."""
+    m.gates(list(pcs))
+    if m.info['pc'] in pcs:
+        m.gate(m.info['pc'], bypass_once=True)
+
+
+def seed_at_boundary(m, frame, pads, rom, patience=3):
+    """Run the oracle from a snapshot to the next main-loop frame boundary and seed a native state there.
+
+    ``patience`` is the number of frames the oracle may run without reaching a gate (a cold boot passes
+    the title and attract screens first, with their own VBlank handling).
+    """
+    arm(m, [FRAME_BOUNDARY])
+    m.pad(pads.get(m.info['tick'] // FRAME_TICKS, 0))
+    while True:
+        assert run_with_pads(m, pads, m.info['tick'] + patience * FRAME_TICKS) == 'gate', 'no frame boundary after the snapshot'
+        m.gate(m.info['pc'], bypass_once=True)
         if at_main_loop_boundary(m):
             break
     frame = m.info['tick'] // FRAME_TICKS
     state = GameState.from_machine(m, frame, rom)
     state.pads = lambda f: pads.get(f, 0)
+    state.replay = OracleClock(state, m, pads)
     return state, frame
 
 
-def run_oracle_frame(m, pads):
-    """Run the oracle to its next frame boundary, applying the recorded pad at every VBlank it passes."""
+TRANSITION_ENTRIES = {'life_lost': 0x1A8F82, 'fell': 0x1A902E}
+TRANSITION_LIMIT = 4000 * FRAME_TICKS      # the continue screen and a level's prologue are under this
+PAD_READS = ((0x1A8DB8, 0x1A8DF4), (0x1A8D22, 0x1A8D68))   # the main loop's two controller port reads (1A8CEE), and attract mode's
+
+
+class OracleClock(ReplayClock):
+    """The replay clock answered by the oracle running alongside: the original's frame at each checkpoint.
+
+    The oracle sits at the main-loop boundary of the frame the native runtime is executing.  When the
+    native frame raises a transition, ``begin`` drives the oracle to the transition's entry inside that
+    frame; every ``checkpoint(pc)`` drives it to ``pc`` and moves the native frame counter to the
+    oracle's VBlank count there; ``end`` drives it to its main loop's next boundary.  ``consumed`` then
+    tells the frame driver that the oracle already stands at the next boundary.
+    """
+
+    def __init__(self, state, m, pads):
+        self.state, self.m, self.pads = state, m, pads
+        self.frame = None          # the oracle's VBlank count (the native frame number it corresponds to)
+        self.consumed = False
+
+    def _run_to(self, targets, limit, main_loop=False):
+        m = self.m
+        arm(m, [VBLANK_HANDLER, *targets])
+        while True:
+            if run_with_pads(m, self.pads, limit) != 'gate':
+                return None
+            here = m.info['pc']
+            m.gate(here, bypass_once=True)
+            if here == VBLANK_HANDLER:
+                self.frame += 1; continue
+            if main_loop and not at_main_loop_boundary(m):
+                continue
+            return here
+
+    def sample_input(self):
+        """The mask the original's controller read sees in this frame: the oracle is run to that read.
+
+        The recorded mask changes at the frame's tick wrap and the emulated controller shows it at once; the
+        main loop's read falls before or after the wrap depending on the work before it, which the native
+        runtime does not time.  The oracle decides, and then stands mid-frame; the frame driver runs it on.
+        A standalone game reads its live controller and has no such question.
+        """
+        m = self.m
+        masks = []
+        for reads in zip(*PAD_READS):           # the first port read of either path, then the second
+            arm(m, list(reads))
+            if run_with_pads(m, self.pads, m.info['tick'] + 3 * FRAME_TICKS) != 'gate':
+                raise ReplayMismatch('pad_read', reads[0], 'the original did not read the controller in the frame',
+                                     self.state.frame)
+            m.gate(m.info['pc'], bypass_once=True)
+            masks.append(self.pads.get(m.info['tick'] // FRAME_TICKS, 0))
+        return tuple(masks)
+
+    def begin(self, kind):
+        state = self.state
+        self.frame = state.frame
+        entry = TRANSITION_ENTRIES.get(kind)
+        if entry is None:
+            raise ReplayMismatch(kind, 0, f'the replay clock knows no entry for a {kind!r} transition', state.frame)
+        if self._run_to((entry,), self.m.info['tick'] + 3 * FRAME_TICKS) is None:
+            raise ReplayMismatch(kind, entry, 'the original did not start this transition in the frame', state.frame)
+        self.consumed = True
+        self._align(entry)
+
+    def _align(self, pc):
+        state = self.state
+        if state.frame > self.frame:
+            raise ReplayMismatch('checkpoint', pc, f'the sequence reached this point in frame {state.frame}, '
+                                                   f'the original in frame {self.frame}', state.frame)
+        state.advance_frames(self.frame - state.frame)
+
+    def checkpoint(self, pc):
+        if self._run_to((pc,), self.m.info['tick'] + TRANSITION_LIMIT) is None:
+            raise ReplayMismatch('checkpoint', pc, f'the original did not reach {pc:06X} next', self.state.frame)
+        self._align(pc)
+
+    def end(self):
+        state = self.state
+        if self._run_to((FRAME_BOUNDARY,), self.m.info['tick'] + TRANSITION_LIMIT, main_loop=True) is None:
+            raise ReplayMismatch('resume', 0, 'the original did not resume its main loop', state.frame)
+        if state.frame >= self.frame:
+            raise ReplayMismatch('resume', 0, f'the sequence waited to frame {state.frame}, the original resumed '
+                                              f'its loop at frame {self.frame}', state.frame)
+        state.advance_frames(self.frame - 1 - state.frame)   # the frame loop counts the resumed frame's own VBlank
+
+
+def run_oracle_frame(m, pads, clock=None):
+    """Run the oracle to its next frame boundary, applying the recorded pad at every VBlank it passes.
+
+    When the frame's transition already drove the oracle there (``clock.consumed``), nothing runs.
+    """
+    if clock is not None and clock.consumed:
+        clock.consumed = False
+        return
+    _run_oracle_frame(m, pads)
+
+
+def seed_cold(m, pads, rom):
+    """A native state at the first main-loop boundary of a cold start (boot, title and attract are the oracle's)."""
+    return seed_at_boundary(m, 0, pads, rom, patience=20000)
+
+
+def _run_oracle_frame(m, pads):
+    arm(m, [FRAME_BOUNDARY])
+    while True:
+        assert run_with_pads(m, pads, m.info['tick'] + 3 * FRAME_TICKS) == 'gate', 'the oracle did not reach the frame boundary'
+        m.gate(m.info['pc'], bypass_once=True)
+        if at_main_loop_boundary(m):
+            return
+
+
+def _run_oracle_frame_by_interrupts(m, pads):
+    """The former rule (the mask applied at the VBlank interrupt); kept for reference, unused."""
     while True:
         assert m.run(target=m.info['tick'] + 3 * FRAME_TICKS) == 'gate', 'the oracle did not reach the frame boundary'
         pc = m.info['pc']
@@ -78,9 +213,20 @@ def field_name(address):
     return f'{address:06X}'
 
 
-def masks():
-    """Recorded pad mask per frame (the history's events, held until the next event)."""
-    store = HistoryStore(str(root / 'history')); path = store.flatten(store.resolve('main'))
+def history_id():
+    """The recording the evidence snapshots were taken from (artifacts/evidence/frames/history_id), never 'main'."""
+    path = root / 'artifacts' / 'evidence' / 'frames' / 'history_id'
+    if not path.exists():
+        sys.exit(f'no {path}: the evidence snapshots do not name their recording')
+    return path.read_text().strip()
+
+
+def masks(recording=None):
+    """Recorded pad mask per frame (a recording's events, held until the next event); a node id or its prefix."""
+    store = HistoryStore(str(root / 'history'))
+    node = history_id() if recording is None else next(
+        (n for n in store.nodes() if n.startswith(recording)), recording)
+    path = store.flatten(store.resolve(node))
     out = {}; current = 0; events = sorted(path['events'], key=lambda e: e['frame'])
     i = 0
     for f in range(path['end_frame'] + 1):

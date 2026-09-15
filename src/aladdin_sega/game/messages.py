@@ -12,8 +12,12 @@ line of later tiles (8..B), select the glyph motion script (C), or spawn
 an object inline (F).  Typewriter mode (FFEFFC) waits a frame per glyph.
 
 The shop's "IT'S A DEAL" / "FIND MORE GEMS" / "SOLD OUT!" and the level
-hints are plain glyph runs; the commands that wait for frames run nested
-game frames and are reported as gaps until the frame loop is nestable.
+hints are plain glyph runs; inside the main loop the commands that wait
+for frames are reported as gaps (the frame loop is not nestable there).
+
+``print_text`` is the other walker over the same command table (1B21F6):
+the story screens print each character as a tile straight into plane A
+at the pen position, and their wait command (06) runs mini frames.
 """
 from .objects.record import RECORD_TABLE, RECORD_SIZE
 from .objects.lifecycle import initialize
@@ -61,65 +65,99 @@ def _draw_tile(read, vdp, column, row, glyph) -> None:
     vdp.data(((glyph | read(TILE_PALETTE_BITS, 2)) + TILE_BASE) & 0xFFFF)
 
 
+class _Pen:
+    """The walker's registers: the text pointer (a0), the pen (d0 / d1) and the glyph motion script."""
+    __slots__ = ('p', 'x', 'y', 'motion', 'done')
+
+    def __init__(self, text, x, y):
+        self.p, self.x, self.y, self.motion, self.done = text, x, y, GLYPH_MOTION, False
+
+
+def _command(read, write, rom, vdp, pen: _Pen, c: int, wait, what: str) -> None:
+    """One control byte (< 0x20) through the handler table at 49D8; ``wait(count)`` serves command 06."""
+    p = pen.p
+    if c == 0x00:
+        pen.done = True
+    elif c == 0x01:
+        pen.x = (pen.x + _signed_byte(rom[p])) & 0xFFFF; p += 1
+    elif c == 0x02:
+        pen.y = (pen.y + _signed_byte(rom[p])) & 0xFFFF; p += 1
+    elif c == 0x03:
+        count, glyph = rom[p], (rom[p + 1] - 0x20) & 0xFF; p += 2
+        for _ in range(count):
+            _draw_tile(read, vdp, pen.x, pen.y, glyph); pen.x = (pen.x + 1) & 0xFF
+    elif c == 0x04:
+        count, glyph = rom[p], (rom[p + 1] - 0x20) & 0xFF; p += 2
+        for _ in range(count):
+            _draw_tile(read, vdp, pen.x, pen.y, glyph); pen.y = (pen.y + 1) & 0xFF
+    elif c == 0x05:
+        width, height, glyph = rom[p], rom[p + 1], (rom[p + 2] - 0x20) & 0xFF; p += 3
+        for _ in range(height):
+            column = pen.x
+            for _ in range(width):
+                _draw_tile(read, vdp, column, pen.y, glyph); column = (column + 1) & 0xFF
+            pen.y = (pen.y + 1) & 0xFF
+    elif c == 0x06:
+        if wait is None:
+            raise MessageGap(f'{what} waits {rom[p]} frames (1B2380)')
+        wait(rom[p]); p += 1
+    elif c == 0x07:
+        pen.y = (pen.y + 1) & 0xFFFF; pen.x &= 0xFF00
+    elif c in (0x08, 0x09, 0x0A, 0x0B):
+        write(TILE_PALETTE_BITS, (c - 0x08) * 0x2000, 2)
+    elif c == 0x0C:
+        pen.motion = int.from_bytes(rom[p:p + 3], 'big'); p += 3
+    elif c == 0x0F:
+        template = int.from_bytes(rom[p:p + 4], 'big')
+        ox, oy = int.from_bytes(rom[p + 4:p + 6], 'big'), int.from_bytes(rom[p + 6:p + 8], 'big'); p += 8
+        for i in range(20):
+            record = RECORD_TABLE + RECORD_SIZE * (3 + i)
+            if not read(record, 1):
+                for a, value in initialize(record, rom[template:template + TEMPLATE_SIZE]):
+                    write(a, value, 1)
+                write(record + 2, ox, 2); write(record + 4, oy, 2)
+                break
+    else:
+        raise MessageGap(f'{what} uses control byte {c:02X} (redraw / fade)')
+    pen.p = p
+
+
+def print_text(read, write, rom, vdp, text, column, row, wait, latched) -> None:
+    """1B21F6: the text as tiles into plane A from (column, row); stops once the any-button latch is set.
+
+    ``wait(count)`` runs the frames of command 06 (1B2380); ``latched()`` reads FF7E22.
+    Typewriter mode's per-glyph wait (1B2EE0) is an RTS here.
+    """
+    pen = _Pen(text, column, row)
+    while not latched() and not pen.done:
+        c = rom[pen.p]
+        pen.p += 1
+        if c < 0x20:
+            _command(read, write, rom, vdp, pen, c, wait, f'text {text:06X}')
+        else:
+            _draw_tile(read, vdp, pen.x, pen.y, c - 0x20)
+            pen.x = (pen.x & 0xFF00) | ((pen.x + 1) & 0xFF)
+
+
 def show(read, write, rom, vdp, memory, services, code) -> None:
     entry = MESSAGES + 12 * code
     text = int.from_bytes(rom[entry:entry + 4], 'big')
-    x = int.from_bytes(rom[entry + 4:entry + 6], 'big')
-    y = int.from_bytes(rom[entry + 6:entry + 8], 'big')
+    pen = _Pen(text, int.from_bytes(rom[entry + 4:entry + 6], 'big'), int.from_bytes(rom[entry + 6:entry + 8], 'big'))
     write(MESSAGE_CALLBACK, int.from_bytes(rom[entry + 8:entry + 12], 'big'), 4)
     clear_glyphs(read, write, memory, services)
     write(PEN_ADVANCE, 0x11, 2)
-    motion = GLYPH_MOTION
-    p = text
     while True:
-        c = rom[p]
-        p += 1
+        c = rom[pen.p]
+        pen.p += 1
         if c == 0x20:
-            x = (x + read(PEN_ADVANCE, 2)) & 0xFFFF
+            pen.x = (pen.x + read(PEN_ADVANCE, 2)) & 0xFFFF
             continue
         if c < 0x20:
-            if c == 0x00:
+            _command(read, write, rom, vdp, pen, c, None, f'message {code:02X}')
+            if pen.done:
                 return
-            if c == 0x01:
-                x = (x + _signed_byte(rom[p])) & 0xFFFF; p += 1
-            elif c == 0x02:
-                y = (y + _signed_byte(rom[p])) & 0xFFFF; p += 1
-            elif c == 0x03:
-                count, glyph = rom[p], (rom[p + 1] - 0x20) & 0xFF; p += 2
-                for _ in range(count):
-                    _draw_tile(read, vdp, x, y, glyph); x = (x + 1) & 0xFF
-            elif c == 0x04:
-                count, glyph = rom[p], (rom[p + 1] - 0x20) & 0xFF; p += 2
-                for _ in range(count):
-                    _draw_tile(read, vdp, x, y, glyph); y = (y + 1) & 0xFF
-            elif c == 0x05:
-                width, height, glyph = rom[p], rom[p + 1], (rom[p + 2] - 0x20) & 0xFF; p += 3
-                for _ in range(height):
-                    column = x
-                    for _ in range(width):
-                        _draw_tile(read, vdp, column, y, glyph); column = (column + 1) & 0xFF
-                    y = (y + 1) & 0xFF
-            elif c == 0x06:
-                raise MessageGap(f'message {code:02X} waits {rom[p]} frames (1B2380)')
-            elif c == 0x07:
-                y = (y + 1) & 0xFFFF; x &= 0xFF00
-            elif c in (0x08, 0x09, 0x0A, 0x0B):
-                write(TILE_PALETTE_BITS, (c - 0x08) * 0x2000, 2)
-            elif c == 0x0C:
-                motion = int.from_bytes(rom[p:p + 3], 'big'); p += 3
-            elif c == 0x0F:
-                template = int.from_bytes(rom[p:p + 4], 'big')
-                ox, oy = int.from_bytes(rom[p + 4:p + 6], 'big'), int.from_bytes(rom[p + 6:p + 8], 'big'); p += 8
-                for i in range(20):
-                    record = RECORD_TABLE + RECORD_SIZE * (3 + i)
-                    if not read(record, 1):
-                        for a, value in initialize(record, rom[template:template + TEMPLATE_SIZE]):
-                            write(a, value, 1)
-                        write(record + 2, ox, 2); write(record + 4, oy, 2)
-                        break
-            else:
-                raise MessageGap(f'message {code:02X} uses control byte {c:02X} (redraw / fade)')
             continue
+        x, y, motion = pen.x, pen.y, pen.motion
         if read(TYPEWRITER, 1):
             raise MessageGap(f'message {code:02X} in typewriter mode waits a frame per glyph (1B2EAC)')
         script = int.from_bytes(rom[GLYPH_SCRIPTS + 4 * (c - 0x20):GLYPH_SCRIPTS + 4 * (c - 0x20) + 4], 'big')
@@ -138,4 +176,4 @@ def show(read, write, rom, vdp, memory, services, code) -> None:
             write(record + 0xA, motion, 4)
             write(record + 2, x, 2)
             write(record + 4, y, 2)
-        x = (x + read(PEN_ADVANCE, 2)) & 0xFFFF
+        pen.x = (x + read(PEN_ADVANCE, 2)) & 0xFFFF

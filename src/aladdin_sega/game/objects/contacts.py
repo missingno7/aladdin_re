@@ -836,7 +836,47 @@ def _shop_refuse(read, write, services, memory):
     write(SHOP_LATCH, 0xFF, 1)
 
 
+def hurt_plain(read, write, rom, services, memory, record):
+    """1AE9D4 (kind 7B): the player is hurt (1AE4F8)."""
+    P.hurt(read, write, services)
+
+
+def bounce_pad(read, write, rom, services, memory, record):
+    """1AFBF4 (kinds 65/66): landed on while falling it springs (kind 66, script 1244B0) and throws the player up."""
+    velocity_y = read(P.VELOCITY_Y, 2)
+    if velocity_y & 0x8000 or velocity_y == 0 or read(record, 1) == 0x66:
+        return
+    write(record, 0x66, 1)
+    write(record + 0x20, 0x1244B0, 4)
+    write(record + 0x37, 0, 1)
+    if read(P.FROZEN, 1):
+        return
+    write(P.VELOCITY_Y, 0xFB00, 2)
+    P.set_script(write, 0x1221B8)
+    write(P.JUMPING, 0xFF, 1)
+    write(P.JUMP_SETTLED, 0, 1)
+    write(P.WALKING, 0, 1)
+
+
+def bounce_lift(read, write, rom, services, memory, record):
+    """1AFC4E (kind 4F): falling onto it within 0x18 of its centre throws the player higher; it becomes kind 84."""
+    if read(P.VELOCITY_Y, 2) & 0x8000 or read(P.FROZEN, 1):
+        return
+    x, player_x = read(record + 2, 2), read(P.WORLD_X, 2)
+    if (x + 0x18) & 0xFFFF < player_x or (x - 0x18) & 0xFFFF >= player_x:
+        return
+    write(P.VELOCITY_Y, 0xF800, 2)
+    P.set_script(write, 0x121C62)
+    write(P.JUMPING, 0xFF, 1)
+    write(P.JUMP_SETTLED, 0, 1)
+    _sound(read, services, 0x4B)
+    write(record, 0x84, 1)
+    write(record + 0x20, 0x124B3E, 4)
+    write(record + 0x37, 0, 1)
+
+
 PLAYER_CALLBACKS = {
+    0x1AE9D4: hurt_plain, 0x1AFBF4: bounce_pad, 0x1AFC4E: bounce_lift,
     0x1AE64C: bottle_pickup, 0x1AE6B4: cancel, 0x1AE722: pushable, 0x1AE796: sword_enemy, 0x1AE978: apple_thief,
     0x1AE9A8: dust_on_sword, 0x1AE9C6: sword_or_hurt, 0x1AE9DA: sword_only,
     0x1AE9E0: _flag_on_sword(0xFFF10E), 0x1AEA00: _flag_on_sword(0xFFF10F, (0x4F, 0xFE)),

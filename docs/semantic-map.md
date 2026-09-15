@@ -413,36 +413,61 @@ level palette fade-in (1AE1A0).  The life-lost respawn (1A8F82, and
 in place and the frame continues with the steps after `fall_check`, as
 the original returns into its loop.
 
-Timing is a measured witness, never a guess.  The native runtime knows
-how many VBlanks a sequence *waits* for (every 1B249E is one
-`services.vblank()`, which also advances the recorded-pad clock) but
-not how many VBlanks the original's work consumed between waits (the
-screen draw alone spans 20).  `TRANSITION_TIMING` records, per
-transition start frame, what the oracle measured: the interrupts
-already taken in the start frame, the boundary at which the main loop
-resumes, and the wait count; a sequence whose own wait count differs
-stops with a NativeGap.  For the recorded death (frame 75278 in level
-5) the sequence makes 131 waits, the original's loop resumes 160
-frames later, and 29 of those frames are work.
+Timing, and what a recording may teach the runtime.  The sequences
+read only game state and the pad; they never look at the frame clock or
+at a recording.  What the native runtime cannot reproduce is *time*:
+the original spent VBlanks computing (a decompression, the screen draw
+of 20 frames) while the recording's player kept pressing buttons, and
+the native runtime computes the same in zero frames.  So the sequences
+mark progress with `services.checkpoint(pc)` (where the original
+reaches `pc`; the game does nothing with it), and a harness-side
+*replay clock* (`native/replay.py` is the interface,
+`scripts/native_replay.OracleClock` the implementation) lines recorded
+input up with the original's time: at each checkpoint it drives the
+oracle running alongside to `pc` and gives the native frame counter the
+oracle's VBlank count, and at a transition's end the boundary at which
+the original's loop resumed; nothing is stored per recording.  The clock
+is also a proof: a sequence that reaches a different checkpoint next, or
+one later than the original did, is a `ReplayMismatch`.  Without a
+replay clock (a standalone game with live input) checkpoints do nothing
+and the game simply runs its transitions faster.  Nothing in the game
+modules depends on an absolute frame number or on the recording; see
+docs/native-frontier.md for the audit and the input rule.
 
-`scripts/transition_witness.py FRAME DIE_FRAME` measures a witness on
-the recording (the oracle to the transition entry in that main-loop
-frame, then the wait count and the resume boundary) and prints the
-`TRANSITION_TIMING` line.  `scripts/verify_sequence.py FRAME DIE_FRAME
-DIE_PC` proves a sequence in place: the sequence calls
-`services.checkpoint(pc)` where the original reaches `pc` (22 points
-in the respawn), the tool records the native RAM at each and compares
-it with the oracle run to the same pc.  The recording's four deaths in
-level 5 (frames 75278, 76174, 77192, 77641) match at all 22 points
-each, and `native_diff.py 69586 ...` carries the native runtime through
-all four with the whole RAM byte-exact.  (The whole-frame tools
+`scripts/transition_witness.py FRAME --all` lists the recording's
+transitions (start frame, kind, resume boundary).
+`scripts/verify_sequence.py FRAME DIE_FRAME DIE_PC` proves a sequence
+in place: the native RAM at each checkpoint (22 in the respawn, 40 in
+the continue-and-prologue route) against the oracle run to the same pc.
+`--pad FROM-TO MASK` replaces the recorded input on both sides and
+`--auto` measures the perturbed route's clock before verifying it, so
+a sequence is proved on inputs the recording never made (a lives
+screen skipped early, never skipped, or offered a button the rule
+ignores).  The recording's eight deaths in level 5 (frames 75278,
+76174, 77192, 77641, 77927, 79034, 79293, 81096) match at every
+checkpoint, and `native_diff.py 69586 ...` carries the native runtime
+through them with the whole RAM byte-exact.  (The whole-frame tools
 recognise the main loop's own frame boundary by the return address on
 the stack, since the mini frames call the same first step.)  Defects
-the checkpoints found: the start-script branch
-order in 1B1F28 (FFF154 set and no camera lock is 125C52, not 121D5A),
-the name-row command table stored word-swapped, the counter reset
-belonging to the 1B28A6 mini-frame entry, and the decompressor's
-Huffman tables living 0x1B0 bytes below the stack (now bookkeeping).
+the checkpoints found: the start-script branch order in 1B1F28 (FFF154
+set and no camera lock is 125C52, not 121D5A), the name-row command
+table stored word-swapped, the counter reset belonging to the 1B28A6
+mini-frame entry, and the decompressor's Huffman tables living 0x1B0
+bytes below the stack (now bookkeeping).
+
+The continue-and-prologue route (the seventh death, frame 79293, with
+the last life gone): the high-score screen 1B0CBC (recovered from the
+listing, not yet exercised by any recording: FFF0F1 was clear), the
+continue screen 1B080E (left declines to the title, a gap; right
+resets lives by difficulty 1B0046, the score 1B0008, the apples, and
+runs the level prologue), the prologue 1A8B50 (the title card 1B1486
+with its palette cycle 1B1676, the level-1 title 1B202A as a gap, the
+story pages 1B0F66 with their tile text 1B21F6 (level 5's two pages
+recovered, the other levels' as gaps), the level intro 1B1260 with the
+plane B ripple 1B1432, the loader 1AA484 over the two decompressors,
+the checkpoint save 1B0490, the first draw and fade-in), after which
+the main loop starts at 1A8C16 (the frame loop resumes at the
+frame-counter step, `ResumeFrame`).
 
 ## 10. What to recover next
 
