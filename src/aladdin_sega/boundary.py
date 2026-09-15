@@ -3465,6 +3465,7 @@ def contact_scan_plan(machine, registers):
         CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
         CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
         CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch,
+        CONTACT_FAMILY_TYPE43_ENTRY: begin_contact_family_type43_scan_dispatch,
     }
     current = AtomicPlan(20, 2, (), {**registers, 'a1': 0xff7e82,
                          'd4': (registers['d4'] & 0xffff0000) | 23,
@@ -3544,7 +3545,8 @@ def _contact_scan_resume(machine, registers):
                         CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
                         CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
                         CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
-                        CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch}
+                        CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch,
+                        CONTACT_FAMILY_TYPE43_ENTRY: begin_contact_family_type43_scan_dispatch}
             if target in (TRANSITION_ENTRY, 0x1AF4D8):
                 raise UnsupportedCandidate('later collection sound requires local fallback')
             if target in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
@@ -5632,6 +5634,22 @@ def begin_contact_family_type43_dispatch_sound_seam(machine, registers, dispatch
     return SoundSeam(combined, result.stack_basis, result.resume_pc, result.return_slot,
                      result.saved_frame, result.frame_size, result.return_delta,
                      result.counts_contact, result.suffix)
+
+
+def begin_contact_family_type43_scan_dispatch(machine, registers, dispatch):
+    """Scan-safe wrapper: only Type 43's inactive early return.
+
+    The batched contact scan (``contact_scan_plan``/``_contact_scan_resume``)
+    composes all 24 slots as one plain ``AtomicPlan`` and cannot suspend
+    that Python composition for a native sound excursion mid-pass -- the
+    same limitation the spawn dispatcher walker has for its own batch.
+    Decline cleanly when the callback would need the seam; the inactive
+    arm (a plain RTS, no writes) composes normally.
+    """
+    result = begin_contact_family_type43_dispatch_sound_seam(machine, registers, dispatch)
+    if isinstance(result, SoundSeam):
+        raise UnsupportedCandidate('contact scan type43 requires original sound path')
+    return result
 
 
 def finish_contact_family_type43_sound(machine, registers):

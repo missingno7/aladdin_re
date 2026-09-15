@@ -11,7 +11,7 @@ RECORD, PLAYER, PLAYER_SHAPE, SHAPE = 0xFF7E82, 0xFF9100, 0xFF9200, 0xFF9300
 
 
 def scan_fixture(*, branch='contact', mirrored=0, x=100, high=0xA500,
-                 ccr=0x17, stack=0xFFEC00, two=False, kind=0x6A):
+                 ccr=0x17, stack=0xFFEC00, two=False, kind=0x6A, extra_writes=()):
     state = family_fixture(0x1AF978, kind=0x6A, previous=100, object_y=100,
                            vertical=0x800, flags=0x10, stack=stack)
     with oracle.Machine(oracle.read_rom()) as machine:
@@ -39,6 +39,7 @@ def scan_fixture(*, branch='contact', mirrored=0, x=100, high=0xA500,
         writes += [*oracle.write_word(0xFFF08E,player_right&65535),
                    *oracle.write_word(0xFFF08C,player_left),
                    *oracle.write_word(PLAYER+4,player_y)]
+        writes += list(extra_writes)
         regs=machine.registers()
         regs.update(pc=ENTRY,a2=PLAYER,a3=PLAYER_SHAPE,sr=(regs['sr']&~31)|ccr)
         for i in range(8): regs[f'd{i}']=(high<<16)|(0x1234+i)
@@ -103,6 +104,31 @@ def test_later_callback_must_read_staged_motion(monkeypatch):
 @pytest.mark.parametrize('kind',(0x4F,0x7B,0x02))
 def test_unresolved_or_sound_callback_does_not_commit_a_partial_scan(kind):
     state=scan_fixture(kind=kind)
+    with oracle.Machine(oracle.read_rom()) as machine:
+        machine.restore(state); machine.gates([ENTRY]); assert machine.run(instructions=1)=='gate'
+        before=machine.snapshot()
+        with pytest.raises(boundary.UnsupportedCandidate):
+            boundary.contact_scan_plan(machine,machine.registers())
+        assert machine.snapshot()==before
+
+
+def test_type43_inactive_scan_callback_matches_original_outer_and_future():
+    """The scan owns type43's inactive early return (registered in both
+    scan callback maps via begin_contact_family_type43_scan_dispatch)."""
+    state=scan_fixture(kind=0x43,extra_writes=((0xFFF0C1,0),))
+    expected=oracle.execute_region(state,entry=ENTRY,candidate=None,expected_return=EXIT,include_raw=True)
+    actual=oracle.execute_region(state,entry=ENTRY,candidate='lifecycle',expected_return=EXIT,include_raw=True)
+    assert actual.outer==expected.outer
+    assert actual.future==expected.future
+    assert oracle.fresh_process_future(actual.outer_state)==actual.future
+    assert actual.stats['contact_scan_hits']==1
+    assert actual.stats['fallbacks']==0
+
+
+def test_type43_active_scan_callback_still_declines_the_whole_scan():
+    """The scan cannot suspend mid-pass for type43's own sound seam (the
+    same limitation as every other seam-needing scan callback)."""
+    state=scan_fixture(kind=0x43,extra_writes=((0xFFF0C1,1),))
     with oracle.Machine(oracle.read_rom()) as machine:
         machine.restore(state); machine.gates([ENTRY]); assert machine.run(instructions=1)=='gate'
         before=machine.snapshot()
