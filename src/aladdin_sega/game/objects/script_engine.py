@@ -723,8 +723,9 @@ class Engine:
             vram = (vram & 0xFFFF0000) | ((low + m.bus(tile + 4, 2)) & 0xFFFF)
             piece += 12
 
-    def animation_pass(self):
-        if self.mem.u8(FRAME_COUNTER) & 1 == 0:
+    def animation_pass(self, force=False):
+        """1AC784 (odd frames only) or, with ``force``, the 1AC796 entry the transitions use."""
+        if not force and self.mem.u8(FRAME_COUNTER) & 1 == 0:
             return          # 1AC784 runs only on odd frames (btst #0, FF7E28 / beq)
         for address in (SWORD_ACTIVE, STANCE_A, STANCE_B, CHANNEL_FLAG, UPLOAD_COUNT_LOW):
             self.mem.write(address, 0, 1)     # 1AC796..1AC7C2

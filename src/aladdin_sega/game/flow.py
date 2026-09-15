@@ -31,7 +31,10 @@ TEMPLATE_SIZE = 19
 
 
 class Transition(Exception):
-    """The frame loop is left for a level change (death, level complete, bonus)."""
+    """The frame loop is left for a sequence (a life lost, a level change, a bonus stage)."""
+    def __init__(self, kind, detail=''):
+        super().__init__(f'{kind}: {detail}' if detail else kind)
+        self.kind, self.detail = kind, detail
 
 
 def _w(v):
@@ -69,7 +72,7 @@ def _random(read, write):
 # -- 1A8F0C --------------------------------------------------------------------------------------
 def fall_check(read, write) -> None:
     if _w(read(P.LEVEL_HEIGHT, 2) + 0x100) < read(P.WORLD_Y, 2):
-        raise Transition('fell below the level (1A902E)')
+        raise Transition('fell', 'below the level (1A902E)')
     dying = read(DYING, 1)
     if not dying:
         return
@@ -87,11 +90,11 @@ def fall_check(read, write) -> None:
         falls = read(CARPET_FALLS, 1) + 1
         write(CARPET_FALLS, falls, 1)
         if falls < 3:
-            raise Transition('life lost on the carpet (1A8F82)')
+            raise Transition('life_lost', 'on the carpet (1A8F82)')
         write(TRANSITION_COUNTDOWN, 0xFF, 1)
         write(DYING, 0, 1)
         return
-    raise Transition('life lost (1A8F82)')
+    raise Transition('life_lost', '(1A8F82)')
 
 
 # -- 1A8E3E --------------------------------------------------------------------------------------
@@ -104,7 +107,7 @@ def transition_countdown(read, write) -> None:
         write(TRANSITION_COUNTDOWN, remaining, 1)
         if remaining:
             return
-    raise Transition('level change (1A8E5C)')
+    raise Transition('level_change', '(1A8E5C)')
 
 
 # -- 1A8F04: the per-level tick ------------------------------------------------------------------
@@ -226,7 +229,7 @@ def tick_level_7(read, write, rom, services, vdp):
 
 def tick_level_8(read, write, rom, services, vdp):
     """1B6066: the carpet ride: the player follows the carpet, the ride speeds up, the sky scrolls, events stream."""
-    raise Transition('the carpet ride tick (1B6066) is not recovered')
+    raise Transition('carpet_tick', 'the carpet ride tick (1B6066) is not recovered')
 
 
 def tick_level_9(read, write, rom, services, vdp):
@@ -295,7 +298,7 @@ def event_stream(read, write, rom, services, vdp):
     write(EVENT_STREAM, pointer + 6, 4)
     write(EVENT_COUNTER, 0, 1)
     target = int.from_bytes(rom[EVENT_HANDLERS + 4 * (opcode - 0xE6):EVENT_HANDLERS + 4 * (opcode - 0xE6) + 4], 'big')
-    raise Transition(f'level event handler {opcode:02X} ({target:06X}) is not recovered')
+    raise Transition('level_event', f'level event handler {opcode:02X} ({target:06X}) is not recovered')
 
 
 LEVEL_TICKS = {
@@ -311,5 +314,5 @@ def level_tick(read, write, rom, services, vdp) -> None:
     try:
         tick = LEVEL_TICKS[routine]
     except KeyError:
-        raise Transition(f'level tick {routine:06X} is not recovered') from None
+        raise Transition('level_tick', f'level tick {routine:06X} is not recovered') from None
     tick(read, write, rom, services, vdp)

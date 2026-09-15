@@ -24,6 +24,7 @@ from aladdin_sega.history import HistoryStore
 FRAME_TICKS = 896040
 VBLANK_HANDLER = 0x1B246E
 FRAME_BOUNDARY = 0x1AC726        # the first main-loop call after the VBlank wait
+MAIN_LOOP_RETURN = 0x1A8CDC      # ... as called from the main loop (1A8CD8); the sequences call it from elsewhere
 
 
 def seed_at_boundary(m, frame, pads, rom):
@@ -37,9 +38,12 @@ def seed_at_boundary(m, frame, pads, rom):
         if pc == VBLANK_HANDLER:
             m.pad(pads.get(m.info['tick'] // FRAME_TICKS, 0))
             continue
-        break
+        if at_main_loop_boundary(m):
+            break
     frame = m.info['tick'] // FRAME_TICKS
-    return GameState.from_machine(m, frame, rom), frame
+    state = GameState.from_machine(m, frame, rom)
+    state.pads = lambda f: pads.get(f, 0)
+    return state, frame
 
 
 def run_oracle_frame(m, pads):
@@ -51,10 +55,16 @@ def run_oracle_frame(m, pads):
         if pc == VBLANK_HANDLER:
             m.pad(pads.get(m.info['tick'] // FRAME_TICKS, 0))
             continue
-        if pc == FRAME_BOUNDARY:
+        if pc == FRAME_BOUNDARY and at_main_loop_boundary(m):
             return
 
-BOOKKEEPING = ((0xFF769A, 0xFF7A00, 'DMA queue'), (0xFFEF40, 0xFFEFDC, 'stack'),
+
+def at_main_loop_boundary(m):
+    """At the FRAME_BOUNDARY gate: is this the main loop's own call (the mini frames of a transition call it too)?"""
+    sp = m.registers()['a7']
+    return int.from_bytes(m.peek_ram(sp & 0xFFFF, 4), 'big') == MAIN_LOOP_RETURN
+
+BOOKKEEPING = ((0xFF769A, 0xFF7A00, 'DMA queue'), (0xFFED00, 0xFFEFDC, 'stack (the decompressors keep their tables 0x1B0 below it)'),
                (0xFF7D9A, 0xFF7DA3, 'continuations'), (0xFFEFEE, 0xFFEFF0, 'queue counters'))
 
 

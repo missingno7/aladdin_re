@@ -32,6 +32,11 @@ PALETTE_SOURCES = (0xFF7262, 0xFF7266, 0xFF726A, 0xFF726E)          # 1B2678 / 1
 PALETTE_COMMANDS = (0xC0000000, 0xC0200000, 0xC0400000, 0xC0600000)  # CRAM lines 0..3
 
 
+def vram_write_command(address) -> int:
+    """The control long for a VRAM write at ``address`` (1B2534 / 1B255C / 1B3416 compute it the same way)."""
+    return (((address & 0x3FFF) | 0x4000) << 16) | ((address >> 14) & 3)
+
+
 def flush_upload_queue(read, write, vdp) -> None:
     """1AC726: every queued sprite-piece upload is sent as a DMA command (6 words, then the last one via FF8880)."""
     count = read(UPLOAD_COUNT, 2)

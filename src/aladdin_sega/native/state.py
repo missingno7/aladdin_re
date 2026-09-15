@@ -29,6 +29,13 @@ class GameState:
         self.buttons = 0
         self.events = []          # platform-facing event stream: ('sound', id), ('frame_upload', slot, descriptor), ...
         self.vdp = Vdp(self.bus_read)
+        self.pads = None          # callable(frame) -> recorded pad mask; the frame clock is the VBlank count
+
+    def advance_frames(self, count: int = 1) -> None:
+        """VBlanks passed (waited for, or spent working): the pad clock moves with them."""
+        self.frame += count
+        if self.pads is not None:
+            self.buttons = self.pads(self.frame)
 
     def bus_read(self, address: int, size: int = 1) -> int:
         """A read on the 68k bus as the VDP's DMA sees it: ROM below 400000, work RAM at FF0000."""

@@ -77,11 +77,19 @@ def _counter(read, table, address, icon_tile, icon_x, digits_x, low_threshold):
     table.entry(0x148, _digit(read, address + 1), x)
 
 
-def build_sprite_table(read, write, rom, bus) -> None:
-    """``bus(address, size)`` reads ROM or work RAM: frame descriptors can live in either."""
-    write(LEADING_DIGIT_SEEN, 0, 1)
+def build_sprite_table(read, write, rom, bus, objects_only=False) -> None:
+    """``bus(address, size)`` reads ROM or work RAM: frame descriptors can live in either.
+
+    ``objects_only`` is the 1AB7A4 entry the transitions use: no HUD, the chain starts at 0x0901.
+    """
     table = _Table(write)
     cam_x, cam_y = read(P.CAMERA_X, 2), read(P.CAMERA_Y, 2)
+    if objects_only:
+        table.link_size = 0x0901
+        _objects(read, write, rom, bus, table, cam_x, cam_y)
+        table.finish()
+        return
+    write(LEADING_DIGIT_SEEN, 0, 1)
     table.entry(0x138, LIVES_ICON, 0x90)
     table.link_size &= 0xF0FF
     table.entry(0x148, _digit(read, LIVES), 0xAA)
@@ -117,6 +125,11 @@ def build_sprite_table(read, write, rom, bus) -> None:
             write(LEADING_DIGIT_SEEN, 0xFF, 1)
             table.entry(0x9A, _w(SCORE_DIGIT_TILE + 4 * (digit - 0x30)), x)
         x += 0x12
+    _objects(read, write, rom, bus, table, cam_x, cam_y)
+    table.finish()
+
+
+def _objects(read, write, rom, bus, table, cam_x, cam_y):
     vertical, shake = read(VERTICAL_OFFSET, 2), read(SHAKE_OFFSET, 2)
     for slot in range(RECORD_COUNT):
         if slot == 0 and read(INVULNERABLE, 1) & 1:
@@ -163,4 +176,3 @@ def build_sprite_table(read, write, rom, bus) -> None:
                             size=int.from_bytes(rom[tile_record + 6:tile_record + 8], 'big'))
             attributes = _w(attributes + bus(piece + 0xA, 2))
             piece += 12
-    table.finish()

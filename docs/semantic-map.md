@@ -363,7 +363,9 @@ the native path executes original code.  Effects the runtime cannot own
 yet raise `NativeGap` with the ROM address: the pause loop, the
 Start-release wait, the level transitions (a life lost, a level change,
 the bonus stages), message commands that wait for frames, and the
-callbacks or native routines not yet in a registry.
+callbacks or native routines not yet in a registry.  The life-lost
+transition is no longer a gap: it runs as a sequence of nested frames
+(below).
 
 Verification rises with the abstraction:
 
@@ -391,17 +393,67 @@ comparison could not: the odd-frame prologue that clears the sword
 flags, opcode FC's call form (the per-step check re-seeds the saved
 script pointer from the oracle), and the compare-branch default mode.
 
+### Transitions (`native/sequences.py`)
+
+What the original runs outside its main loop is a sequence of nested
+frames over the same game modules: palette fades (1B278A: 16 VBlanks
+stepping all 64 CRAM entries one unit per channel toward the target;
+1B26F0: 47 VBlanks, frame n stepping the first n+1 entries), "mini
+frames" (1B28AE: counter, motion, animation, the objects-only sprite
+table 1AB7A4, VBlank, uploads), timed waits a button cuts short
+(1B2EAC), the lives screen (1B2802: 260 mini frames, A/B/C skips after
+the first 50), record retirement (1AE218 / 1AE224), the checkpoint
+restore (1B04DE), the level init routines (level table +0x28), the
+attribute reload (1B3434 through the RAM decompressor), the screen
+draw (1AA724: 23 columns right then left through the strip pass), the
+edge strips (1AB44C / 1AB66C), the music request (1AE1DA) and the
+level palette fade-in (1AE1A0).  The life-lost respawn (1A8F82, and
+1A902E for a fall) is recovered end to end; when the frame loop's
+`fall_check` raises the transition, `sequences.run_transition` runs it
+in place and the frame continues with the steps after `fall_check`, as
+the original returns into its loop.
+
+Timing is a measured witness, never a guess.  The native runtime knows
+how many VBlanks a sequence *waits* for (every 1B249E is one
+`services.vblank()`, which also advances the recorded-pad clock) but
+not how many VBlanks the original's work consumed between waits (the
+screen draw alone spans 20).  `TRANSITION_TIMING` records, per
+transition start frame, what the oracle measured: the interrupts
+already taken in the start frame, the boundary at which the main loop
+resumes, and the wait count; a sequence whose own wait count differs
+stops with a NativeGap.  For the recorded death (frame 75278 in level
+5) the sequence makes 131 waits, the original's loop resumes 160
+frames later, and 29 of those frames are work.
+
+`scripts/transition_witness.py FRAME DIE_FRAME` measures a witness on
+the recording (the oracle to the transition entry in that main-loop
+frame, then the wait count and the resume boundary) and prints the
+`TRANSITION_TIMING` line.  `scripts/verify_sequence.py FRAME DIE_FRAME
+DIE_PC` proves a sequence in place: the sequence calls
+`services.checkpoint(pc)` where the original reaches `pc` (22 points
+in the respawn), the tool records the native RAM at each and compares
+it with the oracle run to the same pc.  The recording's four deaths in
+level 5 (frames 75278, 76174, 77192, 77641) match at all 22 points
+each, and `native_diff.py 69586 ...` carries the native runtime through
+all four with the whole RAM byte-exact.  (The whole-frame tools
+recognise the main loop's own frame boundary by the return address on
+the stack, since the mini frames call the same first step.)  Defects
+the checkpoints found: the start-script branch
+order in 1B1F28 (FFF154 set and no camera lock is 125C52, not 121D5A),
+the name-row command table stored word-swapped, the counter reset
+belonging to the 1B28A6 mini-frame entry, and the decompressor's
+Huffman tables living 0x1B0 bytes below the stack (now bookkeeping).
+
 ## 10. What to recover next
 
-1. The transitions, as sequences of nested frames over the same steps:
-   the life-lost respawn (1A902E / 1A8F82: fade, re-initialisation,
-   screen redraw through the strip and object passes, fade in), the
-   level change (1A8E5C: the end-of-level tally 1B0D70, the level
-   sequence stream FFF572, the level loader 1AA484 with its two
-   decompressors 1B35D0 / 1B3818, the level init routines and the
-   intro screens), and the bonus stages.  The fade (1B278A / 1B29B0) is
-   47 nested VBlank frames of CRAM interpolation; the VDP model already
-   keeps CRAM.
+1. The remaining transitions as sequences over the same primitives: the
+   level change (1A8E5C: the end-of-level tally 1B0D70, the scarab
+   screen 1B16E0, the level sequence stream FFF572, the 1A8B50
+   prologue with the story and level-card screens, the level loader
+   1AA484 with the two decompressors, the screen draw and fade-in), the
+   fall variant of the respawn when the recording meets one, the
+   game-over screen (1B0CBC) and the bonus stages.  Each needs its
+   timing witness measured on the recording first.
 2. The 24 player callbacks and 20 projectile callbacks not yet met by
    the recording (kind 3E at 1AF2B0 is the next one it meets).
 3. The level event streams of levels 2, 6 and 8 (1B634E over the table
@@ -410,6 +462,10 @@ script pointer from the oracle), and the compare-branch default mode.
    game-over screens, so the whole recording runs from power-on.
 
 ## 11. Tools
+
+`scripts/native_replay.py`, `native_diff.py`, `verify_step.py`,
+`verify_sequence.py` and `transition_witness.py` are the native
+runtime's verification ladder (section 9).
 
 `scripts/cartography/`: `ram_activity.py` (per-frame RAM change activity,
 instruction counts and snapshots every 32 frames), `frame_sampler.py`

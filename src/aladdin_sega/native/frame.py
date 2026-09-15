@@ -10,6 +10,7 @@ steps are gaps: native execution stops there, loudly.
 from __future__ import annotations
 from dataclasses import dataclass
 from .state import GameState, NativeGap
+from . import sequences
 from ..game.objects.script_engine import Engine, Services, Trace
 from ..game import pad, hud, player, video, scroll, level, spawn, pause, camera, tiles, control, flow, sprites, messages
 from ..game.objects import ground, contact_scan, contacts  # noqa: F401  (contacts registers the callbacks)
@@ -30,14 +31,23 @@ class NativeServices(Services):
     def __init__(self, state: GameState):
         super().__init__(Trace())
         self.state = state
+        self.waits = 0
+
+    def checkpoint(self, pc):
+        """A sequence reached the point the original reaches at ``pc``: a hook for the verification tools."""
+
+    def sound_flush(self, value):
+        """1E589A on its own: the driver's flush command with a value (the level music)."""
+        self.state.events.append(('sound_flush', self.state.frame, value))
 
     def sound(self, slot, sound_id, flush=True):
         self.state.events.append(('sound', self.state.frame, sound_id, flush))
 
     def vblank(self):
-        """A nested VBlank wait inside a step (1B249E from a callback): one recorded frame passes."""
+        """A nested VBlank wait inside a step (1B249E from a callback or a sequence): one recorded frame passes."""
+        self.waits += 1
         _vblank_boundary(self.state)
-        self.state.frame += 1
+        self.state.advance_frames(1)
 
     def show_message(self, code):
         try:
@@ -171,8 +181,11 @@ def _flow(name, entry):
                 flow.level_tick(state.read, state.write, state.rom, services, state.vdp)
             else:
                 getattr(flow, name)(state.read, state.write)
-        except flow.Transition as error:
-            raise NativeGap(name, entry, str(error), state.frame) from None
+        except flow.Transition as transition:
+            if transition.kind in ('fell', 'life_lost'):
+                sequences.run_transition(state, services, transition.kind)
+            else:
+                raise NativeGap(name, entry, str(transition), state.frame) from None
     step.__name__ = name
     return step
 
@@ -270,12 +283,15 @@ STEPS = (
 )
 
 
-def run_frame(state: GameState, buttons: int = 0) -> None:
-    """Execute one native frame; raise NativeGap at the first step that is not recovered."""
-    state.buttons = buttons
+def run_frame(state: GameState, buttons: int | None = None) -> None:
+    """Execute one native frame; raise NativeGap at the first step that is not recovered.
+
+    The pad comes from ``state.pads`` (the recorded masks by VBlank frame) when set, else ``buttons``.
+    """
+    state.buttons = state.pads(state.frame) if state.pads is not None else (buttons or 0)
     services = NativeServices(state)
     for step in STEPS:
         if step.run is None:
             raise NativeGap(step.name, step.entry, step.note or 'not recovered', state.frame)
         step.run(state, services)
-    state.frame += 1
+    state.advance_frames(1)

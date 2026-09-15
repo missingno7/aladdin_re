@@ -45,10 +45,14 @@ def score_tally(read, write, sound) -> None:
     """1B00CA: on even frames move one tally unit into the score and the extra-life progress."""
     if read(FRAME_COUNTER, 1) & 1:
         return
-    pending = read(PENDING_POINTS, 2)
-    if not pending:
+    if not read(PENDING_POINTS, 2):
         return
-    write(PENDING_POINTS, pending - 1, 2)
+    score_tally_unit(read, write, sound)
+
+
+def score_tally_unit(read, write, sound=lambda sound_id: None) -> None:
+    """1B00D6: one pending unit into the score digits and the extra-life progress."""
+    write(PENDING_POINTS, read(PENDING_POINTS, 2) - 1, 2)
     progress = (read(EXTRA_LIFE_PROGRESS, 2) + 1) & 0xFFFF
     write(EXTRA_LIFE_PROGRESS, progress, 2)
     threshold = EXTRA_LIFE_THRESHOLDS.get(read(DIFFICULTY, 1), 0x2710)
