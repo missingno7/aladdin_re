@@ -18,8 +18,8 @@ puzzle: write the blocker package (section 7) and move to the next ledger row.
 PowerShell, from the checkout root (`D:\Prog\aladdin_re`):
 
 ```powershell
-$env:PYTHONPATH = 'src;scripts;tests'
-$env:ALADDIN_NATIVE_LIBRARY = "$PWD\build\libaladdin_native.dll"
+# PYTHONPATH is no longer needed: tests/conftest.py and scripts/run_tests.py set the checkout's paths
+$env:GENESIS_NATIVE_LIBRARY = "$PWD\build\libgenesis_native.dll"
 $py = '.\.venv\Scripts\python.exe'
 ```
 
@@ -40,15 +40,15 @@ reading the ROM by eye or counting cycles by hand.
 | Command | What it answers |
 |---|---|
 | `& $py scripts\frontier_ledger.py ARTIFACTS --index artifacts\evidence\main` | What the last cold run still hands to the original, ranked by count, with the boundary function that refused it, the scheduler refusals by gate, and the evidence index: every recorded behavior class with its count, first frame, cost, native shape, child and parent fixtures. |
-| `& $py scripts\recovery_census.py artifacts\evidence\main --entry PC [--entry PC] --parent 1ABB40` | The discovery pass: one original replay that single-steps every occurrence of the entries, retains one entry state per distinct executed path (plus one per exit CCR) with the contact-tick parent state that led to it (`parent-*.state`), and writes `index.json`, the evidence index the ledger reads.  Run it once per history extension, for all frontier entries together. |
-| `& $py scripts\segment_verify.py FIXTURE.state --frames 120 [--reference ARTIFACTS]` | Restores a retained state, runs the candidate for N frames under real deadlines and compares every frame with the stored reference observations of the last PASS cold run (copy its `reference.json` into the evidence directory).  For a `parent-*` fixture it says whether the child was owned or declined.  Seconds, independent of replay length. |
-| `& $py scripts\factcheck.py facts FIXTURE.state [--park PC] [--stop PC] [--path]` | Instructions, cycles, last_pc, stack delta, changed registers, CCR, every RAM byte written, calls/returns, and with `--path` each executed instruction. |
-| `& $py scripts\factcheck.py segments FIXTURE.state [--park PC]` | The PYTHON / NATIVE split around sound calls (1E58B8, 1E58F4, 1E589A): the prefix you may own, the native call, the resumed suffix, each with its own facts. |
-| `& $py scripts\factcheck.py branches FIXTURE.state --park PC --vary ADDR[.w]=v1,v2` | Which executed path each input takes and whether the cost is constant inside a path. |
-| `& $py scripts\factcheck.py check FIXTURE.state aladdin_sega.boundary:PLANNER --park PC [--vary ...]` | Every fact your plan gets wrong.  `MATCH` (exit 0), `MISMATCH` (1) or `DECLINED` (2).  A `SoundSeam` planner is checked through its prefix. |
+| `& $py scripts\recovery_census.py artifacts\evidence\main --game aladdin --entry PC [--entry PC] --parent 1ABB40` | The discovery pass: one original replay that single-steps every occurrence of the entries, retains one entry state per distinct executed path (plus one per exit CCR) with the contact-tick parent state that led to it (`parent-*.state`), and writes `index.json`, the evidence index the ledger reads.  Run it once per history extension, for all frontier entries together. |
+| `& $py scripts\segment_verify.py FIXTURE.state --game aladdin --frames 120 [--reference ARTIFACTS]` | Restores a retained state, runs the candidate for N frames under real deadlines and compares every frame with the stored reference observations of the last PASS cold run (copy its `reference.json` into the evidence directory).  For a `parent-*` fixture it says whether the child was owned or declined.  Seconds, independent of replay length. |
+| `& $py scripts\factcheck.py facts FIXTURE.state --game aladdin [--park PC] [--stop PC] [--path]` | Instructions, cycles, last_pc, stack delta, changed registers, CCR, every RAM byte written, calls/returns, and with `--path` each executed instruction. |
+| `& $py scripts\factcheck.py segments FIXTURE.state --game aladdin [--park PC]` | The PYTHON / NATIVE split around sound calls (1E58B8, 1E58F4, 1E589A): the prefix you may own, the native call, the resumed suffix, each with its own facts. |
+| `& $py scripts\factcheck.py branches FIXTURE.state --game aladdin --park PC --vary ADDR[.w]=v1,v2` | Which executed path each input takes and whether the cost is constant inside a path. |
+| `& $py scripts\factcheck.py check FIXTURE.state aladdin_sega.boundary:PLANNER --game aladdin --park PC [--vary ...]` | Every fact your plan gets wrong.  `MATCH` (exit 0), `MISMATCH` (1) or `DECLINED` (2).  A `SoundSeam` planner is checked through its prefix. |
 | `& $py scripts\verify_status.py ARTIFACTS` | The one word about a verification directory: RUNNING, PASS, STALE_EVIDENCE, DIVERGENCE, TIMEOUT, DEPENDENCY_FAILURE, NOT_EXERCISED, ERROR, NO_EVIDENCE.  This is the only way to read verifier state. |
-| `& $py scripts\leaf_review.py [--artifacts DIR]` | The review gate for one leaf: diff, removed guards/assertions, gate count, changed test modules, focused suites, verification status. |
-| `& $py scripts\dev.py history-verify main --history history --candidate lifecycle --timeout-seconds 1800 --output artifacts\NAME` | The cold comparison (two fresh workers in parallel).  Give it at least 20 seconds of timeout per 1,000 frames of `main`. |
+| `& $py scripts\aladdin\leaf_review.py [--artifacts DIR]` | The review gate for one leaf: diff, removed guards/assertions, gate count, changed test modules, focused suites, verification status. |
+| `& $py scripts\dev.py history-verify main --game aladdin --candidate lifecycle --timeout-seconds 1800 --output artifacts\NAME` | The cold comparison (two fresh workers in parallel).  Give it at least 20 seconds of timeout per 1,000 frames of `main`. |
 
 ## 3. Choosing the next bite
 
@@ -132,15 +132,15 @@ reading the ROM by eye or counting cycles by hand.
    recipe does, and the entry to `begin_collection_dispatch`'s accepted list.
    A RAM-only callback whose caller is the contact scan also goes into both
    scan callback maps (that is what makes the parent own it).
-7. **QUALIFY.** Add tests modelled on `tests/test_contact_type55.py`
-   (RAM-only) or the Type-43/Type-46 tests in `tests/test_contact_family.py`
+7. **QUALIFY.** Add tests modelled on `tests/games/aladdin/test_contact_type55.py`
+   (RAM-only) or the Type-43/Type-46 tests in `tests/games/aladdin/test_contact_family.py`
    (seam): outer equality, future equality, `fresh_process_future`, one
    dispatcher hit and zero fallbacks per admitted arm; each unsupported arm
    declines with `fallbacks >= 1` and no writes; the three mutants
    (result, continuation, timing) diverge.  Then run `segment_verify.py` on every retained child and
    parent fixture of the class (`--frames 120`): each must PASS against the
    reference, and a parent fixture must report the child as owned unless the
-   arm is one you declined on purpose.  `tests/test_recorded_evidence.py` is
+   arm is one you declined on purpose.  `tests/games/aladdin/test_recorded_evidence.py` is
    the tracked form of that check; it runs whenever the evidence directory
    exists.
 8. **REVIEW.** `leaf_review.py` must print `leaf review: PASS`.  Read its
@@ -167,9 +167,9 @@ reading the ROM by eye or counting cycles by hand.
 
 | When | Run |
 |---|---|
-| after each edit | the test module you are writing (`pytest tests\test_<name>.py -q -p no:cacheprovider`) |
+| after each edit | the test module you are writing (`pytest tests\games\aladdin\test_<name>.py -q -p no:cacheprovider`) |
 | after `check` matches, before each local commit | `leaf_review.py` (focused suites, about 30 s), then `segment_verify.py` on the class's child and parent fixtures (seconds) |
-| at a milestone: after three leaves or about ninety minutes of recovery work, whichever comes first, and always before a push | full suite with `-n 8` (`pytest -q -p no:cacheprovider -n 8`, about a minute), then the cold comparison started in the background (about 8 min for 82,000 frames); while it runs, do read-only preparation for the next row (`frontier_ledger`, `facts`, `branches`, `segments`) and touch nothing under `src/` or `tests/` |
+| at a milestone: after three leaves or about ninety minutes of recovery work, whichever comes first, and always before a push | full suite with `-n 8` (`python scripts\run_tests.py aladdin`, about 90 s; `all` at larger checkpoints), then the cold comparison started in the background (about 8 min for 82,000 frames); while it runs, do read-only preparation for the next row (`frontier_ledger`, `facts`, `branches`, `segments`) and touch nothing under `src/` or `tests/` |
 | after a milestone PASS | copy its `reference.json` into `artifacts/evidence/main`, run `frontier_ledger.py --index` on the new artifacts, update the current section of `docs/STATUS.md`, push; rerun the census only after a history extension |
 
 Do not run the full suite or the cold comparison after exploratory edits.

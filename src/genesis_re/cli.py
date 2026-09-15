@@ -24,7 +24,11 @@ def main(argv=None):
         if name in {"history-run", "history-verify", "history-export"}:
             p.add_argument("node", nargs="?", default="main")
         if name in {"history-run", "history-verify"}:
-            p.add_argument("--candidate", default="original" if name == "history-run" else "lifecycle")
+            p.add_argument("--candidate", default="original" if name == "history-run" else None,
+                           help="Candidate name of the game's recovery namespace; original replays the ROM alone"
+                           + ("" if name == "history-run" else " (history-verify: required; "
+                              "original-vs-original is the fresh-process determinism check)"),
+                           required=name == "history-verify")
             p.add_argument("--tree", action="store_true")
             p.add_argument("--output", type=Path, default=Path("artifacts/comparison") if name == "history-verify" else None)
         if name == "history-run":

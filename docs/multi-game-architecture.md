@@ -80,11 +80,14 @@ Everything that is a fact about the console — master clock, dividers, frame
 length, the controller, power-on RAM, scheduling and audio contracts — is the
 `Board`, shared.
 
-The native machine is game-agnostic.  Its snapshot identity is the ROM's
-SHA-256 plus the board's id and hash; a snapshot or cache from one cartridge
-cannot be restored into another.  Above it, `GenesisRun` binds a game: the
-cache key includes the game id, the profile hash, the ROM hash, the native
-binary and (for candidates) the recovered source.
+The native adapter holds no game facts.  The snapshot identity it embeds is
+the ROM's SHA-256 plus a profile id and hash that Python declares: the
+registered game's for a supported cartridge (so every Aladdin snapshot
+fixture kept its identity `aladdin-usa-ntsc-v1` across the split), the
+board's for any other cartridge.  A snapshot from one cartridge cannot be
+restored into another.  Above it, `GenesisRun` binds a game: the cache key
+includes the game id, the profile hash, the ROM hash, the native binary and
+(for candidates) the recovered source.
 
 History identity is unchanged: a node id is the root record, the ordered
 input stream and the end frame.  The root record names the game
@@ -93,12 +96,70 @@ one, and a store's manifest is checked against the selected game's root before
 anything is read.  A store below `history/aladdin` holds only Aladdin nodes;
 the timeline reads one store.
 
+## How game selection works
+
+`genesis_re.games.GAMES` maps the stable id (`aladdin`, `gods`) to its
+`GameProfile`.  Every developer command takes `--game ID`
+(`python -m genesis_re history-verify main --game gods --candidate original`,
+`scripts/dev.py` forwards it); `--history` defaults to `history/<id>` and
+`--rom` to `assets/<the profile's filename>`.  `play` without `--game` opens
+the chooser window first; with `--game` it opens that game's timeline
+directly.  Automated play (`--frames`, `--new`, `--node`) needs an explicit
+game.  Shared scripts (`recovery_census.py`, `segment_verify.py`,
+`factcheck.py`, `pathfacts`) take `--game` too; game scripts under
+`scripts/<game>/` are bound to their game.
+
+The registry is the only shared module that imports a game package
+(`scripts/check_architecture.py` enforces it); `Machine(rom)` looks the
+cartridge up there to embed the registered game's identity in its snapshots,
+and a registered cartridge run as another game is refused
+(`GenesisRun(GODS, aladdin_rom)`).
+
+## Histories, caches and evidence per game
+
+```text
+history/aladdin/      original-machine Aladdin histories (root aladdin-usa-new)
+history/gods/         original-machine Gods histories   (root gods-usa-new)
+history_native/aladdin/   Aladdin native-runtime histories (root aladdin-usa-native)
+artifacts/            evidence; Gods artifacts are written under artifacts/gods/
+```
+
+The Aladdin stores that used to live directly under `history/` and
+`history_native/` were moved into the `aladdin/` subdirectories on 15
+September 2026; node ids, caches and screenshots are unchanged, and the
+store manifest refuses any other game's root.  A cache is keyed by
+`{game, rom, profile, native, state_version, candidate[, source]}`, so a
+cache produced for one game or one build is never restored into another.
+
+## Tests
+
+```text
+tests/common/          shared machine, history, replay, verification, tooling
+tests/games/aladdin/   the Aladdin recovery corpus
+tests/games/gods/      the Gods project
+```
+
+`scripts/run_tests.py common|aladdin|gods|all`; the same by path
+(`pytest tests/common tests/games/gods`) or by marker (`-m "common or gods"`).
+The common suite runs its real-cartridge checks on one registered game
+(`GAME = GAMES["aladdin"]` at the top of those modules) and
+`tests/common/test_games.py` runs the isolation checks over every game whose
+ROM is present.
+
 ## What a third game adds
 
 1. `src/<game>_sega/profile.py` with its `GameProfile` (exact ROM hash, size,
-   filename, roots) — and nothing else until recovery starts.
-2. One line in `genesis_re/games.py`.
-3. `tests/games/<game>/`, `scripts/<game>/` as they become necessary.
+   filename, roots) — and nothing else until recovery starts; inspect the
+   cartridge and record the revision, never invent it.
+2. One line in `genesis_re/games.py`, and the package name in
+   `scripts/check_architecture.py` and `pyproject.toml`'s wheel list.
+3. `tests/games/<game>/` (start from `tests/games/gods/test_boot.py`) and
+   `scripts/<game>/` as they become necessary; a `docs/<game>/STATUS.md`.
+
+When recovery starts, the game gains a candidate provider
+(`GameProfile.candidate`: a name to an object with `arm(machine)`,
+`on_gate(machine, deadline)` and `stats`), its own boundary/recovery
+modules and, for the tracer, `tracer_native_entries`.
 
 The machine, the histories, the frontend, the replay mechanics and the
 verification foundation are not touched.

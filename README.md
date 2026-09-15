@@ -1,76 +1,124 @@
-# Aladdin RE
+# Genesis RE
 
-Aladdin RE is a Windows development environment for the USA Genesis release of
-*Aladdin*.  It runs one verified ROM revision through a focused native Genesis
-binding and keeps player input as an immutable cold-start history.  Python game
-recovery remains selective and under active investigation.  This repository is
-not a distributable ROM package or a hardware-accuracy claim.
+A Windows development environment for recovering Genesis games from their
+exact ROM revisions: one shared native Genesis machine, immutable cold-start
+input histories, a history timeline and player, strict replay verification,
+and one recovery project per game.  Two games are registered:
 
-See [the current status](docs/STATUS.md), [input-history model](docs/history.md),
-and [third-party license and source notes](third_party/README.md).
+| game | package | supported revision | state |
+|---|---|---|---|
+| Aladdin (USA) | `src/aladdin_sega` | `aladdin-usa-ntsc-v1` | a large recovered frontier, a native runtime from power-on; see [docs/STATUS.md](docs/STATUS.md) |
+| Gods (USA) | `src/gods_sega` | `gods-usa-ntsc-v1` | runs as the original through the shared machine; no recovered code yet; see [docs/gods/STATUS.md](docs/gods/STATUS.md) |
+
+The shared infrastructure is `src/genesis_re`.  The ownership boundary, how
+game selection works and what a third game would add are in
+[docs/multi-game-architecture.md](docs/multi-game-architecture.md); the
+input-history model is in [docs/history.md](docs/history.md); third-party
+license and source notes are in [third_party/README.md](third_party/README.md).
+This repository is not a distributable ROM package or a hardware-accuracy
+claim.  (The checkout directory is still called `aladdin_re`; the name predates
+the second game.)
 
 ## Play
 
-Put the verified cartridge at `assets/Aladdin (USA).md`; the filename extension
-does not change that it is a binary ROM.  The launcher validates its exact hash
-before execution.
+Put the verified cartridges under `assets/` (`Aladdin (USA).md`,
+`Gods (USA).md`; the `.md` extension does not change that they are binary
+ROMs).  Each game's exact SHA-256 is validated before execution; any other
+revision is refused.
 
 ```powershell
-.\play.cmd
-.\play.cmd --new
-.\play.cmd --node main
+.\play.cmd                      # choose the game, then its history timeline
+.\play.cmd --game gods          # straight to the Gods timeline
+.\play.cmd --game gods --new    # a cold Gods root
+.\play.cmd --game aladdin --node main
 .\play.ps1 -Mute
 ```
 
-The initial panel visualizes immutable input checkpoints.  Click **New** for a
-cold root, **Main** for the current branch, or any checkpoint point to branch
-from it.  F5 and F6 create manual checkpoints; a clean exit creates one too.
-F7 pauses and F8 advances one frame while paused.  `--mute` silences only host
-playback: Genesis audio still runs and is still part of verification.
+Without `--game` the window first asks which game to play; the timeline shown
+afterwards is that game's own.  Click **New** for a cold root, **Main** for the
+current branch, or any checkpoint to branch from it.  F5 and F6 create manual
+checkpoints; a clean exit creates one too.  F7 pauses and F8 advances one frame
+while paused.  `--mute` silences only host playback: Genesis audio still runs
+and is still part of verification.
 
-The recovered game itself (no original CPU; the ROM's Z80 sound driver runs as
-a platform service on a dedicated machine):
+Input histories live under `history/<game>/` (`history/aladdin`,
+`history/gods`) and are ignored by Git.  A store's manifest names its game's
+root record, so an Aladdin store cannot be opened as a Gods one and no node
+id of one game can equal a node id of the other.  Each store contains
+canonical frame input segments, optional screenshots, and disposable Genesis
+caches keyed by game, ROM, profile, native binary and state contract.  See
+[docs/history.md](docs/history.md).
+
+The recovered Aladdin game itself (no original CPU; the ROM's Z80 sound driver
+runs as a platform service on a dedicated machine) is Aladdin's native runtime:
 
 ```powershell
 .\play_native.cmd
 .\play_native.cmd --resume NODE
-.\play_native.cmd --mute
 .\play_native.cmd --help
 ```
 
-Arrows, Z = A, X = B, C = C, Return = Start, Escape exits, F5 journals a
-checkpoint.  Inputs are journaled as an immutable history in `history_native/`;
-a NativeGap ends the session with its record in `history_native/gaps/`, and
-`--resume NODE` replays that history and hands the controller back.
-
-Input histories live under `history/` by default and are ignored by Git.  They
-contain canonical frame input segments, optional screenshots, and disposable
-Genesis caches.  See [docs/history.md](docs/history.md) for identity, branching,
-cache, and command details.
+Its histories are journaled under `history_native/aladdin/`.
 
 ## Develop from the checkout
 
 `play.cmd`, `play.ps1`, and `scripts/dev.py` run this checkout directly.  They
 prepend its absolute `src` directory to `PYTHONPATH` and set
-`ALADDIN_NATIVE_LIBRARY` to `build/libaladdin_native.dll`.  They do not install,
-reinstall, build, or download anything.
+`GENESIS_NATIVE_LIBRARY` to `build/libgenesis_native.dll`.  They do not
+install, reinstall, build, or download anything.  Every developer command names
+its game with `--game`; `--history` defaults to `history/<game>` and `--rom` to
+the game's file under `assets/`.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\dev.py doctor
-.\.venv\Scripts\python.exe scripts\dev.py history-validate --history history
-.\.venv\Scripts\python.exe scripts\dev.py history-run main --history history --candidate lifecycle
-.\.venv\Scripts\python.exe scripts\dev.py history-verify main --history history --candidate lifecycle --tree --output artifacts\history-verify
+.\.venv\Scripts\python.exe scripts\dev.py doctor --game gods
+.\.venv\Scripts\python.exe scripts\dev.py history-validate --game gods
+.\.venv\Scripts\python.exe scripts\dev.py history-run main --game aladdin --candidate lifecycle
+.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game gods --candidate original --output artifacts\gods-verify
+.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game aladdin --candidate lifecycle --tree --output artifacts\history-verify
 ```
 
 `history-run` reconstructs a path cold by default; `--cache` explicitly permits
 a compatible disposable player cache.  `history-verify` uses fresh workers and
-compares strict per-frame state, video, PCM, and terminal observations.  A tree
-verification creates only temporary prefix states for that invocation.  A PASS
-only covers the selected history and candidate execution.
+compares strict per-frame state, video, PCM, and terminal observations;
+`--candidate original` compares two fresh original runs (the fresh-process
+determinism check), a recovery candidate name compares the game's recovered
+code against the original.  A tree verification creates only temporary prefix
+states for that invocation.  A PASS only covers the selected history and
+candidate execution.
 
 Use `history-export` to write a portable normalized input path, and
 `history-capture` for a constructed API smoke path.  Neither turns a constructed
 path into user-gameplay evidence.
+
+Shared tooling is in `scripts/` (`dev.py`, the tracer `pathfacts.py` and
+`factcheck.py`, `recovery_census.py`, `segment_verify.py`, `verify_status.py`,
+`frontier_ledger.py`); it takes `--game`.  Game-specific tooling is under
+`scripts/aladdin/` (witnesses, the native runtime and its verifiers,
+cartography) and `scripts/gods/`.
+
+## Tests
+
+Tests are structured by scope, not skipped at runtime:
+
+```text
+tests/common/          shared machine, history, replay, verification, tooling
+tests/games/aladdin/   the Aladdin recovery corpus
+tests/games/gods/      the Gods project
+```
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_tests.py common     # shared only (about 15 s)
+.\.venv\Scripts\python.exe scripts\run_tests.py gods       # shared + Gods (about 20 s)
+.\.venv\Scripts\python.exe scripts\run_tests.py aladdin    # shared + Aladdin (about 90 s)
+.\.venv\Scripts\python.exe scripts\run_tests.py all        # everything (about 100 s)
+.\.venv\Scripts\python.exe scripts\check_architecture.py
+```
+
+`tests/conftest.py` sets the checkout's import paths and the built native
+library for the test process and for the fresh workers it spawns, so no
+environment variables are needed; plain `pytest tests/common tests/games/gods`
+works too, as do the `common`, `aladdin` and `gods` markers.  A grinding
+iteration on one game runs that game's scope; run `all` at larger checkpoints.
 
 ## Build on Windows
 
@@ -103,20 +151,16 @@ $env:CMAKE_ARGS = "-DPORTFORGE_ROOT=D:/Games/DOS/dos_recosystem/aladdin_sega_for
 
 The build validates locked donor-source bytes before native compilation.  It
 refuses changed locked files instead of producing a DLL with stale provenance.
-Windows x64 is the supported platform.
+Windows x64 is the supported platform.  The native adapter
+(`native/machine.cpp`) holds no game facts: the snapshot identity it embeds is
+the cartridge's hash plus the profile id and hash Python declares.
 
-## Tests and limits
-
-```powershell
-$env:ALADDIN_NATIVE_LIBRARY = "$PWD/build/libaladdin_native.dll"
-.\.venv\Scripts\python.exe -m pytest -q -n 8
-.\.venv\Scripts\python.exe scripts\check_architecture.py
-```
+## Limits
 
 The history smoke suite validates canonical input identity, branching, cache
 rejection, presentation separation, and cold/cache reconstruction.  It does
-not yet provide a new user history or full-game recovery qualification.
-
-Historical replay and snapshot documents remain under [docs/archive](docs/archive/)
-as frozen evidence.  Current commands intentionally do not promise to load
-their obsolete artifact formats.
+not by itself provide a new user history or full-game recovery qualification.
+Historical Aladdin replay and snapshot documents remain under
+[docs/archive](docs/archive/) as frozen evidence; the Aladdin status log is
+[docs/STATUS.md](docs/STATUS.md).  Current commands intentionally do not
+promise to load obsolete artifact formats.

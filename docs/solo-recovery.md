@@ -62,15 +62,15 @@ processes for original/candidate and close each instance before another.
 
 ```powershell
 Set-Location D:/Prog/aladdin_re
-$env:PYTHONPATH='src;scripts;tests'
-$env:ALADDIN_NATIVE_LIBRARY="$PWD/build/libaladdin_native.dll"
+# PYTHONPATH is no longer needed: tests/conftest.py and scripts/run_tests.py set the checkout's paths
+$env:GENESIS_NATIVE_LIBRARY="$PWD/build/libgenesis_native.dll"
 git -c safe.directory=D:/Prog/aladdin_re status --short
 .venv/Scripts/python.exe scripts/dev.py doctor
-.venv/Scripts/python.exe -m pytest tests/test_contact_step.py tests/test_contact_step_sound.py tests/test_contact_scan.py tests/test_contact_family.py -q
+.venv/Scripts/python.exe -m pytest tests/games/aladdin/test_contact_step.py tests/games/aladdin/test_contact_step_sound.py tests/games/aladdin/test_contact_scan.py tests/games/aladdin/test_contact_family.py -q
 ```
 
 For every edit, start with the smallest relevant case (`pytest -k ...`). Use
-scripts/oracle_witness.py's execute_region / qualify_atomic_plan and
+scripts/aladdin/oracle_witness.py's execute_region / qualify_atomic_plan and
 fresh_process_future instead of creating another comparison harness.
 For discovery use recovery_census.capture_entries with a game-specific
 classifier and a fresh output directory; it applies canonical inputs correctly.
@@ -78,9 +78,9 @@ classifier and a fresh output directory; it applies canonical inputs correctly.
 At a cohesive milestone, run the full suite and cold integration:
 
 ```powershell
-.venv/Scripts/python.exe -m pytest -q
+.venv/Scripts/python.exe scripts/run_tests.py aladdin
 # Replace NAME with a new descriptive batch directory; never mix old evidence.
-.venv/Scripts/python.exe scripts/dev.py history-verify main --history history --candidate lifecycle --timeout-seconds 180 --output artifacts/NAME
+.venv/Scripts/python.exe scripts/dev.py history-verify main --game aladdin --candidate lifecycle --timeout-seconds 180 --output artifacts/NAME
 ```
 
 Full suite currently takes about two minutes; full original+candidate cold

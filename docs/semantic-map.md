@@ -262,7 +262,7 @@ spawned" bitmap at FFAE87 -- the walkers the grinder recovered.
 
 Sprites were isolated per object by deactivating that object alone in a
 scratch copy of the machine and diffing two rendered frames
-(`scripts/cartography/object_masks.py`; 927 masks, one per script family
+(`scripts/aladdin/cartography/object_masks.py`; 927 masks, one per script family
 per kind on the sheet `artifacts/cartography/mask_sheet_*.png`).  The
 identities below combine the sprite with the callback's recovered
 behavior; the ones marked "ask" are extracted but not yet named.
@@ -369,15 +369,15 @@ transition is no longer a gap: it runs as a sequence of nested frames
 
 Verification rises with the abstraction:
 
-- `scripts/native_replay.py --verify FRAME COUNT` proves each step in
+- `scripts/aladdin/native_replay.py --verify FRAME COUNT` proves each step in
   place: the semantic step runs over a copy of the oracle's RAM at the
   step's entry and is compared byte for byte at its exit; steps that
   write the VDP are also compared word for word against the port writes
   the oracle makes (`native/oracle.py` single-steps the original and
   evaluates every `move` to C00000 / C00004).
-- `scripts/verify_step.py STEP FRAME COUNT ...` does the same for one
+- `scripts/aladdin/verify_step.py STEP FRAME COUNT ...` does the same for one
   step over long windows and tallies the events it produced.
-- `scripts/native_diff.py FRAME COUNT` is the whole-frame boundary: the
+- `scripts/aladdin/native_diff.py FRAME COUNT` is the whole-frame boundary: the
   native runtime and the oracle run side by side from the same frame
   boundary with the recorded pads applied per VBlank, and the whole work
   RAM is compared after every frame; a divergence is attributed to the
@@ -422,7 +422,7 @@ the native runtime computes the same in zero frames.  So the sequences
 mark progress with `services.checkpoint(pc)` (where the original
 reaches `pc`; the game does nothing with it), and a harness-side
 *replay clock* (`native/replay.py` is the interface,
-`scripts/native_replay.OracleClock` the implementation) lines recorded
+`scripts/aladdin/native_replay.OracleClock` the implementation) lines recorded
 input up with the original's time: at each checkpoint it drives the
 oracle running alongside to `pc` and gives the native frame counter the
 oracle's VBlank count, and at a transition's end the boundary at which
@@ -434,9 +434,9 @@ and the game simply runs its transitions faster.  Nothing in the game
 modules depends on an absolute frame number or on the recording; see
 docs/native-frontier.md for the audit and the input rule.
 
-`scripts/transition_witness.py FRAME --all` lists the recording's
+`scripts/aladdin/transition_witness.py FRAME --all` lists the recording's
 transitions (start frame, kind, resume boundary).
-`scripts/verify_sequence.py FRAME DIE_FRAME DIE_PC` proves a sequence
+`scripts/aladdin/verify_sequence.py FRAME DIE_FRAME DIE_PC` proves a sequence
 in place: it asserts the transition's entry, drives the oracle to each
 checkpoint the sequence makes with every other known checkpoint gated
 (so the original reaching another one first is a route mismatch), and
@@ -444,10 +444,10 @@ compares the whole work RAM there and at the resumed frame boundary.
 `--pad FROM-TO MASK` replaces the recorded input on both sides, so a
 sequence is proved on inputs the recording never made (a lives screen
 skipped early, never skipped, or offered a button the rule ignores).
-`scripts/native_diff.py` runs whole recordings, aligned (the oracle is
+`scripts/aladdin/native_diff.py` runs whole recordings, aligned (the oracle is
 the replay clock) or `--independent` (the native frame clock alone;
 the oracle only compares); `--cold RECORDING` starts from power-on.
-`scripts/route_census.py FROM TO` lists the routines a window of a
+`scripts/aladdin/route_census.py FROM TO` lists the routines a window of a
 recording enters and marks the ones no native module cites.  The
 results and the audit are in docs/native-frontier.md.  (The
 whole-frame tools recognise the main loop's own frame boundary by the
@@ -521,11 +521,11 @@ continue and meets the title screen gap.
 
 ## 11. Tools
 
-`scripts/native_replay.py`, `native_diff.py`, `verify_step.py`,
+`scripts/aladdin/native_replay.py`, `native_diff.py`, `verify_step.py`,
 `verify_sequence.py` and `transition_witness.py` are the native
 runtime's verification ladder (section 9).
 
-`scripts/cartography/`: `ram_activity.py` (per-frame RAM change activity,
+`scripts/aladdin/cartography/`: `ram_activity.py` (per-frame RAM change activity,
 instruction counts and snapshots every 32 frames), `frame_sampler.py`
 (instruction-level trace of chosen frames with routine attribution, call
 edges, memory operands and the ordered main-loop sequence),
@@ -534,5 +534,5 @@ per object field, frame modes), `analyze_samples.py`, `object_boxes.py`,
 `object_masks.py` (sprite isolation by deactivation diff), `hud_search.py`
 (find RAM fields matching screenshot values), and the fallback audit
 scripts `fallback_log.py`, `fallback_states.py`, `trace_fb.py`,
-`classify_fb.py`.  All need `ALADDIN_NATIVE_LIBRARY`, numpy and Pillow
+`classify_fb.py`.  All need `GENESIS_NATIVE_LIBRARY`, numpy and Pillow
 (installed in `.venv` only).

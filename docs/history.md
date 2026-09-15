@@ -55,9 +55,9 @@ same kind of checkpoint automatically.  Resuming a branch begins with no host
 keys held, so the next stepped frame records a zero mask if the saved branch
 ended with a held button; the existing node remains unchanged.
 
-Screenshots are presentation metadata below `history/screenshots/`.  Genesis
+Screenshots are presentation metadata below `history/<game>/screenshots/`.  Genesis
 caches are disposable implementation-specific accelerators below
-`history/caches/`; they are checked against the ROM, native binary, state
+`history/<game>/caches/`; they are checked against the game, ROM, profile, native binary, state
 contract and (for candidate runs) the Python source before use.  An original
 run's cache survives a source edit, because recovered Python never executes
 in it.  Removing either does not alter a history node or
@@ -66,22 +66,26 @@ prevent cold reconstruction.
 ## Commands
 
 All examples use the source runner, which pins `src` and
-`build/libaladdin_native.dll` without reinstalling a package:
+`build/libgenesis_native.dll` without reinstalling a package:
+
+Every store belongs to one game: `history/<game>/` (`history/aladdin`,
+`history/gods`), with the game's root record in its manifest.  Commands take
+`--game`; `--history` overrides the store directory.
 
 ```powershell
 .\play.cmd
-.\play.cmd --new
-.\play.cmd --node main
-.\.venv\Scripts\python.exe scripts\dev.py history-validate --history history
-.\.venv\Scripts\python.exe scripts\dev.py history-export main --history history --output artifacts\history.json
+.\play.cmd --game gods --new
+.\play.cmd --game aladdin --node main
+.\.venv\Scripts\python.exe scripts\dev.py history-validate --game aladdin
+.\.venv\Scripts\python.exe scripts\dev.py history-export main --game aladdin --output artifacts\history.json
 ```
 
 `history-run` executes a selected path cold by default.  `--cache` permits a
 compatible player cache as an optimization; it is not verification evidence.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\dev.py history-run main --history history --candidate lifecycle
-.\.venv\Scripts\python.exe scripts\dev.py history-run main --history history --cache
+.\.venv\Scripts\python.exe scripts\dev.py history-run main --game aladdin --candidate lifecycle
+.\.venv\Scripts\python.exe scripts\dev.py history-run main --game aladdin --cache
 ```
 
 `history-verify` starts separate fresh workers and compares strict state,
@@ -89,15 +93,15 @@ frame, PCM, and terminal observations.  `--tree` verifies every current branch
 from cold root, using only prefix states calculated during that invocation.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\dev.py history-verify main --history history --candidate lifecycle --output artifacts\history-verify
-.\.venv\Scripts\python.exe scripts\dev.py history-verify main --history history --candidate lifecycle --tree --output artifacts\history-tree
+.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game aladdin --candidate lifecycle --output artifacts\history-verify
+.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game aladdin --candidate lifecycle --tree --output artifacts\history-tree
 ```
 
 `history-capture` creates a constructed smoke scenario.  It is useful for API
 and test checks, but it is not a user-gameplay recording or recovery evidence.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\dev.py history-capture --history artifacts\history-smoke --frames 3 --input 0:8 --input 2:0 --checkpoint 2
+.\.venv\Scripts\python.exe scripts\dev.py history-capture --game gods --history artifacts\history-smoke --frames 3 --input 0:8 --input 2:0 --checkpoint 2
 ```
 
 Constructed histories can qualify the candidate paths they actually exercise;

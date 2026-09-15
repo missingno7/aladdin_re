@@ -27,7 +27,7 @@ been a gap in the *game*.  The witness table is gone.  What remains:
 
 - the sequences call `services.checkpoint(pc)` where the original reaches
   `pc`; the game does nothing with it;
-- the harness's replay clock (`scripts/native_replay.OracleClock`) answers a
+- the harness's replay clock (`scripts/aladdin/native_replay.OracleClock`) answers a
   checkpoint by driving the oracle to `pc` and taking its VBlank count, so
   recorded input lines up with the original's *work time* (decompression,
   the screen draw), which the native runtime spends in zero frames.  Nothing
@@ -163,7 +163,7 @@ section 4; they are not blockers for the recovery frontier below.
 
 ## 3. The frontier, from route censuses
 
-`scripts/route_census.py FROM TO [--recording ID | --seed FRAME]` replays a
+`scripts/aladdin/route_census.py FROM TO [--recording ID | --seed FRAME]` replays a
 window of a recording with every bsr / jsr / jmp target of the game's code
 region gated (in batches of 63) and lists the routines entered, marking the
 ones no native module cites by address.  Two windows so far:
@@ -194,7 +194,7 @@ missing.
 ## 3b. The cold-start frontier (audit of 15 September, evening)
 
 What runs from reset to the first main-loop frame, traced on the old
-recording with every call target gated (`scripts/route_census.py 0 1002`
+recording with every call target gated (`scripts/aladdin/route_census.py 0 1002`
 and a first-hit trace): ROM 21A (the console's reset code: TMSS, the VDP
 and the Z80, the region check) -> 1A8A4A (stack, interrupts) ->
 1AA344 (game init) -> 1A8A58 (new game: VDP registers, font and HUD tiles,
@@ -225,7 +225,7 @@ returns to 1A8B24; a declined continue goes to 1A8A58; the game over is
 
 ### 3c. The native player, end to end (15 September, night)
 
-`scripts/play_native.py` from power-on, headless, with an authored native
+`scripts/aladdin/play_native.py` from power-on, headless, with an authored native
 history (Start at game frame 700 to skip the logo intro, Start at 1200 on
 the menu, then walking, a jump and a sword swing in level 1): the title,
 the prologue and level-1 play run natively, the main loop starting at

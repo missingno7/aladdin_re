@@ -91,3 +91,37 @@ def test_a_session_journals_gods_input_into_its_own_store_and_resumes(tmp_path):
         assert resumed.used_cache and resumed.frame == 40
         resumed.step(0)
     assert store.resolve("main") != node and store.node(store.resolve("main"))["parent"] == node
+
+
+def test_a_deliberately_altered_input_diverges_detectably():
+    """Replay confidence: the observation stream tells two histories apart from their first differing frame."""
+    from genesis_re.verification import compare_observations
+    streams = []
+    for start in (900, 901):
+        events = [{"frame": start, "buttons": 128}, {"frame": start + 5, "buttons": 0}]
+        with GenesisRun(GODS, GODS.read_rom()) as run:
+            per_frame = []
+            run.advance(1000, events, lambda r: per_frame.append(r.observable()))
+            streams.append(per_frame)
+    first = next(i for i, (a, b) in enumerate(zip(*streams)) if a != b)
+    assert first == 900                     # frame 901 is the first interval whose mask differs
+    assert streams[0][-1]["state_sha256"] != streams[1][-1]["state_sha256"]
+    observed = [[{"id": str(o["frame"]), "requested_tick": o["frame"], "actual_tick": o["tick"],
+                  "state_sha256": o["state_sha256"], "frame_sha256": o["frame_sha256"],
+                  "pcm_sha256": o["pcm_sha256"], "pcm_bytes": o["pcm_bytes"]} for o in stream] for stream in streams]
+    verdict = compare_observations(*observed)
+    assert not verdict["equal"] and verdict["last_matching_checkpoint"]["id"] == "900"
+    assert verdict["first_failing_interval"]["to"]["reference"]["id"] == "901"
+
+
+def test_fresh_processes_reconstruct_a_constructed_gods_history(tmp_path):
+    """Two separate cold workers agree frame by frame on a constructed (not player-recorded) history."""
+    from genesis_re.verification import compare_history
+    store = HistoryStore(tmp_path / "gods", GODS.history_root)
+    node = store.append(store.root_id, [{"frame": 900, "buttons": 128}, {"frame": 905, "buttons": 0}], 960)
+    store.set_main(node)
+    report = compare_history(GODS, store.path, GODS.rom_path, node=node, candidate="original",
+                             output=tmp_path / "verify", timeout_seconds=300)
+    assert report["status"] == "PASS", report.get("error")
+    assert report["game"] == "gods" and report["comparison"]["equal"]
+    assert report["reference"]["executed_frames"] == 960 and report["reference"]["implementation"]["game"] == "gods"

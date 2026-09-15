@@ -1,3 +1,15 @@
+# Aladdin status log
+
+This is the Aladdin recovery project's status, kept as it was written.  The
+repository now hosts more than one game: the shared layer and the game
+boundary are described in `multi-game-architecture.md`, Gods in
+`gods/STATUS.md`.  Commands quoted below predate 15 September 2026: read
+`scripts\X.py` for the witness/native tools as `scripts\aladdin\X.py`,
+`--history history` as `--game aladdin`, `tests\test_X.py` as
+`tests\games\aladdin\test_X.py`, `aladdin_sega.machine/history/...` as
+`genesis_re.machine/history/...`, and `libaladdin_native.dll` as
+`libgenesis_native.dll`.
+
 # Status - 15 September 2026
 
 The project now has an immutable cold-start input-history model for player

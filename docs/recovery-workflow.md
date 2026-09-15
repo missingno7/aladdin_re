@@ -29,8 +29,8 @@ only in that verification invocation.  It cannot consume persistent player
 caches.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\dev.py history-verify main --history history --candidate lifecycle --output artifacts\candidate
-.\.venv\Scripts\python.exe scripts\dev.py history-verify main --history history --candidate lifecycle --tree --output artifacts\candidate-tree
+.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game aladdin --candidate lifecycle --output artifacts\candidate
+.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game aladdin --candidate lifecycle --tree --output artifacts\candidate-tree
 ```
 
 For a narrow recovered region, retain the existing strict outer-state contract:
@@ -43,7 +43,7 @@ does not replace these controls.
 
 Run source-tree commands through `scripts/dev.py`, `play.cmd`, or `play.ps1`.
 They set `PYTHONPATH` to this checkout and pin
-`build/libaladdin_native.dll`; they never reinstall packages.  Rebuild only when
+`build/libgenesis_native.dll`; they never reinstall packages.  Rebuild only when
 native code or packaged dependencies actually change.  A no-build edit loop
 must mutate a disposable semantic copy and demonstrate rejection against a
 real or constructed witness while the pinned DLL hash is unchanged.
@@ -55,7 +55,7 @@ the script requires baseline PASS and mutation rejection, and verifies the
 native binary was not changed. A 70-frame constructed initializer witness
 takes about 1.9 seconds per verdict on the current machine.
 
-`scripts/oracle_witness.py` constructs explicit raw ROM entry states for short
+`scripts/aladdin/oracle_witness.py` constructs explicit raw ROM entry states for short
 allocator/dispatcher discovery qualification. These fixtures are deliberately
 not gameplay histories. They compare strict outer state and 150 native future
 instructions; `--all-callbacks --fresh-process` also checks the composed
