@@ -297,6 +297,11 @@ class Candidate:
             on_complete=lambda: self.stats.__setitem__('carrier_completed', self.stats['carrier_completed'] + 1),
         )
 
+    def _count_spawn_seam(self, *counters):
+        """A spawn parent completed through a child's seam: the parent and the caller."""
+        for counter in (*counters, 'spawn_caller_hits'):
+            self.stats[counter] += 1
+
     def _complete_sibling_sound(self, seam: SoundSeam, *, dispatched: bool):
         """Bind the caller-owned counters to an explicit constructed seam."""
         def complete():
@@ -746,11 +751,16 @@ class Candidate:
                                            SPAWN_SETUP_ROW_LOW_ENTRY, SPAWN_SETUP_ROW_HIGH_ENTRY):
             self.stats['gates'] += 1
             try:
-                plan = self._mutate(spawn_setup_dispatch(machine, machine.registers(), entry))
-                if not self._apply(machine, plan, target):
+                result = spawn_setup_dispatch(machine, machine.registers(), entry)
+                plan = result.prefix if isinstance(result, SoundSeam) else result
+                if not self._apply(machine, self._mutate(plan), target):
                     return self._fallback(machine, entry, 'scheduler admission')
             except UnsupportedCandidate as error:
                 return self._fallback(machine, entry, f'unsupported domain: {error}')
+            if isinstance(result, SoundSeam):
+                return self._run_sound_seam(
+                    machine, target, result, suffix_transform=self._mutate,
+                    on_complete=lambda: self._count_spawn_seam('spawn_setup_hits', 'spawn_walker_hits'))
             self.stats['spawn_setup_hits'] += 1
             self.stats['spawn_walker_hits'] += 1
             return True
@@ -759,14 +769,19 @@ class Candidate:
             row = entry == SPAWN_ROW_DISPATCH_WALKER_ENTRY
             try:
                 walker = spawn_row_dispatch_walker if row else spawn_dispatch_walker
-                plan = self._mutate(walker(machine, machine.registers()))
-                if not self._apply(machine, plan, target):
+                result = walker(machine, machine.registers())
+                plan = result.prefix if isinstance(result, SoundSeam) else result
+                if not self._apply(machine, self._mutate(plan), target):
                     return self._fallback(machine, entry, 'scheduler admission')
             except UnsupportedCandidate as error:
                 return self._fallback(machine, entry, f'unsupported domain: {error}')
-            self.stats['spawn_walker_hits'] += 1
-            if row:
-                self.stats['spawn_row_walker_hits'] += 1
+            counters = ('spawn_walker_hits', 'spawn_row_walker_hits') if row else ('spawn_walker_hits',)
+            if isinstance(result, SoundSeam):
+                return self._run_sound_seam(
+                    machine, target, result, suffix_transform=self._mutate,
+                    on_complete=lambda: self._count_spawn_seam(*counters))
+            for counter in counters:
+                self.stats[counter] += 1
             return True
         if self.is_lifecycle and entry == SPAWN_DISPATCH_ITERATION_ENTRY:
             self.stats['gates'] += 1

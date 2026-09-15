@@ -408,16 +408,13 @@ def test_walker_truncates_batch_before_a_vdp_seam(name, callbacks):
     actual = oracle.execute_walker(state, candidate="lifecycle")
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats["fallbacks"] == 1
-    assert actual.stats["fallback_reasons"] == {
-        "unsupported domain: spawn dispatcher walker cannot batch a "
-        "VDP tile-upload seam mid-loop": 1}
+    assert actual.stats["fallbacks"] == 0
     assert actual.stats["spawn_caller_hits"] == 1
-    # The seam-first case has nothing to truncate to (the very first slot in
-    # its call is already the seam), so only the post-seam tail becomes a
-    # walker hit; every other case also admits the pre-seam prefix as its
-    # own walker hit.
-    assert actual.stats["spawn_walker_hits"] == (1 if name == "seam-first" else 2)
+    # The visit that starts on the seam slot hands the iteration's seam up
+    # through the walker gate (one walker hit), then the post-seam tail is a
+    # fresh batch (another); every other case also admits the pre-seam
+    # prefix as its own walker hit first.
+    assert actual.stats["spawn_walker_hits"] == (2 if name == "seam-first" else 3)
 
 
 @pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
@@ -433,7 +430,7 @@ def test_walker_seam_truncation_negative_controls(mutant):
 
 ROW_KNOWN_A = 0x1B72D4
 ROW_KNOWN_B = 0x1B6802
-ROW_UNKNOWN = 0x1B6D1E  # inadmissible (multi-native-call prefix); stays unrecovered
+ROW_UNKNOWN = 0x1B6CB4  # never observed on main; stays unrecovered
 ROW_CASES = (
     ("empty", (None,) * 23),
     ("single", (ROW_KNOWN_A,) + (None,) * 22),
@@ -797,7 +794,7 @@ def test_upper_fifth_negative_controls(mutant):
 
 SETUP_KNOWN_A = 0x1B72D4
 SETUP_KNOWN_B = 0x1B6802
-SETUP_UNKNOWN = 0x1B6D1E  # inadmissible (multi-native-call prefix); stays unrecovered
+SETUP_UNKNOWN = 0x1B6CB4  # never observed on main; stays unrecovered
 
 
 def _setup_callbacks(entry, case):
@@ -856,13 +853,29 @@ def test_full_setup_truncates_its_composed_walker_before_a_vdp_seam(entry):
     assert actual.outer == expected.outer
     assert actual.future == expected.future
     assert actual.stats["spawn_setup_hits"] == 1
-    assert actual.stats["fallbacks"] == 1
-    assert actual.stats["fallback_reasons"] == {
-        "unsupported domain: spawn dispatcher walker cannot batch a "
-        "VDP tile-upload seam mid-loop": 1}
+    assert actual.stats["fallbacks"] == 0
     # The composed prefix (setup + pre-seam iterations) is admitted as the
-    # setup's own hit; the post-seam tail (all empty slots) is admitted as
-    # a second, ordinary walker hit reached directly through the loop head.
+    # setup's own hit; the seam slot is handed up through the walker gate
+    # (a second walker hit); the post-seam tail (all empty slots) is a third.
+    assert actual.stats["spawn_walker_hits"] == 3
+    assert actual.stats["spawn_caller_hits"] == 1
+
+
+@pytest.mark.parametrize("entry", oracle.SETUP_ENTRIES)
+def test_full_setup_hands_a_first_slot_seam_up(entry):
+    """A seam in the very first slot composes the setup prefix onto the seam."""
+    row = entry in (oracle.SPAWN_SETUP_ROW_LOW_ENTRY, oracle.SPAWN_SETUP_ROW_HIGH_ENTRY)
+    count = 23 if row else 16
+    callbacks = (WALKER_SEAM_CALLER,) + (None,) * (count - 1)
+    state = oracle.constructed_setup_state(
+        entry, callbacks=callbacks, position=0x1237, varying=0x245F)
+    expected = oracle.execute_setup(state, entry=entry, candidate=None)
+    actual = oracle.execute_setup(state, entry=entry, candidate="lifecycle")
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["fallbacks"] == 0
+    assert actual.stats["spawn_setup_hits"] == 1
+    assert actual.stats["spawn_caller_hits"] == 1
     assert actual.stats["spawn_walker_hits"] == 2
 
 

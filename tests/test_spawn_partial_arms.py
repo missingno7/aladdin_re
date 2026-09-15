@@ -40,7 +40,11 @@ from aladdin_sega.boundary import (SPAWN_DISPATCH_ITERATION_ENTRY, SPAWN_REGION_
                                    UnsupportedCandidate, SoundSeam, spawn_upper_tile_caller,
                                    spawn_cap_guard_two, spawn_upper_tile_word_caller,
                                    spawn_reverse_guard_caller, spawn_upper_tile_two_caller,
-                                   spawn_upper_guard_tile_caller, spawn_upper_tile_four_caller)
+                                   spawn_upper_guard_tile_caller, spawn_upper_tile_four_caller,
+                                   SPAWN_LOWER_SOUND_CALLER_ENTRY, SPAWN_LOWER_SOUND_CALLER_LAST_PC,
+                                   SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY,
+                                   SPAWN_UPPER_TILE_SOUND_CALLER_LAST_PC, SPAWN_REGION_LOWER_ENTRY,
+                                   spawn_lower_sound_caller, spawn_upper_tile_sound_caller)
 from aladdin_sega.recovery import Candidate
 
 
@@ -57,7 +61,7 @@ def _guard_seam_prefix_continuation(monkeypatch):
     original_mutate = Candidate._mutate
 
     def suffix_only(candidate, plan):
-        if candidate.name.endswith('continuation') and plan.registers.get('pc') == 0x1B2650:
+        if candidate.name.endswith('continuation') and plan.registers.get('pc') in (0x1B2650, 0x1E58F4):
             return plan
         return original_mutate(candidate, plan)
 
@@ -628,6 +632,128 @@ def test_upper_tile_four_vdp_seam_mutants_diverge_at_the_dispatcher_boundary(mut
     if mutant == "continuation":
         _guard_seam_prefix_continuation(monkeypatch)
     actual = _run_dispatch(SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
+                           pokes=pokes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
+# ---------------------------------------------------------------------------
+# 1B6C5A: lower-pool creation, then 1E58F4 and a gated command-32 pair,
+# bridged by the machine from the first audio call to the caller's RTS.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
+@pytest.mark.parametrize("sound", (0, 1), ids=("sound-off", "sound-on"))
+def test_lower_sound_caller_bridges_its_audio_tail(free, sound):
+    pokes = [(0xFFF57F, sound)]
+    expected = _run_dispatch(SPAWN_LOWER_SOUND_CALLER_ENTRY, SPAWN_REGION_LOWER_ENTRY,
+                             free=free, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_LOWER_SOUND_CALLER_ENTRY, SPAWN_REGION_LOWER_ENTRY,
+                           free=free, incoming_x=False, candidate="lifecycle", pokes=pokes)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["legacy_entries"] == 1
+    assert actual.stats["fallbacks"] == 0
+
+
+def test_lower_sound_caller_isolated_plan_is_a_bridge_seam():
+    machine = oracle.cold_fixture(SPAWN_REGION_LOWER_ENTRY, free=0,
+                                  pc_entry=SPAWN_LOWER_SOUND_CALLER_ENTRY)
+    try:
+        machine.gates([SPAWN_LOWER_SOUND_CALLER_ENTRY])
+        assert machine.run(instructions=1) == "gate"
+        result = spawn_lower_sound_caller(machine, machine.registers())
+        assert isinstance(result, SoundSeam)
+        assert result.prefix.registers["pc"] == 0x1E58F4
+        assert result.resume_pc == SPAWN_LOWER_SOUND_CALLER_LAST_PC
+        assert (result.saved_frame, result.frame_size, result.return_delta) == (0, 4, 0)
+    finally:
+        machine.close()
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_lower_sound_caller_mutants_diverge_at_the_dispatcher_boundary(mutant, monkeypatch):
+    pokes = [(0xFFF57F, 1)]
+    expected = _run_dispatch(SPAWN_LOWER_SOUND_CALLER_ENTRY, SPAWN_REGION_LOWER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    if mutant == "continuation":
+        _guard_seam_prefix_continuation(monkeypatch)
+    actual = _run_dispatch(SPAWN_LOWER_SOUND_CALLER_ENTRY, SPAWN_REGION_LOWER_ENTRY,
+                           free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
+                           pokes=pokes)
+    assert (actual.outer, actual.future) != (expected.outer, expected.future)
+
+
+# ---------------------------------------------------------------------------
+# 1B6D1E: FFF179/FF7E04-guarded upper-pool creation, a VDP tile upload, then
+# the same audio tail as 1B6C5A, bridged from the upload to the caller's RTS.
+# ---------------------------------------------------------------------------
+
+def _upper_tile_sound_pokes(*, guard=0, position=0x2B0, sound=1):
+    return [(0xFFF179, guard), (0xFF7E04, position >> 8), (0xFF7E05, position & 0xFF),
+            (0xFFF57F, sound)]
+
+
+@pytest.mark.parametrize("case", [
+    dict(guard=1), dict(position=0x100), dict(position=0x2AC), dict(position=0x2F4),
+    dict(position=0x7FFF),
+], ids=("guard-set", "below-window", "just-below", "at-upper-bound", "far-above"))
+def test_upper_tile_sound_caller_early_returns_match_original(case):
+    pokes = _upper_tile_sound_pokes(**case)
+    expected = _run_dispatch(SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=0, incoming_x=False, candidate="lifecycle", pokes=pokes)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["legacy_entries"] == 0
+    assert actual.stats["fallbacks"] == 0
+
+
+@pytest.mark.parametrize("free", (0, 19, None), ids=("first-free", "late-free", "exhausted"))
+@pytest.mark.parametrize("sound", (0, 1), ids=("sound-off", "sound-on"))
+@pytest.mark.parametrize("position", (0x2AD, 0x2F3), ids=("window-low", "window-high"))
+def test_upper_tile_sound_caller_window_arms_match_original(free, sound, position):
+    pokes = _upper_tile_sound_pokes(position=position, sound=sound)
+    expected = _run_dispatch(SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=free, incoming_x=False, candidate=None, pokes=pokes)
+    actual = _run_dispatch(SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                           free=free, incoming_x=False, candidate="lifecycle", pokes=pokes)
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats["spawn_caller_hits"] == 1
+    assert actual.stats["legacy_entries"] == (0 if free is None else 1)
+    assert actual.stats["fallbacks"] == 0
+
+
+def test_upper_tile_sound_caller_isolated_plan_is_a_bridge_seam():
+    machine = oracle.cold_fixture(SPAWN_REGION_UPPER_ENTRY, free=0,
+                                  pc_entry=SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY)
+    try:
+        machine.gates([SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY])
+        assert machine.run(instructions=1) == "gate"
+        registers = machine.registers()
+        assert machine.atomic(target=machine.info["tick"] + 1_000_000, cycles=1, instructions=1,
+                              last_pc=SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY,
+                              writes=_upper_tile_sound_pokes(), registers=registers)
+        result = spawn_upper_tile_sound_caller(machine, machine.registers())
+        assert isinstance(result, SoundSeam)
+        assert result.prefix.registers["pc"] == 0x1B2650
+        assert result.resume_pc == SPAWN_UPPER_TILE_SOUND_CALLER_LAST_PC
+    finally:
+        machine.close()
+
+
+@pytest.mark.parametrize("mutant", ("result", "timing", "continuation"))
+def test_upper_tile_sound_caller_mutants_diverge_at_the_dispatcher_boundary(mutant, monkeypatch):
+    pokes = _upper_tile_sound_pokes()
+    expected = _run_dispatch(SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
+                             free=0, incoming_x=False, candidate=None, pokes=pokes)
+    if mutant == "continuation":
+        _guard_seam_prefix_continuation(monkeypatch)
+    actual = _run_dispatch(SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY, SPAWN_REGION_UPPER_ENTRY,
                            free=0, incoming_x=False, candidate=f"lifecycle-mutant-{mutant}",
                            pokes=pokes)
     assert (actual.outer, actual.future) != (expected.outer, expected.future)

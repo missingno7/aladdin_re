@@ -228,6 +228,13 @@ SPAWN_REVERSE_DOUBLE_CAP_ENTRY = 0x1B67C2
 SPAWN_REVERSE_DOUBLE_CAP_LAST_PC = 0x1B6800
 SPAWN_REVERSE_DOUBLE_CAP_TEMPLATE = 0x1B7DA0
 SPAWN_REVERSE_DOUBLE_CAP_SCRIPT = 0x1241FC
+SPAWN_LOWER_SOUND_CALLER_ENTRY = 0x1B6C5A
+SPAWN_LOWER_SOUND_CALLER_LAST_PC = 0x1B6C94
+SPAWN_LOWER_SOUND_CALLER_TEMPLATE = 0x1B7B84
+SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY = 0x1B6D1E
+SPAWN_UPPER_TILE_SOUND_CALLER_LAST_PC = 0x1B6D82
+SPAWN_UPPER_TILE_SOUND_CALLER_TEMPLATE = 0x1B7F1C
+SPAWN_UPPER_TILE_SOUND_VDP_SOURCE = 0x129152
 SPAWN_UPPER_FIFTH_CALLER_ENTRY = 0x1B65F4
 SPAWN_UPPER_FIFTH_CALLER_EARLY_PC = 0x1B65FC
 SPAWN_UPPER_FIFTH_CALLER_LAST_PC = 0x1B6620
@@ -2330,6 +2337,8 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
         SPAWN_UPPER_TILE_FOUR_CALLER_ENTRY: spawn_upper_tile_four_caller,
         SPAWN_REVERSE_DOUBLE_CAP_ENTRY: begin_spawn_reverse_double_cap,
         SPAWN_UPPER_FIFTH_CALLER_ENTRY: spawn_upper_fifth_caller,
+        SPAWN_LOWER_SOUND_CALLER_ENTRY: spawn_lower_sound_caller,
+        SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY: spawn_upper_tile_sound_caller,
     }
     callback_function = callbacks.get(target)
     if target not in SPAWN_PLAIN_CALLER_FACTS and target not in SPAWN_OFFSET_CALLER_FACTS \
@@ -2364,6 +2373,128 @@ def spawn_dispatch_call(machine, registers: dict[str, int], *, row=False) -> Ato
                       tuple(dict((*prefix.writes, *callback.writes)).items()), final,
                       call_last_pc,
                       prefix.direct_calls + callback.direct_calls)
+
+def _platform_tail_bridge_seam(sp, prefix, resume_pc, return_slot):
+    """Bridge a caller's run of platform calls to its own RTS.
+
+    ``prefix`` ends at the first native platform entry (audio request or
+    VDP upload) with its frame pushed.  Everything from there to the
+    caller's own RTS at ``resume_pc`` -- the remaining audio/video calls
+    and the wrapper code between them -- stays with the machine; the
+    runner's identity check is the caller's SP and its untouched return
+    slot, and the suffix is the RTS.  No chained seam: the between-call
+    wrapper code (frame saves, one sound-enable test) is not worth owning.
+    """
+    def suffix(machine, returned):
+        return AtomicPlan(16, 1, (), {**returned, 'a7': sp + 4,
+                                      'pc': _read(machine, sp, 4) & 0xFFFFFF}, resume_pc)
+    return SoundSeam(prefix, sp, resume_pc, return_slot, 0, 4, 0, suffix=suffix)
+
+
+def _lower_sound_wrapper_shape(machine):
+    raw = machine.peek_rom(SPAWN_LOWER_SOUND_CALLER_ENTRY, 60)
+    if raw != bytes.fromhex(
+            '4df9001b7b846100e5fc48e7c0c24eb9001e58f44cdf43034a3900fff57f671a48e7c0c2'
+            '487800324eb9001e58b84eb9001e589a588f4cdf43034e75'):
+        raise UnsupportedCandidate('lower sound spawn caller ROM shape')
+
+
+def spawn_lower_sound_caller(machine, registers: dict[str, int]):
+    """Recover ``1B6C5A``: a lower-pool creation, then its audio tail bridged.
+
+    LEA 1B7B84,A6 / BSR.W 1B525E (30/2) into the proven lower allocator;
+    both allocation outcomes fall into MOVEM.L D0-D1/A0-A1/A6,-(A7) and
+    JSR 1E58F4 (68/2), the fixed sound helper, then an FFF57F-gated
+    command-32 request/flush pair and the RTS at 1B6C94.  The seam prefix
+    ends at 1E58F4 and the machine bridges to that RTS.  Recorded on main
+    at frame 47798 (artifacts/evidence/spawn/1B6C5A-kind02-p0).
+    """
+    sp = registers['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned lower sound spawn caller stack')
+    _lower_sound_wrapper_shape(machine)
+    _spans_disjoint([('lower sound spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('lower sound spawn caller frame', sp - 28, 32), *SPAWN_REGION_GLOBALS])
+    outer = _read(machine, sp, 4)
+    prefix = AtomicPlan(30, 2, _bytes(sp - 4, SPAWN_LOWER_SOUND_CALLER_ENTRY + 10, 4),
+                        {**registers, 'a6': SPAWN_LOWER_SOUND_CALLER_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_LOWER_ENTRY},
+                        SPAWN_LOWER_SOUND_CALLER_ENTRY + 6, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_LOWER_ENTRY)
+    planned = _join_plans(prefix, selected)
+    final = planned.registers
+    writes = []
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index * 4, final[name], 4))
+    writes.extend(_bytes(sp - 24, SPAWN_LOWER_SOUND_CALLER_ENTRY + 20, 4))
+    entry = AtomicPlan(68, 2, tuple(writes), {**final, 'a7': sp - 24, 'pc': 0x1E58F4},
+                       SPAWN_LOWER_SOUND_CALLER_ENTRY + 14, direct_calls=1)
+    return _platform_tail_bridge_seam(sp, _join_plans(planned, entry),
+                                      SPAWN_LOWER_SOUND_CALLER_LAST_PC, outer & 0xFFFFFF)
+
+
+def _upper_tile_sound_wrapper_shape(machine):
+    raw = machine.peek_rom(SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY, 102)
+    if raw != bytes.fromhex(
+            '4a3900fff179665c0c7902ad00ff7e0465520c7902f400ff7e0464484df9001b7f1c6100e524'
+            '663c41f9001291524eb9001b265048e7c0c24eb9001e58f44cdf43034a3900fff57f671a48e7'
+            'c0c2487800324eb9001e58b84eb9001e589a588f4cdf43034e75'):
+        raise UnsupportedCandidate('upper tile sound spawn caller ROM shape')
+
+
+def spawn_upper_tile_sound_caller(machine, registers: dict[str, int]):
+    """Recover ``1B6D1E``: guarded upper-pool creation, then its video/audio tail bridged.
+
+    TST.B FFF179/BNE and two CMPI.W FF7E04 window checks (below 2AD or at
+    least 2F4 return at once), LEA 1B7F1C,A6 / BSR.W 1B5266 (110/8 through
+    the BSR) into the proven upper allocator; exhaustion returns (26/2).
+    A successful allocation continues into LEA 129152,A0 / JSR 1B2650
+    (40/3), the VDP tile upload, followed by the same 1E58F4 and gated
+    command-32 audio tail as 1B6C5A and the RTS at 1B6D82; the machine
+    bridges from the upload to that RTS.  Recorded on main at frame 44725
+    (artifacts/evidence/spawn/1B6D1E-kind02-p0).
+    """
+    sp, sr = registers['a7'], registers['sr']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned upper tile sound spawn caller stack')
+    _upper_tile_sound_wrapper_shape(machine)
+    _spans_disjoint([('upper tile sound spawn caller pool', 0xFF7E82, 24 * 66),
+                     ('upper tile sound spawn caller frame', sp - 8, 12),
+                     ('upper tile sound spawn guard', 0xFFF179, 1),
+                     ('upper tile sound spawn position', 0xFF7E04, 2), *SPAWN_REGION_GLOBALS])
+    read = lambda address, size: _read(machine, address, size)
+    outer = read(sp, 4) & 0xFFFFFF
+    guard, position = read(0xFFF179, 1), read(0xFF7E04, 2)
+    residue = _logic_sr(sr, guard, 1)
+    if guard:
+        return AtomicPlan(42, 3, (), {**registers, 'a7': sp + 4, 'pc': outer, 'sr': residue},
+                          SPAWN_UPPER_TILE_SOUND_CALLER_LAST_PC)
+    residue = _cmp_sr(residue, position, 0x2AD, 2)
+    if position < 0x2AD:
+        return AtomicPlan(70, 5, (), {**registers, 'a7': sp + 4, 'pc': outer, 'sr': residue},
+                          SPAWN_UPPER_TILE_SOUND_CALLER_LAST_PC)
+    residue = _cmp_sr(residue, position, 0x2F4, 2)
+    if position >= 0x2F4:
+        return AtomicPlan(98, 7, (), {**registers, 'a7': sp + 4, 'pc': outer, 'sr': residue},
+                          SPAWN_UPPER_TILE_SOUND_CALLER_LAST_PC)
+    prefix = AtomicPlan(110, 8, _bytes(sp - 4, SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY + 38, 4),
+                        {**registers, 'a6': SPAWN_UPPER_TILE_SOUND_CALLER_TEMPLATE, 'a7': sp - 4,
+                         'pc': SPAWN_REGION_UPPER_ENTRY, 'sr': residue},
+                        SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY + 34, direct_calls=1)
+    selected = spawn_region(dispatch_plan_view(machine, prefix), prefix.registers,
+                            SPAWN_REGION_UPPER_ENTRY)
+    planned = _join_plans(prefix, selected)
+    final = planned.registers
+    if not (final['sr'] & 4):
+        return _join_plans(planned, AtomicPlan(26, 2, (), {**final, 'a7': sp + 4, 'pc': outer},
+                                               SPAWN_UPPER_TILE_SOUND_CALLER_LAST_PC))
+    entry = AtomicPlan(40, 3, _bytes(sp - 4, SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY + 52, 4),
+                       {**final, 'a0': SPAWN_UPPER_TILE_SOUND_VDP_SOURCE, 'a7': sp - 4, 'pc': 0x1B2650},
+                       SPAWN_UPPER_TILE_SOUND_CALLER_ENTRY + 46, direct_calls=1)
+    return _platform_tail_bridge_seam(sp, _join_plans(planned, entry),
+                                      SPAWN_UPPER_TILE_SOUND_CALLER_LAST_PC, outer)
+
 
 def spawn_upper_variant_caller(machine, registers: dict[str, int]) -> AtomicPlan:
     """Recover table callback 1B7262 through the upper allocator and $3A suffix."""
@@ -2584,11 +2715,15 @@ def spawn_dispatch_walker(machine, registers: dict[str, int], *, row=False) -> A
             if isinstance(callback, SoundSeam):
                 if current.instructions == 0:
                     # Nothing admitted yet this call: there is no prefix to
-                    # truncate to, so decline exactly as before and let the
-                    # single-iteration gate own this slot once native
-                    # execution reaches it.
-                    raise UnsupportedCandidate(
-                        'spawn dispatcher walker cannot batch a VDP tile-upload seam mid-loop')
+                    # truncate to, so hand the iteration's own seam up with
+                    # the loop-head lookup joined to its prefix.  Its suffix
+                    # already ends at the loop head (or the walker's exit)
+                    # with the loop state updated, so the next visit to this
+                    # gate continues the batch exactly as after a truncation.
+                    return SoundSeam(_join_plans(_join_plans(current, selected), callback.prefix),
+                                     callback.stack_basis, callback.resume_pc, callback.return_slot,
+                                     callback.saved_frame, callback.frame_size, callback.return_delta,
+                                     callback.counts_contact, callback.suffix)
                 # Truncate the batch here: the iterations already folded
                 # into `current` end at the loop head (see docstring) and
                 # are admitted as-is; the seam slot and everything after it
@@ -2639,6 +2774,30 @@ SPAWN_SETUP_FACTS = {
 }
 
 
+def _spawn_setup_seam(prefix, seam, row):
+    """Compose a setup prefix onto a walker whose first slot is a seam.
+
+    The walker's suffix ends at the loop head (the next walker gate visit
+    continues the batch, nothing to pop) or at the walker's exit, where the
+    setup's own outer RTS is appended exactly as the plain composition does.
+    """
+    walker_exit = SPAWN_ROW_DISPATCH_WALKER_LAST_PC if row else SPAWN_DISPATCH_WALKER_LAST_PC
+
+    def suffix(machine, returned):
+        plan = seam.suffix(machine, returned)
+        if plan.registers['pc'] != walker_exit:
+            return plan
+        sp = plan.registers['a7']
+        final = dict(plan.registers)
+        final.update(a7=sp + 4, pc=_read(machine, sp, 4) & 0xFFFFFF)
+        return AtomicPlan(plan.cycles + 16, plan.instructions + 1, plan.writes, final,
+                          walker_exit, plan.direct_calls)
+
+    return SoundSeam(_join_plans(prefix, seam.prefix), seam.stack_basis, seam.resume_pc,
+                     seam.return_slot, seam.saved_frame, seam.frame_size, seam.return_delta,
+                     seam.counts_contact, suffix)
+
+
 def spawn_setup_dispatch(machine, registers: dict[str, int], entry: int) -> AtomicPlan:
     """Recover one setup prefix, its selected bounded walker, and outer RTS."""
     try:
@@ -2665,6 +2824,8 @@ def spawn_setup_dispatch(machine, registers: dict[str, int], entry: int) -> Atom
                         direct_calls=1)
     walker = (spawn_row_dispatch_walker if row else spawn_dispatch_walker)(
         dispatch_plan_view(machine, prefix), prefix.registers)
+    if isinstance(walker, SoundSeam):
+        return _spawn_setup_seam(prefix, walker, row)
     combined = AtomicPlan(prefix.cycles + walker.cycles, prefix.instructions + walker.instructions,
                           tuple(dict((*prefix.writes, *walker.writes)).items()), walker.registers,
                           walker.last_pc, prefix.direct_calls + walker.direct_calls)
