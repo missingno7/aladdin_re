@@ -54,12 +54,13 @@ def _find_free(read, start, count, direction=1):
     return None
 
 
-def _spawn(read, write, rom, template, record, x, y, **fields):
+def _spawn(read, write, rom, template, record, x, y, fields=None):
+    """A record from its template at (x, y), then ``fields``: {record offset: (value, size)}."""
     for address, value in initialize(record, rom[template:template + TEMPLATE_SIZE]):
         write(address, value, 1)
     write(record + 2, x, 2)
     write(record + 4, y, 2)
-    for offset, (value, size) in fields.items():
+    for offset, (value, size) in (fields or {}).items():
         write(record + offset, value, size)
 
 
@@ -210,7 +211,7 @@ def tick_level_7(read, write, rom, services, vdp):
                 x, y = (0x820 if _random(read, write) & 0xFF < 0x80 else 0x860), 0x110
             else:
                 x, y = 0xAE0, 0x110
-            _spawn(read, write, rom, 0x1B81C4, record, x, y, **{0x1A: (0x400, 2)})
+            _spawn(read, write, rom, 0x1B81C4, record, x, y, fields={0x1A: (0x400, 2)})
             break
     if read(0xFFF113, 1):
         write(0xFFF113, read(0xFFF113, 1) - 1, 1)
@@ -222,7 +223,7 @@ def tick_level_7(read, write, rom, services, vdp):
             record = _find_free(read, RECORD_TABLE + RECORD_SIZE * 3, 20)
             if record is None:
                 return
-            _spawn(read, write, rom, 0x1B81D8, record, sx, sy, **{9: (0xFF, 1)})
+            _spawn(read, write, rom, 0x1B81D8, record, sx, sy, fields={9: (0xFF, 1)})
             write(0xFFF113, 0x3C, 1)
             return
 
@@ -242,7 +243,7 @@ def tick_level_9(read, write, rom, services, vdp):
             record = _find_free(read, RECORD_TABLE + RECORD_SIZE * 24, 24, -1)
             if record is not None:
                 _spawn(read, write, rom, 0x1B7FA8, record, 0xA22, 0,
-                       **{0: (0x50, 1), 0x20: (0x124B94, 4), 0xA: (0x1203F2, 4), 9: (0xFF, 1), 0x3C: (2, 1)})
+                       fields={0: (0x50, 1), 0x20: (0x124B94, 4), 0xA: (0x1203F2, 4), 9: (0xFF, 1), 0x3C: (2, 1)})
                 write(record + 4, 0x220 + (_random(read, write) & 0x20), 2)
     if not read(TRANSITION_COUNTDOWN, 1):
         _end_when(read, write, x_min=0x1B9E, value=1)
@@ -264,7 +265,7 @@ def tick_level_11(read, write, rom, services, vdp):
         return
     record = _find_free(read, RECORD_TABLE + RECORD_SIZE * 3, 20)
     if record is not None:
-        _spawn(read, write, rom, 0x1B8214, record, 0x4C0, 0x1B0, **{9: (0xFF, 1)})
+        _spawn(read, write, rom, 0x1B8214, record, 0x4C0, 0x1B0, fields={9: (0xFF, 1)})
 
 
 def tick_level_12(read, write, rom, services, vdp):
@@ -279,9 +280,9 @@ def tick_level_12(read, write, rom, services, vdp):
         return
     record = RECORD_TABLE + RECORD_SIZE
     if read(P.WORLD_X, 2) >= 0x182:
-        _spawn(read, write, rom, 0x1B8278, record, 0x184, 0x166, **{0x20: (0x125AFE, 4)})
+        _spawn(read, write, rom, 0x1B8278, record, 0x184, 0x166, fields={0x20: (0x125AFE, 4)})
     else:
-        _spawn(read, write, rom, 0x1B8278, record, 0x184, 0x166, **{0x20: (0x125B42, 4), 9: (0xFF, 1)})
+        _spawn(read, write, rom, 0x1B8278, record, 0x184, 0x166, fields={0x20: (0x125B42, 4), 9: (0xFF, 1)})
 
 
 def event_stream(read, write, rom, services, vdp):

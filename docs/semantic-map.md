@@ -437,26 +437,31 @@ docs/native-frontier.md for the audit and the input rule.
 `scripts/transition_witness.py FRAME --all` lists the recording's
 transitions (start frame, kind, resume boundary).
 `scripts/verify_sequence.py FRAME DIE_FRAME DIE_PC` proves a sequence
-in place: the native RAM at each checkpoint (22 in the respawn, 40 in
-the continue-and-prologue route) against the oracle run to the same pc.
-`--pad FROM-TO MASK` replaces the recorded input on both sides and
-`--auto` measures the perturbed route's clock before verifying it, so
-a sequence is proved on inputs the recording never made (a lives
-screen skipped early, never skipped, or offered a button the rule
-ignores).  The recording's eight deaths in level 5 (frames 75278,
-76174, 77192, 77641, 77927, 79034, 79293, 81096) match at every
-checkpoint, and `native_diff.py 69586 ...` carries the native runtime
-through them with the whole RAM byte-exact.  (The whole-frame tools
-recognise the main loop's own frame boundary by the return address on
-the stack, since the mini frames call the same first step.)  Defects
-the checkpoints found: the start-script branch order in 1B1F28 (FFF154
-set and no camera lock is 125C52, not 121D5A), the name-row command
-table stored word-swapped, the counter reset belonging to the 1B28A6
-mini-frame entry, and the decompressor's Huffman tables living 0x1B0
-bytes below the stack (now bookkeeping).
+in place: it asserts the transition's entry, drives the oracle to each
+checkpoint the sequence makes with every other known checkpoint gated
+(so the original reaching another one first is a route mismatch), and
+compares the whole work RAM there and at the resumed frame boundary.
+`--pad FROM-TO MASK` replaces the recorded input on both sides, so a
+sequence is proved on inputs the recording never made (a lives screen
+skipped early, never skipped, or offered a button the rule ignores).
+`scripts/native_diff.py` runs whole recordings, aligned (the oracle is
+the replay clock) or `--independent` (the native frame clock alone;
+the oracle only compares); `--cold RECORDING` starts from power-on.
+`scripts/route_census.py FROM TO` lists the routines a window of a
+recording enters and marks the ones no native module cites.  The
+results and the audit are in docs/native-frontier.md.  (The
+whole-frame tools recognise the main loop's own frame boundary by the
+return address on the stack, since the mini frames call the same first
+step.)  Defects the checkpoints found: the start-script branch order
+in 1B1F28 (FFF154 set and no camera lock is 125C52, not 121D5A), the
+name-row command table stored word-swapped, the counter reset
+belonging to the 1B28A6 mini-frame entry, and the decompressor's
+Huffman tables living 0x1B0 bytes below the stack (now bookkeeping).
 
-The continue-and-prologue route (the seventh death, frame 79293, with
-the last life gone): the high-score screen 1B0CBC (recovered from the
+The continue-and-prologue route (verified on an input variant of the
+recording: with inputs timed at the VBlank interrupt instead of the
+frame's tick wrap the level-5 stretch has eight deaths and loses the
+last life at frame 79293; see docs/native-frontier.md): the high-score screen 1B0CBC (recovered from the
 listing, not yet exercised by any recording: FFF0F1 was clear), the
 continue screen 1B080E (left declines to the title, a gap; right
 resets lives by difficulty 1B0046, the score 1B0008, the apples, and

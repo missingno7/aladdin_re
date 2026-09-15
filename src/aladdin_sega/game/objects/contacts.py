@@ -503,6 +503,13 @@ def _progress(flag):
     return handler
 
 
+def gem_unless_sword(read, write, rom, services, memory, record):
+    """1AF21E (kind 3B): nothing while the sword is out (1A91C4 is an RTS), else the gem body at 1AF228."""
+    if read(P.SWORD_ACTIVE, 1):
+        return
+    gem(read, write, rom, services, memory, record)
+
+
 def gem(read, write, rom, services, memory, record):
     """1AF228 (kind 3A)."""
     if read(hud.GEMS, 2) == 0x3939:
@@ -886,7 +893,7 @@ PLAYER_CALLBACKS = {
     0x1AEEE0: health_full, 0x1AEF12: health_up, 0x1AEF5C: extra_life,
     0x1AEFB0: _progress(0xFFF126), 0x1AEFDC: _progress(0xFFF127), 0x1AF008: _progress(0xFFF128),
     0x1AF034: _progress(0xFFF129), 0x1AF060: _progress(0xFFF116), 0x1AF08C: _progress(0xFFF12A),
-    0x1AF228: gem, 0x1AF264: apple_every_fourth, 0x1AF2B0: _level_flag_item(0xFFF177), 0x1AF2FA: _level_flag_item(0xFFF178),
+    0x1AF21E: gem_unless_sword, 0x1AF228: gem, 0x1AF264: apple_every_fourth, 0x1AF2B0: _level_flag_item(0xFFF177), 0x1AF2FA: _level_flag_item(0xFFF178),
     0x1AF344: level_end_item, 0x1AF384: bonus_1000, 0x1AF3C2: bonus_flag_item, 0x1AF468: apple, 0x1AF4A0: points_item, 0x1AF4D8: scarab,
     0x1AF516: carried_object, 0x1AF53E: _layer(0), 0x1AF54A: _layer(1), 0x1AF556: _clear_kind(8), 0x1AF562: _clear_kind(9),
     0x1AF590: platform_switch, 0x1AF5F0: platform_2, 0x1AF81C: platform_sink, 0x1AF978: platform_lift_switch,

@@ -1,7 +1,7 @@
 """Run the native runtime and the oracle side by side and report the first frame where they diverge.
 
-  native_diff.py FRAME COUNT [--every N]
-  native_diff.py --cold RECORDING COUNT [--every N]
+  native_diff.py FRAME COUNT [--every N] [--independent]
+  native_diff.py --cold RECORDING COUNT [--every N] [--independent]
 
 Both start from artifacts/evidence/frames/fFRAME.state, or (--cold) from
 power-on with the recording RECORDING (a history node id or prefix): the
@@ -15,6 +15,16 @@ native frame counter takes the original's VBlank count, so recorded
 input lines up without anything stored per recording.  This is the
 whole-frame boundary of verification: nothing is copied from the
 oracle after the seed.
+
+Two modes, named in the output.  The default is the *aligned* run: the
+oracle is also the replay clock, so at a transition's checkpoints the
+native frame counter takes the original's VBlank count, and each frame's
+controller read takes the mask the original's read saw; this proves the
+reconstructed operations under the original's timing.  --independent
+detaches the clock after the seed: the native frame N reads pads(N) and
+transitions spend no work time; the oracle only compares.  Divergences
+in that mode are timing differences of the standalone policy or real
+semantic ones, and the aligned run tells which.
 """
 import sys
 from pathlib import Path
@@ -24,7 +34,7 @@ from aladdin_sega.machine import Machine
 from aladdin_sega.native import GameState, NativeGap, STEPS, run_frame
 
 
-def main(frame, count, every=1, recording=None):
+def main(frame, count, every=1, recording=None, independent=False):
     rom = nr.read_rom(); pads = nr.masks(recording)
     first = frame
     m = Machine(rom); m.audio_policy('discard')
@@ -33,7 +43,10 @@ def main(frame, count, every=1, recording=None):
         state, frame = nr.seed_at_boundary(m, frame, pads, rom)
     else:
         state, frame = nr.seed_cold(m, pads, rom)
-    print(f'seeded at main-loop frame {frame}' + (f' of recording {recording}' if recording else ''))
+    if independent:
+        state.replay = None
+    print(f'{"independent" if independent else "aligned"} run seeded at main-loop frame {frame}'
+          + (f' of recording {recording}' if recording else ''))
     for i in range(count):
         f = state.frame
         try:
@@ -52,7 +65,7 @@ def main(frame, count, every=1, recording=None):
             m.close()
             step_diff(rom, first, f, pads, recording)
             return 3
-    print(f'native matches the oracle for {count} frames to {frame + count} (events {len(state.events)})')
+    print(f'native matches the oracle for {count} frames to frame {state.frame} (events {len(state.events)})')
     m.close()
     return 0
 
@@ -105,9 +118,11 @@ def step_diff(rom, first, target, pads, recording=None):
 if __name__ == '__main__':
     argv = sys.argv[1:]
     every = 1
+    independent = '--independent' in argv
+    argv = [a for a in argv if a != '--independent']
     if '--every' in argv:
         i = argv.index('--every'); every = int(argv[i + 1]); del argv[i:i + 2]
     if '--cold' in argv:
         i = argv.index('--cold'); recording = argv[i + 1]; del argv[i:i + 2]
-        sys.exit(main(0, int(argv[0]), every, recording=recording))
-    sys.exit(main(int(argv[0]), int(argv[1]), every))
+        sys.exit(main(0, int(argv[0]), every, recording=recording, independent=independent))
+    sys.exit(main(int(argv[0]), int(argv[1]), every, independent=independent))

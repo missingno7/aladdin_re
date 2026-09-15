@@ -9,7 +9,7 @@ Recordings used (history node ids, all immutable):
 
 | recording | frames | start | what it is |
 |---|---|---|---|
-| 44223150 | 82,161 | power-on | the original main recording (levels 1, 2, 3, 0, 4, 5; eight deaths, one continue) |
+| 44223150 | 82,161 | power-on | the original main recording (levels 1, 2, 3, 0, 4, 5; two deaths in level 5) |
 | 2dddf860 | 14,249 | power-on | new: level 1 with different inputs |
 | 24c70ffc | 9,811 | power-on | new: level 1 with different inputs |
 
@@ -58,15 +58,28 @@ read saw (`OracleClock.sample_input`); a standalone game reads its live
 controller and has no such question, and without a clock the native frame N
 reads `pads(N)`.
 
+One consequence must be stated plainly: under the earlier (interrupt-timed)
+input rule the old recording's inputs landed one frame late in about one
+frame per hundred, and from level 5 on that produced a different playthrough:
+eight deaths, the last life lost, a continue and a level prologue.  Every
+native-versus-oracle comparison of that stretch was valid (both sides ran
+the same inputs), but those inputs were not the recording's.  Under the
+faithful rule the recording's level-5 stretch has two deaths (frames 75050
+and 81406) and no continue.  The continue screen and the level prologue thus
+stand verified on an *input variant* of the recording (the same standing as
+a `--pad` perturbation), not on the recording itself; the two real deaths
+are verified below.
+
 Results with all of this in place (`native_diff.py`, whole work RAM compared
 after every frame):
 
 | run | outcome |
 |---|---|
 | 44223150 from power-on (seeded at its first main-loop frame 1002) | byte-exact to frame 10018, the level 1 -> 2 change (open, category 3) |
-| 44223150 from f69586 (level 5) | byte-exact to the recording's end (82,161): eight deaths, the continue screen, the level prologue |
+| 44223150 from f69586 (level 5) | byte-exact to the recording's end (82,161), through its two deaths |
 | 24c70ffc from power-on (seeded at 2197) | byte-exact to the recording's end (9,811) |
 | 2dddf860 from power-on (seeded at 1311) | byte-exact to frame 8197, its level 1 -> 2 change (open, category 3) |
+| 44223150 from f69586, `--independent` (no oracle clock after the seed) | byte-exact for 2,271 frames, then the standalone input policy differs: the original's controller read of frame 71856 fell after the tick wrap and saw the next mask; the aligned run passes there |
 
 ## 2. Every gap and divergence met, classified
 
@@ -76,12 +89,12 @@ after every frame):
 
 | where | what | class | resolution |
 |---|---|---|---|
-| 44223150 f75278..81096, eight deaths | respawn as nested frames: fades, lives screen, level init, redraw | 3 | recovered (1A8F82 / 1A902E / 1A9088), byte-exact at 22 checkpoints each |
+| 44223150 level 5: deaths at 75050 and 81406 (and eight on the interrupt-timed input variant) | respawn as nested frames: fades, lives screen, level init, redraw | 3 | recovered (1A8F82 / 1A902E / 1A9088), byte-exact at 22 checkpoints each |
 | respawn, first attempt | 47-frame fade used where the original fades in 16 (1B278A vs 1B26F0) | 1 | fixed |
 | respawn | 1B1F28 start-script branch order; name-row table word order; 1B28A6 counter | 1 | fixed |
 | respawn | decompressor tables 0x1B0 below the stack compared as game RAM | 2 | bookkeeping region extended |
 | whole-frame tools | mini frames call the main loop's first step; boundary mis-detected | 2 | boundary recognised by return address |
-| 44223150 f79293 | continue screen, level card, story, level intro, loader, prologue | 3 | recovered (1B0CBC, 1B080E, 1A8B50 route); high-score screen from the listing only, unexercised |
+| 44223150 input variant, f79293 | continue screen, level card, story, level intro, loader, prologue | 3 | recovered (1B0CBC, 1B080E, 1A8B50 route) on the input variant; high-score screen from the listing only, unexercised |
 | 44223150 f79293 | story checkpoint placed on a routine the level-5 path never calls | 1 | fixed |
 | 44223150 f79293 | pad-polling loop started 55 frames early: no checkpoint after the loading work | 2 | checkpoints before the polling loops (1B0916, 1B1570, 1B12DE) |
 | 44223150 f79293 | latch set by the ISR during decompression work | 2 (platform) | handler runs per elapsed frame |
@@ -94,11 +107,36 @@ after every frame):
 | all, frame 0 | boot, title, attract, options (1B3B4A, 1B43C4.., 1B47xx, 1B0BBE) | 3 | **open**: the oracle seeds the native runtime at the first main-loop boundary |
 | any | messages with wait commands inside the main loop; pause loop; Start-release wait; game over 1B0558; declined continue (title) | 3 | **open**, fail loud |
 | any | 22 player and 20 projectile contact callbacks no recording has met | 4 (future) | fail loud with the ROM address |
+| independent audit (docs/astra6-independent-audit.md) | kind 3B enters the gem through the sword guard 1AF21E, an entry the old recovery qualified 13 times; the native registry had only the body 1AF228 | 1 | registered (`gem_unless_sword`) |
+| independent audit | the level ticks of levels 7, 9, 11, 12 passed record offsets as keyword names to `_spawn`: a TypeError on their spawn branches, unreached by the recordings | 1 | fixed; probed over a sweep of player X |
+| independent audit | `native_replay --native` closed the oracle and then let the clock use it | 2 | it is now the explicitly independent driver (no clock after the seed) |
+| independent audit | the per-step verifier skipped a step whose entry was the previous step's exit, and exited 0 on mismatches | 2 | fixed: exit 2 on mismatch, 3 on a recovered step not exercised |
+| independent audit | transition checkpoints proved only that the oracle eventually reached each pc; the entry and the resumed state were not asserted | 2 | `verify_sequence` gates every known checkpoint (route order), asserts the entry, compares the resumed boundary |
+| independent audit | snapshots named their recording by a second resolution of the moving `main` ref | 2 | resolved once, written once; regenerate whole sets only |
+| independent audit | level-2 event E7 handler 1B7840 (old recording, frame 11259) | 3 | **open**, with the level-2 event stream |
 
 Nothing in the table is a timing rule fitted to a recording.  The two
 category-2 items that touched the runtime (the handler per elapsed frame,
 the checkpoints before polling loops) are platform semantics and progress
 marks; the rest of category 2 is tooling.
+
+What an aligned run proves, and what it does not.  The independent audit
+is right that an oracle-fed clock is a diagnostic instrument: an aligned
+run proves that the native operations reconstruct the original's RAM
+under the original's timing and the input it actually read.  It does not
+prove that the standalone runtime, on its own clock, would take the same
+route.  So the tools name their mode: `native_diff.py` runs *aligned* by
+default and `--independent` with the clock detached after the seed
+(native frame N reads pads(N), transitions spend no work time, the oracle
+only compares), and `native_replay.py --native` is the independent driver
+with no oracle at all.  A divergence in an independent run that the
+aligned run does not show is a timing difference of the standalone
+policy; one that both show is semantic.  The remaining items of that
+audit (one owner for the operations the old boundary machinery and the
+new modules both implement, carried video and sound-event comparison, a
+schedulable input service so a transition can accept live input) are
+the verification and integration work of the next phase, listed in
+section 4; they are not blockers for the recovery frontier below.
 
 ## 3. The frontier, from route censuses
 

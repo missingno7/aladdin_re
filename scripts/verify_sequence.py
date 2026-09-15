@@ -21,24 +21,47 @@ sequence is proved on routes and timings the recording did not take.
   verify_sequence.py 69586 75278 1A8F82                        # the life lost in level 5
   verify_sequence.py 69586 75278 1A8F82 --pad 75346-75350 40   # A pressed at the earliest skip
 """
+import re
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import native_replay as nr
 from aladdin_sega.machine import Machine
 from aladdin_sega.native import NativeGap, run_frame
-from aladdin_sega.native.frame import NativeServices
+
+
+def known_checkpoints():
+    """Every checkpoint pc the sequences can make (their source literals): the order contract's alphabet."""
+    source = (Path(__file__).resolve().parents[1] / 'src' / 'aladdin_sega' / 'native' / 'sequences.py').read_text(encoding='utf-8')
+    return sorted({int(h, 16) for h in re.findall(r'checkpoint\(0x([0-9A-F]{6})\)', source)}
+                  | {int(h, 16) for h in re.findall(r'0x(1B4C8C|1B4CB2)', source)})
 
 
 class ComparingClock(nr.OracleClock):
-    """The oracle clock that also compares RAM at every checkpoint."""
+    """The oracle clock that also compares RAM at every checkpoint and requires the checkpoints in order.
+
+    Where the plain clock drives the oracle to the requested pc alone, this one gates every checkpoint the
+    sequences can make: the original reaching another one first is a route mismatch, not a rejoin.
+    """
 
     def __init__(self, state, m, pads):
         super().__init__(state, m, pads)
         self.differences = None
+        self.entry = None
+        self.alphabet = known_checkpoints()
+
+    def begin(self, kind):
+        super().begin(kind)
+        self.entry = nr.TRANSITION_ENTRIES[kind]
 
     def checkpoint(self, pc):
-        super().checkpoint(pc)
+        others = [c for c in self.alphabet if c != pc]
+        reached = self._run_to((pc, *others), self.m.info['tick'] + nr.TRANSITION_LIMIT)
+        if reached != pc:
+            where = f'{reached:06X}' if reached is not None else 'no checkpoint within the limit'
+            raise nr.ReplayMismatch('checkpoint', pc, f'the original reached {where} where the sequence reached {pc:06X}',
+                                    self.state.frame)
+        self._align(pc)
         oracle = self.m.peek_ram(0, 65536)
         native = self.state.ram
         diff = [a for a in range(65536) if oracle[a] != native[a]
@@ -70,10 +93,21 @@ def main(start, die_frame, die_pc, overrides=()):
     if not clock.consumed and status == 0:
         print(f'no transition started in frame {die_frame}')
         status = 2
+    elif clock.entry != die_pc and status == 0:
+        print(f'the transition entered at {clock.entry:06X}, not {die_pc:06X}')
+        status = 2
     elif clock.differences:
         status = 3
     elif status == 0:
-        print(f'the sequence matches the original at every checkpoint; the main loop resumes at frame {state.frame}')
+        nr.run_oracle_frame(m, pads, clock)          # both at the resumed frame's boundary
+        oracle = m.peek_ram(0, 65536)
+        diff = [a for a in range(65536) if oracle[a] != state.ram[a]
+                and not any(lo <= 0xFF0000 | a < hi for lo, hi, _ in nr.BOOKKEEPING)]
+        print(f'resumed main-loop frame {state.frame}: {len(diff)} bytes differ')
+        if diff:
+            _report(diff, state.ram, oracle); status = 3
+        else:
+            print('the sequence matches the original at every checkpoint and at the resumed frame boundary')
     m.close(); return status
 
 

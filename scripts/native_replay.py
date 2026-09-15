@@ -244,20 +244,27 @@ def load(frame):
 
 
 def native(frame, count):
+    """An independent run: after the seed the oracle is closed; time and input come from the frame clock alone.
+
+    The native frame N reads the recorded mask pads(N); transitions spend no work time.  This is the standalone
+    timing policy, not the recording's: the run is evidence of what the native game does on its own.
+    """
     rom = read_rom()
     m = Machine(rom); m.audio_policy('discard'); m.restore(load(frame))
     pads = masks()
     state, frame = seed_at_boundary(m, frame, pads, rom); m.close()
+    state.replay = None
+    print(f'independent run from main-loop frame {frame}: no oracle after the seed')
     try:
         for _ in range(count):
-            run_frame(state, pads.get(state.frame, 0))
+            run_frame(state)
     except NativeGap as gap:
         done = [s.name for s in STEPS[:[s.name for s in STEPS].index(gap.step)]] if gap.step in [s.name for s in STEPS] else []
         print(f'NativeGap: frame {gap.frame}, step "{gap.step}" at {gap.pc:06X}: {gap.detail}')
         print(f'  steps executed natively this frame: {done}')
         print(f'  events so far: {len(state.events)}')
         return 1
-    print('native replay completed', count, 'frames; events', len(state.events))
+    print(f'native replay completed {count} frames to frame {state.frame}; events {len(state.events)}')
     return 0
 
 
@@ -303,7 +310,8 @@ def verify(frame, count):
             mismatches[step.name][f'ports: native {len(state.vdp.log)} vs oracle {len(traced)} words, first difference at {first}: '
                                   f'{state.vdp.log[first:first + 3]} vs {traced[first:first + 3]}'] += 1
         results[f'{step.name}: {"ok" if not bad else "mismatch"}'] += 1
-        m.gate(m.info['pc'], bypass_once=True)
+        if entries.get(m.info['pc']) is None or entries[m.info['pc']].run is None:
+            m.gate(m.info['pc'], bypass_once=True)      # an exit that is the next recovered step's entry is verified next
     m.close()
     print('verified passes:', dict(results))
     for name, fields in mismatches.items():
@@ -312,7 +320,12 @@ def verify(frame, count):
     for s in STEPS:
         if s.run is None:
             print(f'  {s.entry:06X} {s.name}  {s.note}')
-    return 0
+    failures = sum(n for name, n in results.items() if not name.endswith(': ok'))
+    verified = {name.split(':')[0] for name in results if name.endswith(': ok')}
+    missing = [s.name for s in STEPS if s.run is not None and s.name not in verified]
+    if missing:
+        print('recovered steps NOT exercised in this window:', missing)
+    return 2 if failures else (3 if missing else 0)
 
 
 if __name__ == '__main__':
