@@ -42,22 +42,44 @@ lifecycle` (the 82,161-frame recording, two fresh workers) passed with 0
 restores and 137 fallbacks, the count recorded before the split
 (`artifacts/multi-game-aladdin-main`, 414 s).
 
-## Phase 2: recording and replay (waiting for a recording)
+## Phase 2: recording and replay (done, player recordings)
 
-`play.cmd --game gods` opens the Gods timeline; `--new` starts a cold root;
-checkpoints and the exit checkpoint land in `history/gods/`.  The
-manually recorded gameplay history that phase 3 needs does not exist yet.
+On 15 September 2026 the user recorded two cold histories with
+`play.cmd --game gods` (root `gods-usa-new`, store `history/gods/`):
 
-## Phase 3: replay confidence (constructed evidence only so far)
+| node | frames | input changes | content |
+|---|---|---|---|
+| `ca2b703b6fd5…` | 14,583 | 1,382 | title, Begin Quest, level 1 play, back to the title menu |
+| `f0ac19738f19…` (`main`) | 15,148 | 1,594 | the same route, longer (score 28,703 by frame 12,000) |
 
-Done on constructed input: same history from cold reset gives the same
-terminal and per-frame state, video agrees, PCM agrees, cache restore does
-not change the continuation, a fresh process reconstructs the history, a
-deliberately altered input diverges detectably, and Aladdin caches or
-snapshots are refused for Gods and vice versa
-(`tests/common/test_games.py`).  To do on the real recording: the same
-checks on its full length (`history-verify main --game gods --candidate
-original --tree`), then a retained reference for `segment_verify`.
+Both appear in the Gods timeline only; the exit checkpoint's cache resumes
+either.  These are real player input, about four minutes of level-1 play
+each, not constructed fixtures.
+
+## Phase 3: replay confidence (done on the recordings)
+
+- `history-verify main --game gods --candidate original --tree`: two fresh
+  workers agree on every canonical frame of both recordings (29,731 frames:
+  state, video, PCM chain and byte count, CPU/Z80 counters, PC/SR,
+  terminal) — PASS, `artifacts/gods/verify-tree-2026-09-15`, 121 s.
+- `history-verify main` alone: PASS (`artifacts/gods/verify-main-2026-09-15`,
+  61 s); its `reference.json` is retained under
+  `artifacts/gods/evidence/main/`.
+- `history-run main --game gods --cache` (the player's own exit cache) ends in
+  the same terminal observation as the cold run (state
+  `52187597…`, PCM `569fb39e…`, 53,860,180 PCM bytes, frame 15,148).
+- Two frame-boundary states of `main` (frames 6,000 and 12,000, captured on
+  a cold run) verify against the reference for 300 frames each with
+  `segment_verify.py --game gods --candidate original`
+  (`tests/games/gods/test_recorded_evidence.py`, skipped where the local
+  evidence is absent).
+- A deliberately shifted input diverges detectably; Aladdin caches and
+  snapshots are refused for Gods and vice versa (constructed tests in
+  `tests/games/gods/test_boot.py` and `tests/common/test_games.py`).
+
+The oracle/replay path is trustworthy on the recorded route: level 1 of
+the original game, from power-on.  A PASS covers these histories and the
+original execution only.
 
 ## Phase 4: the recovery grinding loop (not started)
 
