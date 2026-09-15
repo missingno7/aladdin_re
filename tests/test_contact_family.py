@@ -38,6 +38,9 @@ TARGET_KINDS = {
     0x1AF81C: 0x63,  # recorded bounded-distance guard (limit 0xA) + self-kind check (also kind 0x62)
     0x1AEE40: 0x2D,  # recorded FFF0D8 gate, own-buffer release (1AE372) + BSR into shared 1AE4F8 (also 2C/2E/31/6D)
     0x1AE9C6: 0x13,  # recorded C6 sibling wrapper: the type-13 decrement bridges command 8 to 1AECBE
+    0x1AEDA8: 0x2F,  # recorded retype 84/123A96 then the shared contact root
+    0x1AEFB0: 0x47,  # recorded ST.B FFF126, command 67, counted replacement
+    0x1AEFDC: 0x48,  # recorded ST.B FFF127, command 67, counted replacement
 }
 
 
@@ -1180,3 +1183,70 @@ def test_type43_semantics_publish_span_and_template_from_a_reader():
     assert game.contact_type43_update(read, record) == ([], {'active': 0, 'sound': 1, 'command': 0x63})
     assert game.contact_type46_request(lambda a, s: {0xFF7E3C: 0x39, 0xFFF57D: 1}.get(a, 0)) == (
         [(0xFF7E3C, 0x39)], {'old': 0x39, 'value': 0x39, 'capped': True, 'sound': 1, 'command': 0x66})
+
+
+@pytest.mark.parametrize('root', [{'gate_f2': 1}, {'gate_f2': 0, 'sound': 1}, {'blocked': 1, 'sound': 0}],
+                         ids=['early-root', 'sound-reset-root', 'blocked-root'])
+def test_type2f_retype_then_contact_root_matches_original(root):
+    state = family_fixture(0x1AEDA8, active_d8=0, **root)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == (1 if root.get('sound') else 0)
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+def test_type2f_active_arm_remains_original():
+    state = family_fixture(0x1AEDA8, active_d8=1, sound=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 0
+    assert actual.stats['fallbacks'] >= 1
+
+
+@pytest.mark.parametrize('entry', [0x1AEFB0, 0x1AEFDC], ids=['type47', 'type48'])
+@pytest.mark.parametrize('sound', (0, 1), ids=['sound-off', 'sound-on'])
+def test_counted_replace_flag_entries_match_original(entry, sound):
+    state = _poke(family_fixture(entry, sound=sound),
+                  (*oracle.write_long(RECORD + 42, 0), *oracle.write_long(RECORD + 62, 0)))
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == sound
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_counted_replace_flag_sound_mutants_diverge_at_outer_boundary(mutant, monkeypatch):
+    state = _poke(family_fixture(0x1AEFB0, sound=1),
+                  (*oracle.write_long(RECORD + 42, 0), *oracle.write_long(RECORD + 62, 0)))
+    expected = qualify(state, None)
+    if mutant == 'continuation':
+        original_mutate = oracle.Candidate._mutate
+
+        def suffix_only(candidate, plan):
+            if candidate.name.endswith('continuation') and plan.registers.get('pc') == 0x1E58B8:
+                return plan
+            return original_mutate(candidate, plan)
+
+        monkeypatch.setattr(oracle.Candidate, '_mutate', suffix_only)
+    actual = qualify(state, 'lifecycle-mutant-' + mutant, stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type2f_mutants_diverge_at_outer_boundary(mutant):
+    state = family_fixture(0x1AEDA8, active_d8=0, gate_f2=1)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle-mutant-' + mutant, stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer

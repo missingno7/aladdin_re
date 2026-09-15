@@ -49,6 +49,9 @@ CONTACT_FAMILY_TYPE1F_ENTRY = 0x1AE796
 CONTACT_FAMILY_TYPE15_ENTRY = 0x1AE978
 CONTACT_FAMILY_TYPE44_ENTRY = 0x1AEF12
 CONTACT_FAMILY_TYPE03_ENTRY = 0x1AED86
+CONTACT_FAMILY_TYPE2F_ENTRY = 0x1AEDA8   # retype 84/123A96, then the shared contact root
+CONTACT_FAMILY_TYPE47_ENTRY = 0x1AEFB0   # ST.B FFF126, optional command 67, counted replacement
+CONTACT_FAMILY_TYPE48_ENTRY = 0x1AEFDC   # ST.B FFF127, optional command 67, counted replacement
 CONTACT_FAMILY_TYPE46_ENTRY = 0x1AEF5C
 CONTACT_FAMILY_TYPE55_ENTRY = 0x1AF590
 CONTACT_FAMILY_TYPE58_ENTRY = 0x1AF5F0
@@ -3394,6 +3397,8 @@ def begin_collection_dispatch(machine, registers):
                       CONTACT_FAMILY_TYPE15_ENTRY,
                       CONTACT_FAMILY_TYPE44_ENTRY,
                       CONTACT_FAMILY_TYPE03_ENTRY,
+                      CONTACT_FAMILY_TYPE2F_ENTRY,
+                      CONTACT_FAMILY_TYPE47_ENTRY, CONTACT_FAMILY_TYPE48_ENTRY,
                       CONTACT_FAMILY_TYPE46_ENTRY,
                       CONTACT_FAMILY_TYPE55_ENTRY,
                       CONTACT_FAMILY_TYPE58_ENTRY,
@@ -3632,6 +3637,9 @@ def _contact_scan_callbacks():
         CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch,
         CONTACT_FAMILY_TYPE43_ENTRY: begin_contact_family_type43_scan_dispatch,
         CONTACT_FAMILY_TYPE03_ENTRY: begin_contact_family_type03_dispatch,
+        CONTACT_FAMILY_TYPE2F_ENTRY: begin_contact_family_type2f_dispatch,
+        CONTACT_FAMILY_TYPE47_ENTRY: begin_contact_family_type47_dispatch,
+        CONTACT_FAMILY_TYPE48_ENTRY: begin_contact_family_type48_dispatch,
     }
 
 
@@ -5931,6 +5939,158 @@ def begin_contact_family_type15_dispatch(machine, registers, dispatch):
                       dispatch.instructions + callback.instructions,
                       tuple(dict((*dispatch.writes, *callback.writes)).items()), final,
                       callback.last_pc, dispatch.direct_calls + callback.direct_calls)
+
+
+def begin_contact_family_type2f_contact(machine, registers):
+    """1AEDA8 with FFF0D8 clear: retype twice, then BSR into the contact root.
+
+    MOVE.B #84,(A1) / MOVE.L #123A96,20(A1) / CLR.B 37(A1) (52/3), TST.B
+    FFF0D8 / BEQ.W taken (26/2), the same three writes again at 1AEE02
+    (52/3) and BSR.W 1AE4F8 (18/1).  The FFF0D8-set continuation at 1AEDC2
+    is unrecorded and stays original.  Recorded on main at frames 48008,
+    48192 and 48250 (three contact-root reset routes, all with sound).
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned contact type2f record/stack')
+    _spans_disjoint([('contact type2f record', record, 66), ('contact type2f frame', sp - 4, 8),
+                     ('contact type2f active', 0xFFF0D8, 1)])
+    if _read(machine, 0xFFF0D8, 1):
+        raise UnsupportedCandidate('contact type2f active arm is not recovered')
+    writes = (*_bytes(record, 0x84, 1), *_bytes(record + 0x20, 0x123A96, 4),
+              *_bytes(record + 0x37, 0, 1), *_bytes(sp - 4, 0x1AEE16, 4))
+    return AtomicPlan(148, 9, writes,
+                      {**registers, 'a7': sp - 4, 'pc': CONTACT_ENTRY, 'sr': _logic_sr(sr, 0, 1)},
+                      0x1AEE12, direct_calls=1)
+
+
+def _finish_contact_family_type2f_contact(machine, contact):
+    local_sp = contact.registers['a7']
+    if (contact.registers.get('pc') != 0x1AEE16
+            or _read(machine, local_sp, 4) != COLLECTION_DISPATCH_RETURN):
+        raise UnsupportedCandidate('contact type2f local return identity')
+    final = dict(contact.registers)
+    final.update(a7=local_sp + 4, pc=COLLECTION_DISPATCH_RETURN)
+    return AtomicPlan(contact.cycles + 16, contact.instructions + 1, contact.writes,
+                      final, 0x1AEE16, contact.direct_calls)
+
+
+def begin_contact_family_type2f_dispatch(machine, registers, dispatch):
+    """Compose collection dispatch, type-2F's retype and the plain contact root."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE2F_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type2f dispatch identity')
+    callback = begin_contact_family_type2f_contact(dispatch_plan_view(machine, dispatch), callback_registers)
+    contact = begin_contact(dispatch_plan_view(machine, callback), callback.registers)
+    composed = _join_plans(dispatch, _join_plans(callback, contact))
+    finish = _finish_contact_family_type2f_contact(dispatch_plan_view(machine, composed), contact)
+    return _join_plans(dispatch, _join_plans(callback, finish))
+
+
+def begin_contact_family_type2f_dispatch_sound(machine, registers, dispatch):
+    """Compose collection dispatch, type-2F's retype and the command-31 contact prefix."""
+    callback_registers = {**registers, **dispatch.registers}
+    if (callback_registers['pc'] != CONTACT_FAMILY_TYPE2F_ENTRY
+            or callback_registers['a7'] != registers['a7'] - 4):
+        raise UnsupportedCandidate('contact type2f sound dispatch identity')
+    callback = begin_contact_family_type2f_contact(dispatch_plan_view(machine, dispatch), callback_registers)
+    sound = begin_contact_sound(dispatch_plan_view(machine, callback), callback.registers)
+    return _join_plans(dispatch, _join_plans(callback, sound))
+
+
+def finish_contact_family_type2f_contact_sound(machine, registers):
+    """Restore command 31 then close type-2F's local RTS."""
+    return _finish_contact_family_type2f_contact(machine, finish_contact_sound(machine, registers))
+
+
+_COUNTED_REPLACE_FLAGS = {
+    # entry: (flag byte, JSR return slot, resume after the flush, BRA site)
+    CONTACT_FAMILY_TYPE47_ENTRY: (0xFFF126, 0x1AEFCC, 0x1AEFD2, 0x1AEFD8),
+    CONTACT_FAMILY_TYPE48_ENTRY: (0xFFF127, 0x1AEFF8, 0x1AEFFE, 0x1AF004),
+}
+
+
+def _counted_replace_flag_tail(machine, registers, bra_pc):
+    """BRA.W 1AF4C2 (10/1) into the proven +15 counted replacement."""
+    hop = AtomicPlan(10, 1, (), {**registers, 'pc': 0x1AF4C2}, bra_pc)
+    return _join_plans(hop, replace_object(dispatch_plan_view(machine, hop), hop.registers,
+                                           increment_total=True))
+
+
+def begin_contact_family_counted_replace_flag(machine, registers, entry):
+    """1AEFB0 / 1AEFDC without sound: ST.B the flag, then the counted replacement.
+
+    ST.B FFF126 (or FFF127) (20/1), TST.B FFF57D / BEQ taken (26/2), BRA.W
+    1AF4C2 and the same 1B0156/1ABE6E/1AE30A replacement tail type44 uses.
+    """
+    flag, _, _, bra_pc = _COUNTED_REPLACE_FLAGS[entry]
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned counted-replace flag record/stack')
+    _spans_disjoint([('counted-replace record', record, 66), ('counted-replace frame', sp - 4, 8),
+                     ('counted-replace flag', flag, 1), ('counted-replace sound', 0xFFF57D, 1)])
+    sound = _read(machine, 0xFFF57D, 1)
+    if sound:
+        raise UnsupportedCandidate('counted-replace flag arm requires the command67 sound seam')
+    guard = AtomicPlan(46, 3, ((flag, 0xFF),), {**registers, 'pc': bra_pc, 'sr': _logic_sr(sr, 0, 1)},
+                       entry + 12)
+    return _join_plans(guard, _counted_replace_flag_tail(dispatch_plan_view(machine, guard),
+                                                         guard.registers, bra_pc))
+
+
+def begin_contact_family_counted_replace_flag_sound_seam(machine, registers, entry):
+    """1AEFB0 / 1AEFDC with sound: ST.B the flag, command 67, then the replacement."""
+    flag, slot, resume, bra_pc = _COUNTED_REPLACE_FLAGS[entry]
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned counted-replace flag sound record/stack')
+    _spans_disjoint([('counted-replace record', record, 66), ('counted-replace sound frame', sp - 28, 32),
+                     ('counted-replace flag', flag, 1), ('counted-replace sound', 0xFFF57D, 1)])
+    sound = _read(machine, 0xFFF57D, 1)
+    if not sound:
+        raise UnsupportedCandidate('counted-replace flag sound-off arm is the plain planner')
+    writes = [(flag, 0xFF)]
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index * 4, registers[name], 4))
+    writes.extend((*_bytes(sp - 24, 0x67, 4), *_bytes(sp - 28, slot, 4)))
+    prefix = AtomicPlan(20 + 16 + 8 + 48 + 16 + 20, 6, tuple(writes),
+                        {**registers, 'a7': sp - 28, 'pc': 0x1E58B8, 'sr': _logic_sr(sr, sound, 1)},
+                        entry + 22, direct_calls=1)
+
+    def suffix(machine, returned):
+        if returned.get('pc') != resume or returned['a7'] & 1:
+            raise UnsupportedCandidate('foreign counted-replace command67 return')
+        top = returned['a7'] + 24
+        restored = dict(returned, a7=top, pc=bra_pc)
+        for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+            restored[name] = _read(machine, top - index * 4, 4)
+        restore = AtomicPlan(60, 2, (), restored, resume + 2)
+        return _join_plans(restore, _counted_replace_flag_tail(dispatch_plan_view(machine, restore),
+                                                               restore.registers, bra_pc))
+
+    return SoundSeam(prefix, sp, resume, resume, 24, 28, 28, suffix=suffix)
+
+
+def begin_contact_family_type47_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch, CONTACT_FAMILY_TYPE47_ENTRY,
+                                    lambda m, r: begin_contact_family_counted_replace_flag(m, r, CONTACT_FAMILY_TYPE47_ENTRY))
+
+
+def begin_contact_family_type48_dispatch(machine, registers, dispatch):
+    return _contact_family_dispatch(machine, registers, dispatch, CONTACT_FAMILY_TYPE48_ENTRY,
+                                    lambda m, r: begin_contact_family_counted_replace_flag(m, r, CONTACT_FAMILY_TYPE48_ENTRY))
+
+
+def begin_contact_family_counted_replace_flag_dispatch_sound_seam(machine, registers, dispatch, entry):
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != entry or dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('counted-replace flag dispatch prefix identity')
+    sound = begin_contact_family_counted_replace_flag_sound_seam(
+        dispatch_plan_view(machine, dispatch), {**registers, **dispatch.registers}, entry)
+    return SoundSeam(_join_plans(dispatch, sound.prefix), sound.stack_basis, sound.resume_pc,
+                     sound.return_slot, sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, sound.suffix)
 
 
 def begin_contact_family_type03(machine, registers):

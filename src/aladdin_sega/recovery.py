@@ -30,6 +30,11 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         begin_contact_family_type44_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE03_ENTRY, begin_contact_family_type03_sound_seam,
                         begin_contact_family_type03, begin_contact_family_type03_dispatch,
+                        CONTACT_FAMILY_TYPE2F_ENTRY, CONTACT_FAMILY_TYPE47_ENTRY, CONTACT_FAMILY_TYPE48_ENTRY,
+                        begin_contact_family_type2f_dispatch, begin_contact_family_type2f_dispatch_sound,
+                        finish_contact_family_type2f_contact_sound,
+                        begin_contact_family_type47_dispatch, begin_contact_family_type48_dispatch,
+                        begin_contact_family_counted_replace_flag_dispatch_sound_seam,
                         begin_contact_family_type03_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE46_ENTRY, begin_contact_family_type46_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE55_ENTRY, begin_contact_family_type55_dispatch,
@@ -378,6 +383,9 @@ class Candidate:
             CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
             CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
             CONTACT_FAMILY_TYPE03_ENTRY: begin_contact_family_type03_dispatch,
+            CONTACT_FAMILY_TYPE2F_ENTRY: begin_contact_family_type2f_dispatch,
+            CONTACT_FAMILY_TYPE47_ENTRY: begin_contact_family_type47_dispatch,
+            CONTACT_FAMILY_TYPE48_ENTRY: begin_contact_family_type48_dispatch,
         }.get(entry)
         if family_planner is not None:
             try:
@@ -479,6 +487,35 @@ class Candidate:
                     return self._run_sound_seam(
                         machine, target, seam,
                         suffix_transform=self._mutate,
+                        on_complete=lambda: self.stats.__setitem__(
+                            'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
+                if entry == CONTACT_FAMILY_TYPE2F_ENTRY:
+                    try:
+                        sound = begin_contact_family_type2f_dispatch_sound(
+                            machine, dispatch_registers, prefix)
+                        if not self._apply(machine, self._mutate(sound), target):
+                            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                    except UnsupportedCandidate:
+                        return self._fallback(machine, COLLECTION_DISPATCH_ENTRY,
+                                              f'unsupported domain: {error}')
+                    seam = SoundSeam(sound, dispatch_registers['a7'] - 8,
+                                     0x1AE5B6, 0x1AE5B6, 24, 28, 28, True,
+                                     finish_contact_family_type2f_contact_sound)
+                    return self._run_sound_seam(
+                        machine, target, seam, suffix_transform=self._mutate,
+                        on_complete=lambda: self.stats.__setitem__(
+                            'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
+                if entry in (CONTACT_FAMILY_TYPE47_ENTRY, CONTACT_FAMILY_TYPE48_ENTRY):
+                    try:
+                        seam = begin_contact_family_counted_replace_flag_dispatch_sound_seam(
+                            machine, dispatch_registers, prefix, entry)
+                        if not self._apply(machine, self._mutate(seam.prefix), target):
+                            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                    except UnsupportedCandidate:
+                        return self._fallback(machine, COLLECTION_DISPATCH_ENTRY,
+                                              f'unsupported domain: {error}')
+                    return self._run_sound_seam(
+                        machine, target, seam, suffix_transform=self._mutate,
                         on_complete=lambda: self.stats.__setitem__(
                             'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
                 if entry == CONTACT_FAMILY_TYPE15_ENTRY:
