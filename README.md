@@ -28,6 +28,21 @@ from it.  F5 and F6 create manual checkpoints; a clean exit creates one too.
 F7 pauses and F8 advances one frame while paused.  `--mute` silences only host
 playback: Genesis audio still runs and is still part of verification.
 
+The recovered game itself (no original CPU; the ROM's Z80 sound driver runs as
+a platform service on a dedicated machine):
+
+```powershell
+.\play_native.cmd
+.\play_native.cmd --resume NODE
+.\play_native.cmd --mute
+.\play_native.cmd --help
+```
+
+Arrows, Z = A, X = B, C = C, Return = Start, Escape exits, F5 journals a
+checkpoint.  Inputs are journaled as an immutable history in `history_native/`;
+a NativeGap ends the session with its record in `history_native/gaps/`, and
+`--resume NODE` replays that history and hands the controller back.
+
 Input histories live under `history/` by default and are ignored by Git.  They
 contain canonical frame input segments, optional screenshots, and disposable
 Genesis caches.  See [docs/history.md](docs/history.md) for identity, branching,

@@ -1,5 +1,6 @@
 """Play the recovered game natively: power-on, the frame loop, live input, the native VDP rendered, no original CPU.
 
+  play_native.cmd [--resume NODE]      (Windows: the venv and the built DLL set up; the same options)
   play_native.py [--resume NODE] [--store DIR] [--scale N] [--replay NODE] [--frames N] [--headless] [--wav FILE] [--mute]
 
 The game runs from native power-on (aladdin_sega.native.boot) through the

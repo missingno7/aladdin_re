@@ -23,6 +23,9 @@ def library_path():
     name = "libaladdin_native.dll" if sys.platform == "win32" else "libaladdin_native.so"
     path = Path(__file__).parent / name
     if not path.is_file():
+        built = Path(__file__).resolve().parents[2] / "build" / name    # a source checkout's own build
+        if built.is_file():
+            return built
         raise NativeError("Native library missing. Build/install the package as described in README.md, or set ALADDIN_NATIVE_LIBRARY to the built library.")
     return path
 
