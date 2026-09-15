@@ -1036,17 +1036,25 @@ def level_1_title(state, services):
         raise NativeGap('level_1_title', 0x1B202A, 'the level 1 title screen is not recovered', state.frame)
 
 
-def story_plate(state, source, palette):
-    """1B494E / 1B496C: the story's background tiles and the palette line the pages use."""
+def story_plate(state, services, source, palette, plane_b=None):
+    """1B494E / 1B496C / 1B4896 / 1B48C4 / 1B4920: the story's background tiles (and plane B when the plate has
+    one) and the palette line the pages use."""
     clear_plane(state.vdp, 0xE000)
     decompress_to_vram(state, source, 0, services)
+    if plane_b is not None:
+        decompress_to_vram(state, plane_b, 0xE000, services)
     state.write(STORY_PLATE_PALETTE, palette, 4)
 
 
 def story_picture(state, services, source, line0, line1):
-    """1B49DA and its siblings: the page's picture into plane A, then 1B4B28: its four palette lines."""
-    state.write(STORY_PAGE_SOURCE, source, 4)
-    decompress_to_vram(state, source, 0xC000, services)
+    """1B49DA and its siblings: the page's picture into plane A (1B4A7A: plane A cleared instead), then
+    1B4B28: its four palette lines."""
+    if source is None:
+        clear_plane(state.vdp, 0xC000)
+        state.write(STORY_PAGE_SOURCE, 0, 4)
+    else:
+        state.write(STORY_PAGE_SOURCE, source, 4)
+        decompress_to_vram(state, source, 0xC000, services)
     services.vblank()
     palette_line(state, 0, line0)
     state.vdp.control_long(video.PALETTE_COMMANDS[0]); state.vdp.data(0)
@@ -1103,24 +1111,36 @@ def story_page(state, services, picture, line0, line1, text, column, row, print_
 
 
 STORY_PICTURE_A = (0x12DD76, 0x129952, 0x129A92)     # 1B49DA
+STORY_PICTURE_NONE = (None, BLACK_PALETTE, BLACK_PALETTE)   # 1B4A7A: text over the plate alone
 
 
 def _story_level_5(state, services):
     """1B10FC: two pages on the same plate; any button after the first page skips to the level intro."""
     sound_if_enabled(state, services, 0x55, flag=0xFFF57F)
-    story_plate(state, 0x132F8E, 0x1298D2)
+    story_plate(state, services, 0x132F8E, 0x1298D2)
     if latched(state):
         return
     story_page(state, services, *STORY_PICTURE_A, 0x127571, 0x12, 0x8, 0x1B4C8C)   # 1B4C74
     if latched(state):
         return
-    story_plate(state, 0x132F8E, 0x1298D2)
+    story_plate(state, services, 0x132F8E, 0x1298D2)
     if latched(state):
         return
     story_page(state, services, *STORY_PICTURE_A, 0x1275EE, 0x11, 0x7, 0x1B4CB2)   # 1B4C9A
 
 
-STORIES = {5: _story_level_5}
+def _story_level_3(state, services):
+    """1B0FDE: a text page over the plate, the plate again with a picture page; any button skips on."""
+    sound_if_enabled(state, services, 0x55, flag=0xFFF57F)
+    story_plate(state, services, 0x132F8E, 0x129A12, plane_b=0x12E7EA)                      # 1B4920
+    story_page(state, services, *STORY_PICTURE_NONE, 0x127AEE, 0x3, 0xC, 0x1B4E36)          # 1B4E1E
+    story_plate(state, services, 0x132F8E, 0x1298F2, plane_b=0x12D654)                      # 1B4896
+    if latched(state):
+        return
+    story_page(state, services, *STORY_PICTURE_A, 0x127207, 0x11, 0x5, 0x1B4C1A)            # 1B4C02
+
+
+STORIES = {3: _story_level_3, 5: _story_level_5}
 
 
 def story_screen(state, services):
