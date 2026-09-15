@@ -130,6 +130,16 @@ class OracleClock(ReplayClock):
             masks.append(self.pads.get(m.info['tick'] // FRAME_TICKS, 0))
         return tuple(masks)
 
+    def begin_at(self, pc):
+        """The native boot: the fresh oracle to the game's first instruction, the clocks both at frame 0."""
+        state = self.state
+        self.frame = state.frame
+        self.m.pad(self.pads.get(0, 0))
+        if self._run_to((pc,), self.m.info['tick'] + 20 * FRAME_TICKS) is None:
+            raise ReplayMismatch('boot', pc, 'the original did not reach the game from reset', state.frame)
+        self.consumed = True
+        self._align(pc)
+
     def begin(self, kind):
         state = self.state
         self.frame = state.frame
@@ -149,6 +159,9 @@ class OracleClock(ReplayClock):
         state.advance_frames(self.frame - state.frame)
 
     def checkpoint(self, pc):
+        if self.m.info['pc'] == pc and getattr(self, 'parked_at', None) != pc:
+            self.parked_at = pc; self._align(pc); return          # the clock's entry already parked the oracle here
+        self.parked_at = pc
         if self._run_to((pc,), self.m.info['tick'] + TRANSITION_LIMIT) is None:
             raise ReplayMismatch('checkpoint', pc, f'the original did not reach {pc:06X} next', self.state.frame)
         self._align(pc)

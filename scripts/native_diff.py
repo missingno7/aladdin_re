@@ -1,7 +1,7 @@
 """Run the native runtime and the oracle side by side and report the first frame where they diverge.
 
   native_diff.py FRAME COUNT [--every N] [--independent]
-  native_diff.py --cold RECORDING COUNT [--every N] [--independent]
+  native_diff.py --cold RECORDING COUNT [--every N] [--independent] [--native-boot]
 
 Both start from artifacts/evidence/frames/fFRAME.state, or (--cold) from
 power-on with the recording RECORDING (a history node id or prefix): the
@@ -34,26 +34,46 @@ from aladdin_sega.machine import Machine
 from aladdin_sega.native import GameState, NativeGap, STEPS, run_frame
 
 
-def main(frame, count, every=1, recording=None, independent=False):
+def main(frame, count, every=1, recording=None, independent=False, native_boot=False):
     rom = nr.read_rom(); pads = nr.masks(recording)
     first = frame
     m = Machine(rom); m.audio_policy('discard')
-    if recording is None:
+    start_step = None
+    if native_boot:
+        from aladdin_sega.native import boot
+        from aladdin_sega.native.frame import NativeServices
+        state = boot.power_on(rom)
+        state.pads = lambda f: pads.get(f, 0)
+        state.replay = None if independent else nr.OracleClock(state, m, pads)
+        driver = nr.OracleDriver(m, pads, by_waits=independent, frame=0)
+        driver.begin_frame(state.replay)
+        if state.replay is not None:
+            state.replay.begin_at(boot.GAME_INIT)
+        try:
+            start_step = boot.start(state, NativeServices(state))
+        except NativeGap as gap:
+            print(f'boot: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
+            return 1
+        frame = state.frame
+        print(f'{"independent" if independent else "aligned"} run from native power-on; the main loop starts at frame {frame}')
+    elif recording is None:
         m.restore(nr.load(frame))
         state, frame = nr.seed_at_boundary(m, frame, pads, rom)
     else:
         state, frame = nr.seed_cold(m, pads, rom)
     if independent:
         state.replay = None
-    driver = nr.OracleDriver(m, pads, by_waits=independent, frame=frame)
-    print(f'{"independent" if independent else "aligned"} run seeded at main-loop frame {frame}'
-          + (f' of recording {recording}' if recording else ''))
+    if not native_boot:
+        driver = nr.OracleDriver(m, pads, by_waits=independent, frame=frame)
+        print(f'{"independent" if independent else "aligned"} run seeded at main-loop frame {frame}'
+              + (f' of recording {recording}' if recording else ''))
     for i in range(count):
         f = state.frame
         before = len(state.events)
         driver.begin_frame(state.replay)
         try:
-            run_frame(state)
+            run_frame(state, start_step=start_step)
+            start_step = None
         except NativeGap as gap:
             print(f'frame {f}: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
             return 1
@@ -140,10 +160,11 @@ if __name__ == '__main__':
     argv = sys.argv[1:]
     every = 1
     independent = '--independent' in argv
-    argv = [a for a in argv if a != '--independent']
+    native_boot = '--native-boot' in argv
+    argv = [a for a in argv if a not in ('--independent', '--native-boot')]
     if '--every' in argv:
         i = argv.index('--every'); every = int(argv[i + 1]); del argv[i:i + 2]
     if '--cold' in argv:
         i = argv.index('--cold'); recording = argv[i + 1]; del argv[i:i + 2]
-        sys.exit(main(0, int(argv[0]), every, recording=recording, independent=independent))
+        sys.exit(main(0, int(argv[0]), every, recording=recording, independent=independent, native_boot=native_boot))
     sys.exit(main(int(argv[0]), int(argv[1]), every, independent=independent))

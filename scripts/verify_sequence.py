@@ -48,6 +48,7 @@ class ComparingClock(nr.OracleClock):
         super().__init__(state, m, pads)
         self.differences = None
         self.entry = None
+        self.parked_at = None
         self.alphabet = known_checkpoints()
 
     def begin(self, kind):
@@ -56,7 +57,11 @@ class ComparingClock(nr.OracleClock):
 
     def checkpoint(self, pc):
         others = [c for c in self.alphabet if c != pc]
-        reached = self._run_to((pc, *others), self.m.info['tick'] + nr.TRANSITION_LIMIT)
+        if self.m.info['pc'] == pc and self.parked_at != pc:        # the clock's entry already parked the oracle here
+            reached = pc
+        else:
+            reached = self._run_to((pc, *others), self.m.info['tick'] + nr.TRANSITION_LIMIT)
+        self.parked_at = pc
         if reached != pc:
             where = f'{reached:06X}' if reached is not None else 'no checkpoint within the limit'
             raise nr.ReplayMismatch('checkpoint', pc, f'the original reached {where} where the sequence reached {pc:06X}',
@@ -70,6 +75,32 @@ class ComparingClock(nr.OracleClock):
         if diff and self.differences is None:
             self.differences = (pc, diff, bytes(native), oracle)
             _report(diff, native, oracle)
+
+
+def verify_boot(recording=None, overrides=()):
+    """The native power-on against the original from reset, at every checkpoint of the boot sequence."""
+    from aladdin_sega.native import boot
+    from aladdin_sega.native.frame import NativeServices
+    rom = nr.read_rom(); pads = dict(nr.masks(recording))
+    for lo, hi, mask in overrides:
+        for f in range(lo, hi):
+            pads[f] = mask
+    m = Machine(rom); m.audio_policy('discard')
+    state = boot.power_on(rom)
+    state.pads = lambda f: pads.get(f, 0)
+    clock = ComparingClock(state, m, pads)
+    state.replay = clock
+    clock.begin_at(boot.GAME_INIT)
+    status = 0
+    try:
+        step = boot.start(state, NativeServices(state))
+        print(f'the boot matches the original at every checkpoint; the main loop starts at frame {state.frame} ({step})')
+    except NativeGap as gap:
+        print(f'native: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
+        status = 4
+    if clock.differences:
+        status = 3
+    m.close(); return status
 
 
 def main(start, die_frame, die_pc, overrides=()):
@@ -140,5 +171,9 @@ if __name__ == '__main__':
         lo, hi = argv[i + 1].split('-')
         overrides.append((int(lo), int(hi), int(argv[i + 2], 16)))
         del argv[i:i + 3]
+    if '--boot' in argv:
+        i = argv.index('--boot')
+        recording = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith('--') else None
+        sys.exit(verify_boot(recording, overrides))
     args = [a for a in argv if not a.startswith('--')]
     sys.exit(main(int(args[0]), int(args[1]), int(args[2], 16), overrides=overrides))

@@ -58,6 +58,14 @@ class NativeServices(Services):
     def palette_line(self, index, source):
         video.load_palette(self.state.write, self.state.rom, self.state.vdp, index, source)
 
+    def sound_driver_init(self, tables):
+        """1E584A at power-on: the sound driver receives its four data tables (a platform event)."""
+        self.state.events.append(('sound_driver_init', self.state.frame, tuple(tables)))
+
+    def pal(self):
+        """The console's video mode (the VDP status bit the game reads at 1AA3B2): the recordings are NTSC."""
+        return False
+
     def sound_flush(self, value):
         """1E589A on its own: the driver's flush command with a value (the level music)."""
         self.state.events.append(('sound_flush', self.state.frame, value))
@@ -312,10 +320,11 @@ class ResumeFrame(Exception):
         self.step = step
 
 
-def run_frame(state: GameState, buttons: int | None = None) -> None:
+def run_frame(state: GameState, buttons: int | None = None, start_step: str | None = None) -> None:
     """Execute one native frame; raise NativeGap at the first step that is not recovered.
 
     The pad comes from ``state.pads`` (the recorded masks by VBlank frame) when set, else ``buttons``.
+    ``start_step`` enters the loop at that step (the boot and the prologues end at 1A8C16, the frame counter).
     """
     sampled = state.replay.sample_input() if state.replay is not None else None
     if sampled is not None:
@@ -324,7 +333,7 @@ def run_frame(state: GameState, buttons: int | None = None) -> None:
         state.buttons = state.pads(state.frame) if state.pads is not None else (buttons or 0)
         state.buttons_low = None
     services = NativeServices(state)
-    index = 0
+    index = next(i for i, s in enumerate(STEPS) if s.name == start_step) if start_step else 0
     while index < len(STEPS):
         step = STEPS[index]
         if step.run is None:
