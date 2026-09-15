@@ -10,7 +10,7 @@ and SHA-256 for sources, headers, README and LICENSE. Git preserves their bytes.
 |---|---|---|
 | Nuked OPN2 | https://github.com/nukeykt/Nuked-OPN2 · `335747d78cb0abbc3b55b004e62dad9763140115` | LGPL-2.1-or-later; original LICENSE and source notices retained |
 | Nuked PSG | https://github.com/nukeykt/Nuked-PSG · `d15a168c676f4669e23660be9225b34ad7c1764e` | GPL-2.0-or-later; original LICENSE and source notices retained |
-| Retained Genesis components | https://github.com/missingno7/port_forge · `6c971b08c0698cd5fe56ab0ed855df4cbfc0b511` | No top-level license found in the inspected donor; no public redistribution permission asserted |
+| Retained Genesis components | https://github.com/missingno7/port_forge · `07b147619f75f8a1fc570efd961c4c0c1e93ba3f` | No top-level license found in the inspected donor; no public redistribution permission asserted |
 
 `sources.json` separately locks 27 runtime donor headers and 19 additional
 native-test files. The board's two borrowed sound wrappers still include donor
