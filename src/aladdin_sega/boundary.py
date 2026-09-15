@@ -4072,6 +4072,171 @@ def _contact_family_type2c_prefix(machine, registers, record, sp, sr):
                       0x1AEEC8, direct_calls=2)
 
 
+CONTACT_TYPE2C_EXTRA_POOL = 0xFF84B2      # 1AE2DA: six 66-byte slots after the main pool
+CONTACT_TYPE2C_EXTRA_SELECTOR = 0x1AE2DA
+CONTACT_TYPE2C_MAIN_SELECTOR = 0x1AE27A     # the main 24-slot pool at FF7E82
+CONTACT_TYPE2C_TEMPLATE = 0x1B7E40
+
+
+def _pool_selector(machine, registers, base, iterations, return_pc, last_pc):
+    """One ``LEA base,A5 / MOVE.W #n,D0 / TST.B (A5) / BEQ / ADDA.W #66,A5 / DBRA / RTS``
+    free-slot scan, entered after its BSR with the return slot at A7.
+
+    The same shape as the four spawn allocator selectors: found at index i
+    costs 54 + 40 i cycles and 5 + 4 i instructions; exhaustion costs
+    20 + 30 n + 10 (n - 1) + 30 cycles and 4 n + 3 instructions, leaving A5
+    one slot past the pool and D0's word at FFFF.  Reads go through the
+    caller's plan view, so a type byte the caller just cleared is seen.
+    """
+    sp, sr, d0 = registers['a7'], registers['sr'], registers['d0']
+    read = lambda address, size: _read(machine, address, size)
+    slot, index = game.free_object(read, base, iterations)
+    if slot is None:
+        last_type = read(base + (iterations - 1) * 66, 1)
+        return AtomicPlan(20 + 30 * iterations + 10 * (iterations - 1) + 30, 4 * iterations + 3, (),
+                          {**registers, 'd0': (d0 & 0xFFFF0000) | 0xFFFF,
+                           'a5': base + iterations * 66, 'a7': sp + 4, 'pc': return_pc,
+                           'sr': _logic_sr(sr, last_type, 1)}, last_pc)
+    return AtomicPlan(54 + 40 * index, 5 + 4 * index, (),
+                      {**registers, 'd0': (d0 & 0xFFFF0000) | ((iterations - 1 - index) & 0xFFFF),
+                       'a5': slot, 'a7': sp + 4, 'pc': return_pc, 'sr': _logic_sr(sr, 0, 1)},
+                      last_pc)
+
+
+def _contact_family_type2c_active_head(machine, registers):
+    """1AEE40 with FFF0D8 set, through the sound test at 1AEE7E.
+
+    TST/BEQ not taken and BSR 1AE2DA (46/3) into the six-slot extra pool;
+    a free slot takes the retype, the 33-word copy loop and CLR.B (A1)
+    (88/5 + 20/2 + 730/66 + 24/2 after the BNE not taken, 8/1); exhaustion
+    skips all of it (BNE taken, 10/1).
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    _spans_disjoint([('type2c record', record, 66), ('type2c frame', sp - 4, 8),
+                     ('type2c extra pool', CONTACT_TYPE2C_EXTRA_POOL, 6 * 66),
+                     ('type2c gate', 0xFFF0D8, 1), ('type2c sound', 0xFFF57D, 1)])
+    enter = AtomicPlan(46, 3, _bytes(sp - 4, 0x1AEE4E, 4),
+                       {**registers, 'a7': sp - 4, 'pc': CONTACT_TYPE2C_EXTRA_SELECTOR,
+                        'sr': _logic_sr(sr, 1, 1)}, 0x1AEE4A, direct_calls=1)
+    selector = _pool_selector(dispatch_plan_view(machine, enter), enter.registers,
+                              CONTACT_TYPE2C_EXTRA_POOL, 6, 0x1AEE4E, 0x1AE2F0)
+    current = _join_plans(enter, selector)
+    if not (selector.registers['sr'] & 4):
+        return _join_plans(current, AtomicPlan(10, 1, (), {**current.registers, 'pc': 0x1AEE7E}, 0x1AEE4E))
+    read = lambda address, size: _read(dispatch_plan_view(machine, current), address, size)
+    writes = (*_bytes(sp - 4, record, 4), *game.contact_type2c_stash(read, record, selector.registers['a5']))
+    stash = AtomicPlan(8 + 88 + 20 + 730 + 24, 1 + 5 + 2 + 66 + 2, tuple(writes),
+                       {**current.registers, 'a1': record, 'a5': selector.registers['a5'] + 66,
+                        'd7': (registers['d7'] & 0xFFFF0000) | 0xFFFF, 'pc': 0x1AEE7E,
+                        'sr': _logic_sr(current.registers['sr'], 0, 1)}, 0x1AEE7C)
+    return _join_plans(current, stash)
+
+
+def _contact_family_type2c_active_tail(machine, registers):
+    """1AEEA0 to the RTS: main-pool selector, template 1B7E40, X/Y copy.
+
+    BSR 1AE27A (18/1) over the 24-slot main pool; exhaustion returns at
+    once (BNE taken 10/1, RTS 16/1); a free slot takes LEA 1B7E40,A6 / BSR
+    1AE30A (38/3) into the proven initializer, the two MOVE.W copies (40/2)
+    and the RTS (16/1).
+    """
+    record, sp = registers['a1'], registers['a7']
+    enter = AtomicPlan(18, 1, _bytes(sp - 4, 0x1AEEA4, 4),
+                       {**registers, 'a7': sp - 4, 'pc': CONTACT_TYPE2C_MAIN_SELECTOR},
+                       0x1AEEA0, direct_calls=1)
+    selector = _pool_selector(dispatch_plan_view(machine, enter), enter.registers,
+                              0xFF7E82, 24, 0x1AEEA4, 0x1AE290)
+    current = _join_plans(enter, selector)
+    outer = _read(machine, sp, 4) & 0xFFFFFF
+    if not (selector.registers['sr'] & 4):
+        return _join_plans(current, AtomicPlan(26, 2, (), {**current.registers, 'a7': sp + 4, 'pc': outer},
+                                               0x1AEEC8))
+    call = AtomicPlan(8 + 12 + 18, 3, _bytes(sp - 4, 0x1AEEB0, 4),
+                      {**current.registers, 'a6': CONTACT_TYPE2C_TEMPLATE, 'a7': sp - 4, 'pc': INIT_ENTRY},
+                      0x1AEEAC, direct_calls=1)
+    current = _join_plans(current, call)
+    init = initialize_object(dispatch_plan_view(machine, current), current.registers)
+    current = _join_plans(current, init)
+    view = dispatch_plan_view(machine, current)
+    slot = selector.registers['a5']
+    copy = AtomicPlan(40 + 16, 3,
+                      (*_bytes(slot + 2, _read(view, record + 2, 2), 2),
+                       *_bytes(slot + 4, _read(view, record + 4, 2), 2)),
+                      {**current.registers, 'a7': sp + 4, 'pc': outer,
+                       'sr': _logic_sr(current.registers['sr'], _read(view, record + 4, 2), 2)},
+                      0x1AEEBC)
+    return _join_plans(current, copy)
+
+
+def begin_contact_family_type2c_active(machine, registers):
+    """1AEE40's FFF0D8-set arm without sound: stash, then the main-pool spawn."""
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type2c record/stack')
+    if not _read(machine, 0xFFF0D8, 1):
+        raise UnsupportedCandidate('type2c active arm needs FFF0D8 set')
+    head = _contact_family_type2c_active_head(machine, registers)
+    sound = _read(dispatch_plan_view(machine, head), 0xFFF57D, 1)
+    if sound:
+        raise UnsupportedCandidate('type2c active arm requires the command21 sound seam')
+    guard = AtomicPlan(26, 2, (), {**head.registers, 'pc': 0x1AEEA0, 'sr': _logic_sr(head.registers['sr'], 0, 1)},
+                       0x1AEE84)
+    current = _join_plans(head, guard)
+    return _join_plans(current, _contact_family_type2c_active_tail(dispatch_plan_view(machine, current),
+                                                                    current.registers))
+
+
+def begin_contact_family_type2c_active_sound_seam(machine, registers):
+    """1AEE40's FFF0D8-set arm with sound: stash, command 21, then the spawn."""
+    record, sp = registers['a1'], registers['a7']
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type2c sound record/stack')
+    if not _read(machine, 0xFFF0D8, 1):
+        raise UnsupportedCandidate('type2c active arm needs FFF0D8 set')
+    _spans_disjoint([('type2c sound frame', sp - 28, 32), ('type2c record', record, 66)])
+    head = _contact_family_type2c_active_head(machine, registers)
+    view = dispatch_plan_view(machine, head)
+    sound = _read(view, 0xFFF57D, 1)
+    if not sound:
+        raise UnsupportedCandidate('type2c active sound-off arm is the plain planner')
+    live = head.registers
+    writes = []
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index * 4, live[name], 4))
+    writes.extend((*_bytes(sp - 24, 0x21, 4), *_bytes(sp - 28, 0x1AEE94, 4)))
+    request = AtomicPlan(16 + 8 + 48 + 16 + 20, 5, tuple(writes),
+                         {**live, 'a7': sp - 28, 'pc': 0x1E58B8, 'sr': _logic_sr(live['sr'], sound, 1)},
+                         0x1AEE8E, direct_calls=1)
+    return SoundSeam(_join_plans(head, request), sp, 0x1AEE9A, 0x1AEE9A, 24, 28, 28,
+                     suffix=finish_contact_family_type2c_active_sound)
+
+
+def finish_contact_family_type2c_active_sound(machine, registers):
+    """1AEE9A: restore the command-21 frame, then the main-pool spawn tail."""
+    if registers.get('pc') != 0x1AEE9A or registers['a7'] & 1:
+        raise UnsupportedCandidate('foreign type2c command21 return')
+    sp = registers['a7'] + 24
+    restored = dict(registers, a7=sp, pc=0x1AEEA0)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        restored[name] = _read(machine, sp - index * 4, 4)
+    restore = AtomicPlan(60, 2, (), restored, 0x1AEE9C)
+    return _join_plans(restore, _contact_family_type2c_active_tail(dispatch_plan_view(machine, restore),
+                                                                    restore.registers))
+
+
+def begin_contact_family_type2c_active_dispatch_sound_seam(machine, registers, dispatch):
+    """Compose the table callback prefix with type-2C's active command-21 seam."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE2C_ENTRY or \
+            dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('type2c active dispatch prefix identity')
+    sound = begin_contact_family_type2c_active_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                          {**registers, **dispatch.registers})
+    return SoundSeam(_join_plans(dispatch, sound.prefix), sound.stack_basis, sound.resume_pc,
+                     sound.return_slot, sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, sound.suffix)
+
+
 def begin_contact_family_type2c(machine, registers):
     """1AEE40's FFF0D8 gate: clear, self-retype plus the already-proven
     1AE372 buffer release, then a BSR into the shared 1AE4F8 contact root
@@ -4095,7 +4260,7 @@ def begin_contact_family_type2c(machine, registers):
         raise UnsupportedCandidate('unaligned type2c record/stack')
     gate = _read(machine, 0xFFF0D8, 1)
     if gate:
-        raise UnsupportedCandidate('type2c pool-scan-and-spawn arm is not recovered')
+        return begin_contact_family_type2c_active(machine, registers)
     return_pc = _read(machine, sp, 4) & 0xFFFFFF
     callback = _contact_family_type2c_prefix(machine, registers, record, sp, sr)
     contact = begin_contact(dispatch_plan_view(machine, callback), callback.registers)

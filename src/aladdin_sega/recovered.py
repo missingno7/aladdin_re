@@ -29,6 +29,7 @@ from .game.objects.contact import (contact_type6e_guard, contact_type6e_fail,
 from .game.objects.contact import contact_type23_retype, contact_type23_override
 from .game.objects.contact import contact_tick_reset, contact_tick_bounds
 from .game.objects.contact import decrement_decimal_counter, contact_type03_retype
+from .game.objects.contact import contact_type2c_stash
 from .game.objects.contact import (complete_contact_landing, publish_contact_position,
                                    contact_landing_script, contact_position)
 from .game.objects.lifecycle import (

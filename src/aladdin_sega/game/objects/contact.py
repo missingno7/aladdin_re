@@ -738,3 +738,14 @@ def contact_type03_retype(record, player):
     """1AED86's FFF0D8-set arm: retype the record to 84 with script 122E16."""
     return [(record, 0x84), *_long(record + 0x20, 0x122E16), (record + 0x37, 0),
             (player + 0x34, 0)]
+
+
+def contact_type2c_stash(read, record, slot):
+    """1AEE50: retype the record (7F/40/F600/flip 9/script 1209BE), copy its 66 bytes
+    into the free extra-pool ``slot`` and clear the original's type byte."""
+    retype = [(record, 0x7F), (record + 6, 0x40), *_word(record + 0x1A, 0xF600),
+              (record + 9, read(record + 9, 1) ^ 0xFF), *_long(record + 0x0A, 0x1209BE)]
+    overlay = dict(retype)
+    copy = [(slot + offset, overlay.get(record + offset, read(record + offset, 1)))
+            for offset in range(66)]
+    return [*retype, *copy, (record, 0)]

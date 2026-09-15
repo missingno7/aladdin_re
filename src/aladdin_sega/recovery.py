@@ -37,6 +37,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         CONTACT_FAMILY_TYPE63_ENTRY, begin_contact_family_type63_dispatch,
                         CONTACT_FAMILY_TYPE2C_ENTRY, begin_contact_family_type2c_dispatch,
                         begin_contact_family_type2c_dispatch_sound, finish_contact_family_type2c_sound,
+                        begin_contact_family_type2c_active_dispatch_sound_seam,
                         begin_contact_family_type63_dispatch_sound_seam, finish_contact_family_type63_sound,
                         CONTACT_FAMILY_TYPE74_ENTRY, begin_contact_family_type74_dispatch,
                         CONTACT_FAMILY_TYPE6E_ENTRY, begin_contact_family_type6e_dispatch,
@@ -518,6 +519,18 @@ class Candidate:
                         machine, target, seam, suffix_transform=self._mutate,
                         on_complete=self._complete_sibling_sound(seam, dispatched=True))
                 if entry == CONTACT_FAMILY_TYPE2C_ENTRY:
+                    try:
+                        seam = begin_contact_family_type2c_active_dispatch_sound_seam(
+                            machine, dispatch_registers, prefix)
+                    except UnsupportedCandidate:
+                        seam = None
+                    if seam is not None:
+                        if not self._apply(machine, self._mutate(seam.prefix), target):
+                            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                        return self._run_sound_seam(
+                            machine, target, seam, suffix_transform=self._mutate,
+                            on_complete=lambda: self.stats.__setitem__(
+                                'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
                     try:
                         sound = begin_contact_family_type2c_dispatch_sound(
                             machine, dispatch_registers, prefix)

@@ -85,15 +85,15 @@ def test_type2c_gate_clear_sound_arm_matches_original(monkeypatch):
     assert oracle.fresh_process_future(actual.outer_state) == actual.future
 
 
-def test_type2c_gate_set_pool_scan_declines(monkeypatch):
+def test_type2c_gate_set_pool_scan_is_owned(monkeypatch):
     monkeypatch.setitem(TARGET_KINDS, 0x1AEE40, 0x2D)
     state = type2c_fixture(gate=1)
     expected = qualify(state, None)
     actual = qualify(state, 'lifecycle')
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats['collection_dispatch_hits'] == 0
-    assert actual.stats['fallbacks'] >= 1
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
 
 
 def test_type2c_sound_seam_declines_when_gate_set(monkeypatch):
@@ -180,3 +180,64 @@ def test_type2c_is_owned_inside_the_complete_contact_scan(monkeypatch):
     assert actual.stats['collection_dispatch_hits'] == 0
     assert actual.stats['fallbacks'] == 0
     assert calls == 1
+
+
+# ---------------------------------------------------------------------------
+# FFF0D8 set: stash the record in the extra pool, optional command 21, then a
+# main-pool spawn from template 1B7E40.
+# ---------------------------------------------------------------------------
+
+EXTRA_POOL, MAIN_POOL = 0xFF84B2, 0xFF7E82
+
+
+def _active_fixture(*, sound, extra_free, main_free, **kwargs):
+    """``extra_free``/``main_free``: index of the first free slot, or None for exhausted."""
+    state = type2c_fixture(gate=1, sound=sound, **kwargs)
+    machine = oracle.Machine(oracle.read_rom())
+    try:
+        machine.restore(state)
+        machine.gates([COLLECTION_DISPATCH_ENTRY])
+        assert machine.run(instructions=1) == 'gate'
+        writes = [(EXTRA_POOL + i * 66, 0 if extra_free == i else 0x11) for i in range(6)]
+        writes += [(MAIN_POOL + i * 66, 0 if main_free == i else 0x22) for i in range(24)]
+        writes += [(RECORD + 2, 0x03), (RECORD + 3, 0x21), (RECORD + 4, 0x01), (RECORD + 5, 0xF8)]
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000, cycles=1, instructions=1,
+                              last_pc=COLLECTION_DISPATCH_ENTRY, writes=writes,
+                              registers=machine.registers())
+        return machine.snapshot()
+    finally:
+        machine.close()
+
+
+@pytest.mark.parametrize('extra_free', (0, 3, 5, None), ids=('extra-first', 'extra-mid', 'extra-last', 'extra-full'))
+@pytest.mark.parametrize('main_free', (0, 7, 23, None), ids=('main-first', 'main-mid', 'main-last', 'main-full'))
+@pytest.mark.parametrize('sound', (0, 1), ids=('sound-off', 'sound-on'))
+def test_type2c_active_arm_matches_original(extra_free, main_free, sound):
+    state = _active_fixture(sound=sound, extra_free=extra_free, main_free=main_free)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == sound
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+@pytest.mark.parametrize('sound', (0, 1), ids=('sound-off', 'sound-on'))
+def test_type2c_active_arm_mutants_diverge_at_outer_boundary(mutant, sound, monkeypatch):
+    state = _active_fixture(sound=sound, extra_free=0, main_free=0)
+    expected = qualify(state, None)
+    if mutant == 'continuation' and sound:
+        original_mutate = oracle.Candidate._mutate
+
+        def suffix_only(candidate, plan):
+            if candidate.name.endswith('continuation') and plan.registers.get('pc') == 0x1E58B8:
+                return plan
+            return original_mutate(candidate, plan)
+
+        monkeypatch.setattr(oracle.Candidate, '_mutate', suffix_only)
+    actual = qualify(state, 'lifecycle-mutant-' + mutant, stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
