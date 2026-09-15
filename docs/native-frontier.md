@@ -75,7 +75,7 @@ after every frame):
 
 | run | outcome |
 |---|---|
-| 44223150 from power-on (seeded at its first main-loop frame 1002) | byte-exact to frame 10018, the level 1 -> 2 change (open, category 3) |
+| 44223150 from power-on (seeded at its first main-loop frame 1002) | **byte- and sound-exact for all 82,161 frames to the recording's end**: six levels, five level changes with the tally, scarab wheel and bonus card, the level events, three deaths |
 | 44223150 from f69586 (level 5) | byte-exact to the recording's end (82,161), through its two deaths |
 | 44223150 from f44827 (level 0), after the level change and level events were recovered | byte- and sound-exact for 40,000 frames to the end: levels 0, 4 and 5, two level changes with the scarab wheel, two deaths |
 | 24c70ffc from power-on (seeded at 2197) | byte-exact to the recording's end (9,811) |
@@ -141,6 +141,7 @@ the oracle into the native run.
 | 24c70ffc from power-on | byte-exact and sound-exact to the recording's end |
 | 44223150 from f69586 | byte-exact and sound-exact for 12,600 frames to the end, through its deaths |
 | 2dddf860 from power-on | byte-exact and sound-exact to its level change at 8197 |
+| 44223150 from power-on, later | byte- and sound-exact to frame 26798, where its input variant declines a continue: the title screen is a gap |
 
 What an aligned run proves, and what it does not.  The independent audit
 is right that an oracle-fed clock is a diagnostic instrument: an aligned

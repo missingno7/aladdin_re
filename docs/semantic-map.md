@@ -496,6 +496,16 @@ Verified with `verify_sequence.py 9300 10018 1A8E5C` at every
 checkpoint and the resumed boundary, and by the old recording from
 power-on through level 2.
 
+The milestone stands for the recording's gameplay: `native_diff.py --cold
+44223150 82161` runs the whole 82,161-frame recording from its first
+main-loop frame to its end with the whole work RAM and the sound
+driver's calls equal to the original's after every frame.  Boot, title
+and attract are still the oracle's (the seed), and the aligned run
+borrows the original's time at the sequence checkpoints and its
+controller-read instants; the independent run (no oracle after the
+seed) holds to frame 26798, where its own playthrough declines a
+continue and meets the title screen gap.
+
 ## 10. What to recover next
 
 1. The remaining transitions over the same primitives: the story pages
