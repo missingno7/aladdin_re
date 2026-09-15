@@ -58,11 +58,12 @@ reading the ROM by eye or counting cycles by hand.
 2. Take the entry with the highest fallback count whose evidence rows have a
    child fixture, then work its path classes from the most frequent down;
    every class is one arm to recover or to decline explicitly.  Skip a class
-   when its row shows any of: more than one native call in its native shape
-   with writes between them, a read or write outside work RAM
-   (`FF0000`-`FFFFFF`) and ROM in `facts --path`, a loop whose trip count is
-   not bounded by a RAM byte you can name, or more than about 600
-   instructions.  Those rows are escalations (section 7).
+   when its row shows any of: a read or write outside work RAM
+   (`FF0000`-`FFFFFF`) and ROM in `facts --path` that is not inside a
+   `NATIVE_ENTRIES` callee, a loop whose trip count is not bounded by a RAM
+   byte you can name, or more than about 600 instructions.  Those rows are
+   escalations (section 7).  A row with two or more native calls is not an
+   escalation: bridge them (the third recipe in step 2 of section 4).
 3. Write the chosen row and its reason as the first line of your session
    notes before touching any source.
 
@@ -94,6 +95,19 @@ reading the ROM by eye or counting cycles by hand.
      exemplar (a longer prefix, a second native call inside the seam).  A
      device access inside the callee is the callee's business; a device
      access in your own prefix or suffix is an escalation.
+   - *Branch with a run of platform calls*: two or more `NATIVE_ENTRIES`
+     callees in one activation (a VDP upload then sound requests, a sound
+     request then a second one after a selector).  Do not chain seams.
+     End the prefix at the first platform entry with its frame pushed and
+     resume at the activation's own RTS: `_platform_tail_bridge_seam`
+     (spawn callers `1B6C5A`/`1B6D1E`) and the type-13 arm of
+     `begin_contact_sibling_sound_seam` (resume `CONTACT_SIBLING_TYPE13_RETURN`)
+     are the exemplars, with `saved_frame 0, frame_size 4, return_delta 0`
+     and the return slot at SP as the identity.  The machine runs every
+     platform call and the wrapper code between them; the suffix is the
+     RTS plus whatever the caller composes after it.  Own the logic between
+     two platform calls only when a later audit shows it is worth a
+     mechanism; record the ceded instructions in the ledger line.
    - *A call to the random number generator* (`1B3032`): compose
      `rng_step` from boundary.py into your plan the way `initialize_object`
      is composed; its semantics are `game.advance_rng`.  Sweep the seed with

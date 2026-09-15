@@ -6,6 +6,55 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Audit of the remaining fallbacks: platform tails bridged, no chained seam (15 September)
+
+The phase review named one measured obstacle, regions with two or more
+native calls, and proposed a chained seam.  Before building it, every
+remaining fallback was re-examined from the `pre2_port` angle by saving a
+machine snapshot at each fallback event over the whole 82,161-frame `main`
+(scratch scripts, snapshots under `artifacts/grinder/scratch/fb`) and
+grouping them by the callback activation's executed path.  Two facts
+changed the plan.  First, every "native island" is a thin platform call:
+`1E58B8`/`1E589A` take the Z80 bus and enqueue three bytes into the sound
+driver's ring at `A01B40`, `1E58F4` is the same with a fixed command, and
+`1B2650` streams sixteen words into the VDP.  Second, only one class in
+the whole recording runs recovered logic between two platform calls: the
+sibling's type-13 arm (decrement, command 8, the 1AD150 selector, a
+retype, command 6A; seven events).  Everything else was either a
+composition gap, a planner precondition (direction flag, finish gate,
+position compare), or a run of platform calls separated by wrapper code.
+
+Resolution by case, with the mechanism used:
+
+| case | fallbacks | mechanism |
+|---|---|---|
+| type03 (1AED86) D8-clear contact on a RAM-only route, D8-set retype | 20 + 4 | larger composition: plain planner over the C6 wrapper; `game.contact_type03_retype` |
+| type15 (1AE978) D8-clear tail | 3 | larger composition: three `1B0360` calls, `game.decrement_decimal_counter` |
+| type1f (1AE796) contact join, reversed direction, counter-zero finish | up to 68 of 99 | larger composition / precondition widening of the existing planners |
+| type44 (1AEF12) sound on | 19 | platform-service seam (single, existing shape) ahead of the recovered body |
+| type15 (1AE978) decrement with sound | 2 | platform-service seam through the sibling seam |
+| sibling type 13 (via 1AE9C6) | 21 | existing-boundary bridge: resume at the activation's own RTS |
+| 1B6C5A, 1B6D1E spawn children | 5 + 12 | existing-boundary bridge: `_platform_tail_bridge_seam` after the creation prefix |
+| walker / setup first-slot seam | 68 | larger composition: the iteration's seam is handed up |
+| chained seam | 0 | not built |
+
+Left as they were: 106 scheduler refusals, about 31 kind-21 command-stream
+ticks (8,000 instructions with an interrupt inside, reported under the
+type1f reason), the type2c pool copy (8, three RAM-only helpers whose
+exhaustion arms need `--vary` sweeps), three collection targets (7), type7E
+(4) and the type-13 fixed-helper command-14 suffix (1).
+
+The bridge cedes the wrapper code between platform calls, and for type 13
+the selector and retype, to the machine; those instructions are already
+recovered elsewhere and are not worth a runner mechanism.  The protocol's
+skip rule no longer treats "more than one native call" as an escalation;
+section 4 names the bridge as the third seam recipe.
+
+**92576 candidate hits, 152 fallbacks** (down from 379), 18.13M
+instructions replaced, on the 82,161-frame cold comparison at
+`artifacts/audit-bridges16` (PASS, 0 restores); 2,690 tests pass (`-n 8`).
+Commits 8174d68, 86f79e3, d77b2d0, fc91e46 and the docs commit.
+
 ## Supervised grind: phase review (15 September)
 
 Seven Sonnet stints on the 82,161-frame `main` took fallbacks from 21,840 to

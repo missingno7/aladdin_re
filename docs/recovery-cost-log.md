@@ -648,3 +648,27 @@ about ten lines plus tests, a generalization of the existing mechanism
 rather than a new one) followed by one more stint on the 150; and a longer
 recording, because coverage arrives in level-sized chunks and 1AF5F0,
 1AFA84, 1AE9A8, 1AEB7A and 1AF81C did not exist before frame 51,000.
+
+## 15 September 2026: audit of the remaining fallbacks before any chained seam
+
+Asked to audit the "two native call" cases from the pre2_port angle
+(split at existing boundaries and let the original bridge; compose
+upward; treat the callee as a platform service; chain only if the rest is
+impractical), the supervisor hooked the runner's fallback path over the
+whole history, saved a snapshot per event and grouped the 213 events of
+interest by activation path.  Findings: the native routines are the
+audio command queue (Z80 ring at A01B40 behind a bus request) and the VDP
+tile upload, i.e. platform services; only the sibling's type-13 arm (7
+events) runs recovered logic between two of them.  Outcome: no chained
+seam.  Existing-boundary bridges (resume at the activation's own RTS with
+the return slot at SP as identity) took the type-13 arm and the spawn
+children 1B6C5A/1B6D1E; single platform-service seams took type44 and the
+type15 decrement; the rest were compositions and precondition widenings
+(type03, type15 tail with the 1B0360 counter, type1f, walker/setup
+first-slot seam).  Cost: one supervisor session, about 4 hours, 4 leaf
+commits, no worker.  Result: fallbacks 379 -> 152, 18.13M instructions
+replaced (was 18.11M), one cold PASS.  Lesson for the protocol: a row with
+several native calls is a bridge, not an escalation; the audit tooling
+(fallback snapshots grouped by path) is the right way to read a residual
+frontier and is worth turning into a script if the next recording leaves
+a similar tail.
