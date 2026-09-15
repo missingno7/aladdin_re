@@ -102,14 +102,37 @@ def test_later_callback_must_read_staged_motion(monkeypatch):
 
 
 @pytest.mark.parametrize('kind',(0x4F,0x7B,0x02))
-def test_unresolved_or_sound_callback_does_not_commit_a_partial_scan(kind):
+def test_unresolved_or_sound_callback_truncates_at_the_loop_head(kind):
+    """A slot-0 callback the scan cannot compose (unresolved target or one
+    that would need a native seam) no longer discards the whole 24-slot
+    pass: contact_scan_plan admits everything composed before it (here,
+    just the entry prologue, since the failing slot is the very first one)
+    as a plan ending at the loop head (0x1ABBE0) with the same A1/D4/stack
+    the original leaves there, exactly as spawn_dispatch_walker truncates
+    at a mid-pass VDP seam instead of declining its whole batch."""
     state=scan_fixture(kind=kind)
     with oracle.Machine(oracle.read_rom()) as machine:
         machine.restore(state); machine.gates([ENTRY]); assert machine.run(instructions=1)=='gate'
-        before=machine.snapshot()
-        with pytest.raises(boundary.UnsupportedCandidate):
-            boundary.contact_scan_plan(machine,machine.registers())
-        assert machine.snapshot()==before
+        registers=machine.registers()
+        plan=boundary.contact_scan_plan(machine,registers)
+        assert plan.registers['pc']==0x1ABBE0
+        assert plan.registers['a1']==RECORD
+        assert (plan.registers['d4']&0xffff)==23
+        assert (plan.cycles,plan.instructions)==(20,2)
+    expected=oracle.execute_region(state,entry=ENTRY,candidate=None,expected_return=EXIT,include_raw=True)
+    actual=oracle.execute_region(state,entry=ENTRY,candidate='lifecycle',expected_return=EXIT,include_raw=True)
+    assert actual.outer==expected.outer
+    assert actual.future==expected.future
+    assert oracle.fresh_process_future(actual.outer_state)==actual.future
+    # The truncated slot is handed to COLLECTION_DISPATCH_ENTRY, the "one
+    # dispatcher gate" that already owns single-slot recovery; for these
+    # synthetic unresolved kinds that gate also has no recipe for the
+    # target, so it declines that one slot exactly like a fresh (non-scan)
+    # dispatch would -- at most one real fallback, never the whole pass.
+    assert actual.stats['fallbacks']<=1
+    if actual.stats['fallbacks']:
+        assert all(reason.startswith('unsupported domain:')
+                  for reason in actual.stats['fallback_reasons'])
 
 
 def test_type43_inactive_scan_callback_matches_original_outer_and_future():
@@ -125,26 +148,42 @@ def test_type43_inactive_scan_callback_matches_original_outer_and_future():
     assert actual.stats['fallbacks']==0
 
 
-def test_type43_active_scan_callback_still_declines_the_whole_scan():
+def test_type43_active_scan_callback_truncates_at_the_loop_head():
     """The scan cannot suspend mid-pass for type43's own sound seam (the
-    same limitation as every other seam-needing scan callback)."""
+    same limitation as every other seam-needing scan callback), so it now
+    truncates instead of declining the whole pass; the per-slot
+    COLLECTION_DISPATCH_ENTRY gate owns the seam slot from there and the
+    outer/future result still matches the original exactly."""
     state=scan_fixture(kind=0x43,extra_writes=((0xFFF0C1,1),))
     with oracle.Machine(oracle.read_rom()) as machine:
         machine.restore(state); machine.gates([ENTRY]); assert machine.run(instructions=1)=='gate'
-        before=machine.snapshot()
-        with pytest.raises(boundary.UnsupportedCandidate):
-            boundary.contact_scan_plan(machine,machine.registers())
-        assert machine.snapshot()==before
+        plan=boundary.contact_scan_plan(machine,machine.registers())
+        assert plan.registers['pc']==0x1ABBE0
+    expected=oracle.execute_region(state,entry=ENTRY,candidate=None,expected_return=EXIT,include_raw=True)
+    actual=oracle.execute_region(state,entry=ENTRY,candidate='lifecycle',expected_return=EXIT,include_raw=True)
+    assert actual.outer==expected.outer
+    assert actual.future==expected.future
+    assert oracle.fresh_process_future(actual.outer_state)==actual.future
+    # type43's active/sound-on arm is not itself recovered yet (frontier row
+    # "contact scan type43 requires original sound path"); the truncated
+    # slot reaches COLLECTION_DISPATCH_ENTRY, which declines it the same way
+    # a direct (non-scan) dispatch to this arm already does.
+    assert actual.stats['fallbacks']==1
+    assert all(reason.startswith('unsupported domain:')
+              for reason in actual.stats['fallback_reasons'])
 
 
-def test_callback_stack_alias_is_refused():
+def test_callback_stack_alias_truncates_at_the_loop_head():
+    """An aliased-stack hazard the callback planner refuses on is caught by
+    the same truncation as a seam: the slot is left for native/the
+    dispatcher gate, and nothing python-composed for it is misapplied."""
     state=scan_fixture()
     with oracle.Machine(oracle.read_rom()) as machine:
         machine.restore(state)
-        before=machine.snapshot()
-        with pytest.raises(boundary.UnsupportedCandidate):
-            boundary.contact_scan_plan(machine,{**machine.registers(),'a7':0xFF7E04})
-        assert machine.snapshot()==before
+        registers={**machine.registers(),'a7':0xFF7E04}
+        plan=boundary.contact_scan_plan(machine,registers)
+        assert plan.registers['pc']==0x1ABBE0
+        assert plan.registers['a1']==RECORD
 
 
 def test_deadline_refusal_matches_one_original_instruction():

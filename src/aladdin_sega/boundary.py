@@ -3438,11 +3438,14 @@ def _contact_type1f_ram_dispatch(machine, registers, dispatch):
     raise UnsupportedCandidate('contact scan type1f requires original sound/device path')
 
 
-def contact_scan_plan(machine, registers):
-    """Exact 1ABBD6 24-record scan through the instruction before its RTS."""
-    if registers.get('pc') != CONTACT_SCAN_ENTRY:
-        raise UnsupportedCandidate('contact scan entry identity')
-    callbacks = {
+def _contact_scan_callbacks():
+    # Deferred to call time (not a module-level constant) because several
+    # planners here (e.g. begin_contact_family_type44_dispatch) are defined
+    # later in this module than contact_scan_plan/_contact_scan_resume; a
+    # module-level dict literal at this point in the file would NameError at
+    # import time. Shared by contact_scan_plan and _contact_scan_resume so
+    # the two callback tables cannot drift apart.
+    return {
         CONTACT_FAMILY_TYPE79_ENTRY: begin_contact_family_type79_dispatch,
         CONTACT_FAMILY_TYPE1F_ENTRY: _contact_type1f_ram_dispatch,
         CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
@@ -3467,6 +3470,25 @@ def contact_scan_plan(machine, registers):
         CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch,
         CONTACT_FAMILY_TYPE43_ENTRY: begin_contact_family_type43_scan_dispatch,
     }
+
+
+def contact_scan_plan(machine, registers):
+    """Exact 1ABBD6 24-record scan through the instruction before its RTS.
+
+    A slot whose callback would need a native seam cannot be absorbed into
+    this batched Python loop, which has no way to suspend itself mid-pass
+    for a native excursion. When that happens the iterations already
+    composed before it are admitted as one truncated plan ending at the
+    loop head (``0x1ABBE0``) with the loop state exactly as the original
+    leaves it there; the per-slot COLLECTION_DISPATCH_ENTRY gate then owns
+    the seam slot once native execution reaches it, and
+    ``_contact_scan_resume`` owns every slot after it from
+    CONTACT_COMPLETION_EXIT. Mirrors the truncation
+    ``spawn_dispatch_walker`` performs for a mid-pass VDP seam.
+    """
+    if registers.get('pc') != CONTACT_SCAN_ENTRY:
+        raise UnsupportedCandidate('contact scan entry identity')
+    callbacks = _contact_scan_callbacks()
     current = AtomicPlan(20, 2, (), {**registers, 'a1': 0xff7e82,
                          'd4': (registers['d4'] & 0xffff0000) | 23,
                          'pc': 0x1ABBE0, 'sr': _logic_sr(registers['sr'], 23, 2)}, 0x1ABBDC)
@@ -3474,17 +3496,33 @@ def contact_scan_plan(machine, registers):
         prefix, branch = _contact_scan_prefix(dispatch_plan_view(machine, current), current.registers)
         step = prefix
         if branch == 'contact':
-            view = dispatch_plan_view(machine, _join_plans(current, prefix))
-            target, dispatch = begin_collection_dispatch(view, prefix.registers)
-            if target in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
-                callback = begin_contact_sibling_dispatch(view, prefix.registers, dispatch, target)
-            else:
-                planner = callbacks.get(target)
-                if planner is None:
-                    raise UnsupportedCandidate(f'contact scan callback at slot {slot}: {target:06X} unresolved/device-or-sound')
-                callback = planner(view, prefix.registers, dispatch)
-            if callback.registers.get('pc') != COLLECTION_DISPATCH_RETURN:
-                raise UnsupportedCandidate(f'contact scan callback at slot {slot}: noncompletion handoff')
+            try:
+                view = dispatch_plan_view(machine, _join_plans(current, prefix))
+                target, dispatch = begin_collection_dispatch(view, prefix.registers)
+                if target in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+                    callback = begin_contact_sibling_dispatch(view, prefix.registers, dispatch, target)
+                else:
+                    planner = callbacks.get(target)
+                    if planner is None:
+                        raise UnsupportedCandidate(f'contact scan callback at slot {slot}: {target:06X} unresolved/device-or-sound')
+                    callback = planner(view, prefix.registers, dispatch)
+                if callback.registers.get('pc') != COLLECTION_DISPATCH_RETURN:
+                    raise UnsupportedCandidate(f'contact scan callback at slot {slot}: noncompletion handoff')
+            except UnsupportedCandidate:
+                # This slot's callback cannot be composed in Python (most
+                # often because it would need a native seam the batched scan
+                # has no way to suspend itself for). `current` already sits
+                # at the loop head (0x1ABBE0) with exactly the A1 cursor, D4
+                # remaining count and stack the original loop expects there
+                # -- admit the slots already composed before this one as one
+                # truncated plan ending there, exactly as
+                # spawn_dispatch_walker truncates at a mid-pass VDP seam.
+                # The next native pass through this same loop body runs the
+                # seam slot for real, reaching it through the ordinary
+                # per-slot COLLECTION_DISPATCH_ENTRY gate; _contact_scan_resume
+                # owns every slot after it once that gate's native completion
+                # tail reaches CONTACT_COMPLETION_EXIT (1ABD74).
+                return current
             callback_registers = dict(prefix.registers)
             callback_registers.update(dispatch.registers)
             callback_registers.update(callback.registers)
@@ -3522,42 +3560,28 @@ def _contact_scan_resume(machine, registers):
         # borrowing its one-slot body through a bounded synthetic tail.
         prefix, branch = _contact_scan_prefix(dispatch_plan_view(machine, current), current.registers)
         if branch == 'contact':
-            view = dispatch_plan_view(machine, _join_plans(current, prefix))
-            target, dispatch = begin_collection_dispatch(view, prefix.registers)
-            planners = {CONTACT_FAMILY_TYPE79_ENTRY: begin_contact_family_type79_dispatch,
-                        CONTACT_FAMILY_TYPE1F_ENTRY: _contact_type1f_ram_dispatch,
-                        CONTACT_FAMILY_TYPE15_ENTRY: begin_contact_family_type15_dispatch,
-                        CONTACT_FAMILY_TYPE44_ENTRY: begin_contact_family_type44_dispatch,
-                        CONTACT_FAMILY_TYPE55_ENTRY: begin_contact_family_type55_dispatch,
-                        CONTACT_FAMILY_TYPE58_ENTRY: begin_contact_family_type58_dispatch,
-                        CONTACT_FAMILY_TYPE74_ENTRY: begin_contact_family_type74_dispatch,
-        CONTACT_FAMILY_TYPE6E_ENTRY: begin_contact_family_type6e_dispatch,
-        CONTACT_FAMILY_TYPE1A_ENTRY: begin_contact_family_type1a_dispatch,
-        CONTACT_FAMILY_TYPE23_ENTRY: begin_contact_family_type23_dispatch,
-        CONTACT_FAMILY_TYPE0D_ENTRY: begin_contact_family_type0d_dispatch,
-        CONTACT_FAMILY_TYPE14_ENTRY: begin_contact_family_type14_dispatch,
-        CONTACT_FAMILY_TYPE0C_ENTRY: begin_contact_family_type0c_dispatch,
-        CONTACT_FAMILY_TYPE78_ENTRY: begin_contact_family_type78_dispatch,
-        CONTACT_FAMILY_TYPE63_ENTRY: begin_contact_family_type63_dispatch,
-        CONTACT_FAMILY_TYPE2C_ENTRY: begin_contact_family_type2c_dispatch,
-                        CONTACT_COLLECTION_RELOCATION_ENTRY: begin_contact_collection_relocation_dispatch,
-                        CONTACT_FAMILY_66_ENTRY: begin_contact_family_66_dispatch,
-                        CONTACT_FAMILY_MOTION_ENTRY: begin_contact_family_motion_dispatch,
-                        CONTACT_FAMILY_SECONDARY_MOTION_ENTRY: begin_contact_family_secondary_dispatch,
-                        CONTACT_TYPE7E_ENTRY: begin_contact_type7e_dispatch,
-                        CONTACT_ACTIVATION_ENTRY: begin_contact_activation_dispatch,
-                        CONTACT_FAMILY_TYPE43_ENTRY: begin_contact_family_type43_scan_dispatch}
-            if target in (TRANSITION_ENTRY, 0x1AF4D8):
-                raise UnsupportedCandidate('later collection sound requires local fallback')
-            if target in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
-                callback = begin_contact_sibling_dispatch(view, prefix.registers, dispatch, target)
-            else:
-                planner = planners.get(target)
-                if planner is None:
-                    raise UnsupportedCandidate(f'resumed contact scan callback {target:06X} unsupported')
-                callback = planner(view, prefix.registers, dispatch)
-            if callback.registers.get('pc') != COLLECTION_DISPATCH_RETURN:
-                raise UnsupportedCandidate('resumed contact scan noncompletion handoff')
+            try:
+                view = dispatch_plan_view(machine, _join_plans(current, prefix))
+                target, dispatch = begin_collection_dispatch(view, prefix.registers)
+                if target in (TRANSITION_ENTRY, 0x1AF4D8):
+                    raise UnsupportedCandidate('later collection sound requires local fallback')
+                if target in (CONTACT_SIBLING_WRAPPER, CONTACT_SIBLING_DIRECT):
+                    callback = begin_contact_sibling_dispatch(view, prefix.registers, dispatch, target)
+                else:
+                    planner = _contact_scan_callbacks().get(target)
+                    if planner is None:
+                        raise UnsupportedCandidate(f'resumed contact scan callback {target:06X} unsupported')
+                    callback = planner(view, prefix.registers, dispatch)
+                if callback.registers.get('pc') != COLLECTION_DISPATCH_RETURN:
+                    raise UnsupportedCandidate('resumed contact scan noncompletion handoff')
+            except UnsupportedCandidate:
+                # Same truncation as contact_scan_plan: `current` already
+                # sits at the loop head with the remaining slots' A1/D4/stack
+                # exactly as the original leaves them there, so admit what
+                # has been composed of this resume so far and let the
+                # per-slot gate and a later CONTACT_COMPLETION_EXIT resume
+                # own the seam slot and everything after it.
+                return current
             overlay = dict(prefix.registers); overlay.update(dispatch.registers); overlay.update(callback.registers)
             complete = complete_contact_plan(dispatch_plan_view(machine, _join_plans(_join_plans(current, prefix), callback)), overlay)
             current = _join_plans(current, _join_plans(prefix, _join_plans(callback, complete)))
@@ -3607,6 +3631,33 @@ def begin_contact_step_sound(machine, registers):
     raise UnsupportedCandidate('contact tick sound callback was not reached')
 
 
+def _pop_contact_scan_return(machine, combined):
+    """Retire the scan's own RTS to reach the real caller.
+
+    A scan that truncated its batch at a seam slot (see
+    ``contact_scan_plan``) leaves ``combined`` at the loop head
+    (``0x1ABBE0``) instead of ``CONTACT_SCAN_EXIT`` -- nothing has been
+    pushed for an outer return yet, only the loop head to resume at, exactly
+    like a fresh contact-scan gate hit leaves it. Composing an RTS here
+    would misread that loop state as a return address that was never
+    pushed, so it is returned as-is instead; the per-slot dispatcher gate
+    and a later CONTACT_COMPLETION_EXIT resume own the rest.
+    """
+    if combined.registers.get('pc') != CONTACT_SCAN_EXIT:
+        if combined.registers.get('pc') != 0x1ABBE0:
+            raise UnsupportedCandidate('contact scan did not reach its loop head or exit')
+        return combined
+    final = dict(combined.registers); sp = final['a7']
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned contact tick return stack')
+    outer = _read(dispatch_plan_view(machine, combined), sp, 4) & 0xffffff
+    if outer & 1:
+        raise UnsupportedCandidate('unaligned contact tick return PC')
+    final.update(a7=sp + 4, pc=outer)
+    return AtomicPlan(combined.cycles + 16, combined.instructions + 1, combined.writes,
+                      final, CONTACT_SCAN_EXIT, combined.direct_calls)
+
+
 def finish_contact_step_sound(machine, registers, entry=None, finisher=None):
     """Resume a callback sound from live guest state through the parent RTS."""
     if finisher is None:
@@ -3620,15 +3671,7 @@ def finish_contact_step_sound(machine, registers, entry=None, finisher=None):
     combined = _join_plans(finish, complete)
     remainder = _contact_scan_resume(dispatch_plan_view(machine, combined), combined.registers)
     combined = _join_plans(combined, remainder)
-    final = dict(combined.registers); sp = final['a7']
-    if sp & 1:
-        raise UnsupportedCandidate('unaligned contact tick return stack')
-    outer = _read(dispatch_plan_view(machine, combined), sp, 4) & 0xffffff
-    if outer & 1:
-        raise UnsupportedCandidate('unaligned contact tick return PC')
-    final.update(a7=sp + 4, pc=outer)
-    return AtomicPlan(combined.cycles + 16, combined.instructions + 1, combined.writes,
-                      final, CONTACT_SCAN_EXIT, combined.direct_calls)
+    return _pop_contact_scan_return(machine, combined)
 
 
 def _contact_step_prefix(machine, registers):
@@ -3674,16 +3717,7 @@ def contact_step_plan(machine, registers):
     if prefix.registers['pc'] == CONTACT_SCAN_ENTRY:
         scan = contact_scan_plan(dispatch_plan_view(machine, prefix), prefix.registers)
         combined = _join_plans(prefix, scan)
-    final = dict(combined.registers)
-    sp = final['a7']
-    if sp & 1:
-        raise UnsupportedCandidate('unaligned contact tick return stack')
-    outer = _read(dispatch_plan_view(machine, combined), sp, 4) & 0xffffff
-    if outer & 1:
-        raise UnsupportedCandidate('unaligned contact tick return PC')
-    final.update(a7=sp + 4, pc=outer)
-    return AtomicPlan(combined.cycles + 16, combined.instructions + 1, combined.writes,
-                      final, CONTACT_SCAN_EXIT, combined.direct_calls)
+    return _pop_contact_scan_return(machine, combined)
 
 
 def begin_contact_dispatch(machine, registers, dispatch):

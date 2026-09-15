@@ -67,13 +67,30 @@ def test_outer_entry_owns_scan_and_position_changes_later_contact(stack,high):
 
 
 @pytest.mark.parametrize('kind',(0x4F,0x7B,0x02))
-def test_unsupported_parent_path_does_not_commit_prefix(kind):
+def test_unsupported_parent_path_truncates_at_the_scan_loop_head(kind):
+    """An unresolved callback at the record's own slot 0 no longer discards
+    contact_step_plan's whole composed prefix: the inner contact_scan_plan
+    truncates at the loop head (0x1ABBE0) and contact_step_plan's own
+    _pop_contact_scan_return leaves that state as-is (nothing pushed for an
+    outer return yet) instead of misreading it as one -- the per-slot
+    COLLECTION_DISPATCH_ENTRY gate then owns the record directly, exactly
+    as it already does for a fresh (non-scan) dispatch to this same
+    unresolved target."""
     state=step_fixture(kind=kind)
     with oracle.Machine(oracle.read_rom()) as machine:
-        machine.restore(state); before=machine.snapshot()
-        with pytest.raises(boundary.UnsupportedCandidate):
-            boundary.contact_step_plan(machine,machine.registers())
-        assert machine.snapshot()==before
+        machine.restore(state)
+        plan=boundary.contact_step_plan(machine,machine.registers())
+        assert plan.registers['pc']==0x1ABBE0
+        assert plan.registers['a1']==RECORD
+    expected=oracle.execute_region(state,entry=ENTRY,candidate=None,expected_return=RETURN,include_raw=True)
+    actual=oracle.execute_region(state,entry=ENTRY,candidate='lifecycle',expected_return=RETURN,include_raw=True)
+    assert actual.outer==expected.outer
+    assert actual.future==expected.future
+    assert oracle.fresh_process_future(actual.outer_state)==actual.future
+    assert actual.stats['fallbacks']<=1
+    if actual.stats['fallbacks']:
+        assert all(reason.startswith('unsupported domain:')
+                  for reason in actual.stats['fallback_reasons'])
 
 
 def test_parent_deadline_refusal_preserves_original_progress():
