@@ -474,16 +474,34 @@ the checkpoint save 1B0490, the first draw and fade-in), after which
 the main loop starts at 1A8C16 (the frame loop resumes at the
 frame-counter step, `ResumeFrame`).
 
+The level change (1A8E5C), the first target of the recovery frontier:
+the high-score check, the end-of-level tally screen 1B0D70 (the
+tallying objects' scripts over up to 300 mini frames; the tiles by the
+level and the camera lock), the scarab wheel 1B16E0 (while no button
+is held the prize object rerolls its kind from the table at 6960 every
+quarter period; a button stops it and pays one scarab for an extra
+life, five apples, a gem or the loss of all scarabs; the digits are
+glyph objects; five CRAM entries flash on frame-counter phases), the
+level sequence stream at FFF572 (op 0 takes the next word as the
+level, op 2 skips it when FFF005 is set, op 1 shows the bonus card
+1B50EE and takes it when FFF176 is set, FF ends the game), then the
+level prologue.  Level 2's init 1B6394 (camera locked) and the
+locked-camera window draw 1AA81A (16 rows of 23 cells at once, the
+name-row pointer running on into the identical second table) came with
+it, and the level-event handlers of the table at 20C0 for the
+non-carpet levels (E6..F2: spawns from the pool with a palette line,
+the freeze-and-end event EA, the apple / gem / life events gated on
+full counters); the carpet ride's own event handlers stay gaps.
+Verified with `verify_sequence.py 9300 10018 1A8E5C` at every
+checkpoint and the resumed boundary, and by the old recording from
+power-on through level 2.
+
 ## 10. What to recover next
 
-1. The remaining transitions as sequences over the same primitives: the
-   level change (1A8E5C: the end-of-level tally 1B0D70, the scarab
-   screen 1B16E0, the level sequence stream FFF572, the 1A8B50
-   prologue with the story and level-card screens, the level loader
-   1AA484 with the two decompressors, the screen draw and fade-in), the
-   fall variant of the respawn when the recording meets one, the
-   game-over screen (1B0CBC) and the bonus stages.  Each needs its
-   timing witness measured on the recording first.
+1. The remaining transitions over the same primitives: the story pages
+   of the other levels, the fall variant of the respawn when a recording
+   meets one, the game-over screen 1B0558, the declined continue (the
+   title), the ending 1B4F7C, the carpet ride (1B6066 and its events).
 2. The 24 player callbacks and 20 projectile callbacks not yet met by
    the recording (kind 3E at 1AF2B0 is the next one it meets).
 3. The level event streams of levels 2, 6 and 8 (1B634E over the table

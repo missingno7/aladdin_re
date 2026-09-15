@@ -17,6 +17,7 @@ from .objects.record import RECORD_TABLE, RECORD_SIZE
 from .objects.lifecycle import initialize
 from .rng import SEED_ADDRESS, advance_rng
 from . import player as P
+from .hud import LIVES, APPLES, GEMS
 from .video import load_palette
 
 DYING = 0xFFF0E6
@@ -285,6 +286,114 @@ def tick_level_12(read, write, rom, services, vdp):
         _spawn(read, write, rom, 0x1B8278, record, 0x184, 0x166, fields={0x20: (0x125B42, 4), 9: (0xFF, 1)})
 
 
+def _free_slot(read, first, count):
+    """1AE262 (slots 3..22) / 1AE27A (slots 1..24): the first free record, or None."""
+    for slot in range(first, first + count):
+        record = RECORD_TABLE + RECORD_SIZE * slot
+        if not read(record, 1):
+            return record
+    return None
+
+
+def _event_spawn(read, write, rom, template, x, y, first=3, count=20, facing=True, fields=None):
+    """The level events' common spawn: a template at (x, y); x >= 0x8D faces the object left (byte 9)."""
+    record = _free_slot(read, first, count)
+    if record is None:
+        return None
+    _spawn(read, write, rom, template, record, x, y, fields)
+    if facing and x >= 0x8D:
+        write(record + 9, 0xFF, 1)
+    return record
+
+
+def _event_e6(read, write, rom, services, vdp, x, y):
+    """1B7634."""
+    if _event_spawn(read, write, rom, 0x1B7A94, x, y) is not None:
+        load_palette(write, rom, vdp, 2, 0x1292B2)
+
+
+def _event_e7(read, write, rom, services, vdp, x, y):
+    """1B7840: a sound."""
+    if read(P.SOUND_ENABLED, 1):
+        services.sound(0, 0x5D)
+
+
+def _event_e8(read, write, rom, services, vdp, x, y):
+    """1B766C: from the whole pool, with +1E = 4000."""
+    if _event_spawn(read, write, rom, 0x1B81D8, x, y, first=1, count=24, fields={0x1E: (0x4000, 2)}) is not None:
+        load_palette(write, rom, vdp, 2, 0x129332)
+
+
+def _event_e9(read, write, rom, services, vdp, x, y):
+    """1B760A."""
+    _event_spawn(read, write, rom, 0x1B819C, x, y)
+
+
+def _event_ea(read, write, rom, services, vdp, x, y):
+    """1B781A: the player frozen into script 1258D2, the level over in 200 frames, FFF570 set."""
+    write(P.FROZEN, 0xFF, 1)
+    P.set_script(write, 0x1258D2)
+    write(P.TRANSITION_COUNTDOWN, 0xC8, 1)
+    write(0xFFF570, 0xFF, 1)
+
+
+def _event_eb(read, write, rom, services, vdp, x, y):
+    """1B76D4."""
+    _event_spawn(read, write, rom, 0x1B7BD4, x, y, fields={0xA: (0x121082, 4)})
+
+
+def _event_ec(read, write, rom, services, vdp, x, y):
+    """1B77F0."""
+    _event_spawn(read, write, rom, 0x1B7C10, x, y)
+
+
+def _event_ed(read, write, rom, services, vdp, x, y):
+    """1B77A4: a gem, unless the gems are full."""
+    if read(GEMS, 2) != 0x3939:
+        _event_spawn(read, write, rom, 0x1B79B8, x, y, facing=False,
+                     fields={0: (0x3A, 1), 6: (1, 1), 0x20: (0x122BD8, 4), 0xA: (0x121034, 4), 0x29: (1, 1)})
+
+
+def _event_ee(read, write, rom, services, vdp, x, y):
+    """1B7758: an apple, unless the apples are full."""
+    if read(APPLES, 2) != 0x3939:
+        _event_spawn(read, write, rom, 0x1B79B8, x, y, facing=False,
+                     fields={0: (0x40, 1), 6: (1, 1), 0x20: (0x122C12, 4), 0x29: (0, 1), 0xA: (0x121034, 4)})
+
+
+def _event_ef(read, write, rom, services, vdp, x, y):
+    """1B7738."""
+    _event_spawn(read, write, rom, 0x1B7AF8, x, y, facing=False)
+
+
+def _event_f0(read, write, rom, services, vdp, x, y):
+    """1B7706: an extra life, unless the lives are full."""
+    if read(LIVES, 1) != 0x39:
+        _event_spawn(read, write, rom, 0x1B79CC, x, y, facing=False, fields={0xA: (0x120FFE, 4)})
+
+
+def _event_f1(read, write, rom, services, vdp, x, y):
+    """1B76AA."""
+    _event_spawn(read, write, rom, 0x1B7BD4, x, y)
+
+
+def _event_f2(read, write, rom, services, vdp, x, y):
+    """1B5B3A: the level ends next frame; the sequence stream skips its alternate."""
+    write(P.TRANSITION_COUNTDOWN, 1, 1)
+    write(0xFFF005, 0xFF, 1)
+
+
+def _event_nothing(read, write, rom, services, vdp, x, y):
+    """1B58D8."""
+
+
+EVENT_ROUTINES = {
+    0x1B7634: _event_e6, 0x1B7840: _event_e7, 0x1B766C: _event_e8, 0x1B760A: _event_e9, 0x1B781A: _event_ea,
+    0x1B76D4: _event_eb, 0x1B77F0: _event_ec, 0x1B77A4: _event_ed, 0x1B7758: _event_ee, 0x1B7738: _event_ef,
+    0x1B7706: _event_f0, 0x1B76AA: _event_f1, 0x1B5B3A: _event_f2, 0x1B58D8: _event_nothing,
+}       # 1B5B32 and 1B58DA..1B5B02 are the carpet ride's (level 8), driven by its own stream value (d6): gaps
+
+
 def event_stream(read, write, rom, services, vdp):
     """1B634E: [delay, opcode, x, y] events from the level's stream, each after its delay."""
     pointer = read(EVENT_STREAM, 4)
@@ -298,8 +407,13 @@ def event_stream(read, write, rom, services, vdp):
     opcode = rom[pointer + 1]
     write(EVENT_STREAM, pointer + 6, 4)
     write(EVENT_COUNTER, 0, 1)
+    x = int.from_bytes(rom[pointer + 2:pointer + 4], 'big')
+    y = int.from_bytes(rom[pointer + 4:pointer + 6], 'big')
     target = int.from_bytes(rom[EVENT_HANDLERS + 4 * (opcode - 0xE6):EVENT_HANDLERS + 4 * (opcode - 0xE6) + 4], 'big')
-    raise Transition('level_event', f'level event handler {opcode:02X} ({target:06X}) is not recovered')
+    handler = EVENT_ROUTINES.get(target)
+    if handler is None:
+        raise Transition('level_event', f'level event handler {opcode:02X} ({target:06X}) is not recovered')
+    handler(read, write, rom, services, vdp, x, y)
 
 
 LEVEL_TICKS = {

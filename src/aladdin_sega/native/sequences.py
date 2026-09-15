@@ -58,6 +58,16 @@ PALETTE_CYCLING = 0xFFF102
 STORY_PLATE_PALETTE = 0xFF7290
 STORY_PAGE_SOURCE = 0xFF7294
 FONT_TILES = 0x129F00                # 1B2E44: the story font into VRAM F800
+SEQUENCE_STREAM = 0xFFF572           # long: the level sequence stream's read position (ROM 4082 at the start)
+BONUS_OFFERED = 0xFFF176             # the bonus screen before the next level (stream op 1)
+SKIP_ALTERNATE = 0xFFF005            # stream op 2 skips its level when set
+SCARABS = 0xFFF003
+SCARAB_STOPPED, SCARAB_SPUN, SCARAB_COUNTDOWN, SCARAB_PERIOD = 0xFFF120, 0xFFF11E, 0xFFF121, 0xFFF122
+SCARAB_PRIZES = 0x6960               # ROM: 16 x [kind long][script long], picked by (rng & 0x78)
+DIGIT_SCRIPTS = 0x4A58               # ROM: the glyph script of each digit 0..9
+HSCROLL_LIST = 0x2A48                # ROM: 1B2584's word list (FFFF = continue at the following pointer)
+TALLY_TEMPLATES = ((2, 0x1B8318, 0x1CA, 0x1B8), (1, 0x1B832C, 0x206, 0x1B8))
+LEVELS_WITHOUT_STORY = {2, 6, 8, 0xC}
 HUD_TILES = 0x11F000                 # 1B2E5A: the HUD tiles into VRAM F800
 PLAYER_STAND_SCRIPTS = {'hang': 0x122336, 'cutscene': 0x125C52, 'locked': 0x121D5A, 'stand': 0x121D88}
 LEVEL_TABLE, LEVEL_ENTRY = 0x2C78, 0x42
@@ -385,7 +395,21 @@ def _init_level_9(state, services):
     plane_size_64(state)
 
 
+def _init_level_2(state, services):
+    """1B6394: the camera locked (FFF173 / FFF174), the start script, FFF132, sound 3A, message 0F, plane size."""
+    state.write(player.CAMERA_LOCK, 0xFF, 1)
+    state.write(0xFFF174, 0xFF, 1)
+    player_start_script(state)
+    state.write(0xFFF132, 0x2128, 4)
+    sound_if_enabled(state, services, 0x3A)
+    state.write(hud.MESSAGE, 0x0F, 1)
+    services.show_message(0x0F)
+    state.vdp.control(0x8B00)
+    plane_size_64(state)
+
+
 LEVEL_INITS = {
+    0x1B6394: _init_level_2,
     0x1B63EA: _init_level_0, 0x1B6406: _init_reg_8b02_then_plane, 0x1B6414: _init_level_3, 0x1B642E: _init_plain,
     0x1B6434: _init_level_5, 0x1B64C2: _init_level_7, 0x1B653E: _init_level_9, 0x1B6554: _init_reg_8b02_then_plane,
     0x1B655C: _init_plain,
@@ -437,10 +461,12 @@ def _strip_pass(state, services):
 
 
 def draw_screen(state, services):
-    services.work()          # 23 columns: frames of work before anything below
-    """1AA724: the visible window drawn by walking the camera 23 columns right and back, muted."""
+    """1AA724: the visible window drawn by walking the camera 23 columns right and back, muted; or, with the
+    camera locked, drawn in place (1AA81A).  Frames of work either way."""
+    services.work()
     if state.read(player.CAMERA_LOCK, 1):
-        raise NativeGap('screen_draw', 0x1AA81A, 'the locked-camera screen draw is not recovered', state.frame)
+        level.draw_window(state.read, state.write, state.rom, state.vdp)
+        return
     read, write = state.read, state.write
     write(SOUND_ENABLED_SAVED, read(player.SOUND_ENABLED, 1), 1)
     write(player.SOUND_ENABLED, 0, 1)
@@ -620,9 +646,9 @@ def continue_screen(state, services):
     mini_frame(state, services, count=False)
     palette_line(state, 0, 0x129CAA)                # 1B25FE: two lines
     palette_line(state, 1, 0x129CCA)
+    services.checkpoint(0x1B08EA)          # once, before the loop head 1B0916: the loading above took the original time
     palette_line(state, 3, 0x1290B2)
     sound_if_enabled(state, services, 0x0A, flag=0xFFF57F)
-    services.checkpoint(0x1B0916)          # the polling starts here: the loading above took the original time
     while True:
         mini_frame(state, services)
         write(PAD_HIGH, pad.raw_bytes(state.buttons)[0], 1)
@@ -657,6 +683,294 @@ def continue_screen(state, services):
     fade_to(state, services, BLACK_PALETTE)
     services.sound_command(0x16)
     return 'continue'
+
+
+def hscroll_from_list(state, source=HSCROLL_LIST):
+    """1B2584: the 512 words of the horizontal scroll table from a word list (FFFF: continue at the next pointer)."""
+    state.vdp.control_long(scroll.HSCROLL_A)
+    rom = state.rom
+    p = source
+    for _ in range(0x200):
+        word = int.from_bytes(rom[p:p + 2], 'big'); p += 2
+        if word == 0xFFFF:
+            p = int.from_bytes(rom[p:p + 4], 'big')
+            word = int.from_bytes(rom[p:p + 2], 'big'); p += 2
+        state.vdp.data(word)
+
+
+def tally_screen(state, services):
+    """1B0D70: the end-of-level screen with the tallying objects, up to 300 mini frames or a button."""
+    read, write = state.read, state.write
+    if read(player.LEVEL_INDEX, 1) == 0xA:
+        return
+    services.sound_command(0x16)
+    fade_to(state, services, BLACK_PALETTE)
+    sound_if_enabled(state, services, 0x11, flag=0xFFF57F)
+    state.vdp.control(0x8B00)
+    write(player.INVULNERABLE, 0, 1)
+    write(PLANE_B_ON_A, 0, 1)
+    plane_size_64(state)
+    clear_scroll(state.vdp)
+    hscroll_from_list(state)
+    retire_pool(state, services, 0, 32)
+    sprite_terminator(state)
+    clear_plane(state.vdp, 0xE000)
+    level_index = read(player.LEVEL_INDEX, 1)
+    carpet_done = level_index == 8 and read(0xFFF006, 1) >= 3
+    if carpet_done or (read(player.CAMERA_LOCK, 1) and not read(0xFFF570, 1)):
+        decompress_to_vram(state, 0x1319EC, 0, services)
+        decompress_to_vram(state, 0x131682, 0xC000, services)
+    else:
+        decompress_to_vram(state, 0x13C374, 0, services)
+        decompress_to_vram(state, 0x1313FD, 0xC000, services)
+    if not carpet_done:
+        slot, template, x, y = TALLY_TEMPLATES[0]
+        init_template(state, RECORD_TABLE + RECORD_SIZE * slot, template, x, y)
+    if carpet_done or not read(player.CAMERA_LOCK, 1):
+        slot, template, x, y = TALLY_TEMPLATES[1]
+        record = RECORD_TABLE + RECORD_SIZE * slot
+        init_template(state, record, template, x, y)
+        write(record + 0x20, 0x1260EE, 4)
+    mini_frame(state, services, count=False)
+    palette_line(state, 0, 0x129D6A)
+    palette_line(state, 3, 0x1290B2)
+    services.checkpoint(0x1B0EC4)
+    for _ in range(0x12B + 1):
+        mini_frame(state, services)
+        if any_button(state):
+            break
+    fade_to(state, services, BLACK_PALETTE)
+
+
+def scarab_digits(state):
+    """1B1AD6: the scarab count as two digit glyph objects (slots 6 and 7), the tens only when nonzero."""
+    read, write = state.read, state.write
+    tens_record, ones_record = RECORD_TABLE + RECORD_SIZE * 6, RECORD_TABLE + RECORD_SIZE * 7
+    x = 0x188
+    write(tens_record, 0, 1)
+    count = read(SCARABS, 1)
+    tens, ones = count // 10, count % 10
+    if tens:
+        write(tens_record + 0x20, int.from_bytes(state.rom[DIGIT_SCRIPTS + 4 * tens:DIGIT_SCRIPTS + 4 * tens + 4], 'big'), 4)
+        write(tens_record + 2, x, 2)
+        write(tens_record, 0x84, 1)
+        x += 0x11
+    write(ones_record + 0x20, int.from_bytes(state.rom[DIGIT_SCRIPTS + 4 * ones:DIGIT_SCRIPTS + 4 * ones + 4], 'big'), 4)
+    write(ones_record + 2, x, 2)
+
+
+def scarab_pick(state):
+    """1B16B4: the prize object (slot 1) becomes a random kind from the table at 6960, never the same kind twice."""
+    from ..game.rng import advance_rng
+    record = RECORD_TABLE + RECORD_SIZE
+    while True:
+        seed, roll = advance_rng(state.read(0xFF7DEA, 4))
+        state.write(0xFF7DEA, seed, 4)
+        entry = SCARAB_PRIZES + (roll & 0x78)
+        kind = int.from_bytes(state.rom[entry:entry + 4], 'big')
+        if (kind & 0xFF) != state.read(record, 1):
+            break
+    state.write(record, kind & 0xFF, 1)
+    state.write(record + 0x20, int.from_bytes(state.rom[entry + 4:entry + 8], 'big'), 4)
+    state.write(record + 0x37, 0, 1)
+
+
+SCARAB_FLASH = {0x1E: ((0x0E, 0xE66), (0x10, 0xE86), (0x2A, 0), (0x2C, 2), (0x2E, 0x202)),
+                0x0A: ((0x0E, 0xC6C), (0x10, 0xEAE), (0x2A, 6), (0x2C, 0x24E), (0x2E, 0xC8E))}
+
+
+def scarab_flash(state):
+    """1B1B3C: five CRAM entries alternate on frame-counter phases 0x0A and 0x1E."""
+    entries = SCARAB_FLASH.get(state.read(player.FRAME_COUNTER, 1) & 0x3F)
+    if not entries:
+        return
+    for offset, value in entries:
+        state.vdp.control_long(0xC0000000 | (offset << 16))
+        state.vdp.data(value)
+
+
+def scarab_frame(state, services):
+    """1B17FE / 1B18B8: motion, animation, the full sprite table, VBlank, uploads."""
+    engine = Engine(state.memory(), services)
+    engine.motion_pass()
+    engine.animation_pass()
+    sprites.build_sprite_table(state.read, state.write, state.rom, state.bus_read)
+    services.vblank()
+    video.flush_upload_queue(state.read, state.write, state.vdp)
+    video.upload_sprite_table(state.read, state.rom, state.vdp)
+
+
+def scarab_screen(state, services):
+    """1B16E0: the scarab wheel: while no button is held the prize spins; a button stops it and pays out one scarab.
+
+    Prizes by the kind the wheel stops on: 1 an extra life (1AEF70), 3 five apples, 2 a gem, 4 all scarabs lost.
+    The screen ends when the scarabs run out at a spin.
+    """
+    read, write = state.read, state.write
+    if read(player.LEVEL_INDEX, 1) == 0xA or not read(SCARABS, 1):
+        return
+    services.sound_command(0x16)
+    clear_cram(state.vdp)
+    state.vdp.control(0x8B00)
+    write(player.INVULNERABLE, 0, 1)
+    clear_scroll(state.vdp)
+    hscroll_from_list(state)
+    retire_pool(state, services, 0, 32)
+    sprite_terminator(state)
+    clear_records(state)
+    decompress_to_vram(state, 0x12FA02, 0xE000, services)
+    decompress_to_vram(state, 0x12F712, 0xC000, services)
+    decompress_to_vram(state, 0x13A892, 0, services)
+    write(RECORD_TABLE, 0, 1)
+    wheel = RECORD_TABLE + RECORD_SIZE
+    init_template(state, wheel, 0x1B8430, 0x126, 0x198)
+    write(wheel + 0x20, 0x1260E6, 4)
+    for slot, template, x, y, motion in ((5, 0x1B8444, 0x178, 0x194, 0x1217B4), (6, 0x1B7968, 0x188, 0x194, 0x121802),
+                                         (7, 0x1B7968, 0x199, 0x194, 0x121802)):
+        record = RECORD_TABLE + RECORD_SIZE * slot
+        init_template(state, record, template, x, y)
+        write(record + 0xA, motion, 4)
+    scarab_digits(state)
+    write(player.FRAME_COUNTER, 0xFF, 1)
+    scarab_frame(state, services)
+    fade_to(state, services, 0x129832)
+    write(SCARAB_PERIOD, 0x28, 1)
+    write(SCARAB_COUNTDOWN, 0x28 >> 2, 1)
+    write(SCARAB_SPUN, 0, 1)
+    services.checkpoint(0x1B183C)          # once, before the loop head 1B1842
+    write(SCARAB_STOPPED, 0xFF, 1)
+    while True:
+        write(player.FRAME_COUNTER, (read(player.FRAME_COUNTER, 1) + 1) & 0xFF, 1)
+        if not read(SCARAB_STOPPED, 1):
+            countdown = (read(SCARAB_COUNTDOWN, 1) - 1) & 0xFF
+            write(SCARAB_COUNTDOWN, countdown, 1)
+            if countdown == 0:
+                scarab_pick(state)
+                sound_if_enabled(state, services, 0x5B, flush=False)
+                if not read(SCARABS, 1):
+                    break
+                sound_if_enabled(state, services, 0x51)
+                write(SCARAB_COUNTDOWN, read(SCARAB_PERIOD, 1) >> 2, 1)
+                write(SCARAB_SPUN, 0xFF, 1)
+        scarab_frame(state, services)
+        scarab_flash(state)
+        write(PAD_LOW, pad.raw_bytes(state.buttons)[1], 1)          # 1B319C
+        if not (state.buttons & 0x70):                              # neither B, C nor A: the wheel spins
+            write(SCARAB_STOPPED, 0, 1)
+            continue
+        if not read(SCARAB_SPUN, 1):
+            continue
+        sound_if_enabled(state, services, 0x5A)
+        write(SCARAB_STOPPED, 0xFF, 1)
+        write(SCARAB_SPUN, 0, 1)
+        write(SCARABS, read(SCARABS, 1) - 1, 1)
+        if read(SCARAB_PERIOD, 1) != 1:
+            write(SCARAB_PERIOD, read(SCARAB_PERIOD, 1) - 1, 1)
+        scarab_digits(state)
+        write(SCARAB_COUNTDOWN, 0x3C, 1)
+        prize = read(wheel, 1)
+        if prize == 1:
+            sound_if_enabled(state, services, 0x5B)
+            lives = read(hud.LIVES, 1) + 1                          # 1AEF70
+            write(hud.LIVES, min(lives, 0x39), 1)
+            sound_if_enabled(state, services, 0x66)
+        elif prize == 3:
+            sound_if_enabled(state, services, 0x5B)
+            for _ in range(5):
+                hud.add_apple(read, write)
+        elif prize == 2:
+            sound_if_enabled(state, services, 0x5B)
+            hud.add_gem(read, write)
+        elif prize == 4:
+            sound_if_enabled(state, services, 0x0E)
+            write(SCARABS, 0, 1)
+            scarab_digits(state)
+    services.sound_command(0x16)
+    fade_to(state, services, BLACK_PALETTE)
+    retire_pool(state, services, 0, 32)
+    sprite_terminator(state)
+    clear_records(state)
+
+
+def bonus_screen(state, services):
+    """1B50EE: the bonus-stage card before the next level, up to 300 mini frames or a button."""
+    read, write = state.read, state.write
+    services.sound_command(0x16)
+    fade_to(state, services, BLACK_PALETTE)
+    state.vdp.control(0x8B00)
+    write(player.INVULNERABLE, 0, 1)
+    write(PLANE_B_ON_A, 0, 1)
+    plane_size_64(state)
+    clear_scroll(state.vdp)
+    hscroll_from_list(state)
+    retire_pool(state, services, 0, 32)
+    sprite_terminator(state)
+    clear_plane(state.vdp, 0xE000)
+    decompress_to_vram(state, 0x13C374, 0, services)
+    decompress_to_vram(state, 0x131830, 0xC000, services)
+    record = RECORD_TABLE + RECORD_SIZE * 2
+    init_template(state, record, 0x1B8318, 0x40, 0x1B8)
+    write(record + 9, 0, 1)
+    mini_frame(state, services, count=False)
+    palette_line(state, 0, 0x129D6A)
+    palette_line(state, 3, 0x1290B2)
+    sound_if_enabled(state, services, 0x12, flag=0xFFF57F)
+    services.checkpoint(0x1B51AC)
+    for _ in range(0x12B + 1):
+        mini_frame(state, services)
+        if any_button(state):
+            break
+    fade_to(state, services, BLACK_PALETTE)
+
+
+def next_level_from_stream(state, services):
+    """1A8E86: the level sequence stream: op 0 takes the next word as the level; op 2 skips it when FFF005 is
+    set; op 1 shows the bonus screen and takes it when FFF176 is set, else skips it; FF ends the game."""
+    read, write = state.read, state.write
+    rom = state.rom
+    p = read(SEQUENCE_STREAM, 4)
+    while True:
+        op = int.from_bytes(rom[p:p + 2], 'big'); p += 2
+        if op == 0:
+            break
+        if op == 2:
+            if read(SKIP_ALTERNATE, 1):
+                p += 2; continue
+            break
+        if op == 0xFF:
+            raise NativeGap('level_change', 0x1B4F7C, 'the ending is not recovered', state.frame)
+        if not read(BONUS_OFFERED, 1):
+            p += 2; continue
+        bonus_screen(state, services)
+        break
+    level_index = int.from_bytes(rom[p:p + 2], 'big'); p += 2
+    write(SEQUENCE_STREAM, p, 4)
+    write(player.LEVEL_INDEX, level_index, 1)
+
+
+def level_change(state, services):
+    """1A8E5C: the level is over: the high score, the tally, the scarab wheel, the stream, then the next level's
+    prologue; the main loop starts at 1A8C16 afterwards."""
+    hiscore_check(state)
+    services.checkpoint(0x1A8E60)
+    tally_screen(state, services)
+    services.checkpoint(0x1A8E64)
+    fade_to(state, services, BLACK_PALETTE)
+    services.sound_command(0x16)
+    services.checkpoint(0x1A8E78)
+    scarab_screen(state, services)
+    services.checkpoint(0x1A8E7E)
+    retire_pool(state, services, 0, 32)
+    clear_records(state)
+    next_level_from_stream(state, services)
+    services.checkpoint(0x1A8ED8)
+    clear_scroll(state.vdp)
+    hscroll_first_band(state.vdp, 0, 0)
+    clear_records(state)
+    sprite_terminator(state)
+    services.checkpoint(0x1A8B50)
+    level_prologue(state, services)
+    return 'frame_counter'
 
 
 def cycle_palette(state):
@@ -704,7 +1018,7 @@ def level_card(state, services):
     palette_line(state, 3, 0x1290B2)
     sound_if_enabled(state, services, 0x13, flag=0xFFF57D)
     services.checkpoint(0x1B1570)
-    for _ in range(0x55 + 1):
+    for _ in range(0x54 + 1):                       # move.w #$54, d4 / dbra
         mini_frame(state, services)
         if read(PALETTE_CYCLING, 1):
             cycle_palette(state)
@@ -821,12 +1135,13 @@ def story_screen(state, services):
     level_index = state.read(player.LEVEL_INDEX, 1)
     if level_index == 0xC:
         return
-    try:
-        story = STORIES[level_index]
-    except KeyError:
-        raise NativeGap('story_screen', 0x1B0F9A, f'the story pages of level {level_index} are not recovered',
-                        state.frame) from None
-    story(state, services)
+    if level_index not in LEVELS_WITHOUT_STORY:
+        try:
+            story = STORIES[level_index]
+        except KeyError:
+            raise NativeGap('story_screen', 0x1B0F9A, f'the story pages of level {level_index} are not recovered',
+                            state.frame) from None
+        story(state, services)
     level_intro(state, services)
 
 
@@ -1120,6 +1435,8 @@ def run_transition(state, services, kind: str):
         state.replay.begin(kind)
     if kind in ('fell', 'life_lost'):
         resume = respawn(state, services, fell=(kind == 'fell'))
+    elif kind == 'level_change':
+        resume = level_change(state, services)
     else:
         raise NativeGap(kind, 0, f'transition {kind!r} is not recovered', state.frame)
     if state.replay is not None:

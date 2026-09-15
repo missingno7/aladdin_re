@@ -91,6 +91,10 @@ class Services:
         self.trace.handoffs.append(Handoff(kind, slot, detail))
         return False    # not handled here
 
+    def palette_line(self, index, source):
+        """One CRAM line from ROM (1B2678 / 1B2664 / 1B2650 / 1B263C): the video service; a handoff here."""
+        self.handoff('palette_line', -1, (index, source))
+
 
 class Stop(Exception):
     """End this record's processing for the frame (the handlers' FF7D9A/FF7D9E returns)."""
@@ -104,6 +108,20 @@ def _resolve(mem: Memory, obj: RecordView, where):
 def _channel_fields(motion: bool):
     return (('motion_delay', 'motion_loop', 'motion_count', 'motion_script') if motion
             else ('delay', 'loop', 'loop_count', 'script'))
+
+
+def _palette_cycle(on):
+    """1B1640 / 1B1656: the title card's palette cycle switched on (line 2 from 129B72, FFF102 set) or off."""
+    def routine(engine, obj, pc):
+        if on:
+            engine.services.palette_line(2, 0x129B72)
+            engine.mem.write(0xFFF102, 0xFF, 1)
+        else:
+            engine.services.palette_line(0, 0x128ED2)
+            engine.services.palette_line(2, 0x129B52)
+            engine.mem.write(0xFFF102, 0, 1)
+        return pc
+    return routine
 
 
 def _flag_routine(offset, mask, set_bit):
@@ -294,6 +312,7 @@ def _lazy_counter(name):
 
 
 NATIVE_ROUTINES = {
+    0x1B1640: _palette_cycle(True), 0x1B1656: _palette_cycle(False),
     0x1ACB6A: _flag_routine(6, 0x40, True), 0x1ACB72: _flag_routine(6, 0x40, False),
     0x1ACB7A: _flag_routine(7, 0x20, True), 0x1ACB82: _flag_routine(7, 0x20, False),
     0x1ACB8A: _flag_routine(6, 0x10, True), 0x1ACB92: _flag_routine(6, 0x10, False),

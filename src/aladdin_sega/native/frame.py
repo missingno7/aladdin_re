@@ -55,6 +55,9 @@ class NativeServices(Services):
         if self.state.on_vblank is not None:
             self.state.on_vblank(self.state)
 
+    def palette_line(self, index, source):
+        video.load_palette(self.state.write, self.state.rom, self.state.vdp, index, source)
+
     def sound_flush(self, value):
         """1E589A on its own: the driver's flush command with a value (the level music)."""
         self.state.events.append(('sound_flush', self.state.frame, value))
@@ -200,7 +203,7 @@ def _flow(name, entry):
             else:
                 getattr(flow, name)(state.read, state.write)
         except flow.Transition as transition:
-            if transition.kind in ('fell', 'life_lost'):
+            if transition.kind in ('fell', 'life_lost', 'level_change'):
                 resume = sequences.run_transition(state, services, transition.kind)
                 if resume is not None:
                     raise ResumeFrame(resume)

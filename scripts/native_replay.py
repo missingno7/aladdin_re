@@ -70,7 +70,7 @@ def seed_at_boundary(m, frame, pads, rom, patience=3):
     return state, frame
 
 
-TRANSITION_ENTRIES = {'life_lost': 0x1A8F82, 'fell': 0x1A902E}
+TRANSITION_ENTRIES = {'life_lost': 0x1A8F82, 'fell': 0x1A902E, 'level_change': 0x1A8E5C}
 TRANSITION_LIMIT = 4000 * FRAME_TICKS      # the continue screen and a level's prologue are under this
 PAD_READS = ((0x1A8DB8, 0x1A8DF4), (0x1A8D22, 0x1A8D68))   # the main loop's two controller port reads (1A8CEE), and attract mode's
 

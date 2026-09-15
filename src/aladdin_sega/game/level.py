@@ -97,6 +97,36 @@ def draw_column(read, write, rom, vdp, right: bool) -> bool:
     return True
 
 
+def draw_window(read, write, rom, vdp) -> None:
+    """1AA81A: the whole visible window (16 rows of 23 cells) into plane A at once (the locked-camera levels).
+
+    The name-row pointer walks on past the 32 entries into the identical second table, as the original does.
+    """
+    wx, wy = read(WINDOW_X, 2), read(WINDOW_Y, 2)
+    rows = NAME_ROW_TABLE + ((wy >> 3) & 0x1F) * 4
+    column0 = (wx >> 2) & 0x7E
+    cursor = (_row_start(read, wy) + 2 * (wx >> 4)) & 0xFFFFFFFF
+    stride = _signed_word(read(MAP_STRIDE, 2))
+    table = read(CELL_TILES, 4)
+    for _ in range(16):
+        upper, lower = read(rows, 4), read(rows + 4, 4)
+        rows += 8
+        column_upper = column_lower = column0
+        cell = cursor
+        for _ in range(0x17):
+            tiles = cell_tiles(rom, table, read(cell, 2))
+            cell += 2
+            vdp.control_long(_name_command(upper, column_upper)); vdp.data(tiles[0])
+            column_upper = (column_upper + 2) & 0x7E
+            vdp.control_long(_name_command(upper, column_upper)); vdp.data(tiles[1])
+            column_upper = (column_upper + 2) & 0x7E
+            vdp.control_long(_name_command(lower, column_lower)); vdp.data(tiles[2])
+            column_lower = (column_lower + 2) & 0x7E
+            vdp.control_long(_name_command(lower, column_lower)); vdp.data(tiles[3])
+            column_lower = (column_lower + 2) & 0x7E
+        cursor = (cursor + stride) & 0xFFFFFFFF
+
+
 def draw_row(read, write, rom, vdp, bottom: bool) -> bool:
     """1AB66C (top edge) / 1AB55A (bottom edge): one 23-cell row into plane A."""
     if not _settle(read, write, ROW_DEBT, WINDOW_Y):
