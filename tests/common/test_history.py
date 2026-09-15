@@ -311,3 +311,37 @@ def test_original_caches_survive_a_python_source_edit_but_candidate_caches_do_no
     with GenesisRun(GAME, GAME.read_rom(), 'lifecycle') as changed:
         assert 'source' in changed.cache_implementation
         assert not changed.restore_cache(store, node)
+
+
+def faulting_rom() -> bytes:
+    """Runs a loop for a while, then reads a long from an odd address: the machine faults, as a game bug would."""
+    rom = bytearray(synthetic_rom())
+    # 200: move.w #$1234,$ff0010 ; subq.w #1,d0 ; bne.s 200 ; move.l $ff0011.l,d1 (address error) ; bra.s *
+    rom[0x200:0x218] = bytes.fromhex("33fc123400ff0010 5340 66f4 223900ff0011 60fe")
+    return bytes(rom)
+
+
+def test_a_machine_fault_mid_session_preserves_the_inputs_as_a_replayable_node(tmp_path):
+    from genesis_re.machine import NativeError
+    store = HistoryStore(tmp_path / "history", GAME.history_root)
+    with pytest.raises(NativeError, match="address error"):
+        with Session(GAME, store, faulting_rom()) as session:
+            session.step(1)
+            session.step(1)
+            session.step(2)          # the loop counter (D0, zero at power-on) wraps: 65,536 iterations, several frames
+            for _ in range(400):
+                session.step(2)
+    node = store.resolve("main")
+    assert node != ROOT_ID
+    failed_at = store.node(node)["end_frame"]
+    assert 2 < failed_at < 403
+    assert store.flatten(node)["events"] == [{"frame": 0, "buttons": 1}, {"frame": 2, "buttons": 2}]
+    meta = store.metadata(node)
+    assert meta["reason"] == "execution_failure" and "address error" in meta["label"]
+    assert not list((store.path / "caches").rglob("*.cache"))     # a failed machine leaves no cache
+    # Resuming the node reconstructs cold to the last completed frame; the next step reproduces the fault.
+    with pytest.raises(NativeError, match="address error"):
+        with Session(GAME, store, faulting_rom(), node=node) as resumed:
+            assert not resumed.used_cache and resumed.frame == failed_at
+            resumed.step(2)
+    assert store.resolve("main") == node          # nothing new to preserve: no frame completed

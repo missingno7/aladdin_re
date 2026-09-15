@@ -114,7 +114,10 @@ def main(argv=None):
         print(json.dumps(result))
         return 0 if result.get("status", "PASS") in {"PASS", "COMPLETED"} else 1
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, ImportError) as error:
-        print(json.dumps({"status": "ERROR", "detail": str(error)}))
+        report = {"status": "ERROR", "detail": str(error)}
+        if getattr(error, "__notes__", None):
+            report["notes"] = list(error.__notes__)
+        print(json.dumps(report))
         return 1
 
 

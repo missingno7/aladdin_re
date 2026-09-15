@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import artifacts
 from .history import digest, encoded, natural
-from .machine import Machine
+from .machine import Machine, NativeError
 from .receipt import execution_receipt
 
 
@@ -227,9 +227,37 @@ class Session:
     def __enter__(self):
         return self
 
-    def __exit__(self, error_type, *_):
+    def preserve_failure(self, error):
+        """Keep the inputs that led to an execution failure as a node, so the failure can be replayed.
+
+        The frame that failed never completed, so the node ends at the last
+        completed frame and carries only the events before it; the machine is
+        invalid, so there is no cache, and the screenshot is whatever the VDP
+        still renders.  Resuming the node and stepping once reproduces the
+        failure cold.
+        """
+        events = [event for event in self.events if event["frame"] < self.frame]
+        parent = self.store.node(self.parent)
+        if self.frame <= parent["end_frame"]:
+            return None
+        node = self.store.append(self.parent, events, self.frame)
+        try:
+            width, height, rgb = self.machine.frame()
+        except Exception:
+            width, height, rgb = 320, 224, bytes(320 * 224 * 3)
+        self.store.present(node, rgb=rgb, width=width, height=height, reason="execution_failure",
+                           label=f"{type(error).__name__}: {str(error)[:160]}")
+        self.store.set_main(node)
+        return node
+
+    def __exit__(self, error_type, error, _):
         try:
             if error_type is None:
                 self.checkpoint(reason="session_exit")
+            elif isinstance(error, (NativeError, RuntimeError)):
+                node = self.preserve_failure(error)
+                if node is not None:
+                    error.add_note(f"inputs preserved as history node {node} (end frame {self.frame}); "
+                                   f"resume it and step once to reproduce")
         finally:
             self.run.close()
