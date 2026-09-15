@@ -39,7 +39,7 @@ OPCODES = (
     ('home', 'bbb'),                   # F9: speed, y-window, x-window: steer velocity toward the player
     ('add', 'mav'),                    # FA: add (bit7: subtract) a value to memory
     ('call_native', 'l'),              # FB: continue in 68000 code at the address
-    ('resume', 'b'),                   # FC: bit7 -> jump to the saved script (+38)
+    ('resume', 'b[l]'),                # FC: bit7 set -> return to the saved script (+38); clear -> call: save the return, jump
     ('near_x', 'bt'),                  # FD: jump if |player X - my X| <= N (FF = 0x140)
     ('near_y', 'bt'),                  # FE: jump if |player Y - my Y| <= N
 )
@@ -114,7 +114,11 @@ def decode_op(rom: bytes, pc: int, code: int) -> Op:
         value = _u32(rom, pc + 2)
         target = value if name == 'jump' else None
         operands = [value]; p = pc + 6
-    elif name in ('flip', 'end', 'wait', 'sound', 'destroy', 'resume'):
+    elif name == 'resume':
+        flag = rom[p]; p += 1; operands = [flag]
+        if not flag & 0x80:
+            target = _u32(rom, p); operands.append(target); p += 4
+    elif name in ('flip', 'end', 'wait', 'sound', 'destroy'):
         operands = [rom[p]]; p += 1
     elif name == 'loop' or name == 'face_player' or name == 'player_select':
         p += 1  # the handlers skip the pad byte after the opcode
@@ -142,7 +146,7 @@ def decode_op(rom: bytes, pc: int, code: int) -> Op:
         size = _value_size(mode & 0x87)
         raw = _u16(rom, p + 3) if size <= 2 else _u32(rom, p + 3)
         value = raw & 0xFF if size == 1 else raw
-        op = {0x00: 'imm<mem', 0x10: 'eq', 0x20: 'ne', 0x30: 'imm>=mem'}.get(mode & 0x70, f'?{mode & 0x70:02X}')
+        op = {0x10: 'eq', 0x20: 'ne', 0x30: 'imm>=mem'}.get(mode & 0x70, 'imm<mem')   # 1ACA48: anything else compares below
         p += 3 + (2 if size <= 2 else 4)
         target = _u32(rom, p); operands = [size, where, op, value, target]; p += 4
     elif name == 'spawn':

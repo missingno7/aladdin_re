@@ -27,6 +27,7 @@ RECORD_X, RECORD_Y = 0xFF7E42, 0xFF7E44      # the player record's own +02 / +04
 CAMERA_TARGET_X, CAMERA_TARGET_Y = 0xFF7DFE, 0xFF7E00   # where the camera wants the player on screen
 CAMERA_TARGET_HOLD = 0xFFF167                 # frames the camera keeps a look-up / look-down target
 FRAME_COUNTER = 0xFF7E28
+SOUND_ENABLED = 0xFFF57D
 LEVEL_INDEX = 0xFF7E26
 LEVEL_HEIGHT = 0xFF7DBC
 MAP_END = 0xFF725C                            # low word of the map buffer's end: probes past it are ignored
@@ -73,6 +74,20 @@ THROW_COUNTER = 0xFFF16A
 CAMERA_LOCK = 0xFFF173
 
 
+DYING = 0xFFF0E6               # the dying countdown (FF = immediate)
+TRANSITION_COUNTDOWN = 0xFFF0E9
+INVULNERABLE = 0xFFF0F2
+PREVIOUS_CONTACT = 0xFFF0D4
+SWORD_ACTIVE = 0xFFF0D8
+SWORD_COOLDOWN = 0xFFEFFF
+THROW_COOLDOWN = 0xFFF11F
+HEALTH, MAX_HEALTH = 0xFFEFFA, 0xFFEFFB
+DIFFICULTY = 0xFF7E21
+INVINCIBLE = 0xFF7E20          # TENTATIVE: no health loss (cheat / demo)
+HURT_SOUND = 0x31
+SCRIPT_HURT, SCRIPT_HURT_LOCKED = 0x1226CE, 0x1226B2
+
+
 def _w(v):
     return v & 0xFFFF
 
@@ -80,6 +95,63 @@ def _w(v):
 def _sw(v):
     v &= 0xFFFF
     return v - 0x10000 if v & 0x8000 else v
+
+
+def lose_health(read, write) -> None:
+    """1B03F2: one point of health with 40 frames of invulnerability; at zero, the dying countdown."""
+    if read(TRANSITION_COUNTDOWN, 1) or read(DYING, 1) or read(INVINCIBLE, 1):
+        return
+    if not read(HEALTH, 1):
+        write(DYING, 0xA, 1)
+        return
+    if read(INVULNERABLE, 1):
+        return
+    write(HEALTH, read(HEALTH, 1) - 1, 1)
+    write(INVULNERABLE, 0x28, 1)
+
+
+def _take_hit(read, write, services) -> None:
+    """1AE58E: stop, the hurt sound, and up to three health calls (the first grants invulnerability)."""
+    write(WALK_SPEED, 0, 2)
+    write(WALKING, 0, 1)
+    if read(SOUND_ENABLED, 1):
+        services.sound(0, HURT_SOUND, flush=True)
+    lose_health(read, write)
+    if read(DIFFICULTY, 1) == 0:
+        return
+    lose_health(read, write)
+    if read(DIFFICULTY, 1) == 1:
+        return
+    lose_health(read, write)
+
+
+def _hurt_locked(read, write) -> None:
+    """1AE5EA: hurt during a cutscene: the falling pose, frozen, and the transition in 50 frames."""
+    set_script(write, SCRIPT_HURT_LOCKED)
+    write(FROZEN, 0xFF, 1)
+    write(TRANSITION_COUNTDOWN, 0x32, 1)
+    if not read(SWORD_ACTIVE, 1):
+        write(SWORD_COOLDOWN, 1, 1)
+
+
+def hurt(read, write, services) -> None:
+    """1AE4F8: the player is hurt by a tile or an object (unless already dying or invulnerable)."""
+    for flag in (FROZEN, DYING, TRANSITION_COUNTDOWN, INVULNERABLE):
+        if read(flag, 1):
+            return
+    settled = not (read(JUMPING, 1) or not read(ON_GROUND, 1) or read(IN_AIR, 1) or read(ATTACKING, 1)
+                   or read(HANGING, 1) or read(PREVIOUS_CONTACT, 1))
+    if settled:
+        if read(CAMERA_LOCK, 1):
+            return _hurt_locked(read, write)
+        if read(WALKING, 1):
+            return _take_hit(read, write, services)
+        if not (read(SWORD_COOLDOWN, 1) or read(THROW_COOLDOWN, 1)):
+            set_script(write, SCRIPT_HURT)
+            return _take_hit(read, write, services)
+    if read(CAMERA_LOCK, 1):
+        return _hurt_locked(read, write)
+    return _take_hit(read, write, services)
 
 
 def publish_position(read, write) -> None:

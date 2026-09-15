@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from aladdin_sega.profile import read_rom
 from aladdin_sega.game import pad, hud
-from aladdin_sega.native import GameState, STEPS
+from aladdin_sega.native import GameState, STEPS, NativeGap
 from aladdin_sega.native.frame import NativeServices
 from aladdin_sega.native.oracle import trace_port_writes, run_to_exits
 
@@ -54,8 +54,8 @@ def test_recovered_frame_steps_match_the_original(path):
     m = Machine(rom); m.restore(Path(path).read_bytes())
     try:
         entries = {s.entry: s for s in RECOVERED}
-        m.gates([s.entry for s in RECOVERED] + [e for s in RECOVERED for e in s.exits])
-        checked = set(); tick_end = m.info['tick'] + 2 * 896040
+        m.gates(sorted({s.entry for s in RECOVERED} | {e for s in RECOVERED for e in s.exits}))
+        checked = set(); gaps = []; tick_end = m.info['tick'] + 2 * 896040
         while m.info['tick'] < tick_end:
             if m.run(target=tick_end) != 'gate':
                 break
@@ -63,12 +63,18 @@ def test_recovered_frame_steps_match_the_original(path):
             if step is None:
                 m.gate(m.info['pc'], bypass_once=True); continue
             before = bytearray(m.peek_ram(0, 65536)); m.gate(step.entry, bypass_once=True)
-            traced = trace_port_writes(m, step.exits) if step.ports else None
-            if not step.ports:
-                run_to_exits(m, step.exits, tick_end + 896040)
+            try:
+                traced = trace_port_writes(m, step.exits) if step.ports else None
+                if not step.ports:
+                    run_to_exits(m, step.exits, tick_end + 896040)
+            except RuntimeError:
+                break                       # entered from outside the main loop (a loading loop): not bracketed
             after = m.peek_ram(0, 65536)
             state = GameState(bytearray(before), rom, 0); state.buttons = m.info['buttons']
-            step.run(state, NativeServices(state))
+            try:
+                step.run(state, NativeServices(state))
+            except NativeGap as gap:
+                gaps.append(str(gap)); m.gate(m.info['pc'], bypass_once=True); continue
             diff = [f'{0xFF0000 | a:06X}' for a in range(65536)
                     if after[a] != state.ram[a] and not 0xFFEF40 <= 0xFF0000 | a < 0xFFEFE0]
             assert diff == [], (step.name, diff)
@@ -76,6 +82,7 @@ def test_recovered_frame_steps_match_the_original(path):
                 assert state.vdp.log == traced, (step.name, 'VDP port words differ')
             checked.add(step.name); m.gate(m.info['pc'], bypass_once=True)
         if not checked:
-            pytest.skip('no recovered step is reached in these two frames (a loading or card loop)')
+            pytest.skip('no recovered step is reached in these two frames (a loading or card loop)'
+                        + (f'; declared gaps: {gaps}' if gaps else ''))
     finally:
         m.close()

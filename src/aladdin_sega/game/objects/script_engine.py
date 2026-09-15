@@ -28,6 +28,9 @@ RNG_SEED = 0xFF7DEA
 VRAM_SLOT_MAP = 0xFFF008          # 116 bytes, one per VRAM tile slot; FF = taken (1AD3E8 / 1AE372)
 VRAM_SLOT_COUNT = 0x74
 VRAM_SLOT_TABLE = 0x11F500        # ROM: slot index -> VRAM tile address
+UPLOAD_QUEUE, UPLOAD_COUNT_LOW = 0xFF769A, 0xFFEFEF   # the frame-change DMA queue (1AC6D0) and its count byte
+SWORD_ACTIVE, STANCE_A, STANCE_B = 0xFFF0D8, 0xFFF0D9, 0xFFF0DA   # cleared every odd frame, set by scripts (ED)
+CHANNEL_FLAG = 0xFF7DA2           # FF while the motion channel runs; the handlers pick their continuation by it
 
 # Player animation scripts chosen by the selector (opcode F8 / 1AD150)
 PLAYER_SCRIPTS = {
@@ -49,6 +52,12 @@ class Memory:
     def u8(self, a): return self.read(a, 1)
     def u16(self, a): return self.read(a, 2)
     def u32(self, a): return self.read(a, 4)
+
+    def bus(self, a, size=1):
+        """A read on the 68k bus: ROM below 400000, work RAM at FF0000 (frame descriptors live in either)."""
+        if a < 0x400000:
+            return int.from_bytes(self.rom[a:a + size], 'big')
+        return self.read(a, size)
 
 
 @dataclass
@@ -95,6 +104,190 @@ def _resolve(mem: Memory, obj: RecordView, where):
 def _channel_fields(motion: bool):
     return (('motion_delay', 'motion_loop', 'motion_count', 'motion_script') if motion
             else ('delay', 'loop', 'loop_count', 'script'))
+
+
+def _flag_routine(offset, mask, set_bit):
+    def routine(engine, obj, pc):
+        address = RECORD_TABLE + RECORD_SIZE * obj.slot + offset
+        value = engine.mem.u8(address)
+        engine.mem.write(address, (value | mask) if set_bit else (value & ~mask), 1)
+        return pc
+    return routine
+
+
+def _sparkle_above(engine, obj, pc):
+    """1ACB9A: every eighth frame a sparkle (1B7ABC) ten pixels below the object."""
+    m = engine.mem
+    if m.u8(0xFF7E28) & 7 == 1:
+        from .lifecycle import initialize
+        for i in range(24):
+            record = RECORD_TABLE + RECORD_SIZE * (1 + i)
+            if not m.u8(record):
+                for a, value in initialize(record, engine.rom[0x1B7ABC:0x1B7ABC + 19]):
+                    m.write(a, value, 1)
+                m.write(record + 6, 0x40, 1)
+                m.write(record + 2, obj.x, 2)
+                m.write(record + 4, (obj.y + 0xA) & 0xFFFF, 2)
+                break
+    return pc
+
+
+def _follow_rider(engine, obj, pc):
+    """1ACBD8: take the rider's position."""
+    if obj.rider:
+        rider = RecordView(obj.rider, engine.mem.read, engine.mem.write)
+        obj.x, obj.y = rider.x, rider.y
+    return pc
+
+
+def _jump_when_faced(engine, obj, pc):
+    """1ACBF2: continue at 125966 when the player faces the object."""
+    m = engine.mem
+    faced = (obj.x < m.u16(PLAYER_X)) == (m.u8(0xFF7E49) == 0)
+    return 0x125966 if faced else pc
+
+
+def _become_splash(engine, obj, pc):
+    """1ACC30: the record turns into the splash effect (1B7E40) as kind 84 with no velocity."""
+    from .lifecycle import initialize
+    engine.release(obj)
+    record = RECORD_TABLE + RECORD_SIZE * obj.slot
+    for a, value in initialize(record, engine.rom[0x1B7E40:0x1B7E40 + 19]):
+        engine.mem.write(a, value, 1)
+    obj.kind = 0x84
+    obj.vel_x = 0
+    obj.vel_y = 0
+    return pc
+
+
+def _random_sound(choices):
+    def routine(engine, obj, pc):
+        """1ACC5E / 1ACD02: one of the sounds at random."""
+        seed, roll = advance_rng(engine.mem.u32(RNG_SEED))
+        engine.mem.write(RNG_SEED, seed, 4)
+        sound_id = choices[roll & (len(choices) - 1)]
+        if engine.mem.u8(SOUND_ENABLED):
+            engine.services.sound(obj.slot, sound_id, flush=True)
+        return pc
+    return routine
+
+
+def _random_velocity(mask, dx, dy):
+    def routine(engine, obj, pc):
+        """1ACD5A / 1ACD7E: random high bytes for both velocities."""
+        m = engine.mem
+        record = RECORD_TABLE + RECORD_SIZE * obj.slot
+        seed, roll = advance_rng(m.u32(RNG_SEED)); m.write(RNG_SEED, seed, 4)
+        m.write(record + 0x18, ((roll & mask) - dx) & 0xFF, 1)
+        seed, roll = advance_rng(m.u32(RNG_SEED)); m.write(RNG_SEED, seed, 4)
+        m.write(record + 0x1A, ((roll & mask) - dy) & 0xFF, 1)
+        return pc
+    return routine
+
+
+def _vertical_stream(address):
+    def routine(engine, obj, pc):
+        """1B52D6 / 1B52E2 / 1B52EE: select the level's vertical scroll stream."""
+        engine.mem.write(0xFF7E1A, address, 4)
+        return pc
+    return routine
+
+
+def _home_to_target(dx, dy, limit_x, limit_y, facing_from_contact):
+    def routine(engine, obj, pc):
+        """1B57C4 / 1B5850: drift and steer the velocities toward the target point FFF094 / FFF096."""
+        m = engine.mem
+        obj.x = (obj.x + dx) & 0xFFFF
+        obj.y = (obj.y + dy) & 0xFFFF
+        for value, target, field, limit in ((obj.x, m.u16(0xFFF094), 'vel_x', limit_x),
+                                            (obj.y, m.u16(0xFFF096), 'vel_y', limit_y)):
+            delta = (value - target) & 0xFFFF
+            if not delta:
+                continue
+            if delta & 0x8000:
+                step = min((-delta) & 0xFFFF, limit)
+                setattr(obj, field, (getattr(obj, field) + step) & 0xFFFF)
+            else:
+                step = min(delta, limit)
+                setattr(obj, field, (getattr(obj, field) - step) & 0xFFFF)
+        if facing_from_contact and m.u8(0xFFF0D3) in (0x5E, 0x60):
+            obj.facing = 0xFF
+            if not m.u8(RECORD_TABLE + RECORD_SIZE * obj.slot + 0x1C) & 0x80:
+                obj.facing = 0
+        return pc
+    return routine
+
+
+def _spawn_companion(kind, motion):
+    def routine(engine, obj, pc):
+        """1ACF80 / 1ACFBC: unless an object of the kind exists, spawn one (1B7904) at the object."""
+        from .lifecycle import initialize
+        m = engine.mem
+        for i in range(24):
+            if m.u8(RECORD_TABLE + RECORD_SIZE * (1 + i)) == kind:
+                return pc
+        for i in range(20):
+            record = RECORD_TABLE + RECORD_SIZE * (20 - i)
+            if not m.u8(record):
+                for a, value in initialize(record, engine.rom[0x1B7904:0x1B7904 + 19]):
+                    m.write(a, value, 1)
+                m.write(record, kind, 1)
+                m.write(record + 0xA, motion, 4)
+                m.write(record + 2, obj.x, 2)
+                m.write(record + 4, obj.y, 2)
+                break
+        return pc
+    return routine
+
+
+def _drop_rider(engine, obj, pc):
+    """1ACFF8: the rider is deactivated and its VRAM freed."""
+    if obj.rider:
+        rider = RecordView(obj.rider, engine.mem.read, engine.mem.write)
+        rider.kind = 0
+        engine.release(rider)
+    return pc
+
+
+def _set_target(engine, obj, pc):
+    """1B58BA: the target point for the homing routines."""
+    engine.mem.write(0xFFF094, (obj.x - 0x20) & 0xFFFF, 2)
+    engine.mem.write(0xFFF096, (obj.y + 0x40) & 0xFFFF, 2)
+    return pc
+
+
+def _counter(function):
+    def routine(engine, obj, pc):
+        from .. import hud
+        function(engine.mem.read, engine.mem.write)
+        return pc
+    return routine
+
+
+def _lazy_counter(name):
+    def routine(engine, obj, pc):
+        from .. import hud
+        getattr(hud, name)(engine.mem.read, engine.mem.write)
+        return pc
+    return routine
+
+
+NATIVE_ROUTINES = {
+    0x1ACB6A: _flag_routine(6, 0x40, True), 0x1ACB72: _flag_routine(6, 0x40, False),
+    0x1ACB7A: _flag_routine(7, 0x20, True), 0x1ACB82: _flag_routine(7, 0x20, False),
+    0x1ACB8A: _flag_routine(6, 0x10, True), 0x1ACB92: _flag_routine(6, 0x10, False),
+    0x1ACC18: _flag_routine(0x3C, 0x20, True), 0x1ACC20: _flag_routine(0x3C, 0x20, False),
+    0x1ACC28: _flag_routine(6, 0x01, True), 0x1ACC56: _flag_routine(6, 0x01, False),
+    0x1ACB9A: _sparkle_above, 0x1ACBD8: _follow_rider, 0x1ACBF2: _jump_when_faced, 0x1ACC30: _become_splash,
+    0x1ACC5E: _random_sound((0x5E, 0x5F, 0x60, 0x61)), 0x1ACD02: _random_sound((0x40, 0x44)),
+    0x1ACD5A: _random_velocity(0xF, 7, 0xF), 0x1ACD7E: _random_velocity(7, 4, 7),
+    0x1B52D6: _vertical_stream(0x693E), 0x1B52E2: _vertical_stream(0x6952), 0x1B52EE: _vertical_stream(0x695A),
+    0x1B57C4: _home_to_target(3, -2, 0x68, 0x7C, True), 0x1B5850: _home_to_target(1, -2, 0x68, 0x7C, False),
+    0x1B58BA: _set_target, 0x1ACFBC: _spawn_companion(0x73, 0x1208D8), 0x1ACF80: _spawn_companion(0x72, 0x120868),
+    0x1ACFF8: _drop_rider,
+    0x1B0336: _lazy_counter('add_apple'), 0x1B0360: _lazy_counter('remove_apple'),
+    0x1B0394: _lazy_counter('add_gem'), 0x1B03BE: _lazy_counter('remove_gem'),
+}
 
 
 class Engine:
@@ -203,20 +396,68 @@ class Engine:
             return next_pc
         if name == 'resume':
             if args[0] & 0x80:
-                return obj.saved_script
-            return next_pc
+                return obj.saved_script          # return from the subroutine
+            obj.saved_script = next_pc           # call: remember where to resume, jump to the target
+            return args[1]
         if name == 'player_select':
             return self.player_select(obj)
         if name == 'destroy':
             self.destroy(obj, args[0])
             raise Stop()
         if name == 'spawn':
-            self.services.handoff('spawn', obj.slot, args)
+            self.spawn(obj, *args)
             return next_pc          # the original continues after the 15 operand bytes either way
         if name == 'call_native':
-            self.services.handoff('native', obj.slot, (args[0],))
-            raise Stop()
+            routine = NATIVE_ROUTINES.get(args[0])
+            if routine is None:
+                self.services.handoff('native', obj.slot, (args[0],))
+                raise Stop()
+            return routine(self, obj, next_pc)
         raise ValueError(name)
+
+    # ---- opcode F5: spawn a companion from a template ----------------------------------
+    SPAWN_POOLS = {0: (3, 20, 1), 1: (1, 24, 1), 2: (20, 20, -1), 3: (25, 6, 1), 5: (1, 24, 1), 6: (20, 20, -1)}
+
+    def spawn(self, obj: RecordView, mode, template, dx, dy, animation, motion) -> None:
+        """1AD00E: a new record from a template, placed relative to the spawner (mirrored with it).
+
+        The mode picks the pool (or the player's own record when free);
+        modes 5 and 6 also make the new object the spawner's rider.
+        """
+        from .lifecycle import initialize
+        mem = self.mem
+        if mode == 4:
+            if mem.u8(RECORD_TABLE):
+                return
+            address = RECORD_TABLE
+        elif mode in self.SPAWN_POOLS:
+            first, count, direction = self.SPAWN_POOLS[mode]
+            address = None
+            for i in range(count):
+                candidate = RECORD_TABLE + RECORD_SIZE * (first + direction * i)
+                if not mem.u8(candidate):
+                    address = candidate
+                    break
+            if address is None:
+                return
+        else:
+            return
+        if mode in (5, 6):
+            obj.flags3c |= 0x04
+            obj.rider = address
+        for a, value in initialize(address, self.rom[template:template + 19]):
+            mem.write(a, value, 1)
+        new = RecordView(address, mem.read, mem.write)
+        if mode in (5, 6):
+            new.rider = RECORD_TABLE + RECORD_SIZE * obj.slot
+        new.x = (obj.x + (-dx if obj.facing else dx)) & 0xFFFF
+        new.y = (obj.y + (-dy if obj.flip else dy)) & 0xFFFF
+        new.facing = obj.facing
+        new.flip = obj.flip
+        if animation:
+            new.script = animation
+        if motion:
+            new.motion_script = motion
 
     # ---- record lifetime: VRAM slots, retirement, despawn ----------------------------
     def release(self, obj: RecordView) -> None:
@@ -269,13 +510,19 @@ class Engine:
         """1AD3E8: find ``vram_slots`` free consecutive slots; on failure the record is dropped."""
         need = obj.vram_slots
         base = VRAM_SLOT_MAP
-        limit = VRAM_SLOT_COUNT - need
-        for index in range(limit):
-            if all(self.mem.u8(base + index + i) == 0 for i in range(need + 1)):
+        tests = VRAM_SLOT_COUNT - need        # the DBRA budget is shared by first-byte tests and continuation checks
+        index = 0
+        while tests:
+            tests -= 1
+            start = index
+            index += 1
+            if self.mem.u8(base + start):
+                continue
+            if all(self.mem.u8(base + start + 1 + i) == 0 for i in range(need)):
                 for i in range(need + 1):
-                    self.mem.write(base + index + i, 0xFF, 1)
-                obj.vram_map = base + index
-                obj.vram = int.from_bytes(self.rom[VRAM_SLOT_TABLE + 4 * index:VRAM_SLOT_TABLE + 4 * index + 4], 'big')
+                    self.mem.write(base + start + i, 0xFF, 1)
+                obj.vram_map = base + start
+                obj.vram = int.from_bytes(self.rom[VRAM_SLOT_TABLE + 4 * start:VRAM_SLOT_TABLE + 4 * start + 4], 'big')
                 return True
         self.restore_spawn_flag(obj)
         obj.kind = 0
@@ -341,6 +588,7 @@ class Engine:
         descriptor = int.from_bytes(self.rom[word:word + 4], 'big')
         if descriptor != obj.frame:
             obj.frame = descriptor
+            self.queue_frame_upload(obj, descriptor)
             self.services.frame_changed(obj.slot, descriptor)
         if obj.delay:
             obj.delay -= 1
@@ -435,9 +683,29 @@ class Engine:
             rider.y = rider.y + _signed_word(dy); rider.delta_y = dy & 0xFF
 
     # ---- whole-table passes --------------------------------------------------------
+    def queue_frame_upload(self, obj: RecordView, descriptor: int) -> None:
+        """1AC6D0: one 14-byte DMA command per piece of the new frame into the upload queue (FF769A, count FFEFEF)."""
+        m = self.mem
+        vram = m.u32(RECORD_TABLE + RECORD_SIZE * obj.slot + 0x2E)
+        piece = descriptor + 6
+        for _ in range(m.bus(descriptor, 2) + 1):
+            count = m.u8(UPLOAD_COUNT_LOW)
+            entry = UPLOAD_QUEUE + 14 * count
+            m.write(UPLOAD_COUNT_LOW, (count + 1) & 0xFF, 1)
+            tile = m.bus(piece, 2)
+            low = vram & 0xFFFF
+            words = (m.bus(tile, 2), m.bus(tile + 2, 2), m.bus(piece + 4, 2), m.bus(piece + 6, 2), m.bus(piece + 8, 2),
+                     ((low & 0x3FFF) + 0x4000) & 0xFFFF, ((((low << 2) | (low >> 14)) & 3) + 0x80) & 0xFF)
+            for i, word in enumerate(words):
+                m.write(entry + 2 * i, word, 2)
+            vram = (vram & 0xFFFF0000) | ((low + m.bus(tile + 4, 2)) & 0xFFFF)
+            piece += 12
+
     def animation_pass(self):
         if self.mem.u8(FRAME_COUNTER) & 1 == 0:
             return          # 1AC784 runs only on odd frames (btst #0, FF7E28 / beq)
+        for address in (SWORD_ACTIVE, STANCE_A, STANCE_B, CHANNEL_FLAG, UPLOAD_COUNT_LOW):
+            self.mem.write(address, 0, 1)     # 1AC796..1AC7C2
         for slot in range(RECORD_COUNT):
             self.step_animation(self.mem.record(slot))
 

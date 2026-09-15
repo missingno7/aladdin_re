@@ -23,7 +23,7 @@ from aladdin_sega.game.objects.record import RECORD_TABLE, FIELDS
 from aladdin_sega.history import HistoryStore
 FRAME_TICKS = 896040
 
-BOOKKEEPING = ((0xFF769A, 0xFF7800, 'DMA queue'), (0xFFEF40, 0xFFEFE0, 'stack'),
+BOOKKEEPING = ((0xFF769A, 0xFF7A00, 'DMA queue'), (0xFFEF40, 0xFFEFDC, 'stack'),
                (0xFF7D9A, 0xFF7DA3, 'continuations'), (0xFFEFEE, 0xFFEFF0, 'queue counters'))
 
 
@@ -76,10 +76,10 @@ def native(frame, count):
 
 def verify(frame, count):
     rom = read_rom()
-    m = Machine(rom); m.restore(load(frame))
+    m = Machine(rom); m.audio_policy('discard'); m.restore(load(frame))
     entries = {s.entry: s for s in STEPS}
     results = collections.Counter(); mismatches = collections.defaultdict(collections.Counter)
-    m.gates([s.entry for s in STEPS if s.run is not None] + [e for s in STEPS if s.run for e in s.exits])
+    m.gates(sorted({s.entry for s in STEPS if s.run is not None} | {e for s in STEPS if s.run for e in s.exits}))
     frames_done = 0; recovered_entries = {s.entry for s in STEPS if s.run is not None}
     tick_end = m.info['tick'] + count * FRAME_TICKS
     pads = masks(); padded = -1

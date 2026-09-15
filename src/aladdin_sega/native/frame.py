@@ -11,7 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from .state import GameState, NativeGap
 from ..game.objects.script_engine import Engine, Services, Trace
-from ..game import pad, hud, player, video, scroll, level, spawn, pause
+from ..game import pad, hud, player, video, scroll, level, spawn, pause, camera, tiles, control, flow, sprites
+from ..game.objects import ground, contact_scan, contacts  # noqa: F401  (contacts registers the callbacks)
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,83 @@ def player_attack_input(state: GameState, services):
     player.attack_input(state.read, state.write, state.rom)
 
 
+def object_level_collision(state: GameState, services):
+    ground.object_level_collision(state.read, state.write, state.rom, services, state.memory())
+
+
+def player_contact_scan(state: GameState, services):
+    try:
+        contact_scan.player_contact_scan(state.read, state.write, state.rom, services, state.memory(), state.bus_read)
+    except contact_scan.ContactGap as gap:
+        raise NativeGap('contact_scan', gap.target, str(gap), state.frame) from None
+    except contacts.ContactFrameGap as gap:
+        raise NativeGap('contact_scan', 0x1ABC9E, str(gap), state.frame) from None
+
+
+def projectile_contact_scan(state: GameState, services):
+    try:
+        contact_scan.projectile_contact_scan(state.read, state.write, state.rom, services, state.memory(), state.bus_read)
+    except contact_scan.ContactGap as gap:
+        raise NativeGap('projectile_contact_scan', gap.target, str(gap), state.frame) from None
+
+
+def camera_follow(state: GameState, services):
+    camera.follow(state.read, state.write, state.rom)
+
+
+def special_tile(state: GameState, services):
+    try:
+        tiles.special_tile(state.read, state.write, state.rom, services, state.memory())
+    except tiles.TileGap as gap:
+        raise NativeGap('special_tile', gap.target, str(gap), state.frame) from None
+
+
+def _control(name, entry):
+    def step(state: GameState, services):
+        try:
+            getattr(control, name)(state.read, state.write, services)
+        except LookupError as error:
+            raise NativeGap(name, entry, str(error), state.frame) from None
+    step.__name__ = name
+    return step
+
+
+def hud_health(state: GameState, services):
+    hud.health_display(state.read, state.write)
+
+
+def token_counter(state: GameState, services):
+    def message(code):
+        raise NativeGap('token_counter', 0x1B2236, f'the message overlay {code:02X} is not recovered', state.frame)
+    hud.token_counter(state.read, state.write, lambda sound_id: services.sound(0, sound_id), message)
+
+
+def _flow(name, entry):
+    def step(state: GameState, services):
+        try:
+            if name == 'level_tick':
+                flow.level_tick(state.read, state.write, state.rom, services, state.vdp)
+            else:
+                getattr(flow, name)(state.read, state.write)
+        except flow.Transition as error:
+            raise NativeGap(name, entry, str(error), state.frame) from None
+    step.__name__ = name
+    return step
+
+
+def sprite_table(state: GameState, services):
+    sprites.build_sprite_table(state.read, state.write, state.rom, state.bus_read)
+
+
+def wait_vblank(state: GameState, services):
+    """1B249E and the VBlank handler 1B246E: the frame boundary and the any-button latch."""
+    if state.read(pause.PAUSE_INHIBITED, 1):
+        raise NativeGap('wait_vblank', 0x1B24AC, 'the Start-release wait is not recovered', state.frame)
+    state.write(0xFF7E1E, 0xFF, 1)
+    if state.read(0xFF7E23, 1) and any(f(state.read) for f in (pad.button_start, pad.button_a, pad.button_b, pad.button_c)):
+        state.write(0xFF7E22, 0xFF, 1)
+
+
 def frame_counter(state: GameState, services):
     player.advance_frame_counter(state.read, state.write)
 
@@ -128,44 +206,53 @@ def motion_pass(state: GameState, services):
 
 
 STEPS = (
-    # after the VBlank wait (the frame boundary), in the original's call order (main loop at 1A8C16)
-    Step('vram_upload_flush', 0x1AC726, (0x1AC782,), vram_upload_flush, 'recovered: game.video.flush_upload_queue', ports=True),
-    Step('sprite_table_upload', 0x1AB776, (0x1AB7A0, 0x1AB7A2), sprite_table_upload, 'recovered: game.video.upload_sprite_table', ports=True),
-    Step('tile_stream', 0x1AE0F6, (0x1AE19E,), tile_stream, 'recovered: game.video.stream_tiles', ports=True),
-    Step('camera_scroll_and_spawn_strips', 0x1AAA2A, (0x1AAA7E,), camera_scroll_and_spawn_strips,
+    # the original main loop (1A8C16..1A8CEE) in call order, one frame starting after the VBlank wait;
+    # every step's exit is the next call's entry, so a step is bracketed by the main loop itself
+    Step('vram_upload_flush', 0x1AC726, (0x1AB776, 0x1AC782), vram_upload_flush, 'recovered: game.video.flush_upload_queue', ports=True),
+    Step('sprite_table_upload', 0x1AB776, (0x1AE0F6, 0x1AB7A0, 0x1AB7A2), sprite_table_upload, 'recovered: game.video.upload_sprite_table', ports=True),
+    Step('tile_stream', 0x1AE0F6, (0x1AAA2A, 0x1AE19E), tile_stream, 'recovered: game.video.stream_tiles', ports=True),
+    Step('camera_scroll_and_spawn_strips', 0x1AAA2A, (0x1B315C, 0x1AAA7E), camera_scroll_and_spawn_strips,
          'recovered: game.scroll (per-level parallax), game.level (map strips), game.spawn (spawn sites)', ports=True),
-    Step('attract_input', 0x1B315C, (0x1B317E,), attract_input, 'recovered: game.pad.attract_input (the demo pad stream)'),
+    Step('attract_input', 0x1B315C, (0x1A8CEE,), attract_input, 'recovered: game.pad.attract_input (the demo pad stream)'),
     Step('pad_read', 0x1A8CEE, (0x1A8C16,), pad_read, 'recovered: game.pad.read_pad'),
-    Step('frame_counter', 0x1A8C16, (0x1A8C1C,), frame_counter, 'recovered: game.player.advance_frame_counter'),
-    Step('pause_check', 0x1A91C6, (0x1A92D2, 0x1A92DA), pause_check, 'recovered: game.pause.pause_requested (the pause loop itself is a gap)'),
-    Step('publish_player_position', 0x1A8E0C, (0x1A8E3C,), publish_player_position, 'recovered: game.player.publish_position'),
-    Step('player_ground_collision', 0x1AD7B4, (0x1AD9CC, 0x1ADA3A, 0x1ADA96, 0x1ADB20, 0x1ADB28, 0x1ADB30, 0x1A91C4),
-         player_ground_collision, 'recovered: game.player.ground_collision'),
-    Step('player_wall_collision', 0x1AD632, (0x1AD7B2,), player_wall_collision, 'recovered: game.player.wall_sensors'),
-    Step('player_vertical_input', 0x1A986E, (0x1A98D0, 0x1A9928, 0x1A9970, 0x1A9978), player_vertical_input,
-         'recovered: game.player.vertical_input'),
-    Step('player_attack_input', 0x1A99F0, (0x1A9A48, 0x1A9B2E, 0x1A9B36), player_attack_input,
-         'recovered: game.player.attack_input'),
-    Step('object_motion', 0x1ADE36, (0x1AE0AE,), motion_pass, 'recovered: game.objects.script_engine.Engine.motion_pass'),
-    Step('object_level_collision', 0x1ADB5C),
-    Step('contact_scan', 0x1ABB40, note='player-vs-object collision and the per-kind callbacks'),
-    Step('pad_decode', 0x1A8C44, (0x1A8C8C,), pad_decode, 'recovered: game.pad.decode_directions'),
-    Step('special_tile', 0x1B1E38),
-    Step('player_horizontal_control', 0x1A9D98),
-    Step('player_state_transitions', 0x1A9716),
-    Step('camera_follow', 0x1AA8FA),
-    Step('player_state_machine', 0x1A9304),
-    Step('player_animation_selection', 0x1A9502),
-    Step('contact_completion', 0x1ABD7E),
-    Step('hud_health', 0x1B02EC, note='writes the OAM buffer'),
-    Step('fall_check', 0x1A8F0C),
-    Step('scroll_state', 0x1A8F04, note='writes FFEFD4'),
-    Step('score_tally', 0x1B00CA, (0x1B0132,), score_tally, 'recovered: game.hud.score_tally'),
-    Step('hud_counters', 0x1B01AC),
-    Step('death_sequence', 0x1A8E3E),
-    Step('object_animation', 0x1AC784, (0x1AC84E, 0x1B0334), animation_pass, 'recovered: game.objects.script_engine.Engine.animation_pass'),
-    Step('sprite_table', 0x1AB7C4, note='objects, player and HUD pieces -> OAM buffer FF729A'),
-    Step('wait_vblank', 0x1B249E),
+    Step('frame_counter', 0x1A8C16, (0x1A91C6,), frame_counter, 'recovered: game.player.advance_frame_counter'),
+    Step('pause_check', 0x1A91C6, (0x1A8E0C,), pause_check, 'recovered: game.pause.pause_requested (the pause loop itself is a gap)'),
+    Step('publish_player_position', 0x1A8E0C, (0x1AD7B4, 0x1AD632, 0x1AA8FA, 0x1A8E3E), publish_player_position,
+         'recovered: game.player.publish_position'),
+    Step('player_ground_collision', 0x1AD7B4, (0x1A8E0C,), player_ground_collision, 'recovered: game.player.ground_collision'),
+    Step('publish_player_position', 0x1A8E0C, (0x1AD7B4, 0x1AD632, 0x1AA8FA, 0x1A8E3E), publish_player_position,
+         'recovered: game.player.publish_position'),
+    Step('player_wall_collision', 0x1AD632, (0x1A986E,), player_wall_collision, 'recovered: game.player.wall_sensors'),
+    Step('player_vertical_input', 0x1A986E, (0x1A99F0,), player_vertical_input, 'recovered: game.player.vertical_input'),
+    Step('player_attack_input', 0x1A99F0, (0x1ADE36,), player_attack_input, 'recovered: game.player.attack_input'),
+    Step('object_motion', 0x1ADE36, (0x1ADB5C,), motion_pass, 'recovered: game.objects.script_engine.Engine.motion_pass'),
+    Step('object_level_collision', 0x1ADB5C, (0x1ABB40,), object_level_collision, 'recovered: game.objects.ground'),
+    Step('contact_scan', 0x1ABB40, (0x1A8C44,), player_contact_scan,
+         'recovered: game.objects.contact_scan (callbacks are registered per kind as they are recovered)'),
+    Step('pad_decode', 0x1A8C44, (0x1B1E38,), pad_decode, 'recovered: game.pad.decode_directions'),
+    Step('special_tile', 0x1B1E38, (0x1A9D98,), special_tile, 'recovered: game.tiles (handlers by collision class)'),
+    Step('player_horizontal_control', 0x1A9D98, (0x1A9716,), _control('horizontal_control', 0x1A9D98),
+         'recovered: game.control.horizontal_control'),
+    Step('jump_start', 0x1A9716, (0x1A8E0C,), _control('jump_start', 0x1A9716), 'recovered: game.control.jump_start'),
+    Step('publish_player_position', 0x1A8E0C, (0x1AD7B4, 0x1AD632, 0x1AA8FA, 0x1A8E3E), publish_player_position,
+         'recovered: game.player.publish_position'),
+    Step('camera_follow', 0x1AA8FA, (0x1A9304,), camera_follow, 'recovered: game.camera.follow'),
+    Step('throw_input', 0x1A9304, (0x1A9502,), _control('throw_input', 0x1A9304), 'recovered: game.control.throw_input'),
+    Step('sword_input', 0x1A9502, (0x1ABD7E,), _control('sword_input', 0x1A9502), 'recovered: game.control.sword_input'),
+    Step('projectile_contact_scan', 0x1ABD7E, (0x1B02EC,), projectile_contact_scan,
+         'recovered: game.objects.contact_scan (callbacks per struck kind)'),
+    Step('hud_health', 0x1B02EC, (0x1A8F0C,), hud_health, 'recovered: game.hud.health_display'),
+    Step('fall_check', 0x1A8F0C, (0x1A8F04,), _flow('fall_check', 0x1A8F0C), 'recovered: game.flow.fall_check (the life-lost sequence is a gap)'),
+    Step('level_tick', 0x1A8F04, (0x1B00CA,), _flow('level_tick', 0x1A8F04), 'recovered: game.flow.level_tick (per-level routines)'),
+    Step('score_tally', 0x1B00CA, (0x1B01AC,), score_tally, 'recovered: game.hud.score_tally'),
+    Step('token_counter', 0x1B01AC, (0x1A8E0C,), token_counter, 'recovered: game.hud.token_counter (the message overlay is a gap)'),
+    Step('publish_player_position', 0x1A8E0C, (0x1AD7B4, 0x1AD632, 0x1AA8FA, 0x1A8E3E), publish_player_position,
+         'recovered: game.player.publish_position'),
+    Step('transition_countdown', 0x1A8E3E, (0x1AC784,), _flow('transition_countdown', 0x1A8E3E),
+         'recovered: game.flow.transition_countdown (the level change is a gap)'),
+    Step('object_animation', 0x1AC784, (0x1AB7C4,), animation_pass, 'recovered: game.objects.script_engine.Engine.animation_pass'),
+    Step('sprite_table', 0x1AB7C4, (0x1B249E, 0x1ABB3E), sprite_table, 'recovered: game.sprites.build_sprite_table'),
+    Step('wait_vblank', 0x1B249E, (0x1AC726, 0x1B24F4), wait_vblank, 'recovered: the frame boundary (VBlank handler 1B246E)'),
 )
 
 

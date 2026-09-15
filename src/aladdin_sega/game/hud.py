@@ -60,3 +60,86 @@ def score_tally(read, write, sound) -> None:
         write(digit, 0x30, 1)
         digit -= 1
     write(digit, read(digit, 1) + 1, 1)
+
+
+def _add_two_digits(read, write, address) -> None:
+    """1B0336 / 1B0394: a two-digit ASCII counter goes up, capped at 99."""
+    if read(address, 2) == 0x3939:
+        return
+    ones = read(address + 1, 1) + 1
+    write(address + 1, ones, 1)
+    if ones >= 0x3A:
+        write(address, read(address, 1) + 1, 1)
+        write(address + 1, 0x30, 1)
+
+
+def _remove_two_digits(read, write, address) -> None:
+    """1B0360 / 1B03BE: a two-digit ASCII counter goes down, floored at 00."""
+    if read(address, 2) == 0x3030:
+        return
+    ones = (read(address + 1, 1) - 1) & 0xFF
+    write(address + 1, ones, 1)
+    if ones >= 0x30:
+        return
+    write(address + 1, 0x39, 1)
+    if read(address, 1) != 0x30:
+        write(address, read(address, 1) - 1, 1)
+
+
+def add_apple(read, write): _add_two_digits(read, write, APPLES)
+def remove_apple(read, write): _remove_two_digits(read, write, APPLES)
+def add_gem(read, write): _add_two_digits(read, write, GEMS)
+def remove_gem(read, write): _remove_two_digits(read, write, GEMS)
+
+
+HEALTH, SHOWN_HEALTH = 0xFFEFFA, 0xFFF0EC
+TOKEN_DIGITS = 0xFF7E38            # three ASCII digits (TENTATIVE: the level's collected tokens)
+TOKENS_PENDING = 0xFFF159          # units still to be counted into the digits
+TOKEN_GOAL_A, TOKEN_GOAL_B = 0xFF7E16, 0xFF7E12   # longs: the digit strings that trigger a reward (per difficulty)
+TOKEN_REWARD_FLAG = 0xFFF0F9
+LEVEL_INDEX = 0xFF7E26
+BONUS_STAGE_FLAG = 0xFFF0F7
+TRANSITION_COUNTDOWN = 0xFFF0E9
+MESSAGE = 0xFFF15A
+PAUSED = 0xFFF158
+TOKEN_SOUND = 0x02
+LEVEL_INDEX_BONUS = 0x14
+
+
+def health_display(read, write) -> None:
+    """1B02EC: on even frames the shown health eases one step toward the real one."""
+    if read(FRAME_COUNTER, 1) & 1:
+        return
+    shown, health = read(SHOWN_HEALTH, 1), read(HEALTH, 1)
+    if shown == health:
+        return
+    write(SHOWN_HEALTH, shown - 1 if shown > health else shown + 1, 1)
+
+
+def token_counter(read, write, sound, message) -> None:
+    """1B01AC: on even frames count one pending token into the digits; goals trigger a message and points."""
+    if read(FRAME_COUNTER, 1) & 1 or not read(TOKENS_PENDING, 1):
+        return
+    write(TOKENS_PENDING, read(TOKENS_PENDING, 1) - 1, 1)
+    digit = TOKEN_DIGITS + 2
+    while read(digit, 1) == 0x39:
+        write(digit, 0x30, 1)
+        digit -= 1
+    write(digit, read(digit, 1) + 1, 1)
+    if read(LEVEL_INDEX, 1) < LEVEL_INDEX_BONUS:
+        digits = read(TOKEN_DIGITS, 4)
+        for goal, code in ((TOKEN_GOAL_A, 0x1C), (TOKEN_GOAL_B, 0x1B)):
+            if digits == read(goal, 4):
+                write(PAUSED, 0xFF, 1)
+                write(MESSAGE, code, 1)
+                message(code)
+                write(PAUSED, 0, 1)
+                if read(SOUND_ENABLED, 1):
+                    sound(TOKEN_SOUND)
+                return
+    if read(TOKEN_DIGITS, 4) != 0x30313000:
+        return
+    write(TOKEN_REWARD_FLAG, 0xFF, 1)
+    add_points(read, write, POINT_ADDERS[0x1B0192])
+    if read(LEVEL_INDEX, 1) >= LEVEL_INDEX_BONUS and read(BONUS_STAGE_FLAG, 1):
+        write(TRANSITION_COUNTDOWN, 0xB4, 1)
