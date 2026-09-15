@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from .state import GameState, NativeGap
 from ..game.objects.script_engine import Engine, Services, Trace
-from ..game import pad, hud, player
+from ..game import pad, hud, player, video
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,25 @@ class NativeServices(Services):
 
 
 def pad_read(state: GameState, services):
-    pad.read_pad(state.write, state.buttons)
+    if pad.read_pad(state.read, state.write, state.buttons):
+        raise NativeGap('game start from attract mode', 0x1B3182, 'a button ended the attract demo', state.frame)
+
+
+def attract_input(state: GameState, services):
+    if not pad.attract_input(state.read, state.write, state.rom):
+        raise NativeGap('game start from attract mode', 0x1B3182, 'the demo input stream ended', state.frame)
+
+
+def vram_upload_flush(state: GameState, services):
+    video.flush_upload_queue(state.read, state.write, lambda kind, data: state.events.append((kind, state.frame, data)))
+
+
+def sprite_table_upload(state: GameState, services):
+    video.upload_sprite_table(state.read, lambda kind, data: state.events.append((kind, state.frame, data)))
+
+
+def tile_stream(state: GameState, services):
+    video.stream_tiles(state.read, state.write, state.rom, lambda kind, data: state.events.append((kind, state.frame, data)))
 
 
 def frame_counter(state: GameState, services):
@@ -69,12 +87,12 @@ def motion_pass(state: GameState, services):
 
 STEPS = (
     # after the VBlank wait (the frame boundary), in the original's call order (main loop at 1A8C16)
-    Step('vram_upload_flush', 0x1AC726, note='DMA queue (1AC6D0 entries) -> VDP; platform service'),
-    Step('sprite_table_upload', 0x1AB776, note='OAM buffer FF729A -> VDP; platform service'),
-    Step('sound_queue_tick', 0x1AE0F6, note='FFF140 queue'),
+    Step('vram_upload_flush', 0x1AC726, (0x1AC782,), vram_upload_flush, 'recovered: game.video.flush_upload_queue (events)'),
+    Step('sprite_table_upload', 0x1AB776, (0x1AB7A0, 0x1AB7A2), sprite_table_upload, 'recovered: game.video.upload_sprite_table (events)'),
+    Step('tile_stream', 0x1AE0F6, (0x1AE19E,), tile_stream, 'recovered: game.video.stream_tiles (events)'),
     Step('camera_scroll_and_spawn_strips', 0x1AAA2A, note='FF7DA4 scroll routine; FFF0B9..BC -> spawn strips 1AE3FC/1AE406/...'),
-    Step('sound_driver', 0x1B315C),
-    Step('pad_read', 0x1A8CEE, (0x1A8C16,), pad_read, 'recovered: game.pad.read_pad (the attract-mode start check is not modelled)'),
+    Step('attract_input', 0x1B315C, (0x1B317E,), attract_input, 'recovered: game.pad.attract_input (the demo pad stream)'),
+    Step('pad_read', 0x1A8CEE, (0x1A8C16,), pad_read, 'recovered: game.pad.read_pad'),
     Step('frame_counter', 0x1A8C16, (0x1A8C1C,), frame_counter, 'recovered: game.player.advance_frame_counter'),
     Step('vdp_queue', 0x1A91C6, note='1B3208'),
     Step('publish_player_position', 0x1A8E0C, (0x1A8E3C,), publish_player_position, 'recovered: game.player.publish_position'),

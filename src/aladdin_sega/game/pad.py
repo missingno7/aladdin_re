@@ -19,11 +19,35 @@ def raw_bytes(mask: int) -> tuple[int, int]:
     return th_high & 0xFF, th_low & 0xFF
 
 
-def read_pad(write, mask: int) -> None:
-    """The main loop's two port reads (step ``pad_read``)."""
+GAME_MODE = 0xFFF57C            # 1 = attract demo (input comes from the ROM stream below)
+DEMO_STREAM = 0xFFF576          # long: next byte of the attract demo's recorded pad bytes
+
+
+def read_pad(read, write, mask: int) -> bool:
+    """The main loop's two port reads (1A8CEE).  In attract mode the pad only starts the game.
+
+    Returns True when the attract demo should end because a button was
+    pressed (B and C, or A and Start, on the recorded mask).
+    """
+    if read(GAME_MODE, 1) == 1:
+        return bool(mask & 0x30) or bool(mask & 0xC0)
     th_high, th_low = raw_bytes(mask)
     write(RAW_TH_HIGH, th_high, 1)
     write(RAW_TH_LOW, th_low, 1)
+    return False
+
+
+def attract_input(read, write, rom) -> bool:
+    """1B315C: in attract mode feed the next recorded byte into FFF156; False when the stream ends."""
+    if read(GAME_MODE, 1) != 1:
+        return True
+    pointer = read(DEMO_STREAM, 4)
+    value = rom[pointer]
+    if value == 0:
+        return False
+    write(RAW_TH_HIGH, value, 1)
+    write(DEMO_STREAM, pointer + 1, 4)
+    return True
 
 
 def decode_directions(read, write) -> None:
