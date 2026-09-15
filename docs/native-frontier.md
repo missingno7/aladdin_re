@@ -266,7 +266,10 @@ renewed at every gate).
   printed on from the label's pen (1B4378 sets neither d0 nor d1, so
   `messages.print_text` now returns the pen), the music row's on/off
   redraw (1B41F2), and the sound test's ninth row (d4 = 8 with dbra).
-  Video verification is the check for every screen from now on.
+  Video verification is the check for every screen from now on.  With
+  those fixed, `--until 1A8C16` (the whole cold start of 43ec25b7: boot,
+  title, options, sound test, Start, the level-1 prologue) is identical:
+  307,570 port words.
 * Between two checkpoints the aligned clock cannot see the original's
   extra work frames (the backdrop decompress 1B47F0 takes two): the
   native frame count lags until the next checkpoint realigns it.  On the
