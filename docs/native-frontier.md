@@ -211,7 +211,7 @@ returns to 1A8B24; a declined continue goes to 1A8A58; the game over is
 |---|---|---|
 | reset code 21A..6A8 (TMSS, VDP, Z80, region) | 4 (platform) | the power-on contract: zeroed RAM, the VDP as the reset code leaves it (`boot.power_on`); the sound driver's tables are a platform service |
 | game init 1AA344, session defaults 1AA41C, high-score and button-routine tables 1AFFE4 / 1B32E2, new-game console setup 1A8A58 | 1 | recovered in `native/boot.py`; verified from reset at 1AA344, 1A8A58, 1A8B2C (`verify_sequence.py --boot`) |
-| title, logos, attract timeout, Start / Options menu 1B3B96..~1B4800 with 1B3B4A, 1B43C4.., 1B477C.., 1B4410.., 1B4802, 1B4836, 1B3548, 1B0BA6 | 3 | recovered (`native/title.py`); byte-exact from reset on the three power-on recordings (`--boot`: 44223150 to frame 1001, 24c70ffc to 2196, 2dddf860 through the options screen to 1310) and on the post-game title witness; the hidden button-sequence reader 1B0BA6/1B0BBE is modelled, its completion 1B0C82 a NativeGap |
+| title, logos, attract timeout, Start / Options menu 1B3B96..~1B4800 with 1B3B4A, 1B43C4.., 1B477C.., 1B4410.., 1B4802, 1B4836, 1B3548, 1B0BA6 | 3 | recovered (`native/title.py`); byte-exact from reset on the three power-on recordings (`--boot`: 44223150 to frame 1001, 24c70ffc to 2196, 2dddf860 through the options screen to 1310) and on the post-game title witness; the hidden button-sequence reader 1B0BA6/1B0BBE is modelled, its completion 1B0C82 a NativeGap; 43ec25b7 (sound test) verified too |
 | level-1 title 1B202A | 3 | recovered (`sequences.level_1_title`), verified on 44223150 and 24c70ffc |
 | story pages of levels 1, 7, 9, A, B | 3 (1, 7 partly composition) | level 1 verified on the cold-start recordings; levels 7, 9, A, B unreachable by any recording: listing-only until a recording reaches them |
 | attract exit 1B3182 and the demo run | 1 | composed: from the demo's main loop a transition 'attract_end' (`attract_exit`), from inside the demo's prologue `AttractExit` caught by `boot.title_entry` (the original pops the return address at 1B161A / 1B2114 / 1B141E); the level card only leaves on a button (a mis-composition fixed: it raised after the countdown too). Witness: `verify_sequence.py --boot --pad 0-2400 00 --pad 2400-2404 40 ...` (A during the demo's level card): byte-exact at 1B3182 and the title's re-entry; the native player runs the level-1 demo from power-on with no input |
@@ -219,7 +219,7 @@ returns to 1A8B24; a declined continue goes to 1A8A58; the game over is
 | game over 1B0558 | 3 | `sequences.game_over` (two loops, the palette cycle 1B07D0, the second picture with its object), verified against the original on a constructed witness: the level-5 death of 44223150 with `--poke FF7E3F=00 --poke FF7E3C=30` (no continues, the last life), both with the recorded buttons (the first loop cut short) and with `--pad 75120-75700 00` (both loops run out); byte-exact at every checkpoint through the new game, the title and the prologue to the resumed loop. The button variant found one missing VBlank wait per step (the RAM checkpoints resync the frame count, so only an input-timed route exposes a wait count) |
 | declined continue -> 1A8A58 -> title | 1 | verified on the same witness with `--pad 75200-75330 04 --pad 75330-77000 00` (Left declines, then no button): byte-exact through the new game, the title and the prologue to the resumed loop. With the buttons held on into the title (`--pad 75200-75900 04`, then the recording's gameplay buttons) 78 transient bytes differ at 1B3EA2 (FF7DF4, FF8805-FF8849, FF8860-FF887D; equal again at 1A8B50): the title's input handling under a held direction / button, with the title's grinder |
 | video: the boot's VDP port-write stream | verification | `verify_ports.py --boot`: the native power-on's port words from 1AA344 to the title's first frame (1B3C64) against the original single-stepped from reset: identical, 30,606 words (the register table, the font and HUD tiles, the plane clears, the scroll table, the title's decompressions and palettes). Found and fixed a tracer defect on the way: an interrupt taken in front of a port write counted the write twice (the exception entry counts as an instruction); a write now counts only when the PC moved to the next instruction |
-| options screen 1B4056..1B430A (difficulty, music, sound, control scheme, exit) | 3 | recovered in `title.py` (`_options_screen`), verified on 2dddf860; the button-remap sub-screen 1B4436 is a NativeGap |
+| options screen 1B4056..1B430A (difficulty, music, sound, sound test, control scheme, exit) and the sound-test screen 1B4436..1B45CA (the 94-entry list at 12675E, up/down with auto-repeat, A previews, Start/B/C exits) | 3 | recovered in `title.py` (`_options_screen`, `_sound_test_screen`); verified from reset on 2dddf860 (options) and 43ec25b7 (the sound test; the third cold-start recording, 16 September). The screen was first misnamed a button-remap table from control flow alone: the table's text says SOUND TEST |
 | ending 1B4F7C | 4 | not on the path to the milestone |
 | sound output | platform service | `native/sound_service.py`: the ROM's Z80 driver (YM2612, PSG) runs on a dedicated Machine with its 68000 parked in a self-branch after the driver's initialisation; the native runtime's sound events are made as the game's own entry-point calls (1E58B8 request, 1E589A flush, the fixed commands) on that 68000, one frame of the machine per game frame gives the PCM (`play_native.py`, `--wav FILE`, `--mute`). Nothing feeds back into the game |
 
@@ -241,6 +241,38 @@ after the logo fade (1B3CC8; every recording pressed a button before the
 fade), and the by-waits driver's hang guard, which spanned a whole
 run_frame and could not cover a cold boot's thousands of waits (now
 renewed at every gate).
+
+### 3d. What the third cold-start recording (43ec25b7, the sound test) found
+
+* The options' third row is the **sound test** (1B4436..1B45CA, the
+  94-entry list at 12675E), not a button-remap screen as the control-flow
+  reading had it; recovered in `title.py`, byte-exact from reset.
+* The upload queue's count (FFEFEF) is cleared by the animation pass's
+  1AC784 entry on every frame *before* its odd-frame test, and kept by
+  the 1AC796 entry the transitions use; the native pass had both the
+  other way round.  RAM checkpoints never saw it (the queue counters are
+  bookkeeping, excluded) and VRAM never differed (the stale entries
+  re-uploaded the same tiles), but the port-write stream did: 14,000
+  extra DMA words over the title.  `verify_ports.py --boot 43ec25b7
+  --until 1B446C` is the witness.
+* The by-recording end: `native_diff.py --cold` stops at the recording's
+  last frame; beyond it the inputs are unspecified and the original walks
+  into screens with no controller read.
+* The port stream of the whole cold start to the sound test
+  (`verify_ports.py --boot 43ec25b7 --until 1B446C`, the native side under
+  the aligned clock, then the same machine retraced from a reset snapshot)
+  found four VRAM-only omissions the RAM checkpoints cannot see: the text
+  row blanked at the title's convergence (1B3E22), the difficulty name
+  printed on from the label's pen (1B4378 sets neither d0 nor d1, so
+  `messages.print_text` now returns the pen), the music row's on/off
+  redraw (1B41F2), and the sound test's ninth row (d4 = 8 with dbra).
+  Video verification is the check for every screen from now on.
+* Between two checkpoints the aligned clock cannot see the original's
+  extra work frames (the backdrop decompress 1B47F0 takes two): the
+  native frame count lags until the next checkpoint realigns it.  On the
+  options screen every such stretch ends in a checkpoint, so no input
+  landed late; a screen with a long stretch after heavy work needs a
+  checkpoint (or a `work` that the clock can measure) right after it.
 
 ## 4. The loop, as it now runs
 

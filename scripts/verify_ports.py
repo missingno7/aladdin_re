@@ -127,12 +127,16 @@ class _Stop(Exception):
     pass
 
 
-def verify_boot(recording=None, until=0x1B3C64):
+def verify_boot(recording=None, until=0x1B3C64, dump=None):
     from aladdin_sega.native import boot
     from aladdin_sega.native.frame import NativeServices
     rom = nr.read_rom(); pads = dict(nr.masks(recording))
+    m = Machine(rom); m.audio_policy('discard')
+    reset = m.snapshot()                     # the same machine traces afterwards, from reset again
     state = boot.power_on(rom)
     state.pads = lambda f: pads.get(f, 0)
+    state.replay = nr.OracleClock(state, m, pads)      # the aligned clock: the input lands on the original's frames
+    state.replay.begin_at(boot.GAME_INIT)
     state.vdp.log = []                       # the power-on contract's own writes are the reset code's
     services = NativeServices(state)
     original_checkpoint = services.checkpoint
@@ -151,7 +155,7 @@ def verify_boot(recording=None, until=0x1B3C64):
         print(f'native: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}'); return 4
     native_log = list(state.vdp.log)
     print(f'the native boot wrote {len(native_log)} port words up to {until:06X}')
-    m = Machine(rom); m.audio_policy('discard')
+    m.restore(reset)
     nr.arm(m, [boot.GAME_INIT])
     assert nr.run_with_pads(m, pads, 400 * nr.FRAME_TICKS) == 'gate', 'the original did not reach 1AA344'
     print(f'the original entered {boot.GAME_INIT:06X} in tick frame {m.info["tick"] // nr.FRAME_TICKS}; tracing its port writes ...')
@@ -166,6 +170,11 @@ def verify_boot(recording=None, until=0x1B3C64):
     oracle_log = trace_port_writes(m, (until,), limit=200_000_000, on_step=on_step)
     m.close()
     print(f'the original wrote {len(oracle_log)} port words up to {until:06X}')
+    if dump:
+        import pickle
+        with open(dump, 'wb') as f:
+            pickle.dump({'native': native_log, 'oracle': oracle_log}, f)
+        print(f'both streams dumped to {dump}')
     return compare(native_log, oracle_log)
 
 
@@ -175,5 +184,6 @@ if __name__ == '__main__':
         until = int(argv[argv.index('--until') + 1], 16) if '--until' in argv else 0x1B3C64
         i = argv.index('--boot')
         recording = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith('--') else None
-        sys.exit(verify_boot(recording, until))
+        dump = argv[argv.index('--dump') + 1] if '--dump' in argv else None
+        sys.exit(verify_boot(recording, until, dump))
     sys.exit(main(int(argv[0]), int(argv[1]), int(argv[2], 16)))

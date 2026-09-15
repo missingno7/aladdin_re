@@ -122,11 +122,12 @@ def _command(read, write, rom, vdp, pen: _Pen, c: int, wait, what: str) -> None:
     pen.p = p
 
 
-def print_text(read, write, rom, vdp, text, column, row, wait, latched) -> None:
+def print_text(read, write, rom, vdp, text, column, row, wait, latched):
     """1B21F6: the text as tiles into plane A from (column, row); stops once the any-button latch is set.
 
     ``wait(count)`` runs the frames of command 06 (1B2380); ``latched()`` reads FF7E22.
-    Typewriter mode's per-glyph wait (1B2EE0) is an RTS here.
+    Typewriter mode's per-glyph wait (1B2EE0) is an RTS here.  Returns the pen (column, row) the routine
+    leaves in d0 / d1: a caller printing on without setting them continues from there (1B4378).
     """
     pen = _Pen(text, column, row)
     while not latched() and not pen.done:
@@ -137,6 +138,7 @@ def print_text(read, write, rom, vdp, text, column, row, wait, latched) -> None:
         else:
             _draw_tile(read, vdp, pen.x, pen.y, c - 0x20)
             pen.x = (pen.x & 0xFF00) | ((pen.x + 1) & 0xFF)
+    return pen.x, pen.y
 
 
 def show(read, write, rom, vdp, memory, services, code) -> None:

@@ -745,9 +745,11 @@ class Engine:
 
     def animation_pass(self, force=False):
         """1AC784 (odd frames only) or, with ``force``, the 1AC796 entry the transitions use."""
-        if not force and self.mem.u8(FRAME_COUNTER) & 1 == 0:
-            return          # 1AC784 runs only on odd frames (btst #0, FF7E28 / beq)
-        for address in (SWORD_ACTIVE, STANCE_A, STANCE_B, CHANNEL_FLAG, UPLOAD_COUNT_LOW):
+        if not force:
+            self.mem.write(UPLOAD_COUNT_LOW, 0, 1)      # 1AC784: the queue count clears every frame, before
+            if self.mem.u8(FRAME_COUNTER) & 1 == 0:      # the parity test; the 1AC796 entry keeps the count
+                return      # 1AC784 runs only on odd frames (btst #0, FF7E28 / beq)
+        for address in (SWORD_ACTIVE, STANCE_A, STANCE_B, CHANNEL_FLAG):
             self.mem.write(address, 0, 1)     # 1AC796..1AC7C2
         for slot in range(RECORD_COUNT):
             self.step_animation(self.mem.record(slot))

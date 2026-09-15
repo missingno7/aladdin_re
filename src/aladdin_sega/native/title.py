@@ -20,11 +20,13 @@ ROM 1B3B96..1B4800 (called once, from 1A8B24 / :mod:`boot`.title_entry).  The ro
   entries; any of B/C/A/Start (the CBAS repeat latch FFEFFE) with the
   cursor at 0 ends the routine (the game starts); with the cursor at 1 it
   enters the options screen (1B4056, :func:`_options_screen`): six rows
-  (difficulty, music, sound, the button-remap entry, the control-scheme
+  (difficulty, music, sound, the sound test entry, the control-scheme
   cycle, exit) cycled by Up/Down and confirmed by any of B/C/A, with
-  Start exiting from any row.  The button-remap sub-screen it can enter
-  (1B4436..) and the hidden button-sequence completion its per-frame pad
-  reader can reach (1B0C82) are not recovered (see ``OPTIONS_GAP``).
+  Start exiting from any row.  The sound test sub-screen it can enter
+  (1B4436, :func:`_sound_test_screen` -- its own inferred-from-control-flow
+  "button-remap" name was wrong, see the comment above ``SOUND_TEST_TABLE``)
+  is recovered; the hidden button-sequence completion its per-frame pad
+  reader can reach (1B0C82) is not (see ``OPTIONS_GAP``).
 
 The routine's own return value models FFF57C: it returns ``('game', None)``
 when 1A8B2C should continue as a new game, or ``('attract', level)`` when
@@ -70,9 +72,8 @@ DIFFICULTY_DEBUG = 0xFF7274         # 1B3FBA: unreachable with a two-item menu (
 
 
 class OPTIONS_GAP:
-    """The options screen's button-remap sub-screen (ROM 1B4436..1B4664) and the hidden button-sequence
-    completion (1B0C82) are not recovered; the rest of the options screen is (see ``_options_screen``)."""
-    REMAP_PC = 0x1B4436
+    """The hidden button-sequence completion (1B0C82) is not recovered; the rest of the options screen,
+    including its row-3 sound test (ROM 1B4436..1B4664, see ``_sound_test_screen``), is."""
     SECRET_PC = 0x1B0C82
 
 
@@ -93,6 +94,31 @@ CONTROL_PROFILE_NEXT = 0x12         # each profile record is 0x12 bytes; the nex
                                      # a leading zero long marking the end of the list (1B4224..1B4254)
 PAD_SEQ_PTR, PAD_SEQ_RESET, PAD_SEQ_MATCHED = 0xFF7276, 0xFF727A, 0xFF727E    # 1B0BA6 / 1B0BBE
 PAD_SEQ_TABLE = 0x413A              # ROM: the hidden button-sequence table, 2 bytes/entry, FF terminated
+
+# ---- the row-3 "SOUND TEST" screen (1B4436..1B45CA) ----------------------------------------------
+# The existing OPTIONS_GAP/``_place_remap_cursor`` names called this a "button-remap" screen, inferred
+# from control flow alone.  The ROM table it walks (SOUND_TEST_TABLE) is not a remap list: each 0x10-byte
+# record is a one-byte *sound id* followed by a 15-byte name ("HIGH SWORD", "LOW SWORD", "SILENT LAMB", ...,
+# 94 entries, FF-sentinelled just before the first and just after the last), and OPTIONS_HEADER_TEXT's own
+# chained label text (drawn once for every options row from 0x1266A0) reads "...SOUND FX ARE :...SOUND
+# TEST...TRIGGERS ARE : SWORD - B...THROW - A...JUMP - C...EXIT" -- "SOUND TEST" is row 3's own label,
+# "TRIGGERS ARE" is row 4's (the control-scheme cycle).  This is the game's sound test menu.
+SOUND_TEST_TABLE = 0x12675E         # ROM: 0x10-byte records (id byte, 15-byte name), FF-terminated both ends
+SOUND_TEST_SELECTION = 0xFF7DE2     # boot.py seeds this to SOUND_TEST_TABLE at power-on; persists across visits
+SOUND_TEST_REPEAT = 0xFFF15B        # 1B4466/1B44AA..: the Up/Down auto-repeat countdown
+SOUND_TEST_REPEAT_FRAMES = 7        # 1B44B6/1B44DA: reloaded after every step
+SOUND_TEST_HELD = 0xFFEFFD          # 1B4436/1B4500..: this screen's own any-of-A/B/C/Start edge latch
+                                     # (the same RAM cell as DIR_LATCH/OPTIONS_SELECT_LATCH -- one shared cell,
+                                     # different screens)
+SOUND_TEST_STRIDE = 0x10
+SOUND_TEST_ROWS = 9                 # 1B463A: d4 = 8 and dbra: nine rows, the selection the fifth (a0 - 0x40)
+SOUND_TEST_ROW_COLUMN = 0xC
+SOUND_TEST_ROW_TOP = 0xE
+SOUND_TEST_BLANK_TEXT = 0x128E5B    # 1B4440: printed at (0, 0x19) on entry and on exit
+SOUND_TEST_ROWS_BLANK_TEXT = 0x128E4D   # 1B4626: a lone control byte (0x0A -> TILE_PALETTE_BITS = 0x4000),
+                                         # printed before every row redraw
+SOUND_TEST_ROWS_FOOTER_TEXT = 0x128E49  # 1B465A: a lone control byte (0x08 -> TILE_PALETTE_BITS = 0x0000),
+                                         # printed after every row redraw
 
 _TEXT_ARG_LEN = {0x00: 0, 0x01: 1, 0x02: 1, 0x03: 2, 0x04: 2, 0x05: 3, 0x06: 1,
                  0x07: 0, 0x08: 0, 0x09: 0, 0x0A: 0, 0x0B: 0, 0x0C: 3, 0x0F: 8}
@@ -150,8 +176,8 @@ def _spawn_from_list(state, services):
 
 def _print(state, services, text, column, row):
     """1B21F6 as the title calls it: no control byte in these strings waits, but the walker is general."""
-    messages.print_text(state.read, state.write, state.rom, state.vdp, text, column, row,
-                         sequences.text_wait(state, services), lambda: sequences.latched(state))
+    return messages.print_text(state.read, state.write, state.rom, state.vdp, text, column, row,
+                                sequences.text_wait(state, services), lambda: sequences.latched(state))
 
 
 def _menu_frame(state, services):
@@ -210,12 +236,12 @@ def _pad_sequence_step(state, services):
 
 
 def _draw_difficulty(state, services):
-    """1B434E: the fixed label, then the difficulty name from the table at DIFFICULTY_TABLE (both printed
-    at the same position -- the label's own text blanks the line the name is drawn over)."""
+    """1B434E: the fixed label at (A, E), then the difficulty name from the table at DIFFICULTY_TABLE printed
+    on from where the label's print left the pen (1B4378 sets neither d0 nor d1)."""
     digit = state.read(DIFFICULTY, 1)
     name = int.from_bytes(state.rom[DIFFICULTY_TABLE + 4 * digit:DIFFICULTY_TABLE + 4 * digit + 4], 'big')
-    _print(state, services, DIFFICULTY_LABEL, 0xA, 0xE)
-    _print(state, services, name, 0xA, 0xE)
+    column, row = _print(state, services, DIFFICULTY_LABEL, 0xA, 0xE)
+    _print(state, services, name, column, row)
 
 
 def _draw_sound_music(state, services):
@@ -251,10 +277,100 @@ def _place_options_cursor(state):
 
 
 def _place_remap_cursor(state):
-    """1B43FC: the cursor object placed for the button-remap screen (a fixed position)."""
+    """1B43FC: the cursor object placed for the sound test screen (a fixed position -- the list scrolls
+    under it, the cursor itself never moves)."""
     record = RECORD_TABLE + RECORD_SIZE * 2
     state.write(record + 4, 0x194, 2)
     state.write(record + 2, 0xCC, 2)
+
+
+def _draw_sound_test_rows(state, services):
+    """1B4626: a blank/palette-bits control text, the 8 visible records' names around the current
+    selection (nine rows, dbra with d4 = 8; each record is SOUND_TEST_STRIDE bytes: an id byte then the name, so the text pointer is
+    simply the record's address + 1 -- no chaining needed), then a second control text."""
+    _print(state, services, SOUND_TEST_ROWS_BLANK_TEXT, 0, 0x19)
+    anchor = state.read(SOUND_TEST_SELECTION, 4) - 0x40                 # 1B4636: four records above the selection
+    for i in range(SOUND_TEST_ROWS):
+        record = anchor + i * SOUND_TEST_STRIDE
+        _print(state, services, record + 1, SOUND_TEST_ROW_COLUMN, SOUND_TEST_ROW_TOP + i)
+    _print(state, services, SOUND_TEST_ROWS_FOOTER_TEXT, 0, 0x19)
+
+
+def _sound_test_move(state, services, step):
+    """1B45CC (step=-SOUND_TEST_STRIDE, Up) / 1B45D8 (step=+SOUND_TEST_STRIDE, Down): move the selection
+    one record, clamped by the FF sentinel records just past either end of the table (a clamp, not a wrap:
+    the pointer -- and the on-screen window -- simply stays put)."""
+    record = state.read(SOUND_TEST_SELECTION, 4) + step
+    if state.rom[record] == 0xFF:
+        return
+    state.write(SOUND_TEST_SELECTION, record, 4)
+    _draw_sound_test_rows(state, services)
+
+
+def _sound_test_preview(state, services):
+    """1B45F4: play the selected record's sound (its id byte) through the driver's flush command."""
+    record = state.read(SOUND_TEST_SELECTION, 4)
+    services.sound_command(0x16)
+    services.sound_flush(state.rom[record])
+
+
+def _sound_test_screen(state, services):
+    """1B4436..1B45CA: the options screen's row-3 entry, the sound test (see the module comment above
+    SOUND_TEST_TABLE for why this replaces the old "button-remap" gap).  Up/Down scroll an 8-row window
+    through the table (auto-repeat at a 7-frame rate); A previews the selected sound; any of B/C/Start
+    exits back to the options screen, which redraws itself (the caller's own ``redraw()``)."""
+    read, write = state.read, state.write
+    write(SOUND_TEST_HELD, 0xFF, 1)                                      # 1B4436
+    sequences.decompress_to_vram(state, 0x12F4EC, 0xC000, services)      # 1B443C (1B47F0 / BACKDROP_C)
+    _print(state, services, SOUND_TEST_BLANK_TEXT, 0, 0x19)              # 1B4440..1B444E
+    _draw_sound_test_rows(state, services)                               # 1B4452
+    _place_remap_cursor(state)                                           # 1B4456
+    services.sound_command(0x16)                                         # 1B4458..1B4462
+    write(SOUND_TEST_REPEAT, 0, 1)                                       # 1B4466
+    services.checkpoint(0x1B446C)                   # once per pass, right before the per-frame loop
+
+    while True:
+        write(player.FRAME_COUNTER, (read(player.FRAME_COUNTER, 1) + 1) & 0xFF, 1)   # 1B446C
+        services.vblank()                                                            # 1B4472
+        engine = Engine(state.memory(), services)
+        engine.animation_pass()                                                      # 1B4476
+        engine.motion_pass()                                                         # 1B447A
+        video.flush_upload_queue(read, write, state.vdp)                             # 1B447E
+        sprites.build_sprite_table(read, write, state.rom, state.bus_read, objects_only=True)   # 1B4482
+        video.upload_sprite_table(read, state.rom, state.vdp)                        # 1B4488
+
+        if state.buttons & 0x02:                                         # Down, 1B449E..1B44C6
+            if read(SOUND_TEST_REPEAT, 1):
+                write(SOUND_TEST_REPEAT, read(SOUND_TEST_REPEAT, 1) - 1, 1)
+            else:
+                _sound_test_move(state, services, SOUND_TEST_STRIDE)
+                write(SOUND_TEST_REPEAT, SOUND_TEST_REPEAT_FRAMES, 1)
+            continue
+        if state.buttons & 0x01:                                         # Up, 1B44C8..1B44E2
+            if read(SOUND_TEST_REPEAT, 1):
+                write(SOUND_TEST_REPEAT, read(SOUND_TEST_REPEAT, 1) - 1, 1)
+            else:
+                _sound_test_move(state, services, -SOUND_TEST_STRIDE)
+                write(SOUND_TEST_REPEAT, SOUND_TEST_REPEAT_FRAMES, 1)
+            continue
+        if state.buttons & 0x40:                                         # A, 1B44E4..1B4514
+            if not read(SOUND_TEST_HELD, 1):
+                write(SOUND_TEST_HELD, 0xFF, 1)
+                _sound_test_preview(state, services)
+            continue
+        if state.buttons & (0x80 | 0x10 | 0x20):                         # Start/B/C, 1B4522..1B4566
+            if read(SOUND_TEST_HELD, 1):
+                continue
+            services.sound_command(0x16)                                 # 1B456A..1B4574
+            write(SOUND_TEST_HELD, 0xFF, 1)                              # 1B4578
+            sequences.sound_if_enabled(state, services, STOP_MUSIC_CODE, flag=0xFFF57F)  # 1B457E..1B459C
+            write(RECORD_TABLE + RECORD_SIZE * 2 + 4, 1, 2)              # 1B45A0
+            sprites.build_sprite_table(read, write, state.rom, state.bus_read, objects_only=True)  # 1B45A8
+            video.upload_sprite_table(read, state.rom, state.vdp)        # 1B45AE
+            sequences.decompress_to_vram(state, 0x12F4EC, 0xC000, services)   # 1B45B4
+            _print(state, services, SOUND_TEST_BLANK_TEXT, 0, 0x19)      # 1B45B8..1B45C6
+            return                                                       # 1B45CA
+        write(SOUND_TEST_HELD, 0, 1)                                     # 1B4518
 
 
 def _options_frame(state, services):
@@ -322,6 +438,7 @@ def _options_screen(state, services):
                     if not was_on:
                         services.sound(0, 0x1A)
                     sequences.sound_if_enabled(state, services, CURSOR_MOVE_SOUND, flag=SOUND_ENABLED)
+                    _draw_sound_music(state, services)                  # 1B41F2 (VRAM only: the port stream saw it)
                     continue
                 elif cursor == 2:
                     write(OPTIONS_SELECT_LATCH, 0xFF, 1)
@@ -337,9 +454,12 @@ def _options_screen(state, services):
                     _load_control_profile(state, services)
                     continue
                 elif cursor == 3:
-                    _place_remap_cursor(state)
-                    raise NativeGap('title', OPTIONS_GAP.REMAP_PC,
-                                     'the button-remap screen is not recovered', state.frame)
+                    write(OPTIONS_SELECT_LATCH, 0xFF, 1)
+                    _place_remap_cursor(state)                          # 1B4262..1B4268
+                    _sound_test_screen(state, services)                 # 1B426C
+                    redraw()                                            # 1B4270 (bra $1b4066)
+                    services.checkpoint(0x1B409A)
+                    continue
                 else:
                     sequences.decompress_to_vram(state, 0x12F4EC, 0xC000, services)
                     return
@@ -483,7 +603,8 @@ def title_screen(state, services):
     # ---- 1B3DB8: post-intro convergence -------------------------------------------------------
     sequences.clear_cram(state.vdp)
     if not read(0xFFF119, 1) and read(0xFFF57F, 1):
-        services.sound_command(STOP_MUSIC_CODE)
+        services.sound(0, STOP_MUSIC_CODE)          # 1B3DBC: pea $1a; jsr 1E58B8; jsr 1E589A (a request + flush,
+                                                       # the same shape as sound_if_enabled at 1B3CDA -- not 1E58F4)
     state.vdp.control(0x8B00)
     sequences.retire_pool(state, services, 0, 32)
     sequences.sprite_terminator(state)
@@ -495,6 +616,7 @@ def title_screen(state, services):
     sequences.decompress_to_vram(state, TITLE_TILES[2][0], TITLE_TILES[2][1], services)     # 0x136912 -> 0
     sequences.decompress_to_vram(state, BACKDROP_E[0], BACKDROP_E[1], services)
     sequences.init_template(state, record2, 0x1B7A44)
+    _print(state, services, SOUND_TEST_BLANK_TEXT, 0, 0x19)      # 1B3E22..1B3E30: the text row 25 blanked (VRAM only)
     services.vblank()
     sequences.palette_line(state, 2, 0x129012)
     sequences.palette_line(state, 1, 0x1297F2)

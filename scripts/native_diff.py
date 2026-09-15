@@ -78,8 +78,12 @@ def main(frame, count, every=1, recording=None, independent=False, native_boot=F
         driver = nr.OracleDriver(m, pads, by_waits=independent, frame=frame)
         print(f'{"independent" if independent else "aligned"} run seeded at main-loop frame {frame}'
               + (f' of recording {recording}' if recording else ''))
+    end = max(pads) if pads else None            # the recording's end: its inputs are unspecified beyond it
     for i in range(count):
         f = state.frame
+        if end is not None and f >= end:
+            print(f'the recording ends at frame {end}: {i} frames compared')
+            break
         # the independent driver's first run from reset passes the whole boot: its sound calls are the native
         # boot's events (the aligned clock compared those as it drove the boot)
         before = 0 if i == 0 and native_boot and independent else len(state.events)
