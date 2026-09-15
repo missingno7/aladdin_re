@@ -56,13 +56,21 @@ class Journal:
 
     def __init__(self, start_frame=0, buttons=0):
         self.events = []
-        self.buttons = buttons
+        self.buttons = self.initial = buttons
         self.start_frame = start_frame
 
     def note(self, frame, buttons):
-        if buttons != self.buttons and frame >= self.start_frame:
-            self.events.append({'frame': frame, 'buttons': buttons})
-            self.buttons = buttons
+        """The mask the game read for ``frame``; a second read in the same frame replaces the first (one mask per
+        game frame in a history), and a change back to the previous mask cancels the event."""
+        if buttons == self.buttons or frame < self.start_frame:
+            return
+        if self.events and self.events[-1]['frame'] == frame:
+            self.events.pop()
+            self.buttons = self.events[-1]['buttons'] if self.events else self.initial
+            if buttons == self.buttons:
+                return
+        self.events.append({'frame': frame, 'buttons': buttons})
+        self.buttons = buttons
 
 
 class Player:
@@ -190,7 +198,7 @@ class Session:
     # -- the immutable record ------------------------------------------------------------------
     def journal_node(self, reason, label=None):
         events = self.journal.events
-        end_frame = max(self.state.frame, 1)
+        end_frame = max(self.state.frame, 1, (events[-1]['frame'] + 1) if events else 0)   # a history's events precede its end
         node = self.store.append(self.parent, list(events), end_frame)
         image = self.player.last_image if self.player is not None else render.render(self.state.vdp)
         self.store.present(node, rgb=image.tobytes(), width=320, height=224, reason=reason, label=label)
@@ -255,6 +263,8 @@ def resume(session: Session, node: str):
 
 
 def main(argv):
+    if '--help' in argv or '-h' in argv:
+        print(__doc__); return 0
     flags = [a for a in argv if a in ('--headless',)]
     argv = [a for a in argv if a not in flags]
     args = dict(zip(argv[::2], argv[1::2])) if len(argv) % 2 == 0 else {}
