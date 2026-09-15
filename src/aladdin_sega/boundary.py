@@ -4295,13 +4295,23 @@ def begin_contact_family_type1f_contact(machine, registers):
                      ('contact type1f direction', 0xFF7E49, 1),
                      ('contact type1f active', 0xFFF0D8, 1)])
     read = lambda address, size: _read(machine, address, size)
-    player, threshold = read(0xFF7E02, 2), read(record + 2, 2)
-    if (read(0xFF7E49, 1) != 0 or player >= threshold
-            or read(0xFFF0D8, 1) != 0 or not (read(record + 0x3C, 1) & 0x20)):
+    player, threshold, direction = read(0xFF7E02, 2), read(record + 2, 2), read(0xFF7E49, 1)
+    if not (read(record + 0x3C, 1) & 0x20):
         raise UnsupportedCandidate('contact type1f non-recorded contact arm')
-    return AtomicPlan(138, 10, (*_bytes(sp - 4, 0x1AE870, 4),),
+    position_failed = player >= threshold if not direction else player < threshold
+    if position_failed:
+        # CMP.W's N/V/C survive the BTST, whose set bit clears Z alone.
+        residue = _cmp_sr(sr, player, threshold, 2) & ~0x04
+        cycles, instructions = (110, 8) if not direction else (108, 8)
+    elif read(0xFFF0D8, 1):
+        raise UnsupportedCandidate('contact type1f non-recorded contact arm')
+    else:
+        # TST.B FFF0D8 clears N/V/C before the BTST clears Z.
+        residue = sr & ~0x0F
+        cycles, instructions = (138, 10) if not direction else (146, 11)
+    return AtomicPlan(cycles, instructions, (*_bytes(sp - 4, 0x1AE870, 4),),
                       {**registers, 'd7': (registers['d7'] & 0xFFFF0000) | player,
-                       'a7': sp - 4, 'pc': CONTACT_ENTRY, 'sr': sr & ~0x0F},
+                       'a7': sp - 4, 'pc': CONTACT_ENTRY, 'sr': residue},
                       0x1AE86C, direct_calls=1)
 
 
@@ -4357,23 +4367,26 @@ def begin_contact_family_type1f_transition(machine, registers):
                      ('contact type1f active', 0xFFF0D8, 1),
                      ('contact type1f finish gate', 0xFF7E21, 1)])
     read = lambda address, size: _read(machine, address, size)
-    player, threshold = read(0xFF7E02, 2), read(record + 2, 2)
-    if (read(0xFF7E49, 1) != 0 or player >= threshold
-            or not read(0xFFF0D8, 1) or read(record + 0x3C, 1) & 0x20):
+    player, threshold, direction = read(0xFF7E02, 2), read(record + 2, 2), read(0xFF7E49, 1)
+    position_failed = player >= threshold if not direction else player < threshold
+    if (position_failed or not read(0xFFF0D8, 1) or read(record + 0x3C, 1) & 0x20):
         raise UnsupportedCandidate('contact type1f non-direct-finish arm')
     kind, finish_gate = read(record, 1), read(0xFF7E21, 1)
-    if not finish_gate:
-        try:
-            script, cycles, instructions = {
-                0x1E: (0x1234BE, 272, 19), 0x1F: (0x12384A, 316, 23),
-                0x21: (0x12350C, 294, 21), 0x22: (0x12387A, 328, 24),
-            }[kind]
-        except KeyError as error:
-            raise UnsupportedCandidate('contact type1f direct-finish kind') from error
-    elif kind == 0x1F and not read(record + 1, 1):
-        script, cycles, instructions = 0x12384A, 336, 25
-    else:
-        raise UnsupportedCandidate('contact type1f non-direct-finish arm')
+    try:
+        script, cycles, instructions = {
+            0x1E: (0x1234BE, 272, 19), 0x1F: (0x12384A, 316, 23),
+            0x21: (0x12350C, 294, 21), 0x22: (0x12387A, 328, 24),
+        }[kind]
+    except KeyError as error:
+        raise UnsupportedCandidate('contact type1f direct-finish kind') from error
+    if finish_gate:
+        if read(record + 1, 1):
+            raise UnsupportedCandidate('contact type1f non-direct-finish arm')
+        # CMPI.B #0,FF7E21 falls through and TST.B 1(A1) takes the finish branch.
+        cycles, instructions = cycles + 20, instructions + 2
+    if direction:
+        # BEQ not taken, BCS not taken, BRA taken instead of BEQ taken and BCC not taken.
+        cycles, instructions = cycles + 8, instructions + 1
     writes = (*_bytes(record + 0x20, script, 4), *_bytes(record, 0x84, 1),
               *_bytes(record + 0x37, 0, 1), *_bytes(record + 0x0A, 0, 4),
               *_bytes(record + 0x36, 0, 1))
@@ -4409,8 +4422,9 @@ def begin_contact_family_type1f_transition_sound(machine, registers):
                      ('contact type1f sound', 0xFFF57D, 1)])
     read = lambda address, size: _read(machine, address, size)
     player, threshold, kind = read(0xFF7E02, 2), read(record + 2, 2), read(record, 1)
-    counter = read(record + 1, 1)
-    if (read(0xFF7E49, 1) != 0 or player >= threshold
+    counter, direction = read(record + 1, 1), read(0xFF7E49, 1)
+    position_failed = player >= threshold if not direction else player < threshold
+    if (position_failed
             or not read(0xFFF0D8, 1) or read(record + 0x3C, 1) & 0x20
             or kind not in (0x1E, 0x1F, 0x21, 0x22) or not read(0xFF7E21, 1)
             or not counter or not read(0xFFF57D, 1)):
@@ -4419,6 +4433,8 @@ def begin_contact_family_type1f_transition_sound(machine, registers):
                                      0x1F: (0x12384A, 458, 31),
                                      0x21: (0x12350C, 436, 29),
                                      0x22: (0x12387A, 470, 32)}[kind])
+    if direction:
+        cycles, instructions = cycles + 8, instructions + 1
     writes = [*_bytes(record + 0x20, script, 4), (record, 0x84),
               (record + 0x37, 0), *_bytes(record + 0x0A, 0, 4),
               (record + 0x36, 0), (record + 1, counter - 1)]
@@ -4489,8 +4505,9 @@ def begin_contact_family_type1f_transition_soundoff(machine, registers):
                      ('contact type1f script', 0xFF7E60, 4)])
     read = lambda address, size: _read(machine, address, size)
     player, threshold, kind = read(0xFF7E02, 2), read(record + 2, 2), read(record, 1)
-    counter = read(record + 1, 1)
-    if (read(0xFF7E49, 1) != 0 or player >= threshold or not read(0xFFF0D8, 1)
+    counter, direction = read(record + 1, 1), read(0xFF7E49, 1)
+    position_failed = player >= threshold if not direction else player < threshold
+    if (position_failed or not read(0xFFF0D8, 1)
             or read(record + 0x3C, 1) & 0x20 or kind not in (0x1E, 0x1F, 0x21, 0x22)
             or not read(0xFF7E21, 1) or not counter or read(0xFFF57D, 1)):
         raise UnsupportedCandidate('contact type1f non-soundoff selector arm')
@@ -4498,6 +4515,8 @@ def begin_contact_family_type1f_transition_soundoff(machine, registers):
                                      0x1F: (0x12384A, 446, 32),
                                      0x21: (0x12350C, 424, 30),
                                      0x22: (0x12387A, 458, 33)}[kind])
+    if direction:
+        cycles, instructions = cycles + 8, instructions + 1
     writes = [*_bytes(record + 0x20, script, 4), (record, 0x84),
               (record + 0x37, 0), *_bytes(record + 0x0A, 0, 4),
               (record + 0x36, 0), (record + 1, counter - 1),
@@ -6688,6 +6707,27 @@ def begin_contact_family_type6e_dispatch(machine, registers, dispatch):
                                     begin_contact_family_type6e)
 
 
+def _contact_family_type44_body(machine, registers):
+    """1AEF34 onward: the counter clamp and counted replacement both arms share."""
+    sr = registers['sr']
+    read = lambda address, size: _read(machine, address, size)
+    candidate = (3 - read(0xFF7E21, 1) + read(0xFFEFFA, 1)) & 0xff
+    limit = read(0xFFEFFB, 1)
+    value = candidate if candidate < limit else limit
+    # Arithmetic, compare, optional clamp move, byte store, BRA.
+    prefix = AtomicPlan(92 if candidate < limit else 106,
+                        7 if candidate < limit else 8,
+                        _bytes(0xFFEFFA, value, 1),
+                        {**registers,
+                         'd0': (registers['d0'] & 0xffffff00) | value,
+                         'sr': _logic_sr(sr, value, 1)},
+                        0x1AEF58)
+    tail = replace_object(dispatch_plan_view(machine, prefix), prefix.registers,
+                          increment_total=True,
+                          extra_spans=(('type44 counter', 0xFFEFFA, 2),))
+    return _join_plans(prefix, tail)
+
+
 def begin_contact_family_type44(machine, registers):
     """1AEF12's no-sound counter clamp and counted replacement tail."""
     record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
@@ -6698,28 +6738,76 @@ def begin_contact_family_type44(machine, registers):
                      ('type44 sound', 0xFFF57D, 1),
                      ('type44 finish gate', 0xFF7E21, 1),
                      ('type44 counter', 0xFFEFFA, 2)])
-    read = lambda address, size: _read(machine, address, size)
-    if read(0xFFF57D, 1):
+    sound = _read(machine, 0xFFF57D, 1)
+    if sound:
         raise UnsupportedCandidate('type44 requires command98 sound seam')
-    candidate = (3 - read(0xFF7E21, 1) + read(0xFFEFFA, 1)) & 0xff
-    limit = read(0xFFEFFB, 1)
-    value = candidate if candidate < limit else limit
-    # TST/BEQ, arithmetic, compare, optional clamp move, byte store, BRA.
-    prefix = AtomicPlan(118 if candidate < limit else 132,
-                        9 if candidate < limit else 10,
-                        _bytes(0xFFEFFA, value, 1),
-                        {**registers,
-                         'd0': (registers['d0'] & 0xffffff00) | value,
-                         'sr': _logic_sr(sr, value, 1)},
-                        0x1AEF58)
-    tail = replace_object(dispatch_plan_view(machine, prefix), prefix.registers,
-                          increment_total=True,
-                          extra_spans=(('type44 counter', 0xFFEFFA, 2),))
-    final = dict(prefix.registers); final.update(tail.registers)
-    return AtomicPlan(prefix.cycles + tail.cycles,
-                      prefix.instructions + tail.instructions,
-                      tuple(dict((*prefix.writes, *tail.writes)).items()), final,
-                      tail.last_pc, prefix.direct_calls + tail.direct_calls)
+    # TST.B FFF57D and the taken BEQ.B.
+    guard = AtomicPlan(26, 2, (), {**registers, 'sr': _logic_sr(sr, sound, 1), 'pc': 0x1AEF34},
+                       0x1AEF18)
+    return _join_plans(guard, _contact_family_type44_body(dispatch_plan_view(machine, guard),
+                                                          guard.registers))
+
+
+def begin_contact_family_type44_sound_seam(machine, registers):
+    """1AEF12 with sound on: the command-62 request/flush seam, then the shared body.
+
+    TST.B FFF57D falls through into MOVEM.L D0-D1/A0-A1/A6,-(A7), PEA 62,
+    JSR 1E58B8 (108/5); the machine runs the request and its flush; the
+    suffix restores the frame (ADDQ/MOVEM, 60/2) and continues at 1AEF34
+    exactly as the no-sound arm does.  Recorded on main in
+    1AEF12-kind44-p0/p1 and at 19 scan slots (audit snapshots).
+    """
+    record, sp, sr = (registers[key] for key in ('a1', 'a7', 'sr'))
+    if (record | sp) & 1:
+        raise UnsupportedCandidate('unaligned type44 sound record/stack')
+    _spans_disjoint([('type44 record', record, 66),
+                     ('type44 sound frame', sp - 28, 32),
+                     ('type44 sound', 0xFFF57D, 1),
+                     ('type44 finish gate', 0xFF7E21, 1),
+                     ('type44 counter', 0xFFEFFA, 2)])
+    sound = _read(machine, 0xFFF57D, 1)
+    if not sound:
+        raise UnsupportedCandidate('type44 sound-off arm is the plain planner')
+    writes = []
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        writes.extend(_bytes(sp - index * 4, registers[name], 4))
+    writes.extend((*_bytes(sp - 24, 0x62, 4), *_bytes(sp - 28, 0x1AEF28, 4)))
+    prefix = AtomicPlan(108, 5, tuple(writes),
+                        {**registers, 'a7': sp - 28, 'pc': 0x1E58B8, 'sr': _logic_sr(sr, sound, 1)},
+                        0x1AEF22, direct_calls=1)
+    return SoundSeam(prefix, sp, 0x1AEF2E, 0x1AEF2E, 24, 28, 28,
+                     suffix=finish_contact_family_type44_sound)
+
+
+def finish_contact_family_type44_sound(machine, registers):
+    """1AEF2E: restore the command-62 frame and run the shared type44 body."""
+    if registers.get('pc') != 0x1AEF2E or registers['a7'] & 1:
+        raise UnsupportedCandidate('foreign type44 command62 return')
+    sp = registers['a7'] + 24
+    restored = dict(registers, a7=sp, pc=0x1AEF34)
+    for index, name in enumerate(('a6', 'a1', 'a0', 'd1', 'd0'), 1):
+        restored[name] = _read(machine, sp - index * 4, 4)
+    _spans_disjoint([('type44 record', restored['a1'], 66),
+                     ('type44 sound frame', sp - 28, 32),
+                     ('type44 finish gate', 0xFF7E21, 1),
+                     ('type44 counter', 0xFFEFFA, 2)])
+    restore = AtomicPlan(60, 2, (), restored, 0x1AEF30)
+    return _join_plans(restore, _contact_family_type44_body(dispatch_plan_view(machine, restore),
+                                                            restore.registers))
+
+
+def begin_contact_family_type44_dispatch_sound_seam(machine, registers, dispatch):
+    """Compose the table callback prefix with type44's command-62 seam."""
+    sp = registers['a7']
+    if dispatch.registers.get('pc') != CONTACT_FAMILY_TYPE44_ENTRY or \
+            dispatch.registers.get('a7') != sp - 4:
+        raise UnsupportedCandidate('type44 dispatch prefix identity')
+    callback_registers = {**registers, **dispatch.registers}
+    sound = begin_contact_family_type44_sound_seam(dispatch_plan_view(machine, dispatch),
+                                                    callback_registers)
+    return SoundSeam(_join_plans(dispatch, sound.prefix), sound.stack_basis, sound.resume_pc,
+                     sound.return_slot, sound.saved_frame, sound.frame_size, sound.return_delta,
+                     sound.counts_contact, sound.suffix)
 
 
 def begin_contact_family_type44_dispatch(machine, registers, dispatch):

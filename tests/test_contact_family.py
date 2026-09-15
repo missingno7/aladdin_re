@@ -499,8 +499,62 @@ def test_type1f_sibling_direct_command41_transition_matches_original_future_and_
     assert oracle.fresh_process_future(actual.outer_state) == actual.future
 
 
-@pytest.mark.parametrize('values', ({'contact_bit5': 0x20},))
+@pytest.mark.parametrize('values', [
+    {'direction': 0, 'player_x': 100, 'object_x': 100},                 # position failed
+    {'direction': 1, 'player_x': 99, 'object_x': 100},                  # position failed, reversed
+    {'direction': 1, 'player_x': 100, 'object_x': 100, 'active_d8': 0}, # position ok, D8 clear, reversed
+    {'direction': 0, 'player_x': 99, 'object_x': 100, 'active_d8': 0},  # the originally recorded arm
+], ids=['pos-fail', 'pos-fail-reversed', 'd8-zero-reversed', 'd8-zero'])
+@pytest.mark.parametrize('root', [{'gate_f2': 1}, {'gate_f2': 0, 'sound': 1}],
+                         ids=['early-root', 'sound-reset-root'])
+def test_type1f_contact_join_arms_match_original(values, root):
+    """Every route into 1AE862 with bit 5 set calls the shared contact root."""
+    state = family_fixture(0x1AE796, contact_bit5=0x20, **values, **root)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == (1 if root.get('sound') else 0)
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('kind', (0x1E, 0x1F, 0x21, 0x22))
+@pytest.mark.parametrize('direction,player_x', [(0, 99), (1, 100)], ids=['forward', 'reversed'])
+def test_type1f_finish_gate_counter_zero_transition_matches_original(kind, direction, player_x):
+    """FF7E21 set with a zero counter takes the same direct finish as the gate-clear arm."""
+    state = _poke(family_fixture(0x1AE796, kind=kind, active_d8=1, object_x=100, player_x=player_x,
+                                 direction=direction, contact_bit5=0, finish_gate=1, record_counter=0),
+                  (*oracle.write_long(RECORD + 42, 0), *oracle.write_long(RECORD + 62, 0)))
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('kind', (0x1E, 0x21))
+@pytest.mark.parametrize('sound', (0, 1), ids=['soundoff', 'command41'])
+def test_type1f_reversed_counter_transition_matches_original(kind, sound):
+    """The reversed direction only changes the compare's branch timing."""
+    state = family_fixture(0x1AE796, kind=kind, active_d8=1, object_x=100, player_x=100,
+                           direction=1, contact_bit5=0, finish_gate=1, record_counter=2, sound=sound)
+    expected = qualify(state, None)
+    actual = qualify(state, 'lifecycle')
+    assert actual.outer == expected.outer
+    assert actual.future == expected.future
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == sound
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('values', ({'contact_bit5': 0x20, 'active_d8': 1, 'player_x': 99, 'object_x': 100},))
 def test_type1f_non_rts_arms_decline_to_original(values):
+    """Bit 5 set with the record active is the device/stream arm and stays original."""
     state = family_fixture(0x1AE796, **values)
     expected = qualify(state, None)
     actual = qualify(state, 'lifecycle')
@@ -757,15 +811,39 @@ def test_type44_counter_clamp_and_counted_replace_match_original(
     assert actual.stats['fallbacks'] == 0
 
 
-def test_type44_sound_arm_remains_original():
-    state = type44_fixture(sound=1, finish_gate=0, decimal_current=1,
-                           decimal_limit=9)
+@pytest.mark.parametrize('finish_gate,current,limit', [
+    (0, 1, 9), (2, 7, 9), (0, 8, 9), (3, 0, 0),
+])
+def test_type44_sound_arm_seams_into_the_shared_body(finish_gate, current, limit):
+    state = type44_fixture(sound=1, finish_gate=finish_gate, decimal_current=current,
+                           decimal_limit=limit)
     expected = qualify(state, None)
     actual = qualify(state, 'lifecycle')
     assert actual.outer == expected.outer
     assert actual.future == expected.future
-    assert actual.stats['collection_dispatch_hits'] == 0
-    assert actual.stats['fallbacks'] >= 1
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.stats['legacy_entries'] == 1
+    assert actual.stats['legacy_returns'] == 1
+    assert actual.stats['fallbacks'] == 0
+    assert oracle.fresh_process_future(actual.outer_state) == actual.future
+
+
+@pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])
+def test_type44_sound_arm_mutants_diverge_at_outer_boundary(mutant, monkeypatch):
+    state = type44_fixture(sound=1, finish_gate=0, decimal_current=1, decimal_limit=9)
+    expected = qualify(state, None)
+    if mutant == 'continuation':
+        original_mutate = oracle.Candidate._mutate
+
+        def suffix_only(candidate, plan):
+            if candidate.name.endswith('continuation') and plan.registers.get('pc') == 0x1E58B8:
+                return plan
+            return original_mutate(candidate, plan)
+
+        monkeypatch.setattr(oracle.Candidate, '_mutate', suffix_only)
+    actual = qualify(state, 'lifecycle-mutant-' + mutant, stop_after_first=True)
+    assert actual.stats['collection_dispatch_hits'] == 1
+    assert actual.outer != expected.outer
 
 
 @pytest.mark.parametrize('mutant', ['result', 'continuation', 'timing'])

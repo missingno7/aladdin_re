@@ -26,6 +26,7 @@ from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, 
                         CONTACT_FAMILY_TYPE1F_ENTRY, begin_contact_family_type1f_inactive_dispatch,
                         CONTACT_FAMILY_TYPE15_ENTRY, begin_contact_family_type15_dispatch,
                         CONTACT_FAMILY_TYPE44_ENTRY, begin_contact_family_type44_dispatch,
+                        begin_contact_family_type44_dispatch_sound_seam,
                         CONTACT_FAMILY_TYPE03_ENTRY, begin_contact_family_type03_sound_seam,
                         begin_contact_family_type03, begin_contact_family_type03_dispatch,
                         begin_contact_family_type03_dispatch_sound_seam,
@@ -471,6 +472,19 @@ class Candidate:
                     return self._run_sound_seam(
                         machine, target, seam,
                         suffix_transform=self._mutate,
+                        on_complete=lambda: self.stats.__setitem__(
+                            'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
+                if entry == CONTACT_FAMILY_TYPE44_ENTRY:
+                    try:
+                        seam = begin_contact_family_type44_dispatch_sound_seam(
+                            machine, dispatch_registers, prefix)
+                        if not self._apply(machine, self._mutate(seam.prefix), target):
+                            return self._fallback(machine, COLLECTION_DISPATCH_ENTRY, 'scheduler admission')
+                    except UnsupportedCandidate:
+                        return self._fallback(machine, COLLECTION_DISPATCH_ENTRY,
+                                              f'unsupported domain: {error}')
+                    return self._run_sound_seam(
+                        machine, target, seam, suffix_transform=self._mutate,
                         on_complete=lambda: self.stats.__setitem__(
                             'collection_dispatch_hits', self.stats['collection_dispatch_hits'] + 1))
                 if entry == CONTACT_FAMILY_TYPE03_ENTRY:
