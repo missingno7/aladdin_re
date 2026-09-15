@@ -87,7 +87,7 @@ Record.  The player is object slot 0 at `FF7E40` (66 bytes, kind byte
 | FF7E58 / FF7E5A | player X / Y velocity (sub-pixel, applied in 0x28 / 0x3C steps) | CONFIRMED | `1A9B90`; jump sets FF7E5A, landing clears both |
 | FF7E49 | facing (00 right, FF left) | CONFIRMED | `1A9D98` clears it on right, sets on left; every callback's direction test |
 | FFF07C / FFF07D | right / left held | CONFIRMED | `1A9D98` |
-| FFF07E / FFF07F | jump button / attack-throw button, pressed | STRONG | `1A986E` and `1A99F0` branch on them; the shop reads FFF07E as "ready" |
+| FFF07C..FFF07F | right / left / up / down held (FF), from the raw pad bytes FFF156 (TH high) and FFF155 (TH low) | CONFIRMED | main loop 1A8C44..1A8C86 (`game.pad`); B, C, A and Start are tested from the raw bytes by 1B3244 / 1B324E / 1B323A / 1B3208 |
 | FFF0B0 | walk speed (word; 3 = running) | CONFIRMED | `1A9D98` adds it to FF7DFA; the idle script 122006 writes it with opcode ED |
 | FFF0CC | walking flag | STRONG | `1A9D98` sets 1 when moving; idle script tests it |
 | FFF0D0 | in air | STRONG | set by the jump handler, cleared on landing, tested by the attack script |
@@ -104,7 +104,7 @@ Record.  The player is object slot 0 at `FF7E40` (66 bytes, kind byte
 | FF7E60, FF7E77 | player animation script pointer and restart flag | CONFIRMED | player record +20; written by 1A9B38, 1AD7B4, 1A9502, 1A9716, 1B1FAE/1B1FFE (state changes) |
 | FF7E54 | player current sprite frame pointer (+14) | CONFIRMED | written by the interpreter only |
 | FF7E26 | level type code (0..5, 8 = special) | TENTATIVE | control tests `== 8`; the music byte FFF575 follows it exactly |
-| FFEFEA | stage index 0..8 (levels and bonus stages interleaved) | STRONG | steps 0,0,0,1,2,4,6 at the six load bursts and only there |
+| FFEFEA | extra-life progress: tally units (10 points each) since the last extra life; reset at 5,000 / 7,500 / 10,000 points by difficulty | CONFIRMED | `1B00CA` increments it per tally unit and calls the extra-life routine at the threshold (an earlier reading as a stage index was wrong: its high byte merely steps with the score) |
 | FF7DFE / FF7E00 | camera window target for the player (0x70, 0x150) | CONFIRMED | `1AA8FA` compares FF7DFA/FC against them |
 | FF7DB8 / FF7DBC | level width / height | STRONG | camera right limit = FF7DB8 - 0x161; fall check uses FF7DBC |
 | FF7DB4, FF9884, FF98C4, FFAE86 | level collision map base and row pointers | STRONG | ground collision indexes FF98C4 by tile row; readers are only the collision routines |
@@ -135,7 +135,7 @@ single consistent address each.  **CONFIRMED.**
 | FFEFE2..E3 | gems (rubies), two ASCII digits | matches 5, 3, 2, 10, 13, 24; `1B03BE` spends one; the shop (type7E) spends five |
 | FF7E3C | lives, one ASCII digit | matches 3, 6, 8, 4; `1AEF70` adds one capped at '9' (extra life, also the type46 pickup); drops by one at each death (frames 30720, 38752, 57088, 75136, 81504) |
 | FF7E2A..2E | score, five ASCII digits | `1B00CA` moves points from FFF14E into the digits with carries at the first score change (frame 2752) |
-| FFF14E | pending score points (binary) | `1B0156` adds 15 for every counted replacement (enemy killed / object broken), `1AE95A` adds `8(a1)` (the object's point value) on retirement |
+| FFF14E | pending score in tally units of 10 points | `1B0138..1B0192` add 1, 5, 10, 15, 20, 25, 50, 75, 100 or 1,000 units; `1AE95A` adds the object's own value `8(a1)`; `1B00CA` moves one unit per even frame into the digits (`game.hud.score_tally`) |
 | FFF0F2 | invulnerability timer | see above |
 
 Shop.  Object kind 7E (the WISH merchant, sprite confirmed) requires at
@@ -292,7 +292,69 @@ behavior; the ones marked "ask" are extracted but not yet named.
 | 7A, 7C | type78 / sibling wrapper | dark dungeon guard with spear; blue dungeon creature | ask |
 | 15, 17, 1A, 1D, 20, 0F, 06, 03, 01, 2B, 2C, 2E, 31, 36, 3E, 3F, 47, 49, 4C, 65, 79, 80, 82 | various | extracted, identity pending (see the sheets) | ask |
 
-## 8. What to recover next
+## 8. Recovered structure (code and data, verified)
+
+`src/aladdin_sega/game/`:
+
+- `objects/record.py`: the 66-byte record as named fields (`RecordView`),
+  32 records from FF7E40, `ObjectTemplate` (the 19 bytes 1AE30A copies)
+  and the 85 template sites.
+- `scripts.py`: the opcode table as data (21 named opcodes with operand
+  decoders), `decode_animation` / `decode_motion` into `Frame`, `Op`,
+  `MotionStep` items and branch-target blocks.
+- `assets.py`: `SpriteFrame` (descriptor header + 12-byte pieces),
+  `SpritePiece` (0x80-biased offsets, DMA source, tile advance),
+  `TileRecord` (DMA length, VRAM advance, OAM size, width/height), plain
+  4bpp tile decoding and `render_frame`.  Every template's first frame
+  renders from ROM (`artifacts/cartography/template_sheet.png`).
+- `objects/script_engine.py`: the engine over a `Memory` adapter: the
+  animation channel (1AC784: frame resolution, delay, opcode loop), the
+  motion channel and velocity integration (1ADE36: friction 0x28/0x3C,
+  gravity 0x78, despawn window, rider propagation), all 21 opcodes, the
+  player selector (1AD150), VRAM slot allocation (1AD3E8) and release
+  (1AE372), retirement (1ABE6E), destroy (F6) and despawn (1AE0B0).
+  Spawning (F5) and native calls (FB) are reported as handoffs.
+- `pad.py`, `hud.py`, `player.py`: pad bytes from the recorded mask, the
+  four direction flags, the score tally with the extra-life rule, the
+  frame counter and the player position publish.
+
+Asset graph (`scripts/cartography/asset_graph.py` ->
+`artifacts/cartography/asset_graph.json`): 85 templates, 122 scripts, 461
+distinct frames, 2,356 tile sources of which 62 are shared between
+frames.  Animations are the maximal frame runs between control opcodes
+of each script block; a template's identity is (kind, animation script,
+motion script, attributes, VRAM slots).
+
+Verification (`tests/test_script_engine.py`, `tests/test_frame_steps.py`,
+`scripts/native_replay.py --verify`): each recovered step runs over a copy
+of the original's RAM at that step's entry and is compared byte for byte
+at its exit, ignoring only the stack, the DMA upload queue and the two
+continuation pointers.  Over the saved frame states and 40 consecutive
+frames of play, every recovered step matches; the engine's only
+non-matching passes are the ones that hit a spawn or native-call opcode,
+which it reports instead of guessing.
+
+## 9. The native runtime and its gaps
+
+`src/aladdin_sega/native/`: a `GameState` (the original's 64 KB work RAM
+as the backing store, the ROM, the frame clock, an event stream) and a
+frame defined as the original main loop's ordered steps (`frame.STEPS`,
+33 steps from the VBlank wait).  `scripts/native_replay.py --native`
+seeds the state from an oracle snapshot and runs frames until a step that
+is not recovered raises `NativeGap`; `--verify` proves each recovered step
+against the oracle in place.  Nothing in the native path executes
+original code.
+
+Recovered natively: pad read, frame counter, position publish, motion
+pass, button decode, score tally, animation pass.  The first gap is the
+VRAM upload flush (a platform service: the queued frame uploads become
+`frame_upload` events), then the sprite-table upload (platform), the sound
+queue and driver (platform), camera scroll with the spawn strips, the VDP
+queue, the player collision and control cluster, the object level
+collision, the contact scan, the HUD pieces, the fall and death steps and
+the sprite table builder.  That ordered list is the recovery queue.
+
+## 10. What to recover next
 
 1. The script engine (`1AC784`, `1ADE36`, the 21 handlers, `1AC6D0`) as
    one Python module with the opcode table as data.  It is bounded, RAM
