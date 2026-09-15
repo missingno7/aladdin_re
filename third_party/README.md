@@ -23,7 +23,7 @@ The inspected read-only donor root is
 `D:/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge`.
 [dependencies.json](dependencies.json) is generated from actual compiler records,
 with active build objects and relative paths; the
-[component ledger](../docs/component-migration.md) explains every dependency group.
+[component ledger](../docs/archive/aladdin/component-migration.md) explains every dependency group.
 System compiler headers are excluded from that focused graph.
 
 CMake checks selected donor files and all direct upstream bytes at configure

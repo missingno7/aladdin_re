@@ -8,7 +8,7 @@ each point, a replay clock advances the frame counter at the sequence's
 checkpoints (``services.checkpoint(pc)``) to the frame at which the
 original reached ``pc``, and at the end of the transition to the
 boundary at which the original's loop resumed.  The harness's clock
-asks the oracle running alongside (scripts/native_replay.OracleClock);
+asks the oracle running alongside (scripts/aladdin/native_replay.OracleClock);
 nothing about a recording is stored.  Without a replay clock (a
 standalone game with live input) checkpoints do nothing and the game
 simply runs its transitions faster.

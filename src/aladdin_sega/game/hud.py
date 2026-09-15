@@ -1,6 +1,6 @@
 """Score, lives and the HUD counters as the game keeps them.
 
-All counters are ASCII digits in work RAM (docs/semantic-map.md section 3):
+All counters are ASCII digits in work RAM (docs/aladdin/semantic-map.md section 3):
 score FF7E2A..FF7E2E, lives FF7E3C, apples FFEFE0..E1, gems FFEFE2..E3.
 Points are accumulated in FFF14E as *tally units* of ten points and moved
 into the digits by ``score_tally`` (1B00CA), which also counts progress

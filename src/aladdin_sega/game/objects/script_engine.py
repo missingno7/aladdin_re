@@ -16,7 +16,7 @@ from .record import (RecordView, RECORD_TABLE, RECORD_SIZE, RECORD_COUNT, PLAYER
 from ..scripts import (decode_op, ANIMATION_OPCODE_BASE, MOTION_OPCODE_BASE, OPCODES)
 from ..rng import advance_rng
 
-# Global fields the engine touches (see docs/semantic-map.md)
+# Global fields the engine touches (see docs/aladdin/semantic-map.md)
 PLAYER_X, PLAYER_Y = 0xFF7E02, 0xFF7E04
 PLAYER_SCREEN_X, PLAYER_SCREEN_Y = 0xFF7DFA, 0xFF7DFC
 CAMERA_X, CAMERA_Y = 0xFF7DF6, 0xFF7DF8

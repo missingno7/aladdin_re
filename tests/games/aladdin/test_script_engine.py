@@ -2,7 +2,7 @@
 
 The differential tests replay nothing: they use the original-machine
 snapshots under ``artifacts/evidence/frames`` (regenerable with
-``scripts/cartography/frame_states.py``) and skip when absent.
+``scripts/aladdin/cartography/frame_states.py``) and skip when absent.
 """
 import glob, os
 from pathlib import Path

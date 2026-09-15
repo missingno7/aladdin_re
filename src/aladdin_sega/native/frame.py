@@ -1,7 +1,7 @@
 """One game frame as the ordered list of main-loop steps, recovered or not.
 
 The order is the original main loop's call sequence, identical in every
-gameplay frame of the recording (docs/semantic-map.md section 1).  Each
+gameplay frame of the recording (docs/aladdin/semantic-map.md section 1).  Each
 step names its entry in the original (for the verification path, which
 brackets the original between ``entry`` and ``exits``) and, when
 recovered, the semantic callable that owns it natively.  Unrecovered

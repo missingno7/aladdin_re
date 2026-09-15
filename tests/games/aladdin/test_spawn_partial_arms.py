@@ -13,7 +13,7 @@ FFEFE0==0x3030 arm is an unrecorded four-slot allocation sequence with no
 retained fixture; 1B6756's FF7E26==0x0B arm nests a second guard, a
 second reverse-pool spawn and a second 1B2650 VDP call, also with no
 retained fixture -- both remain genuine declines.  None fit the
-plain/offset/closure table shapes tests/test_spawn_oracle.py exercises
+plain/offset/closure table shapes tests/games/aladdin/test_spawn_oracle.py exercises
 generically, and none may join oracle_witness's DISPATCH_CALLBACKS bulk
 matrix without first auditing that suite's blanket ``fallbacks == 0``
 assumption against every entry's default cold-boot RAM residue.  This
@@ -55,7 +55,7 @@ def _guard_seam_prefix_continuation(monkeypatch):
     entry; perturbing that PC would execute unrelated ROM mid-instruction
     (a real M68000 crash, not a semantic divergence).  Perturb the resumed
     suffix instead -- the observable continuation contract under test --
-    mirroring tests/test_contact_family.py's identical guard for the sound
+    mirroring tests/games/aladdin/test_contact_family.py's identical guard for the sound
     seams (there keyed on 0x1E58B8).
     """
     original_mutate = Candidate._mutate

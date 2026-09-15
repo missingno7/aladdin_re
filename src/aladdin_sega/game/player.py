@@ -15,7 +15,7 @@ Recovered here: the position publish (1A8E0C), the frame counter
 throw input (1A99F0).  Horizontal control, the velocity integrator, the
 state machine and the camera (1A9D98, 1A9B90, 1A9716, 1A9304, 1A9502,
 1AA8FA) are the next steps; their fields are named in
-docs/semantic-map.md section 2.
+docs/aladdin/semantic-map.md section 2.
 """
 from .pad import HELD_RIGHT, HELD_LEFT, HELD_UP, HELD_DOWN
 from .level import MAP_ROW_TABLE, MAP_STRIDE
@@ -49,7 +49,7 @@ FACING_SCRIPTS = 0x121828                     # ROM: scripts by (WORLD_Y >> 2) &
 SCRIPT_HARD_LANDING, SCRIPT_FALLING = 0x121BB6, 0x121AD8
 SCRIPT_LAND_IDLE, SCRIPT_LAND_IDLE_FREE, SCRIPT_LAND_WALK, SCRIPT_LAND_RUN = 0x121F74, 0x121F84, 0x121F6A, 0x122080
 
-# state bytes (docs/semantic-map.md section 2; TENTATIVE names carry the address in their comment)
+# state bytes (docs/aladdin/semantic-map.md section 2; TENTATIVE names carry the address in their comment)
 WALK_SPEED = 0xFFF0B0          # word
 GROUND_IGNORED = 0xFFF0BD      # TENTATIVE: set while dropping through the ground
 JUMPING = 0xFFF0BE

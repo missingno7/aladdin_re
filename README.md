@@ -1,30 +1,29 @@
 # Genesis RE
 
 A Windows development environment for recovering Genesis games from their
-exact ROM revisions: one shared native Genesis machine, immutable cold-start
-input histories, a history timeline and player, strict replay verification,
-and one recovery project per game.  Two games are registered:
+exact ROM revisions into readable, proven source.  One shared native Genesis
+machine, immutable cold-start input histories, a timeline and player, strict
+replay verification, and one recovery project per game.
 
 | game | package | supported revision | state |
 |---|---|---|---|
-| Aladdin (USA) | `src/aladdin_sega` | `aladdin-usa-ntsc-v1` | a large recovered frontier, a native runtime from power-on; see [docs/STATUS.md](docs/STATUS.md) |
-| Gods (USA) | `src/gods_sega` | `gods-usa-ntsc-v1` | two player recordings verified cold; the first recovered region (the camera follow step) passes the full replay; see [docs/gods/STATUS.md](docs/gods/STATUS.md) |
+| Aladdin (USA) | `src/aladdin_sega` | `aladdin-usa-ntsc-v1` | a large recovered frontier under gates, and a native runtime that runs the whole recorded route from power-on — [docs/aladdin/STATUS.md](docs/aladdin/STATUS.md) |
+| Gods (USA) | `src/gods_sega` | `gods-usa-ntsc-v1` | eight player recordings verified cold; the first recovered region (the camera follow step) passes the whole tree — [docs/gods/STATUS.md](docs/gods/STATUS.md) |
 
-The shared infrastructure is `src/genesis_re`.  The ownership boundary, how
-game selection works and what a third game would add are in
-[docs/multi-game-architecture.md](docs/multi-game-architecture.md); the
-input-history model is in [docs/history.md](docs/history.md); third-party
-license and source notes are in [third_party/README.md](third_party/README.md).
-This repository is not a distributable ROM package or a hardware-accuracy
-claim.  (The checkout directory is still called `aladdin_re`; the name predates
-the second game.)
+The shared infrastructure is `src/genesis_re` (machine, histories, replay,
+frontend, verification, registry).  Documentation starts at
+[docs/README.md](docs/README.md): the architecture and ownership boundary,
+the history model, the recovery process, how Aladdin converged, how to grind
+Gods.  Third-party license and source notes are in
+[third_party/README.md](third_party/README.md).  This repository is not a
+distributable ROM package or a hardware-accuracy claim.  (The checkout
+directory is still called `aladdin_re`; the name predates the second game.)
 
 ## Play
 
 Put the verified cartridges under `assets/` (`Aladdin (USA).md`,
 `Gods (USA).md`; the `.md` extension does not change that they are binary
-ROMs).  Each game's exact SHA-256 is validated before execution; any other
-revision is refused.
+ROMs).  Each game's exact SHA-256 is validated before execution.
 
 ```powershell
 .\play.cmd                      # choose the game, then its history timeline
@@ -34,71 +33,37 @@ revision is refused.
 .\play.ps1 -Mute
 ```
 
-Without `--game` the window first asks which game to play; the timeline shown
-afterwards is that game's own.  Click **New** for a cold root, **Main** for the
-current branch, or any checkpoint to branch from it.  F5 and F6 create manual
-checkpoints; a clean exit creates one too.  F7 pauses and F8 advances one frame
-while paused.  `--mute` silences only host playback: Genesis audio still runs
-and is still part of verification.
-
-Input histories live under `history/<game>/` (`history/aladdin`,
-`history/gods`) and are ignored by Git.  A store's manifest names its game's
-root record, so an Aladdin store cannot be opened as a Gods one and no node
-id of one game can equal a node id of the other.  Each store contains
-canonical frame input segments, optional screenshots, and disposable Genesis
-caches keyed by game, ROM, profile, native binary and state contract.  See
-[docs/history.md](docs/history.md).
-
-The recovered Aladdin game itself (no original CPU; the ROM's Z80 sound driver
-runs as a platform service on a dedicated machine) is Aladdin's native runtime:
-
-```powershell
-.\play_native.cmd
-.\play_native.cmd --resume NODE
-.\play_native.cmd --help
-```
-
-Its histories are journaled under `history_native/aladdin/`.
+Click **New** for a cold root, **Main** for the current branch, or any
+checkpoint to branch from it.  F5/F6 create checkpoints, a clean exit creates
+one, F7 pauses, F8 steps.  `--mute` silences host playback only.  Histories
+live under `history/<game>/`, each store bound to its game; a session that
+dies on a machine fault keeps its inputs as a replayable node.  The Aladdin
+native runtime (the recovered game without the original CPU) is
+`.\play_native.cmd`, with histories under `history_native/aladdin/`.
 
 ## Develop from the checkout
 
-`play.cmd`, `play.ps1`, and `scripts/dev.py` run this checkout directly.  They
-prepend its absolute `src` directory to `PYTHONPATH` and set
-`GENESIS_NATIVE_LIBRARY` to `build/libgenesis_native.dll`.  They do not
-install, reinstall, build, or download anything.  Every developer command names
-its game with `--game`; `--history` defaults to `history/<game>` and `--rom` to
-the game's file under `assets/`.
+`play.cmd`, `play.ps1` and `scripts/dev.py` run this checkout directly against
+`build/libgenesis_native.dll` (`GENESIS_NATIVE_LIBRARY`); they never install
+or build.  Every developer command names its game with `--game`; `--history`
+defaults to `history/<game>` and `--rom` to the game's file under `assets/`.
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\dev.py doctor --game gods
 .\.venv\Scripts\python.exe scripts\dev.py history-validate --game gods
-.\.venv\Scripts\python.exe scripts\dev.py history-run main --game aladdin --candidate lifecycle
-.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game gods --candidate original --output artifacts\gods-verify
-.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game aladdin --candidate lifecycle --tree --output artifacts\history-verify
+.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game gods --candidate original --tree --output artifacts\gods\verify
+.\.venv\Scripts\python.exe scripts\dev.py history-verify main --game aladdin --candidate lifecycle --output artifacts\verify
 ```
 
-`history-run` reconstructs a path cold by default; `--cache` explicitly permits
-a compatible disposable player cache.  `history-verify` uses fresh workers and
-compares strict per-frame state, video, PCM, and terminal observations;
-`--candidate original` compares two fresh original runs (the fresh-process
-determinism check), a recovery candidate name compares the game's recovered
-code against the original.  A tree verification creates only temporary prefix
-states for that invocation.  A PASS only covers the selected history and
-candidate execution.
-
-Use `history-export` to write a portable normalized input path, and
-`history-capture` for a constructed API smoke path.  Neither turns a constructed
-path into user-gameplay evidence.
-
-Shared tooling is in `scripts/` (`dev.py`, the tracer `pathfacts.py` and
-`factcheck.py`, `recovery_census.py`, `segment_verify.py`, `verify_status.py`,
-`frontier_ledger.py`); it takes `--game`.  Game-specific tooling is under
-`scripts/aladdin/` (witnesses, the native runtime and its verifiers,
-cartography) and `scripts/gods/`.
+`history-verify` starts two fresh workers and compares every canonical frame
+(state, video, PCM, counters); `--candidate original` is the determinism check,
+a candidate name compares recovered code against the original.  Shared
+tooling in `scripts/` (`dev.py`, `run_tests.py`, `hot_calls.py`,
+`recovery_census.py`, `factcheck.py`, `segment_verify.py`, `verify_status.py`,
+`frontier_ledger.py`) takes `--game`; game tooling is under `scripts/aladdin/`
+and `scripts/gods/`.  What each does and when: [docs/common/recovery-process.md](docs/common/recovery-process.md).
 
 ## Tests
-
-Tests are structured by scope, not skipped at runtime:
 
 ```text
 tests/common/          shared machine, history, replay, verification, tooling
@@ -108,21 +73,20 @@ tests/games/gods/      the Gods project
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_tests.py common     # shared only (about 15 s)
-.\.venv\Scripts\python.exe scripts\run_tests.py gods       # shared + Gods (about 20 s)
+.\.venv\Scripts\python.exe scripts\run_tests.py gods       # shared + Gods (about 25 s)
 .\.venv\Scripts\python.exe scripts\run_tests.py aladdin    # shared + Aladdin (about 90 s)
 .\.venv\Scripts\python.exe scripts\run_tests.py all        # everything (about 100 s)
 .\.venv\Scripts\python.exe scripts\check_architecture.py
 ```
 
-`tests/conftest.py` sets the checkout's import paths and the built native
-library for the test process and for the fresh workers it spawns, so no
-environment variables are needed; plain `pytest tests/common tests/games/gods`
-works too, as do the `common`, `aladdin` and `gods` markers.  A grinding
-iteration on one game runs that game's scope; run `all` at larger checkpoints.
+`tests/conftest.py` sets the import paths and the native library for the
+test process and the workers it spawns; no environment variables are needed.
+A grinding iteration on one game runs that game's scope; `all` at larger
+checkpoints.
 
 ## Build on Windows
 
-Requirements are Python 3.12 x64, CMake/Ninja, a C++17 compiler, and the pinned
+Requirements: Python 3.12 x64, CMake/Ninja, a C++17 compiler, and the pinned
 PortForge checkout described in [third_party/README.md](third_party/README.md).
 
 ```powershell
@@ -139,28 +103,9 @@ python -m venv .venv
 .\.venv\Scripts\ctest.exe --test-dir build --output-on-failure
 ```
 
-Install the package only when you deliberately need a packaged player after a
-native or packaged-Python change.  The source launchers above deliberately do
-not do this:
-
-```powershell
-$env:CMAKE_GENERATOR = 'Ninja'
-$env:CMAKE_ARGS = "-DPORTFORGE_ROOT=D:/Games/DOS/dos_recosystem/aladdin_sega_forged/port_forge -DCMAKE_C_COMPILER=C:/msys64/mingw64/bin/gcc.exe -DCMAKE_CXX_COMPILER=C:/msys64/mingw64/bin/g++.exe -DCMAKE_MAKE_PROGRAM=$PWD/.venv/Scripts/ninja.exe -DBUILD_TESTING=OFF".Replace('\', '/')
-.\.venv\Scripts\python.exe -m pip install . --no-build-isolation --no-deps
-```
-
-The build validates locked donor-source bytes before native compilation.  It
-refuses changed locked files instead of producing a DLL with stale provenance.
+Install the package (`pip install . --no-build-isolation --no-deps` with
+`CMAKE_ARGS` set as above) only when you deliberately need a packaged
+player; the source launchers never do.  The build validates locked
+donor-source bytes before compiling and refuses changed locked files.
 Windows x64 is the supported platform.  The native adapter
-(`native/machine.cpp`) holds no game facts: the snapshot identity it embeds is
-the cartridge's hash plus the profile id and hash Python declares.
-
-## Limits
-
-The history smoke suite validates canonical input identity, branching, cache
-rejection, presentation separation, and cold/cache reconstruction.  It does
-not by itself provide a new user history or full-game recovery qualification.
-Historical Aladdin replay and snapshot documents remain under
-[docs/archive](docs/archive/) as frozen evidence; the Aladdin status log is
-[docs/STATUS.md](docs/STATUS.md).  Current commands intentionally do not
-promise to load obsolete artifact formats.
+(`native/machine.cpp`) holds no game facts.
