@@ -35,6 +35,13 @@ Gods-specific change to the machine:
 Tests: `tests/games/gods/test_boot.py` (`scripts/run_tests.py gods`).
 Everything above is constructed or headless evidence, not player gameplay.
 
+## Aladdin through the same boundary
+
+After the split, `history-verify 44223150b7d6… --game aladdin --candidate
+lifecycle` (the 82,161-frame recording, two fresh workers) passed with 0
+restores and 137 fallbacks, the count recorded before the split
+(`artifacts/multi-game-aladdin-main`, 414 s).
+
 ## Phase 2: recording and replay (waiting for a recording)
 
 `play.cmd --game gods` opens the Gods timeline; `--new` starts a cold root;
@@ -58,9 +65,9 @@ Gods has no candidate provider, no boundary, no recovered module, no
 census, no witnesses.  The first bounded region will be chosen from the
 recorded path's execution evidence (`recovery_census.py --game gods` with a
 Gods classifier, then the tracer), not from reading the ROM.  Note for that
-step: `recovery_census.kind_classifier` reads the record kind byte at (A1),
-an Aladdin object-table convention; Gods needs its own classifier passed to
-`capture_entries`.
+step: the census's `--classifier kind` reads the record kind byte at (A1),
+an Aladdin object-table convention; use `--classifier entry` (no game
+knowledge) until Gods has its own.
 
 ## What Gods has not got
 

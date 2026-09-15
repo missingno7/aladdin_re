@@ -48,7 +48,7 @@ native code or packaged dependencies actually change.  A no-build edit loop
 must mutate a disposable semantic copy and demonstrate rejection against a
 real or constructed witness while the pinned DLL hash is unchanged.
 
-`scripts/history_edit_check.py` performs that check with `--history`, `--node`,
+`scripts/history_edit_check.py` performs that check with `--game`, `--candidate`, `--node`,
 `--source`, `--needle`, `--replacement` and `--output`. The replacement must
 match exactly once. Both baseline and mutated runs use the same cold history;
 the script requires baseline PASS and mutation rejection, and verifies the

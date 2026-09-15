@@ -50,9 +50,22 @@ CCR_VARIANTS = 4        # extra fixtures per signature, one per distinct exit CC
 
 
 def kind_classifier(machine, pc):
-    """Default classification: the record kind byte the dispatcher read at A1."""
+    """Classification by the record kind byte the dispatcher read at A1.
+
+    This is Aladdin's object-table convention (a record pointer in A1 whose
+    first byte is the kind); another game passes its own classifier, or
+    ``entry_classifier`` until it has one.
+    """
     kind = machine.peek_ram(machine.registers()['a1'] & 0xFFFF, 1)[0]
     return {'branch': 'kind%02X' % kind, 'kind': kind}
+
+
+def entry_classifier(machine, pc):
+    """No game knowledge: every occurrence of an entry is one class."""
+    return {'branch': 'entry'}
+
+
+CLASSIFIERS = {'kind': kind_classifier, 'entry': entry_classifier}
 
 
 def _safe_branch(branch):
@@ -310,10 +323,13 @@ def main(argv=None):
     parser.add_argument('--plain', action='store_true', help='group by (entry, kind) only; retain the first --retain')
     parser.add_argument('--game', required=True)
     parser.add_argument('--history', default=None, help='history store; default history/<game>')
+    parser.add_argument('--classifier', choices=sorted(CLASSIFIERS), default='kind',
+                        help="'kind': the record kind byte at (A1), Aladdin's object-table convention; "
+                             "'entry': one class per entry, no game knowledge")
     args = parser.parse_args(argv)
     entries = [int(value, 16) for value in args.entry]
     parent = int(args.parent, 16) if args.parent else None
-    report = capture_entries(entries, kind_classifier, args.output, game=args.game, history=args.history,
+    report = capture_entries(entries, CLASSIFIERS[args.classifier], args.output, game=args.game, history=args.history,
                              node=args.node, retain=args.retain, parent=parent,
                              signatures=not args.plain, max_classes=args.max_classes)
     print('census of %s (%d frames) took %s s (replay %s s)' % (
