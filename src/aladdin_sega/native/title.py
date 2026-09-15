@@ -207,32 +207,16 @@ def _arm_menu(state, services):
 
 
 def _reset_pad_sequence(state):
-    """1B0BA6: (re)arm the hidden button-sequence reader at the table's start."""
-    state.write(PAD_SEQ_PTR, PAD_SEQ_TABLE, 4)
-    state.write(PAD_SEQ_RESET, PAD_SEQ_TABLE, 4)
-    state.write(PAD_SEQ_MATCHED, 0, 1)
+    """1B0BA6: (re)arm the hidden button-sequence reader at the title's table."""
+    sequences.reset_pad_sequence(state, PAD_SEQ_TABLE)
 
 
 def _pad_sequence_step(state, services):
-    """1B0BBE: one step of the hidden button-sequence reader.  A(0x10)/Start(0x20) come from what a TH-low
-    port read would show; B(0x10)/C(0x20) from a TH-high read, repacked into the table's own byte pattern.
-    The sequence's own completion (1B0C82, which unwinds two call frames) is not recovered."""
-    a0 = state.read(PAD_SEQ_PTR, 4)
-    d0 = (0x10 if state.buttons & 0x40 else 0) | (0x20 if state.buttons & 0x80 else 0)    # A, Start
-    d1 = (0x10 if state.buttons & 0x10 else 0) | (0x20 if state.buttons & 0x20 else 0)    # B, C
-    if d0 == 0 and d1 == 0:
-        if state.read(PAD_SEQ_MATCHED, 1):
-            state.write(PAD_SEQ_MATCHED, 0, 1)
-            a0 += 2
-            state.write(PAD_SEQ_PTR, a0, 4)
-            if state.rom[a0] == 0xFF:
-                raise NativeGap('title', OPTIONS_GAP.SECRET_PC,
-                                 'the hidden button-sequence completion is not recovered', state.frame)
-        return
-    if state.rom[a0] == d0 and state.rom[a0 + 1] == d1:
-        state.write(PAD_SEQ_MATCHED, 0xFF, 1)
-    else:
-        _reset_pad_sequence(state)
+    """1B0BBE: one step of the hidden button-sequence reader (sequences.pad_sequence_step).  The title's own
+    completion (1B0C82, which unwinds two call frames) is not recovered."""
+    if sequences.pad_sequence_step(state, PAD_SEQ_TABLE):
+        raise NativeGap('title', OPTIONS_GAP.SECRET_PC, 'the hidden button-sequence completion is not recovered',
+                        state.frame)
 
 
 def _draw_difficulty(state, services):
@@ -422,7 +406,7 @@ def _options_screen(state, services):
                 sequences.decompress_to_vram(state, 0x12F4EC, 0xC000, services)     # 1B47F0
                 return
             else:
-                services.sound(0, 6)                         # 1B329E, unconditional
+                services.sound_flush(6)                      # 1B329E: pea 6; jsr 1E589A (a flush alone, unconditional)
                 cursor = read(CURSOR, 2)
                 if cursor == 0:
                     write(OPTIONS_SELECT_LATCH, 0xFF, 1)

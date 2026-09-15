@@ -20,7 +20,7 @@ the verification tools compare RAM there.  A standalone game has
 neither and simply runs the sequence without the work time.
 """
 from __future__ import annotations
-from ..game import video, level, spawn, player, control, hud, compress, messages, pad, camera
+from ..game import pause, video, level, spawn, player, control, hud, compress, messages, pad, camera
 from ..game.objects import lifecycle
 from ..game.objects.record import RECORD_TABLE, RECORD_SIZE, RECORD_COUNT, RecordView
 from ..game.objects.script_engine import Engine
@@ -1685,6 +1685,88 @@ def game_over(state, services):
     return boot.new_game(state, services)
 
 
+PAD_SEQ_PTR, PAD_SEQ_RESET, PAD_SEQ_MATCHED = 0xFF7276, 0xFF727A, 0xFF727E    # 1B0B8E / 1B0BA6 / 1B0A46 / 1B0BBE
+PAUSE_SEQUENCE_TABLE = 0x4128            # ROM: the pause screen's hidden button sequence, 2 bytes/entry, FF terminated
+
+
+def reset_pad_sequence(state, table):
+    """1B0B8E (table 4128) / 1B0BA6 (table 413A): (re)arm the hidden button-sequence reader at the table's start."""
+    state.write(PAD_SEQ_PTR, table, 4)
+    state.write(PAD_SEQ_RESET, table, 4)
+    state.write(PAD_SEQ_MATCHED, 0, 1)
+
+
+def pad_sequence_step(state, table) -> bool:
+    """1B0A46 / 1B0BBE: one step of the hidden button-sequence reader; True when the sequence just completed.
+
+    A (0x10) / Start (0x20) are what a TH-low port read shows, B (0x10) / C (0x20) a TH-high read, each
+    inverted and masked to the table's own byte pattern.  With no button held, a matched entry advances
+    the pointer; the table's FF ends the sequence.  A held mismatch re-arms the reader.
+    """
+    a0 = state.read(PAD_SEQ_PTR, 4)
+    d0 = (0x10 if state.buttons & 0x40 else 0) | (0x20 if state.buttons & 0x80 else 0)
+    d1 = (0x10 if state.buttons & 0x10 else 0) | (0x20 if state.buttons & 0x20 else 0)
+    if d0 == 0 and d1 == 0:
+        if state.read(PAD_SEQ_MATCHED, 1):
+            state.write(PAD_SEQ_MATCHED, 0, 1)
+            a0 += 2
+            state.write(PAD_SEQ_PTR, a0, 4)
+            return state.rom[a0] == 0xFF
+        return False
+    if state.rom[a0] == d0 and state.rom[a0 + 1] == d1:
+        state.write(PAD_SEQ_MATCHED, 0xFF, 1)
+    else:
+        reset_pad_sequence(state, table)
+    return False
+
+
+def pause_sequence_complete(state, services):
+    """1B0B0A: the pause screen's sequence entered -- a chime, the level's exit countdown armed (FFF0E9), two
+    more chimes over 20 + 30 + 20 frames (1B2EAC, cut short by a button)."""
+    sound_if_enabled(state, services, 0x02)
+    reset_pad_sequence(state, PAUSE_SEQUENCE_TABLE)
+    wait_frames_or_button(state, services, 0x14)
+    state.write(player.TRANSITION_COUNTDOWN, 0xFF, 1)
+    sound_if_enabled(state, services, 0x5B)
+    wait_frames_or_button(state, services, 0x1E)
+    sound_if_enabled(state, services, 0x5B, flush=False)
+    wait_frames_or_button(state, services, 0x14)
+
+
+def pause_loop(state, services):
+    """1A91E4: the pause.  The driver's pause command, CRAM saved to FF8800 and dimmed two steps toward black
+    (1B293C twice), the hidden button-sequence reader armed; then a VBlank at a time until Start is pressed
+    again after a release (FFF168), or the sequence armed the exit countdown; the four palette lines come
+    back from the pointers the last fade left (FF7262..FF726E), the driver resumes.  Returns to the frame's
+    next step (1A8E0C)."""
+    read, write = state.read, state.write
+    services.sound_command(0x0C)                 # 1E58CC
+    write(pause.PAUSED, 0xFF, 1)
+    write(pause.START_RELEASED, 0xFF, 1)
+    snapshot_cram(state)
+    fade_step(state, BLACK_PALETTE, 64)
+    fade_step(state, BLACK_PALETTE, 64)
+    reset_pad_sequence(state, PAUSE_SEQUENCE_TABLE)
+    services.checkpoint(0x1A9230)                # once, before the loop head (the loop's first wait follows)
+    while True:
+        services.vblank()
+        if pad_sequence_step(state, PAUSE_SEQUENCE_TABLE):
+            pause_sequence_complete(state, services)
+        if read(player.TRANSITION_COUNTDOWN, 1):
+            break
+        if state.buttons & 0x80:
+            if not read(pause.START_RELEASED, 1):
+                break
+        else:
+            write(pause.START_RELEASED, 0, 1)
+    for line, pointer in enumerate(video.PALETTE_SOURCES):     # 1B2678 / 1B2664 / 1B2650 / 1B263C
+        palette_line(state, line, read(pointer, 4))
+    write(pause.PAUSED, 0, 1)
+    write(pause.START_RELEASED, 0xFF, 1)
+    services.sound_command(0x0D)                 # 1E58E0
+    services.checkpoint(0x1A92D2)
+
+
 class AttractExit(Exception):
     """The demo's prologue left for 1B3182 (the original pops its return address and branches): the title entry
     catches it and runs ``attract_exit_tail`` before showing the title again."""
@@ -1721,6 +1803,9 @@ def run_transition(state, services, kind: str):
         resume = level_change(state, services)
     elif kind == 'attract_end':
         resume = attract_exit(state, services)
+    elif kind == 'pause':
+        pause_loop(state, services)
+        resume = None
     else:
         raise NativeGap(kind, 0, f'transition {kind!r} is not recovered', state.frame)
     if state.replay is not None:

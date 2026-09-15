@@ -105,7 +105,7 @@ after every frame):
 | 44223150 f10018, f24593, f48929 | level change (1A8E5C: tally 1B0D70, scarab screen 1B16E0, sequence stream, 1A8B50 prologue) | 3 | recovered; verified at every checkpoint for the 1->2, 3->0 and 0->4 changes |
 | 44223150 level 2 | level event stream handlers (1B634E over the table at 20C0) | 3 | recovered for the non-carpet levels (E6..F2); the carpet ride's stay gaps |
 | all, frame 0 | boot, title, attract, options (1B3B4A, 1B43C4.., 1B47xx, 1B0BBE) | 3 | boot and the title recovered (`native/boot.py`, `native/title.py`), verified from reset on 44223150 and 24c70ffc; the options screen (2dddf860) in progress; the attract demo's table wrap (1B4666) **open** |
-| any | messages with wait commands inside the main loop; pause loop; Start-release wait | 3 | game over and the declined continue are now sequences (see 3b); the in-loop message waits, the pause loop and the Start-release wait stay **open**, fail loud |
+| any | messages with wait commands inside the main loop; pause loop; Start-release wait | 3 | game over, the declined continue and the pause loop (1A91E4: `sequences.pause_loop`, a transition kind 'pause' resuming in the frame; the pause screen's hidden button sequence 1B0A46 and its level-exit completion 1B0B0A included) are sequences; the in-loop message waits and the Start-release wait stay **open**, fail loud |
 | any | 22 player and 20 projectile contact callbacks no recording has met | 4 (future) | fail loud with the ROM address |
 | independent audit (docs/astra6-independent-audit.md) | kind 3B enters the gem through the sword guard 1AF21E, an entry the old recovery qualified 13 times; the native registry had only the body 1AF228 | 1 | registered (`gem_unless_sword`) |
 | independent audit | the level ticks of levels 7, 9, 11, 12 passed record offsets as keyword names to `_spawn`: a TypeError on their spawn branches, unreached by the recordings | 1 | fixed; probed over a sweep of player X |
@@ -276,6 +276,24 @@ renewed at every gate).
   options screen every such stretch ends in a checkpoint, so no input
   landed late; a screen with a long stretch after heavy work needs a
   checkpoint (or a `work` that the clock can measure) right after it.
+
+### 3e. The pause (16 September)
+
+The native player's first gap in play was Start in level 2: the pause
+loop 1A91E4.  Recovered as `sequences.pause_loop`, a transition kind
+'pause' that resumes inside the frame (the driver's pause command, CRAM
+saved and dimmed two steps, the hidden button-sequence reader 1B0A46 with
+its level-exit completion 1B0B0A, Start after a release to leave, the
+palette lines restored from the last fade's pointers, the resume
+command).  Witness: the fourth cold-start recording e1500d66 (pausing
+and unpausing several times) runs from native power-on byte- and
+sound-exact to its end.  Two harness gaps it exposed: only 1E58F4 was
+gated as a sound command, so the pause (1E58CC = 0C) and resume (1E58E0
+= 0D) commands were invisible to the oracle's event list -- every
+argument-less entry of the driver family is gated now and its code
+compared; and the options' cursor sound 1B329E is a bare flush of 6, not
+a request (the independent mode compares the boot's sounds, the aligned
+mode did not).
 
 ## 4. The loop, as it now runs
 

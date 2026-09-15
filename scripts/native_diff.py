@@ -40,6 +40,10 @@ from aladdin_sega.machine import Machine
 from aladdin_sega.native import GameState, NativeGap, STEPS, run_frame
 
 
+class RecordingEnd(Exception):
+    pass
+
+
 def main(frame, count, every=1, recording=None, independent=False, native_boot=False, native_history=False, store=None):
     rom = nr.read_rom()
     if native_history and not (independent and native_boot):
@@ -48,11 +52,17 @@ def main(frame, count, every=1, recording=None, independent=False, native_boot=F
     first = frame
     m = Machine(rom); m.audio_policy('discard')
     start_step = None
+    end = max(pads) if pads else None            # the recording's end: its inputs are unspecified beyond it
+
+    def pad_for(f):
+        if end is not None and f > end:
+            raise RecordingEnd(f)                # a wait past the end inside a transition (a pause held for ever)
+        return pads.get(f, 0)
     if native_boot:
         from aladdin_sega.native import boot
         from aladdin_sega.native.frame import NativeServices
         state = boot.power_on(rom)
-        state.pads = lambda f: pads.get(f, 0)
+        state.pads = pad_for
         state.replay = None if independent else nr.OracleClock(state, m, pads)
         driver = nr.OracleDriver(m, pads, by_waits=independent, frame=0)
         driver.begin_frame(state.replay)
@@ -78,7 +88,8 @@ def main(frame, count, every=1, recording=None, independent=False, native_boot=F
         driver = nr.OracleDriver(m, pads, by_waits=independent, frame=frame)
         print(f'{"independent" if independent else "aligned"} run seeded at main-loop frame {frame}'
               + (f' of recording {recording}' if recording else ''))
-    end = max(pads) if pads else None            # the recording's end: its inputs are unspecified beyond it
+    if not native_boot:
+        state.pads = pad_for
     for i in range(count):
         f = state.frame
         if end is not None and f >= end:
@@ -94,6 +105,10 @@ def main(frame, count, every=1, recording=None, independent=False, native_boot=F
         except NativeGap as gap:
             print(f'frame {f}: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
             return 1
+        except RecordingEnd as stop:
+            print(f'the recording ends at frame {end} inside frame {f} (a wait reached frame {stop.args[0]}): '
+                  f'{i} frames compared')
+            break
         driver.run_frame(state.replay)
         if not independent:
             if state.frame > driver.frame:
@@ -115,7 +130,7 @@ def main(frame, count, every=1, recording=None, independent=False, native_boot=F
             m.close()
             step_diff(rom, first, f, pads, recording)
             return 3
-    print(f'native matches the oracle for {count} frames to frame {state.frame} (events {len(state.events)})')
+    print(f'native matches the oracle for {i if i < count - 1 or end is not None and f >= end else count} frames to frame {state.frame} (events {len(state.events)})')
     m.close()
     return 0
 

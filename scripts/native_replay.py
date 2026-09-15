@@ -70,8 +70,15 @@ def seed_at_boundary(m, frame, pads, rom, patience=3):
     return state, frame
 
 
-TRANSITION_ENTRIES = {'life_lost': 0x1A8F82, 'fell': 0x1A902E, 'level_change': 0x1A8E5C, 'attract_end': 0x1B3182}
-SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND = 0x1E58B8, 0x1E589A, 0x1E58F4
+TRANSITION_ENTRIES = {'life_lost': 0x1A8F82, 'fell': 0x1A902E, 'level_change': 0x1A8E5C, 'attract_end': 0x1B3182,
+                      'pause': 0x1A91E4}
+SOUND_REQUEST, SOUND_FLUSH = 0x1E58B8, 0x1E589A
+# the argument-less driver commands (1E58F4 = 16, 1E58CC = 0C the pause, 1E58E0 = 0D the resume, 1E5908 = 1C ...):
+# every entry of the family is gated, and its code compared with the native sound_command event's
+from aladdin_sega.native.sound_service import SoundDriver as _SoundDriver
+SOUND_COMMANDS = {pc: code for code, pc in _SoundDriver._entries(read_rom()).items()
+                  if pc not in (SOUND_REQUEST, SOUND_FLUSH)}
+SOUND_COMMAND_GATES = tuple(SOUND_COMMANDS)
 TRANSITION_LIMIT = 4000 * FRAME_TICKS      # the continue screen and a level's prologue are under this
 PAD_READS = ((0x1A8DB8, 0x1A8DF4), (0x1A8D22, 0x1A8D68))   # the main loop's two controller port reads (1A8CEE), and attract mode's
 
@@ -94,7 +101,7 @@ class OracleClock(ReplayClock):
 
     def _run_to(self, targets, limit, main_loop=False):
         m = self.m
-        arm(m, [VBLANK_HANDLER, SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND, *targets])
+        arm(m, [VBLANK_HANDLER, SOUND_REQUEST, SOUND_FLUSH, *SOUND_COMMAND_GATES, *targets])
         while True:
             if run_with_pads(m, self.pads, limit) != 'gate':
                 return None
@@ -119,7 +126,7 @@ class OracleClock(ReplayClock):
         m = self.m
         masks = []
         for reads in zip(*PAD_READS):           # the first port read of either path, then the second
-            arm(m, [SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND, *reads])
+            arm(m, [SOUND_REQUEST, SOUND_FLUSH, *SOUND_COMMAND_GATES, *reads])
             while True:
                 if run_with_pads(m, self.pads, m.info['tick'] + 3 * FRAME_TICKS) != 'gate':
                     raise ReplayMismatch('pad_read', reads[0], 'the original did not read the controller in the frame',
@@ -185,14 +192,14 @@ WAIT_RETURN = 0x1B24F4                      # the RTS of the VBlank wait 1B249E:
 
 
 def note_sound(m, pc, sink):
-    """At a sound driver entry, record the call ('request', id) / ('flush', value) / ('command',); False otherwise."""
+    """At a sound driver entry, record the call ('request', id) / ('flush', value) / ('command', code); False otherwise."""
     if pc == SOUND_REQUEST or pc == SOUND_FLUSH:
         sp = m.registers()['a7']
         value = int.from_bytes(m.peek_ram((sp + 4) & 0xFFFF, 4), 'big') & 0xFFFF
         sink.append(('request' if pc == SOUND_REQUEST else 'flush', value))
         return True
-    if pc == SOUND_COMMAND:
-        sink.append(('command',))
+    if pc in SOUND_COMMANDS:
+        sink.append(('command', SOUND_COMMANDS[pc]))
         return True
     return False
 
@@ -212,7 +219,7 @@ class OracleDriver:
         self.waits = frame              # the game frames passed so far (the native frame number)
         self.frame = frame              # faithful mode: the original's VBlank count (a loop iteration that spans
         self.sounds = []                #   two VBlanks moves it by two; the native frame clock follows it)
-        # this frame's ('request', id) / ('flush', value) / ('command',) events
+        # this frame's ('request', id) / ('flush', value) / ('command', code) events
 
     def begin_frame(self, clock=None):
         """Before the native frame: this frame's sound list, shared with the clock that may drive the oracle first."""
@@ -227,7 +234,7 @@ class OracleDriver:
             clock.consumed = False
             self.frame = clock.frame
             return
-        gates = [FRAME_BOUNDARY, SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND] + ([WAIT_RETURN] if self.by_waits else [VBLANK_HANDLER])
+        gates = [FRAME_BOUNDARY, SOUND_REQUEST, SOUND_FLUSH, *SOUND_COMMAND_GATES] + ([WAIT_RETURN] if self.by_waits else [VBLANK_HANDLER])
         arm(m, gates)
         limit = m.info['tick'] + (TRANSITION_LIMIT if self.by_waits else 3 * FRAME_TICKS)
         while True:
@@ -265,7 +272,7 @@ def native_sound_events(events, frame):
         elif e[0] == 'sound_flush':
             out.append(('flush', e[2]))
         elif e[0] == 'sound_command':
-            out.append(('command',))
+            out.append(('command', e[2]))
     return out
 
 

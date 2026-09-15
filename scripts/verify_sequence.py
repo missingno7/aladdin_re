@@ -66,7 +66,8 @@ class ComparingClock(nr.OracleClock):
         # the native gate set is capped at 64 (native/machine.cpp); the alphabet has outgrown that, so the
         # route-mismatch net is the closest 59 other checkpoints rather than all of them (pc itself, plus the
         # platform sound/VBlank gates _run_to always adds, still make the checkpoint itself exact)
-        others = sorted((c for c in self.alphabet if c != pc), key=lambda c: abs(c - pc))[:59]
+        room = 64 - 1 - 3 - len(nr.SOUND_COMMAND_GATES)         # pc, the VBlank handler, request, flush, the commands
+        others = sorted((c for c in self.alphabet if c != pc), key=lambda c: abs(c - pc))[:room]
         if self.m.info['pc'] == pc and self.parked_at != pc:        # the clock's entry already parked the oracle here
             reached = pc
         else:

@@ -145,7 +145,7 @@ def camera_scroll_and_spawn_strips(state: GameState, services):
 
 def pause_check(state: GameState, services):
     if pause.pause_requested(state.read, state.write):
-        raise NativeGap('pause_check', 0x1A91E4, 'Start pressed: the pause loop is not recovered', state.frame)
+        sequences.run_transition(state, services, 'pause')     # 1A91E4: the loop inside the step; resumes at 1A8E0C
 
 
 def player_wall_collision(state: GameState, services):
@@ -283,7 +283,7 @@ STEPS = (
     Step('attract_input', 0x1B315C, (0x1A8CEE,), attract_input, 'recovered: game.pad.attract_input (the demo pad stream)'),
     Step('pad_read', 0x1A8CEE, (0x1A8C16,), pad_read, 'recovered: game.pad.read_pad'),
     Step('frame_counter', 0x1A8C16, (0x1A91C6,), frame_counter, 'recovered: game.player.advance_frame_counter'),
-    Step('pause_check', 0x1A91C6, (0x1A8E0C,), pause_check, 'recovered: game.pause.pause_requested (the pause loop itself is a gap)'),
+    Step('pause_check', 0x1A91C6, (0x1A8E0C,), pause_check, 'recovered: game.pause.pause_requested, sequences.pause_loop'),
     Step('publish_player_position', 0x1A8E0C, (0x1AD7B4, 0x1AD632, 0x1AA8FA, 0x1A8E3E), publish_player_position,
          'recovered: game.player.publish_position'),
     Step('player_ground_collision', 0x1AD7B4, (0x1A8E0C,), player_ground_collision, 'recovered: game.player.ground_collision'),
