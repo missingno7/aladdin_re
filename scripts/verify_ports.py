@@ -1,6 +1,7 @@
 """Compare the VDP port writes of a native transition with the original's, word for word and in order.
 
   verify_ports.py FRAME DIE_FRAME DIE_PC
+  verify_ports.py --boot [RECORDING] [--until PC]
 
 The RAM checkpoints of verify_sequence.py prove the game state; this proves
 the video output of a transition: every word the native sequence writes to
@@ -15,6 +16,12 @@ side runs under the aligned replay clock.
 
 The original's stream is a few million instructions for a level change;
 expect minutes.
+
+--boot compares the power-on's stream: the native power-on
+(aladdin_sega.native.boot) from the game's first instruction 1AA344 to
+the checkpoint --until (default 1B3C64, the title screen's first frame)
+against the original from reset; the reset code's own port writes
+(platform work) are before 1AA344 on both sides and not compared.
 """
 import sys
 from pathlib import Path
@@ -62,8 +69,8 @@ def main(start, die_frame, die_pc):
     clock.consumed = False
     print(f'the native transition started in frame {started} and wrote {len(native_log)} port words')
     # the original: from the transition's entry to the main loop's resumed boundary, single-stepped
-    m2 = Machine(rom); m2.audio_policy('discard'); m2.restore(nr.load(start))
-    m.close()
+    m2 = m                                  # one machine per process: the same one, restored to the snapshot
+    m2.restore(nr.load(start))
     nr.seed_at_boundary(m2, start, pads, rom)
     nr.arm(m2, [nr.FRAME_BOUNDARY, die_pc])
     boundary = None
@@ -116,5 +123,57 @@ def compare(native_log, oracle_log):
     return 0
 
 
+class _Stop(Exception):
+    pass
+
+
+def verify_boot(recording=None, until=0x1B3C64):
+    from aladdin_sega.native import boot
+    from aladdin_sega.native.frame import NativeServices
+    rom = nr.read_rom(); pads = dict(nr.masks(recording))
+    state = boot.power_on(rom)
+    state.pads = lambda f: pads.get(f, 0)
+    state.vdp.log = []                       # the power-on contract's own writes are the reset code's
+    services = NativeServices(state)
+    original_checkpoint = services.checkpoint
+
+    def checkpoint(pc):
+        original_checkpoint(pc)
+        if pc == until:
+            raise _Stop()
+    services.checkpoint = checkpoint
+    try:
+        boot.start(state, services)
+        print(f'native: the boot reached the main loop before {until:06X}'); return 2
+    except _Stop:
+        pass
+    except NativeGap as gap:
+        print(f'native: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}'); return 4
+    native_log = list(state.vdp.log)
+    print(f'the native boot wrote {len(native_log)} port words up to {until:06X}')
+    m = Machine(rom); m.audio_policy('discard')
+    nr.arm(m, [boot.GAME_INIT])
+    assert nr.run_with_pads(m, pads, 400 * nr.FRAME_TICKS) == 'gate', 'the original did not reach 1AA344'
+    print(f'the original entered {boot.GAME_INIT:06X} in tick frame {m.info["tick"] // nr.FRAME_TICKS}; tracing its port writes ...')
+    last = [m.info['tick'] // nr.FRAME_TICKS]
+
+    def on_step(machine):
+        frame = machine.info['tick'] // nr.FRAME_TICKS
+        if frame != last[0]:
+            last[0] = frame; machine.pad(pads.get(frame, 0))
+    m.gate(boot.GAME_INIT, bypass_once=True)
+    m.gates([])
+    oracle_log = trace_port_writes(m, (until,), limit=200_000_000, on_step=on_step)
+    m.close()
+    print(f'the original wrote {len(oracle_log)} port words up to {until:06X}')
+    return compare(native_log, oracle_log)
+
+
 if __name__ == '__main__':
-    sys.exit(main(int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3], 16)))
+    argv = sys.argv[1:]
+    if '--boot' in argv:
+        until = int(argv[argv.index('--until') + 1], 16) if '--until' in argv else 0x1B3C64
+        i = argv.index('--boot')
+        recording = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith('--') else None
+        sys.exit(verify_boot(recording, until))
+    sys.exit(main(int(argv[0]), int(argv[1]), int(argv[2], 16)))

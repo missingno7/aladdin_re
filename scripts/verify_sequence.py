@@ -1,6 +1,6 @@
 """Compare a native transition sequence with the original at every one of its checkpoints.
 
-  verify_sequence.py FRAME DIE_FRAME DIE_PC [--pad FROM-TO MASK ...]
+  verify_sequence.py FRAME DIE_FRAME DIE_PC [--pad FROM-TO MASK ...] [--poke ADDR=BYTE ...]
 
 Both sides start from artifacts/evidence/frames/fFRAME.state and run to
 the main-loop frame DIE_FRAME in which the transition starts (DIE_PC:
@@ -18,8 +18,15 @@ down 2, left 4, right 8, B 10, C 20, A 40, Start 80) on the frames FROM
 up to TO on both sides: an input the recording never made, so a
 sequence is proved on routes and timings the recording did not take.
 
-  verify_sequence.py 69586 75278 1A8F82                        # the life lost in level 5
-  verify_sequence.py 69586 75278 1A8F82 --pad 75346-75350 40   # A pressed at the earliest skip
+--poke ADDR=BYTE writes one work-RAM byte on both sides at the seed
+boundary (hex): a state the recording never reached, so a screen no
+recording enters (the game over) is proved against the original from a
+recorded route.  The perturbation is the witness's construction, never
+the game's logic.
+
+  verify_sequence.py 69586 75050 1A8F82                        # the life lost in level 5
+  verify_sequence.py 69586 75050 1A8F82 --poke FF7E3F=00 --poke FF7E3C=30   # no continues, last life: game over
+  verify_sequence.py 69586 75050 1A8F82 --pad 75346-75350 40   # A pressed at the earliest skip
 """
 import re
 import sys
@@ -56,7 +63,10 @@ class ComparingClock(nr.OracleClock):
         self.entry = nr.TRANSITION_ENTRIES[kind]
 
     def checkpoint(self, pc):
-        others = [c for c in self.alphabet if c != pc]
+        # the native gate set is capped at 64 (native/machine.cpp); the alphabet has outgrown that, so the
+        # route-mismatch net is the closest 59 other checkpoints rather than all of them (pc itself, plus the
+        # platform sound/VBlank gates _run_to always adds, still make the checkpoint itself exact)
+        others = sorted((c for c in self.alphabet if c != pc), key=lambda c: abs(c - pc))[:59]
         if self.m.info['pc'] == pc and self.parked_at != pc:        # the clock's entry already parked the oracle here
             reached = pc
         else:
@@ -94,7 +104,10 @@ def verify_boot(recording=None, overrides=()):
     status = 0
     try:
         step = boot.start(state, NativeServices(state))
-        print(f'the boot matches the original at every checkpoint; the main loop starts at frame {state.frame} ({step})')
+        if clock.differences:
+            print(f'the boot reached the main loop at frame {state.frame} ({step}) with differences (above)')
+        else:
+            print(f'the boot matches the original at every checkpoint; the main loop starts at frame {state.frame} ({step})')
     except NativeGap as gap:
         print(f'native: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
         status = 4
@@ -103,13 +116,28 @@ def verify_boot(recording=None, overrides=()):
     m.close(); return status
 
 
-def main(start, die_frame, die_pc, overrides=()):
+def poke(m, state, pokes):
+    """Equal work-RAM bytes on both sides, at the seed boundary (the original's through an atomic write)."""
+    if not pokes:
+        return
+    pc = m.info['pc']
+    m.gates([pc])
+    assert m.run(instructions=1) == 'gate'
+    assert m.atomic(target=m.info['tick'] + 1_000_000, cycles=1, instructions=1, last_pc=pc,
+                    writes=list(pokes), registers=m.registers())
+    for address, value in pokes:
+        state.write(address, value, 1)
+    print('poked on both sides: ' + ', '.join(f'{a:06X}={v:02X}' for a, v in pokes))
+
+
+def main(start, die_frame, die_pc, overrides=(), pokes=()):
     rom = nr.read_rom(); pads = dict(nr.masks())
     for lo, hi, mask in overrides:
         for f in range(lo, hi):
             pads[f] = mask
     m = Machine(rom); m.audio_policy('discard'); m.restore(nr.load(start))
     state, frame = nr.seed_at_boundary(m, start, pads, rom)
+    poke(m, state, pokes)
     while state.frame < die_frame - 2:
         run_frame(state)
         nr.run_oracle_frame(m, pads, state.replay)
@@ -165,7 +193,12 @@ def _report(diff, native, oracle, limit=16):
 
 if __name__ == '__main__':
     argv = sys.argv[1:]
-    overrides = []
+    overrides = []; pokes = []
+    while '--poke' in argv:
+        i = argv.index('--poke')
+        address, value = argv[i + 1].split('=')
+        pokes.append((int(address, 16), int(value, 16)))
+        del argv[i:i + 2]
     while '--pad' in argv:
         i = argv.index('--pad')
         lo, hi = argv[i + 1].split('-')
@@ -176,4 +209,4 @@ if __name__ == '__main__':
         recording = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith('--') else None
         sys.exit(verify_boot(recording, overrides))
     args = [a for a in argv if not a.startswith('--')]
-    sys.exit(main(int(args[0]), int(args[1]), int(args[2], 16), overrides=overrides))
+    sys.exit(main(int(args[0]), int(args[1]), int(args[2], 16), overrides=overrides, pokes=pokes))

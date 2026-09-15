@@ -97,14 +97,24 @@ class NativeServices(Services):
         raise NativeGap(f'engine service {kind}', 0, f'slot {slot} {detail}', self.state.frame)
 
 
+def _attract_end(name, entry):
+    """A button ended the attract demo, or its recorded input ran out: 1B3182 exits to the title entry."""
+    def step(state: GameState, services):
+        resume = sequences.run_transition(state, services, 'attract_end')
+        if resume is not None:
+            raise ResumeFrame(resume)
+    step.__name__ = name
+    return step
+
+
 def pad_read(state: GameState, services):
     if pad.read_pad(state.read, state.write, state.buttons, state.buttons_low):
-        raise NativeGap('game start from attract mode', 0x1B3182, 'a button ended the attract demo', state.frame)
+        _attract_end('pad_read', 0x1A8CEE)(state, services)
 
 
 def attract_input(state: GameState, services):
     if not pad.attract_input(state.read, state.write, state.rom):
-        raise NativeGap('game start from attract mode', 0x1B3182, 'the demo input stream ended', state.frame)
+        _attract_end('attract_input', 0x1B315C)(state, services)
 
 
 def vram_upload_flush(state: GameState, services):
@@ -326,7 +336,8 @@ def run_frame(state: GameState, buttons: int | None = None, start_step: str | No
     The pad comes from ``state.pads`` (the recorded masks by VBlank frame) when set, else ``buttons``.
     ``start_step`` enters the loop at that step (the boot and the prologues end at 1A8C16, the frame counter).
     """
-    sampled = state.replay.sample_input() if state.replay is not None else None
+    # a frame entered at a later step (the boot, a prologue) has no controller read: the mask stands
+    sampled = state.replay.sample_input() if state.replay is not None and start_step is None else None
     if sampled is not None:
         state.buttons, state.buttons_low = sampled[0], sampled[1]
     else:

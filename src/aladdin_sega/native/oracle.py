@@ -145,7 +145,9 @@ def trace_port_writes(machine, exits, *, limit: int = 2_000_000, on_step=None) -
                 if stalls > 100000:
                     raise RuntimeError(f'the oracle makes no progress at {pc:06X}')
             machine.run(instructions=1)
-        if pending and machine.info['m68k_instructions'] != info['m68k_instructions']:
+        # completed: the count moved on and the PC is the next instruction's (an exception entry counts as an
+        # instruction too, with the PC at the handler; the write happens when the PC comes back here)
+        if pending and machine.info['m68k_instructions'] != info['m68k_instructions']                 and machine.info['pc'] == pc + insn.size:
             writes.extend(pending)
         if on_step is not None:
             on_step(machine)

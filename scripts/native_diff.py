@@ -60,6 +60,8 @@ def main(frame, count, every=1, recording=None, independent=False, native_boot=F
             state.replay.begin_at(boot.GAME_INIT)
         try:
             start_step = boot.start(state, NativeServices(state))
+            if state.replay is not None:
+                state.replay.end()          # the original on to its first main-loop boundary; the clocks agree there
         except NativeGap as gap:
             print(f'boot: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
             return 1

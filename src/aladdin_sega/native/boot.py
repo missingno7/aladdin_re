@@ -20,7 +20,7 @@ from __future__ import annotations
 from ..game import video, player, hud
 from ..game.objects.record import RECORD_TABLE
 from .state import GameState, NativeGap
-from . import sequences
+from . import sequences, title
 
 GAME_INIT, NEW_GAME, TITLE_ENTRY, MAIN_LOOP = 0x1AA344, 0x1A8A58, 0x1A8B24, 0x1A8C16
 SOUND_DRIVER_TABLES = (0x1B9D06, 0x1BAF46, 0x1BAF6F, 0x1C73CB)     # 1AA344: the four pointers pushed for 1E584A
@@ -110,12 +110,17 @@ def title_entry(state: GameState, services) -> str:
     write = state.write
     write(0xFFF57C, 0, 1)
     services.checkpoint(0x1A8B2C)
-    raise NativeGap('title', 0x1B3B96, 'the title screen and its menu are not recovered', state.frame)
-    # 1B3B96 here, then:
-    # sequences.plane_size_64(state); (1B02EA, 1B0022 are RTS)
-    # sequences.reset_score(state); sequences.lives_by_difficulty(state); sequences.reset_apples(state)
-    # write(0xFFEFE2, 0x3030, 2)
-    # services.checkpoint(0x1A8B50); sequences.level_prologue(state, services); return 'frame_counter'
+    outcome, level = title.title_screen(state, services)
+    if outcome == 'attract' and level is not None:
+        write(0xFF7E26, level, 1)
+    sequences.plane_size_64(state)          # 1B02EA, 1B0022 are RTS
+    sequences.reset_score(state)
+    sequences.lives_by_difficulty(state)
+    sequences.reset_apples(state)
+    write(0xFFEFE2, 0x3030, 2)
+    services.checkpoint(0x1A8B50)
+    sequences.level_prologue(state, services)
+    return 'frame_counter'
 
 
 def start(state: GameState, services) -> str:

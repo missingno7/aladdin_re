@@ -131,12 +131,17 @@ class OracleClock(ReplayClock):
         return tuple(masks)
 
     def begin_at(self, pc):
-        """The native boot: the fresh oracle to the game's first instruction, the clocks both at frame 0."""
+        """The native boot: the fresh oracle to the game's first instruction.
+
+        The recorded masks are indexed by the console's tick frame, and the first frames of the boot pass before
+        VBlank interrupts run, so the clocks start from the tick frame at ``pc`` rather than an interrupt count.
+        """
         state = self.state
         self.frame = state.frame
         self.m.pad(self.pads.get(0, 0))
         if self._run_to((pc,), self.m.info['tick'] + 20 * FRAME_TICKS) is None:
             raise ReplayMismatch('boot', pc, 'the original did not reach the game from reset', state.frame)
+        self.frame = self.m.info['tick'] // FRAME_TICKS
         self.consumed = True
         self._align(pc)
 
