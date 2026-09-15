@@ -2,6 +2,12 @@
 
   native_diff.py FRAME COUNT [--every N] [--independent]
   native_diff.py --cold RECORDING COUNT [--every N] [--independent] [--native-boot]
+  native_diff.py --cold NODE COUNT --native-history [--store DIR] --independent --native-boot
+
+--native-history takes a node of the native player's store (history_native):
+its inputs are indexed by the game's own frames, so the run must be
+--independent (the oracle fed by waits) and starts from native power-on;
+this reproduces a native session's point of failure in the original.
 
 Both start from artifacts/evidence/frames/fFRAME.state, or (--cold) from
 power-on with the recording RECORDING (a history node id or prefix): the
@@ -34,8 +40,11 @@ from aladdin_sega.machine import Machine
 from aladdin_sega.native import GameState, NativeGap, STEPS, run_frame
 
 
-def main(frame, count, every=1, recording=None, independent=False, native_boot=False):
-    rom = nr.read_rom(); pads = nr.masks(recording)
+def main(frame, count, every=1, recording=None, independent=False, native_boot=False, native_history=False, store=None):
+    rom = nr.read_rom()
+    if native_history and not (independent and native_boot):
+        sys.exit('--native-history needs --independent and --native-boot')
+    pads = nr.masks(recording, store_path=store, native=native_history)
     first = frame
     m = Machine(rom); m.audio_policy('discard')
     start_step = None
@@ -161,10 +170,15 @@ if __name__ == '__main__':
     every = 1
     independent = '--independent' in argv
     native_boot = '--native-boot' in argv
-    argv = [a for a in argv if a not in ('--independent', '--native-boot')]
+    native_history = '--native-history' in argv
+    store = None
+    if '--store' in argv:
+        i = argv.index('--store'); store = argv[i + 1]; del argv[i:i + 2]
+    argv = [a for a in argv if a not in ('--independent', '--native-boot', '--native-history')]
     if '--every' in argv:
         i = argv.index('--every'); every = int(argv[i + 1]); del argv[i:i + 2]
     if '--cold' in argv:
         i = argv.index('--cold'); recording = argv[i + 1]; del argv[i:i + 2]
-        sys.exit(main(0, int(argv[0]), every, recording=recording, independent=independent, native_boot=native_boot))
+        sys.exit(main(0, int(argv[0]), every, recording=recording, independent=independent, native_boot=native_boot,
+                      native_history=native_history, store=store))
     sys.exit(main(int(argv[0]), int(argv[1]), every, independent=independent))

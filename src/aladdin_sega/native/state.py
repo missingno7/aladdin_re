@@ -33,6 +33,7 @@ class GameState:
         self.pads = None          # callable(frame) -> recorded pad mask; the frame clock is the VBlank count
         self.replay = None        # a replay.ReplayClock when recorded input must line up with the original's timing
         self.on_vblank = None     # the VBlank handler's RAM effects (frame.py sets it): run once per VBlank passed
+        self.on_frame = None      # a presenter (the native player): called once per frame passed, before its pad is read
 
     def advance_frames(self, count: int = 1) -> None:
         """VBlanks passed (waited for, or spent working): the handler runs for each, the pad clock moves with them."""
@@ -41,6 +42,8 @@ class GameState:
                 self.on_vblank(self)
             self.frame += 1
             self.buttons_low = None
+            if self.on_frame is not None:
+                self.on_frame(self)
             if self.pads is not None:
                 self.buttons = self.pads(self.frame)
 

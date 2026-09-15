@@ -70,7 +70,7 @@ def seed_at_boundary(m, frame, pads, rom, patience=3):
     return state, frame
 
 
-TRANSITION_ENTRIES = {'life_lost': 0x1A8F82, 'fell': 0x1A902E, 'level_change': 0x1A8E5C}
+TRANSITION_ENTRIES = {'life_lost': 0x1A8F82, 'fell': 0x1A902E, 'level_change': 0x1A8E5C, 'attract_end': 0x1B3182}
 SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND = 0x1E58B8, 0x1E589A, 0x1E58F4
 TRANSITION_LIMIT = 4000 * FRAME_TICKS      # the continue screen and a level's prologue are under this
 PAD_READS = ((0x1A8DB8, 0x1A8DF4), (0x1A8D22, 0x1A8D68))   # the main loop's two controller port reads (1A8CEE), and attract mode's
@@ -323,9 +323,15 @@ def history_id():
     return path.read_text().strip()
 
 
-def masks(recording=None):
-    """Recorded pad mask per frame (a recording's events, held until the next event); a node id or its prefix."""
-    store = HistoryStore(str(root / 'history'))
+def masks(recording=None, store_path=None, native=False):
+    """Recorded pad mask per frame (a recording's events, held until the next event); a node id or its prefix.
+
+    ``native`` reads the native player's store (history_native by default): its frame is a game frame (one of
+    the game's VBlank waits), so such masks belong to the by-waits driver, never to the faithful one.
+    """
+    from aladdin_sega.history import NATIVE_ROOT
+    store = HistoryStore(str(store_path or (root / ('history_native' if native else 'history'))),
+                         root=NATIVE_ROOT if native else None)
     node = history_id() if recording is None else next(
         (n for n in store.nodes() if n.startswith(recording)), recording)
     path = store.flatten(store.resolve(node))

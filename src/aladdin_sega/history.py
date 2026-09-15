@@ -9,6 +9,10 @@ import re
 
 ROOT = {"format": "input-history-1", "root": "aladdin-usa-new",
         "clock": "simulation-frame", "input": "three-button-pad-1", "initial_buttons": 0}
+# The native runtime's histories: the same immutable model, but a frame is one of the game's own VBlank waits
+# (the mask for game frame W applies when the game returns from its W-th wait), never elapsed console time.
+NATIVE_ROOT = {"format": "input-history-1", "root": "aladdin-usa-native",
+               "clock": "game-frame", "input": "three-button-pad-1", "initial_buttons": 0}
 
 
 def encoded(value):
@@ -54,28 +58,28 @@ def write_json(path, value):
 
 
 class HistoryStore:
-    def __init__(self, path=Path("history")):
+    def __init__(self, path=Path("history"), root=None):
         self.path = Path(path)
+        self.root = ROOT if root is None else root
+        self.root_id = digest(encoded(self.root))
         self.path.mkdir(parents=True, exist_ok=True)
         manifest = self.path / "manifest.json"
         if manifest.exists():
-            if read_json(manifest) != ROOT:
+            if read_json(manifest) != self.root:
                 raise ValueError("Unsupported history root/format")
         else:
-            write_json(manifest, ROOT)
-        self.root_id = ROOT_ID
+            write_json(manifest, self.root)
 
-    @staticmethod
-    def _root():
+    def _root(self):
         return {"parent": None, "end_frame": 0, "events": [],
-                "input_digest": ROOT_ID, "buttons": 0}
+                "input_digest": self.root_id, "buttons": 0}
 
     def ancestry(self, node_id):
         """Validate both graph structure and derived identity, from the root."""
         node_id = object_id(node_id)
         reverse, seen = [], set()
         current = node_id
-        while current != ROOT_ID:
+        while current != self.root_id:
             if current in seen:
                 raise ValueError("History ancestry contains a cycle")
             seen.add(current)
@@ -85,7 +89,7 @@ class HistoryStore:
             reverse.append((current, node))
             current = object_id(node["parent"])
         parent = self._root()
-        result = [(ROOT_ID, parent)]
+        result = [(self.root_id, parent)]
         for key, node in reversed(reverse):
             expected, computed = self._derive(result[-1][0], parent, node["events"], node["end_frame"])
             if key != expected or node != computed:
@@ -97,8 +101,7 @@ class HistoryStore:
     def node(self, node_id):
         return self.ancestry(node_id)[-1][1]
 
-    @staticmethod
-    def _derive(parent_id, parent, events, end_frame):
+    def _derive(self, parent_id, parent, events, end_frame):
         end_frame = natural(end_frame)
         if end_frame <= parent["end_frame"]:
             raise ValueError("A child must advance canonical simulation time")
@@ -121,7 +124,7 @@ class HistoryStore:
             previous, buttons = frame, mask
         # Checkpoint placement does not alter logical path identity: only the
         # ordered input stream and elapsed frame enter this digest.
-        key = digest(encoded({"root": ROOT_ID, "input": chain, "end_frame": end_frame}))
+        key = digest(encoded({"root": self.root_id, "input": chain, "end_frame": end_frame}))
         return key, {"parent": parent_id, "end_frame": end_frame, "events": normalized,
                      "input_digest": chain, "buttons": buttons}
 
@@ -141,12 +144,12 @@ class HistoryStore:
 
     def flatten(self, node_id):
         path = self.ancestry(node_id)
-        return {"root": ROOT, "history_id": node_id,
+        return {"root": self.root, "history_id": node_id,
                 "end_frame": path[-1][1]["end_frame"],
                 "events": [event for _, node in path for event in node["events"]]}
 
     def nodes(self):
-        result = {ROOT_ID: self._root()}
+        result = {self.root_id: self._root()}
         for path in sorted((self.path / "nodes").glob("*.json")):
             result[path.stem] = self.node(path.stem)
         return result
@@ -175,6 +178,6 @@ class HistoryStore:
     def resolve(self, ref="main"):
         if ref == "main":
             path = self.path / "refs" / "main.json"
-            ref = read_json(path)["node"] if path.exists() else ROOT_ID
+            ref = read_json(path)["node"] if path.exists() else self.root_id
         self.node(ref)
         return ref

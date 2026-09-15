@@ -105,7 +105,7 @@ def run_to_exits(machine, exits, target: int) -> None:
         machine.gate(pc, bypass_once=True)
 
 
-def trace_port_writes(machine, exits, *, limit: int = 2_000_000) -> list:
+def trace_port_writes(machine, exits, *, limit: int = 2_000_000, on_step=None) -> list:
     """Single-step the oracle until its PC is one of ``exits``; return the VDP port words written.
 
     A write is recorded only when its instruction completes: an interrupt
@@ -147,6 +147,8 @@ def trace_port_writes(machine, exits, *, limit: int = 2_000_000) -> list:
             machine.run(instructions=1)
         if pending and machine.info['m68k_instructions'] != info['m68k_instructions']:
             writes.extend(pending)
+        if on_step is not None:
+            on_step(machine)
         limit -= 1
         if not limit:
             raise RuntimeError('port trace did not reach ' + ', '.join(f'{e:06X}' for e in exits))

@@ -191,6 +191,36 @@ remaining 1.2 % are the decompressors' and pad readers' inner helpers and
 the sound driver (platform).  The main loop is not where recovery is
 missing.
 
+## 3b. The cold-start frontier (audit of 15 September, evening)
+
+What runs from reset to the first main-loop frame, traced on the old
+recording with every call target gated (`scripts/route_census.py 0 1002`
+and a first-hit trace): ROM 21A (the console's reset code: TMSS, the VDP
+and the Z80, the region check) -> 1A8A4A (stack, interrupts) ->
+1AA344 (game init) -> 1A8A58 (new game: VDP registers, font and HUD tiles,
+planes, scroll table, objects) -> 1A8B24 (title entry) -> 1B3B96 (logos,
+title, the 1500-frame attract timeout, the Start / Options menu) -> the
+session counters -> 1A8B50 (prologue: title card 1B1486, the level-1 title
+1B202A, the story 1B0F66, the level intro 1B1260, the loader, the draw) ->
+1A8C16.  The attract demo is the same prologue and main loop with FFF57C
+set and the pad from the ROM stream; a button ends it at 1B3182, which
+returns to 1A8B24; a declined continue goes to 1A8A58; the game over is
+1B0558.
+
+| region | class | state |
+|---|---|---|
+| reset code 21A..6A8 (TMSS, VDP, Z80, region) | 4 (platform) | the power-on contract: zeroed RAM, the VDP as the reset code leaves it (`boot.power_on`); the sound driver's tables are a platform service |
+| game init 1AA344, session defaults 1AA41C, high-score and button-routine tables 1AFFE4 / 1B32E2, new-game console setup 1A8A58 | 1 | recovered in `native/boot.py`; verified from reset at 1AA344, 1A8A58, 1A8B2C (`verify_sequence.py --boot`) |
+| title, logos, attract timeout, Start / Options menu 1B3B96..~1B4800 with 1B3B4A, 1B43C4.., 1B477C.., 1B4410.., 1B4802, 1B4836, 1B3548, 1B0BA6 | 3 | grinder in progress (`native/title.py`); verification: the three power-on recordings through `--boot` |
+| level-1 title 1B202A | 3 | grinder in progress |
+| story pages of levels 1, 7, 9, A, B | 3 (1, 7 partly composition) | grinder in progress; levels 7, 9, A, B unreachable by any recording: listing-only until a recording reaches them |
+| attract exit 1B3182 and the demo run | 1 | composition: a transition kind 'attract_end' back to the title entry (grinder) |
+| declined continue -> 1A8A58 | 1 | composition once the title lands |
+| game over 1B0558 | 3 | grinder, listing-only (no recording reaches it) |
+| options screen (from the menu) | 3 | within the title grinder's scope if the menu reaches it; else a NativeGap |
+| ending 1B4F7C | 4 | not on the path to the milestone |
+| sound output | 4 | the driver's calls are events; audible playback needs the Z80 driver as a service, later |
+
 ## 4. The loop, as it now runs
 
 native run (`native_diff.py --cold RECORDING N`, or from a snapshot) ->
