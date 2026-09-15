@@ -577,6 +577,41 @@ def pot_2f(read, write, rom, services, memory, record):
         _spawn_at(read, write, rom, SPLASH, splash, read(record + 2, 2), read(record + 4, 2))
 
 
+def apple_every_fourth(read, write, rom, services, memory, record):
+    """1AF264: an apple source that yields one apple every fourth touch (FFF10A), unless apples are at 99."""
+    if read(hud.APPLES, 2) == 0x3939:
+        return
+    touches = read(0xFFF10A, 1) + 1
+    write(0xFFF10A, touches, 1)
+    if touches >= 4:
+        write(0xFFF10A, 0, 1)
+        hud.add_apple(read, write)
+        _sound(read, services, 0x0C)
+    _collect(read, write, rom, services, memory, record)
+
+
+def _level_flag_item(flag):
+    def handler(read, write, rom, services, memory, record):
+        """1AF2B0 / 1AF2FA (kinds 3E/3F): a level flag, the object plays script 121618, the camera looks up."""
+        write(flag, 0xFF, 1)
+        write(record, 0x84, 1)
+        write(record + 0xA, 0x121618, 4)
+        write(record + 0x37, 0, 1)
+        write(P.CAMERA_TARGET_X, 0x70, 2)
+        write(P.CAMERA_TARGET_Y, 0x190, 2)
+        _sound(read, services, 0x64)
+    return handler
+
+
+def level_end_item(read, write, rom, services, memory, record):
+    """1AF344: the level ends in 32 frames; the sparkle, its jingle and 1,000 points."""
+    write(P.TRANSITION_COUNTDOWN, 0x20, 1)
+    _retire(memory, services, record)
+    _template(write, rom, record, SPARKLE)
+    _sound(read, services, 0x64)
+    hud.add_points(read, write, hud.POINT_ADDERS[0x1B0188])
+
+
 def carried_object(read, write, rom, services, memory, record):
     """1AF516 (kind 36): moves to the extra pool as kind 82 with script 125710."""
     extra = _find_free(read, _record(25), 6)
@@ -811,7 +846,8 @@ PLAYER_CALLBACKS = {
     0x1AEEE0: health_full, 0x1AEF12: health_up, 0x1AEF5C: extra_life,
     0x1AEFB0: _progress(0xFFF126), 0x1AEFDC: _progress(0xFFF127), 0x1AF008: _progress(0xFFF128),
     0x1AF034: _progress(0xFFF129), 0x1AF060: _progress(0xFFF116), 0x1AF08C: _progress(0xFFF12A),
-    0x1AF228: gem, 0x1AF384: bonus_1000, 0x1AF3C2: bonus_flag_item, 0x1AF468: apple, 0x1AF4A0: points_item, 0x1AF4D8: scarab,
+    0x1AF228: gem, 0x1AF264: apple_every_fourth, 0x1AF2B0: _level_flag_item(0xFFF177), 0x1AF2FA: _level_flag_item(0xFFF178),
+    0x1AF344: level_end_item, 0x1AF384: bonus_1000, 0x1AF3C2: bonus_flag_item, 0x1AF468: apple, 0x1AF4A0: points_item, 0x1AF4D8: scarab,
     0x1AF516: carried_object, 0x1AF53E: _layer(0), 0x1AF54A: _layer(1), 0x1AF556: _clear_kind(8), 0x1AF562: _clear_kind(9),
     0x1AF590: platform_switch, 0x1AF5F0: platform_2, 0x1AF81C: platform_sink, 0x1AF978: platform_lift_switch,
     0x1AF9F6: platform_tilt, 0x1AFA84: platform_break,

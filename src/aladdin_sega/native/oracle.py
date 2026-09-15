@@ -106,7 +106,13 @@ def run_to_exits(machine, exits, target: int) -> None:
 
 
 def trace_port_writes(machine, exits, *, limit: int = 2_000_000) -> list:
-    """Single-step the oracle until its PC is one of ``exits``; return the VDP port words written."""
+    """Single-step the oracle until its PC is one of ``exits``; return the VDP port words written.
+
+    A write is recorded only when its instruction completes: an interrupt
+    taken in front of it (the machine parks on the handler's gate without
+    executing) or a full-FIFO stall (no progress at the same PC) does not
+    count it, and the instruction is evaluated again when the PC returns.
+    """
     md = _disassembler()
     writes = []
     while True:
@@ -116,6 +122,7 @@ def trace_port_writes(machine, exits, *, limit: int = 2_000_000) -> list:
             return writes
         code = machine.peek_rom(pc, 10) if pc < 0x400000 else machine.peek_ram(pc & 0xFFFF, 10)
         insn = next(iter(md.disasm(code, pc)), None)
+        pending = None
         if insn is not None and insn.mnemonic in ('move.b', 'move.w', 'move.l'):
             size = _SIZES[insn.mnemonic[-1]]
             source, destination = _split(insn.op_str)
@@ -124,15 +131,22 @@ def trace_port_writes(machine, exits, *, limit: int = 2_000_000) -> list:
             if address is not None and 0xC00000 <= address <= 0xC00007:
                 value = operand_value(machine, regs, source, size)
                 port = 'data' if address & 4 == 0 else 'control'
-                if size == 4:
-                    writes.append((port, value >> 16))
-                    writes.append((port, value & 0xFFFF))
-                else:
-                    writes.append((port, value & 0xFFFF))
+                pending = [(port, value >> 16), (port, value & 0xFFFF)] if size == 4 else [(port, value & 0xFFFF)]
         machine.run(instructions=1)
-        if machine.info['m68k_instructions'] == info['m68k_instructions']:
-            machine.gate(pc, bypass_once=True)      # parked on a gate: pass it once
+        stalls = 0
+        while machine.info['m68k_instructions'] == info['m68k_instructions']:
+            if machine.info['pc'] != pc:
+                pending = None          # an interrupt was taken first: the instruction has not executed
+                break
+            try:
+                machine.gate(pc, bypass_once=True)     # parked on its own gate: pass it once
+            except Exception:
+                stalls += 1                            # a full-FIFO stall: wait for the write to go through
+                if stalls > 100000:
+                    raise RuntimeError(f'the oracle makes no progress at {pc:06X}')
             machine.run(instructions=1)
+        if pending and machine.info['m68k_instructions'] != info['m68k_instructions']:
+            writes.extend(pending)
         limit -= 1
         if not limit:
             raise RuntimeError('port trace did not reach ' + ', '.join(f'{e:06X}' for e in exits))
