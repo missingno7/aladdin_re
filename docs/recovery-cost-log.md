@@ -672,3 +672,15 @@ several native calls is a bridge, not an escalation; the audit tooling
 (fallback snapshots grouped by path) is the right way to read a residual
 frontier and is worth turning into a script if the next recording leaves
 a similar tail.
+
+## 15 September 2026 (later): the bounded frontier is exhausted
+
+Two more supervisor leaves after the audit (type2c's active arm, the three
+collection targets 1AEDA8/1AEFB0/1AEFDC) took fallbacks 152 -> 137 on one
+cold PASS (18.13M instructions replaced).  The residue is the scheduler
+(106, concentrated in about thirty frames, seventy of them the walker's
+batch straddling a VBlank in seven long frames) and the command-stream
+engine (about 31 ticks of 1,000 to 8,000 instructions).  Bottom-up
+recovery has converged on this recording; the ledger will not move again
+without a longer recording or a decision about the command-stream engine
+and the unarmed game loop.

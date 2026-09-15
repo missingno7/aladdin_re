@@ -6,6 +6,40 @@ workflow; machine snapshots are disposable Genesis cache material, never
 history identity.  Python recovery remains selective.  No claim is made that
 the game, its dispatcher, or the recovery task is complete.
 
+## Bounded frontier exhausted on this recording (15 September, later)
+
+After the audit, the rows that were still bounded were taken the same way:
+type2c's FFF0D8-set arm (a six-slot extra-pool stash, an optional
+command-21 seam, a main-pool spawn from template 1B7E40; the selector
+shape shared with the spawn allocators is now `_pool_selector`), and the
+three collection targets 1AEDA8 (retype, then the shared contact root),
+1AEFB0 and 1AEFDC (a flag byte, an optional command-67 seam, then the
+proven counted replacement).  All of it was composition of proven pieces
+plus the standard single seam; no new mechanism.
+
+**92588 candidate hits, 137 fallbacks** (down from 152 and from 379
+at the phase review), 18.13M instructions replaced, on the 82,161-frame
+cold comparison at `artifacts/audit-frontier17` (PASS, 0 restores).
+
+What is left on this history is no longer a recovery frontier:
+
+- 106 scheduler refusals in about 30 frames.  Seventy of them are the spawn
+  walker declining its batch repeatedly inside seven long frames (38768,
+  38783, 38788, 50448, 57115, 69391, 81524) where the batch straddles
+  the next VBlank admission instant, not the observation deadline; the rest
+  are single events.  A budget-aware batch would be a runner mechanism for
+  a handful of frames and is not worth it.
+- About 26 kind-21 command-stream ticks under the type1f reason (8,000
+  instructions with an interrupt inside), 4 type7E stream handoffs (1,000+
+  instructions, two seams around a 1B2238 stream routine) and one type-13
+  fixed-helper command-14 suffix.  These are the command-stream engine,
+  the one region on this recording that is neither a leaf nor a seam.
+
+The next lever is therefore not more grinding on `main`: either a longer
+recording (new levels bring new leaves) or a deliberate decision about
+the command-stream engine and the game loop itself, which the frontier
+ledger does not list because no gate is armed there.
+
 ## Audit of the remaining fallbacks: platform tails bridged, no chained seam (15 September)
 
 The phase review named one measured obstacle, regions with two or more
