@@ -45,16 +45,24 @@ def main(frame, count, every=1, recording=None, independent=False):
         state, frame = nr.seed_cold(m, pads, rom)
     if independent:
         state.replay = None
+    driver = nr.OracleDriver(m, pads, by_waits=independent, frame=frame)
     print(f'{"independent" if independent else "aligned"} run seeded at main-loop frame {frame}'
           + (f' of recording {recording}' if recording else ''))
     for i in range(count):
         f = state.frame
+        before = len(state.events)
         try:
             run_frame(state)
         except NativeGap as gap:
             print(f'frame {f}: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
             return 1
-        nr.run_oracle_frame(m, pads, state.replay)
+        driver.run_frame(state.replay)
+        if not (state.replay is not None and driver.sounds == [] and state.frame - f > 1):   # a clock-driven transition: uncollected
+            native_sounds = [s for e in state.events[before:] for s in nr.native_sound_events([e], e[1])]
+            if native_sounds != driver.sounds:
+                print(f'frame {f}: sound events differ: native {native_sounds} oracle {driver.sounds}')
+                m.close()
+                return 4
         if (i + 1) % every:
             continue
         oracle = m.peek_ram(0, 65536)

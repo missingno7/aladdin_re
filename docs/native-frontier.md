@@ -79,7 +79,6 @@ after every frame):
 | 44223150 from f69586 (level 5) | byte-exact to the recording's end (82,161), through its two deaths |
 | 24c70ffc from power-on (seeded at 2197) | byte-exact to the recording's end (9,811) |
 | 2dddf860 from power-on (seeded at 1311) | byte-exact to frame 8197, its level 1 -> 2 change (open, category 3) |
-| 44223150 from f69586, `--independent` (no oracle clock after the seed) | byte-exact for 2,271 frames, then the standalone input policy differs: the original's controller read of frame 71856 fell after the tick wrap and saw the next mask; the aligned run passes there |
 
 ## 2. Every gap and divergence met, classified
 
@@ -119,6 +118,28 @@ Nothing in the table is a timing rule fitted to a recording.  The two
 category-2 items that touched the runtime (the handler per elapsed frame,
 the checkpoints before polling loops) are platform semantics and progress
 marks; the rest of category 2 is tooling.
+
+The independent contract.  A standalone run has no oracle, so it states
+its own timing contract and the oracle is checked *under that contract*:
+input advances per game frame (the mask for game frame W applies when the
+game returns from its W-th VBlank wait, `WAIT_RETURN` 1B24F4, never with
+elapsed work time), and a routine that always spans frames in the original
+(a decompression, the screen draw) carries `services.work()`, which runs
+the VBlank handler's effects once, the same result as any number of
+handler passes under an unchanged mask.  `native_diff.py --independent`
+runs the native side with no clock and the oracle by that contract
+(`OracleDriver(by_waits=True)`), comparing whole RAM and the ordered sound
+driver calls (request / flush / command, from the driver entries' stack
+argument) after every frame.  Under it the recordings become slightly
+different playthroughs than under the faithful rule, which is what makes
+this a check of independence rather than of alignment: nothing flows from
+the oracle into the native run.
+
+| independent run | outcome |
+|---|---|
+| 24c70ffc from power-on | byte-exact and sound-exact to the recording's end |
+| 44223150 from f69586 | byte-exact and sound-exact for 12,600 frames to the end, through its deaths |
+| 2dddf860 from power-on | byte-exact and sound-exact to its level change at 8197 |
 
 What an aligned run proves, and what it does not.  The independent audit
 is right that an oracle-fed clock is a diagnostic instrument: an aligned

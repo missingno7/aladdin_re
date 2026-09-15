@@ -47,6 +47,14 @@ class NativeServices(Services):
         if self.checkpoints is not None:
             self.checkpoints.append((pc, bytes(state.ram), state.frame))
 
+    def work(self):
+        """The original spends at least one frame of work here (a decompression, the screen draw): its VBlank
+        handler runs meanwhile.  The native runtime spends no time, so the handler's effects run once; with
+        the pad unchanged they are the same however many frames the work took.
+        """
+        if self.state.on_vblank is not None:
+            self.state.on_vblank(self.state)
+
     def sound_flush(self, value):
         """1E589A on its own: the driver's flush command with a value (the level music)."""
         self.state.events.append(('sound_flush', self.state.frame, value))

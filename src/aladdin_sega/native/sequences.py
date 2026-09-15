@@ -94,20 +94,24 @@ def copy_ram_words(state, source, vram, count):
         vdp.data(state.read(source + 2 * i, 2))
 
 
-def decompress_to_vram(state, source, vram):
-    """1B3416: the VRAM decompressor through the 16 KB window at FF0000 (which it overwrites)."""
+def decompress_to_vram(state, source, vram, services=None):
+    """1B3416: the VRAM decompressor through the 16 KB window at FF0000 (which it overwrites); frames of work."""
     state.vdp.control_long(video.vram_write_command(vram))
     window = bytearray(state.ram[0:0x4000])
     ring = compress.decompress_to_vdp(state.rom, source, state.vdp.data, window=window)
     state.ram[0:0x4000] = ring
+    if services is not None:
+        services.work()
 
 
-def decompress_to_ram(state, source, destination):
-    """1B3818."""
+def decompress_to_ram(state, source, destination, services=None):
+    """1B3818; frames of work."""
     out = compress.decompress(state.rom, source)
     size = int.from_bytes(state.rom[source + 4:source + 8], 'big')
     base = destination & 0xFFFF
     state.ram[base:base + size] = out[:size]
+    if services is not None:
+        services.work()
 
 
 def clear_cram(vdp):
@@ -407,9 +411,9 @@ def reset_apples(state):
     state.write(hud.APPLES, 0x3135 if difficulty == 0 else 0x3130 if difficulty == 1 else 0x3035, 2)
 
 
-def reload_attributes(state):
+def reload_attributes(state, services):
     """1B3434: the level's cell attributes (level table +8) decompressed to FFAE84."""
-    decompress_to_ram(state, level_entry(state, 8), player.CELL_ATTRIBUTES)
+    decompress_to_ram(state, level_entry(state, 8), player.CELL_ATTRIBUTES, services)
 
 
 def _walk(state, services):
@@ -433,6 +437,7 @@ def _strip_pass(state, services):
 
 
 def draw_screen(state, services):
+    services.work()          # 23 columns: frames of work before anything below
     """1AA724: the visible window drawn by walking the camera 23 columns right and back, muted."""
     if state.read(player.CAMERA_LOCK, 1):
         raise NativeGap('screen_draw', 0x1AA81A, 'the locked-camera screen draw is not recovered', state.frame)
@@ -603,8 +608,8 @@ def continue_screen(state, services):
     write(player.INVULNERABLE, 0, 1)
     retire_pool(state, services, 0, 32)
     clear_plane(state.vdp, 0xE000)
-    decompress_to_vram(state, 0x13046F, 0xC000)
-    decompress_to_vram(state, 0x13C374, 0)
+    decompress_to_vram(state, 0x13046F, 0xC000, services)
+    decompress_to_vram(state, 0x13C374, 0, services)
     for slot, template, x, y, script in CONTINUE_TEMPLATES:
         record = RECORD_TABLE + RECORD_SIZE * slot
         init_template(state, record, template, x, y)
@@ -684,8 +689,8 @@ def level_card(state, services):
     clear_records(state)
     clear_bytes(state, 0xFFF008, 0x126)
     clear_plane(state.vdp, 0xC000)
-    decompress_to_vram(state, 0x12EA12, 0xE000)
-    decompress_to_vram(state, 0x1319EC, 0)
+    decompress_to_vram(state, 0x12EA12, 0xE000, services)
+    decompress_to_vram(state, 0x1319EC, 0, services)
     write(RECORD_TABLE, 0, 1)
     init_template(state, free_slot_downward(state), LEVEL_CARD_TEMPLATE, 0x58, 0x1F0)
     record = free_slot_downward(state)
@@ -720,14 +725,14 @@ def level_1_title(state, services):
 def story_plate(state, source, palette):
     """1B494E / 1B496C: the story's background tiles and the palette line the pages use."""
     clear_plane(state.vdp, 0xE000)
-    decompress_to_vram(state, source, 0)
+    decompress_to_vram(state, source, 0, services)
     state.write(STORY_PLATE_PALETTE, palette, 4)
 
 
 def story_picture(state, services, source, line0, line1):
     """1B49DA and its siblings: the page's picture into plane A, then 1B4B28: its four palette lines."""
     state.write(STORY_PAGE_SOURCE, source, 4)
-    decompress_to_vram(state, source, 0xC000)
+    decompress_to_vram(state, source, 0xC000, services)
     services.vblank()
     palette_line(state, 0, line0)
     state.vdp.control_long(video.PALETTE_COMMANDS[0]); state.vdp.data(0)
@@ -851,9 +856,9 @@ def level_intro(state, services):
     clear_scroll(state.vdp)
     retire_pool(state, services, 0, 32)
     sprite_terminator(state)
-    decompress_to_vram(state, 0x12F39E, 0xE000)
-    decompress_to_vram(state, 0x12F12E, 0xC000)
-    decompress_to_vram(state, 0x136912, 0)
+    decompress_to_vram(state, 0x12F39E, 0xE000, services)
+    decompress_to_vram(state, 0x12F12E, 0xC000, services)
+    decompress_to_vram(state, 0x136912, 0, services)
     write(RECORD_TABLE, 0, 1)
     services.checkpoint(0x1B12DE)
     write(hud.MESSAGE, read(player.LEVEL_INDEX, 1), 1)
@@ -907,14 +912,14 @@ def load_level(state, services):
     write(player.CAMERA_Y, word(2), 2); write(level.WINDOW_Y, word(2), 2)
     write(player.SCREEN_Y, word(6), 2); write(0xFF7E00, word(6), 2)
     if long(8):
-        decompress_to_ram(state, long(8), player.CELL_ATTRIBUTES)
-    decompress_to_vram(state, long(0xC), 0)
+        decompress_to_ram(state, long(8), player.CELL_ATTRIBUTES, services)
+    decompress_to_vram(state, long(0xC), 0, services)
     write(PLANE_B_ON_A, rom[entry + 0x40], 1)
     if long(0x1C):
-        decompress_to_ram(state, long(0x1C), PLANE_B_CACHE)
+        decompress_to_ram(state, long(0x1C), PLANE_B_CACHE, services)
         restore_plane_b(state)
     if long(0x10):
-        decompress_to_ram(state, long(0x10), 0xFF0000)
+        decompress_to_ram(state, long(0x10), 0xFF0000, services)
     write(0xFFF140, long(0x14), 4)
     write(0xFFF148, word(0x18), 2)
     write(0xFF7DBE, long(0x24), 4)
@@ -1067,7 +1072,7 @@ def respawn(state, services, fell: bool):
     restore_checkpoint(state)
     reset_apples(state)
     services.checkpoint(0x1A9106)
-    reload_attributes(state)
+    reload_attributes(state, services)
     services.checkpoint(0x1A910C)
     draw_screen(state, services)
     services.checkpoint(0x1A9110)

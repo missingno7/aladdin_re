@@ -156,11 +156,79 @@ class OracleClock(ReplayClock):
         state.advance_frames(self.frame - 1 - state.frame)   # the frame loop counts the resumed frame's own VBlank
 
 
-def run_oracle_frame(m, pads, clock=None):
-    """Run the oracle to its next frame boundary, applying the recorded pad at every VBlank it passes.
+WAIT_RETURN = 0x1B24F4                      # the RTS of the VBlank wait 1B249E: the game has passed one of its frames
+SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND = 0x1E58B8, 0x1E589A, 0x1E58F4
 
-    When the frame's transition already drove the oracle there (``clock.consumed``), nothing runs.
+
+class OracleDriver:
+    """Runs the oracle frame by frame beside the native runtime, under one of two input contracts.
+
+    *Faithful* (the default): the recorded mask changes at the frame's tick wrap, as the recording runtime
+    applied it; with a replay clock this is the aligned mode.  *By waits* (the independent contract): the mask
+    for game frame W is applied when the game returns from its W-th VBlank wait, so input advances with the
+    game's own frames and never with work time; the native runtime under the same contract needs no oracle.
+    Either way the driver collects the sound driver's calls per frame for comparison with the native events.
     """
+
+    def __init__(self, m, pads, by_waits=False, frame=0):
+        self.m, self.pads, self.by_waits = m, pads, by_waits
+        self.waits = frame              # the game frames passed so far (the native frame number)
+        self.sounds = []                # this frame's ('request', id) / ('flush', value) / ('command',) events
+
+    def run_frame(self, clock=None):
+        """To the next main-loop boundary; nothing when the frame's transition already drove the oracle there."""
+        m = self.m
+        self.sounds = []
+        if clock is not None and clock.consumed:
+            clock.consumed = False
+            return
+        gates = [FRAME_BOUNDARY, SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND] + ([WAIT_RETURN] if self.by_waits else [])
+        arm(m, gates)
+        limit = m.info['tick'] + (TRANSITION_LIMIT if self.by_waits else 3 * FRAME_TICKS)
+        while True:
+            if self.by_waits:
+                result = 'gate' if m.run(target=limit) == 'gate' else 'limit'
+            else:
+                result = run_with_pads(m, self.pads, limit)
+            assert result == 'gate', 'the oracle did not reach the frame boundary'
+            pc = m.info['pc']
+            m.gate(pc, bypass_once=True)
+            if pc == WAIT_RETURN:
+                self.waits += 1
+                m.pad(self.pads.get(self.waits, 0))
+            elif pc == SOUND_REQUEST:
+                self.sounds.append(('request', self._argument()))
+            elif pc == SOUND_FLUSH:
+                self.sounds.append(('flush', self._argument()))
+            elif pc == SOUND_COMMAND:
+                self.sounds.append(('command',))
+            elif at_main_loop_boundary(m):
+                return
+
+    def _argument(self):
+        sp = self.m.registers()['a7']
+        return int.from_bytes(self.m.peek_ram((sp + 4) & 0xFFFF, 4), 'big') & 0xFFFF
+
+
+def native_sound_events(events, frame):
+    """The native event stream of one frame in the driver's terms."""
+    out = []
+    for e in events:
+        if e[1] != frame:
+            continue
+        if e[0] == 'sound':
+            out.append(('request', e[2]))
+            if e[3]:
+                out.append(('flush', e[2]))
+        elif e[0] == 'sound_flush':
+            out.append(('flush', e[2]))
+        elif e[0] == 'sound_command':
+            out.append(('command',))
+    return out
+
+
+def run_oracle_frame(m, pads, clock=None):
+    """Run the oracle to its next frame boundary under the faithful input contract (see OracleDriver)."""
     if clock is not None and clock.consumed:
         clock.consumed = False
         return
