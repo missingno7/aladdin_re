@@ -77,6 +77,7 @@ after every frame):
 |---|---|
 | 44223150 from power-on (seeded at its first main-loop frame 1002) | byte-exact to frame 10018, the level 1 -> 2 change (open, category 3) |
 | 44223150 from f69586 (level 5) | byte-exact to the recording's end (82,161), through its two deaths |
+| 44223150 from f44827 (level 0), after the level change and level events were recovered | byte- and sound-exact for 40,000 frames to the end: levels 0, 4 and 5, two level changes with the scarab wheel, two deaths |
 | 24c70ffc from power-on (seeded at 2197) | byte-exact to the recording's end (9,811) |
 | 2dddf860 from power-on (seeded at 1311) | byte-exact to frame 8197, its level 1 -> 2 change (open, category 3) |
 
@@ -101,8 +102,8 @@ after every frame):
 | 24c70ffc f3296 | contact callback kind 7B (1AE9D4) | 4 | it is the plain hurt (1AE4F8, already recovered): registered |
 | 2dddf860 f6853, 44223150 f8425 | kind-01 spring (1AFD84) launched the player from a plain landing | 1 | the new kind-65 function shadowed the existing `spring`: renamed |
 | 44223150 f8425 | the same defect, in a frame no snapshot-seeded run had ever covered (f1000 reached 6700, the next seed was 8500) | 1 | cold starts now run the whole recording from its first main-loop frame |
-| 44223150 f10018, f48930 | level change (1A8E5C: tally 1B0D70, scarab screen 1B16E0, sequence stream, 1A8B50 prologue) | 3 | **open**: the next blocker of the old recording |
-| 44223150 level 2 | level event stream handlers (1B634E over the table at 20C0) | 3 | **open** |
+| 44223150 f10018, f24593, f48929 | level change (1A8E5C: tally 1B0D70, scarab screen 1B16E0, sequence stream, 1A8B50 prologue) | 3 | recovered; verified at every checkpoint for the 1->2, 3->0 and 0->4 changes |
+| 44223150 level 2 | level event stream handlers (1B634E over the table at 20C0) | 3 | recovered for the non-carpet levels (E6..F2); the carpet ride's stay gaps |
 | all, frame 0 | boot, title, attract, options (1B3B4A, 1B43C4.., 1B47xx, 1B0BBE) | 3 | **open**: the oracle seeds the native runtime at the first main-loop boundary |
 | any | messages with wait commands inside the main loop; pause loop; Start-release wait; game over 1B0558; declined continue (title) | 3 | **open**, fail loud |
 | any | 22 player and 20 projectile contact callbacks no recording has met | 4 (future) | fail loud with the ROM address |
@@ -112,7 +113,7 @@ after every frame):
 | independent audit | the per-step verifier skipped a step whose entry was the previous step's exit, and exited 0 on mismatches | 2 | fixed: exit 2 on mismatch, 3 on a recovered step not exercised |
 | independent audit | transition checkpoints proved only that the oracle eventually reached each pc; the entry and the resumed state were not asserted | 2 | `verify_sequence` gates every known checkpoint (route order), asserts the entry, compares the resumed boundary |
 | independent audit | snapshots named their recording by a second resolution of the moving `main` ref | 2 | resolved once, written once; regenerate whole sets only |
-| independent audit | level-2 event E7 handler 1B7840 (old recording, frame 11259) | 3 | **open**, with the level-2 event stream |
+| independent audit | level-2 event E7 handler 1B7840 (old recording, frame 11259) | 3 | recovered (a sound) |
 
 Nothing in the table is a timing rule fitted to a recording.  The two
 category-2 items that touched the runtime (the handler per elapsed frame,

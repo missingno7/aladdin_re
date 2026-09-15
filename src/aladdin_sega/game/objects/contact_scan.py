@@ -77,7 +77,7 @@ def player_contact_scan(read, write, rom, services, memory, bus) -> None:
     player = _record(0)
     if not frame or not read(player, 1):
         return
-    px, py = read(player + 2, 2), read(player + 4, 2)
+    px = read(player + 2, 2)
     if read(FACING, 1):
         left, right = _edge(px, bus(frame + 4, 1), True), _edge(px, bus(frame + 2, 1), True)
     else:
@@ -93,6 +93,7 @@ def player_contact_scan(read, write, rom, services, memory, bus) -> None:
         if not descriptor:
             continue
         ox, oy, mirrored = read(record + 2, 2), read(record + 4, 2), read(record + 9, 1)
+        py = read(player + 4, 2)        # per object: a landing earlier in the scan republishes the player's Y
         if right < (_edge(ox, bus(descriptor + 4, 1), True) if mirrored else _edge(ox, bus(descriptor + 2, 1), False)):
             continue
         if _w(bus(frame + 5, 1) + py) < _w(bus(descriptor + 3, 1) + oy):

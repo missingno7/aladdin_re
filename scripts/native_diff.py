@@ -51,18 +51,23 @@ def main(frame, count, every=1, recording=None, independent=False):
     for i in range(count):
         f = state.frame
         before = len(state.events)
+        driver.begin_frame(state.replay)
         try:
             run_frame(state)
         except NativeGap as gap:
             print(f'frame {f}: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
             return 1
         driver.run_frame(state.replay)
-        if not (state.replay is not None and driver.sounds == [] and state.frame - f > 1):   # a clock-driven transition: uncollected
-            native_sounds = [s for e in state.events[before:] for s in nr.native_sound_events([e], e[1])]
-            if native_sounds != driver.sounds:
-                print(f'frame {f}: sound events differ: native {native_sounds} oracle {driver.sounds}')
-                m.close()
-                return 4
+        if not independent:
+            if state.frame > driver.frame:
+                print(f'frame {f}: the native frame waited to {state.frame}, the original passed {driver.frame} VBlanks')
+                m.close(); return 4
+            state.advance_frames(driver.frame - state.frame)     # a loop iteration the original spent two VBlanks on
+        native_sounds = [s for e in state.events[before:] for s in nr.native_sound_events([e], e[1])]
+        if native_sounds != driver.sounds:
+            print(f'frame {f}: sound events differ: native {native_sounds} oracle {driver.sounds}')
+            m.close()
+            return 4
         if (i + 1) % every:
             continue
         oracle = m.peek_ram(0, 65536)
@@ -98,9 +103,12 @@ def step_diff(rom, first, target, pads, recording=None):
         state, frame = nr.seed_at_boundary(m, first, pads, rom)
     else:
         state, frame = nr.seed_cold(m, pads, rom)
+    driver = nr.OracleDriver(m, pads, frame=frame)
     while state.frame < target:
+        driver.begin_frame(state.replay)
         run_frame(state)
-        nr.run_oracle_frame(m, pads, state.replay)
+        driver.run_frame(state.replay)
+        state.advance_frames(max(0, driver.frame - state.frame))
     m.gates(sorted({s.entry for s in STEPS} | {e for s in STEPS for e in s.exits} | {nr.VBLANK_HANDLER}))
     m.pad(pads.get(target, 0)); state.buttons = pads.get(target, 0)
     services = NativeServices(state)

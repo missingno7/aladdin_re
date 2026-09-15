@@ -71,6 +71,7 @@ def seed_at_boundary(m, frame, pads, rom, patience=3):
 
 
 TRANSITION_ENTRIES = {'life_lost': 0x1A8F82, 'fell': 0x1A902E, 'level_change': 0x1A8E5C}
+SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND = 0x1E58B8, 0x1E589A, 0x1E58F4
 TRANSITION_LIMIT = 4000 * FRAME_TICKS      # the continue screen and a level's prologue are under this
 PAD_READS = ((0x1A8DB8, 0x1A8DF4), (0x1A8D22, 0x1A8D68))   # the main loop's two controller port reads (1A8CEE), and attract mode's
 
@@ -89,10 +90,11 @@ class OracleClock(ReplayClock):
         self.state, self.m, self.pads = state, m, pads
         self.frame = None          # the oracle's VBlank count (the native frame number it corresponds to)
         self.consumed = False
+        self.sounds = []           # the sound driver's calls the oracle makes while the clock drives it
 
     def _run_to(self, targets, limit, main_loop=False):
         m = self.m
-        arm(m, [VBLANK_HANDLER, *targets])
+        arm(m, [VBLANK_HANDLER, SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND, *targets])
         while True:
             if run_with_pads(m, self.pads, limit) != 'gate':
                 return None
@@ -100,6 +102,8 @@ class OracleClock(ReplayClock):
             m.gate(here, bypass_once=True)
             if here == VBLANK_HANDLER:
                 self.frame += 1; continue
+            if note_sound(m, here, self.sounds):
+                continue
             if main_loop and not at_main_loop_boundary(m):
                 continue
             return here
@@ -115,11 +119,14 @@ class OracleClock(ReplayClock):
         m = self.m
         masks = []
         for reads in zip(*PAD_READS):           # the first port read of either path, then the second
-            arm(m, list(reads))
-            if run_with_pads(m, self.pads, m.info['tick'] + 3 * FRAME_TICKS) != 'gate':
-                raise ReplayMismatch('pad_read', reads[0], 'the original did not read the controller in the frame',
-                                     self.state.frame)
-            m.gate(m.info['pc'], bypass_once=True)
+            arm(m, [SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND, *reads])
+            while True:
+                if run_with_pads(m, self.pads, m.info['tick'] + 3 * FRAME_TICKS) != 'gate':
+                    raise ReplayMismatch('pad_read', reads[0], 'the original did not read the controller in the frame',
+                                         self.state.frame)
+                m.gate(m.info['pc'], bypass_once=True)
+                if not note_sound(m, m.info['pc'], self.sounds):
+                    break
             masks.append(self.pads.get(m.info['tick'] // FRAME_TICKS, 0))
         return tuple(masks)
 
@@ -157,7 +164,19 @@ class OracleClock(ReplayClock):
 
 
 WAIT_RETURN = 0x1B24F4                      # the RTS of the VBlank wait 1B249E: the game has passed one of its frames
-SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND = 0x1E58B8, 0x1E589A, 0x1E58F4
+
+
+def note_sound(m, pc, sink):
+    """At a sound driver entry, record the call ('request', id) / ('flush', value) / ('command',); False otherwise."""
+    if pc == SOUND_REQUEST or pc == SOUND_FLUSH:
+        sp = m.registers()['a7']
+        value = int.from_bytes(m.peek_ram((sp + 4) & 0xFFFF, 4), 'big') & 0xFFFF
+        sink.append(('request' if pc == SOUND_REQUEST else 'flush', value))
+        return True
+    if pc == SOUND_COMMAND:
+        sink.append(('command',))
+        return True
+    return False
 
 
 class OracleDriver:
@@ -173,16 +192,24 @@ class OracleDriver:
     def __init__(self, m, pads, by_waits=False, frame=0):
         self.m, self.pads, self.by_waits = m, pads, by_waits
         self.waits = frame              # the game frames passed so far (the native frame number)
-        self.sounds = []                # this frame's ('request', id) / ('flush', value) / ('command',) events
+        self.frame = frame              # faithful mode: the original's VBlank count (a loop iteration that spans
+        self.sounds = []                #   two VBlanks moves it by two; the native frame clock follows it)
+        # this frame's ('request', id) / ('flush', value) / ('command',) events
+
+    def begin_frame(self, clock=None):
+        """Before the native frame: this frame's sound list, shared with the clock that may drive the oracle first."""
+        self.sounds = []
+        if clock is not None:
+            clock.sounds = self.sounds
 
     def run_frame(self, clock=None):
         """To the next main-loop boundary; nothing when the frame's transition already drove the oracle there."""
         m = self.m
-        self.sounds = []
         if clock is not None and clock.consumed:
             clock.consumed = False
+            self.frame = clock.frame
             return
-        gates = [FRAME_BOUNDARY, SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND] + ([WAIT_RETURN] if self.by_waits else [])
+        gates = [FRAME_BOUNDARY, SOUND_REQUEST, SOUND_FLUSH, SOUND_COMMAND] + ([WAIT_RETURN] if self.by_waits else [VBLANK_HANDLER])
         arm(m, gates)
         limit = m.info['tick'] + (TRANSITION_LIMIT if self.by_waits else 3 * FRAME_TICKS)
         while True:
@@ -196,18 +223,12 @@ class OracleDriver:
             if pc == WAIT_RETURN:
                 self.waits += 1
                 m.pad(self.pads.get(self.waits, 0))
-            elif pc == SOUND_REQUEST:
-                self.sounds.append(('request', self._argument()))
-            elif pc == SOUND_FLUSH:
-                self.sounds.append(('flush', self._argument()))
-            elif pc == SOUND_COMMAND:
-                self.sounds.append(('command',))
+            elif pc == VBLANK_HANDLER:
+                self.frame += 1
+            elif note_sound(m, pc, self.sounds):
+                pass
             elif at_main_loop_boundary(m):
                 return
-
-    def _argument(self):
-        sp = self.m.registers()['a7']
-        return int.from_bytes(self.m.peek_ram((sp + 4) & 0xFFFF, 4), 'big') & 0xFFFF
 
 
 def native_sound_events(events, frame):

@@ -79,19 +79,28 @@ def main(start, die_frame, die_pc, overrides=()):
             pads[f] = mask
     m = Machine(rom); m.audio_policy('discard'); m.restore(nr.load(start))
     state, frame = nr.seed_at_boundary(m, start, pads, rom)
-    while state.frame < die_frame:
+    while state.frame < die_frame - 2:
         run_frame(state)
         nr.run_oracle_frame(m, pads, state.replay)
     clock = ComparingClock(state, m, pads)
     state.replay = clock
     status = 0
+    started = False
     try:
-        run_frame(state)
+        while state.frame <= die_frame + 2 and not started:       # the native frame count may sit a frame off
+            frame = state.frame                                    # the tick count after an earlier transition
+            run_frame(state)
+            started = clock.consumed
+            if not started:
+                nr.run_oracle_frame(m, pads, state.replay)
     except NativeGap as gap:
         print(f'native: NativeGap at {gap.step} ({gap.pc:06X}): {gap.detail}')
         status = 4
-    if not clock.consumed and status == 0:
-        print(f'no transition started in frame {die_frame}')
+        started = clock.entry is not None
+    if started:
+        print(f'the transition started in native frame {frame}')
+    if not started and status == 0:
+        print(f'no transition started in frames {die_frame - 2}..{die_frame + 2}')
         status = 2
     elif clock.entry != die_pc and status == 0:
         print(f'the transition entered at {clock.entry:06X}, not {die_pc:06X}')
