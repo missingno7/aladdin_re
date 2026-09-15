@@ -182,8 +182,15 @@ class HistoryStore:
         write_json(self.path / "refs" / "main.json", {"node": node_id})
 
     def resolve(self, ref="main"):
+        """``main``, a full node id, or an unambiguous hex prefix of at least eight characters."""
         if ref == "main":
             path = self.path / "refs" / "main.json"
             ref = read_json(path)["node"] if path.exists() else self.root_id
+        elif isinstance(ref, str) and 8 <= len(ref) < 64 and re.fullmatch(r"[0-9a-f]+", ref):
+            matches = [key for key in [self.root_id] + [p.stem for p in (self.path / "nodes").glob("*.json")]
+                       if key.startswith(ref)]
+            if len(matches) != 1:
+                raise ValueError(f"History prefix {ref!r} matches {len(matches)} nodes")
+            ref = matches[0]
         self.node(ref)
         return ref

@@ -38,7 +38,7 @@ def camera_follow(read_word):
     if x < 0:                                     # 002822 moveq #0,d0: never witnessed
         clamps.append('x-negative'); x = 0
     scroll_x = x >> 1
-    if scroll_x >= SCROLL_X_LIMIT:                # 00282C move.w #$67f,d0: never witnessed
+    if scroll_x >= SCROLL_X_LIMIT:                # 00282C move.w #$67f,d0 (the right end of a wide level)
         clamps.append('x-limit'); scroll_x = SCROLL_X_LIMIT - 1
     y = _signed(read_word(FOLLOW_Y))
     if y < 0:                                     # 00283A moveq #0,d0: never witnessed

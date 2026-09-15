@@ -20,9 +20,9 @@ from gods_sega import boundary, recovery
 from gods_sega.game import camera
 from gods_sega.profile import GODS
 
-CENSUS = Path('artifacts/gods/evidence/census-002806')
 EVIDENCE = Path('artifacts/gods/evidence/main')
-FIXTURES = sorted(CENSUS.glob('002806-entry-*.state'))
+# One census directory per recording the routine was censused on (census-002806, census-002806-<node>).
+FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-002806*/002806-entry-*.state'))
 needs_census = pytest.mark.skipif(not FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 002806')
 needs_reference = pytest.mark.skipif(not (EVIDENCE / 'reference.json').exists() or not (EVIDENCE / 'boundary-6000.state').exists()
                                      or not GODS.history_path().is_dir(), reason='no local Gods reference evidence')
@@ -45,7 +45,7 @@ def test_camera_x_eases_by_four_toward_the_follow_point_and_y_snaps():
     assert camera.camera_follow(_reader({**base, camera.FOLLOW_Y: 0x0340}))['x_flag'] == 0
 
 
-def test_the_y_clamp_is_witnessed_and_the_other_clamps_are_named():
+def test_the_limit_clamps_are_witnessed_and_the_negative_clamps_are_named():
     base = {camera.FOLLOW_X: 0x0070, camera.CAMERA_X: 0x0070, camera.FOLLOW_Y: 0x0340}
     clamped = camera.camera_follow(_reader(base))
     assert clamped['clamps'] == ['y-limit'] and clamped['d0'] == 0xFF and clamped['stores'][camera.SCROLL_Y] == 0xFF
@@ -60,7 +60,7 @@ def test_the_y_clamp_is_witnessed_and_the_other_clamps_are_named():
 
 
 @needs_census
-@pytest.mark.parametrize('fixture', FIXTURES, ids=lambda p: p.stem)
+@pytest.mark.parametrize('fixture', FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
 def test_plan_reproduces_every_fact_of_the_original_on_each_retained_path(fixture):
     state = fixture.read_bytes()
     meta = json.loads(fixture.with_suffix('.json').read_text(encoding='utf-8'))

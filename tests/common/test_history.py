@@ -345,3 +345,14 @@ def test_a_machine_fault_mid_session_preserves_the_inputs_as_a_replayable_node(t
             assert not resumed.used_cache and resumed.frame == failed_at
             resumed.step(2)
     assert store.resolve("main") == node          # nothing new to preserve: no frame completed
+
+
+def test_a_node_resolves_by_an_unambiguous_prefix(tmp_path):
+    store = HistoryStore(tmp_path / "history", GAME.history_root)
+    a = store.append(ROOT_ID, [{"frame": 0, "buttons": 1}], 3)
+    b = store.append(ROOT_ID, [{"frame": 0, "buttons": 2}], 3)
+    assert store.resolve(a[:12]) == a and store.resolve(b[:8]) == b and store.resolve(a) == a
+    with pytest.raises(ValueError, match="matches 0 nodes"):
+        store.resolve("0123456789ab" if not a.startswith("0123456789ab") and not b.startswith("0123456789ab") else "fedcba987654")
+    with pytest.raises(ValueError, match="Invalid history ID"):
+        store.resolve("abc")                       # too short to be a prefix, not an id

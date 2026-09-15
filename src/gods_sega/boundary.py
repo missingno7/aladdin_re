@@ -30,21 +30,22 @@ class AtomicPlan:
 CAMERA_FOLLOW_ENTRY, CAMERA_FOLLOW_LAST_PC = 0x002806, 0x002850
 
 # 68000 costs of the routine's instructions along its paths, as the tracer
-# measured them (artifacts/gods/evidence/census-002806): the common trunk,
-# the three x arms and the y clamp.
+# measured them (artifacts/gods/evidence/census-002806*): the common trunk,
+# the three x arms, the x limit and the y limit.
 _TRUNK_CYCLES = (12 + 12       # move.w FOLLOW_X,d0; sub.w CAMERA_X,d0
                  + 12 + 10     # move.w CAMERA_X,d0; bpl taken
-                 + 8 + 8 + 10  # asr; cmpi #$680; blt taken
+                 + 8 + 8       # asr; cmpi #$680
                  + 12          # move.w d0,SCROLL_X
                  + 12 + 10     # move.w FOLLOW_Y,d0; bpl taken
                  + 12 + 8 + 8  # move.w d0,CAMERA_Y; asr; cmpi #$100
                  + 12 + 16)    # move.w d0,SCROLL_Y; rts
-_TRUNK_INSTRUCTIONS = 15
+_TRUNK_INSTRUCTIONS = 14
 _X_ARMS = {'hold': (10, 1),               # beq taken
            'right': (8 + 10 + 16, 3),     # beq not taken, bpl taken, addq.w #4,CAMERA_X
            'left': (8 + 8 + 16 + 10, 4)}  # beq, bpl not taken, subq.w #4,CAMERA_X, bra
-_Y_ARMS = {False: (10, 1),                # blt taken
-           True: (8 + 8, 2)}              # blt not taken, move.w #$ff,d0
+_LIMIT_ARMS = {False: (10, 1),            # blt taken
+               True: (8 + 8, 2)}          # blt not taken, move.w #$67f,d0 / move.w #$ff,d0
+WITNESSED_CLAMPS = {'x-limit', 'y-limit'}  # the negative clamps (002822, 00283A) are unwitnessed: declined
 
 
 def _word_bytes(address, value):
@@ -57,11 +58,12 @@ def camera_follow_plan(machine, registers):
         raise UnsupportedCandidate('camera follow planner needs the machine parked at 002806')
     read_word = lambda address: int.from_bytes(machine.peek_ram(address & 0xFFFF, 2), 'big')
     result = camera.camera_follow(read_word)
-    unwitnessed = [name for name in result['clamps'] if name != 'y-limit']
+    unwitnessed = [name for name in result['clamps'] if name not in WITNESSED_CLAMPS]
     if unwitnessed:
         raise UnsupportedCandidate('camera clamp not witnessed by a recording: ' + ', '.join(unwitnessed))
     x_cycles, x_instructions = _X_ARMS[result['branch']]
-    y_cycles, y_instructions = _Y_ARMS['y-limit' in result['clamps']]
+    xl_cycles, xl_instructions = _LIMIT_ARMS['x-limit' in result['clamps']]
+    y_cycles, y_instructions = _LIMIT_ARMS['y-limit' in result['clamps']]
     writes = tuple(pair for address, value in result['stores'].items() for pair in _word_bytes(address, value))
     d0 = (registers['d0'] & 0xFFFF0000) | result['d0']
     # The last flag-setting instruction is move.w d0,SCROLL_Y: N/Z from the stored word, V=C=0;
@@ -69,8 +71,8 @@ def camera_follow_plan(machine, registers):
     ccr = (result['x_flag'] << 4) | (0x04 if result['d0'] == 0 else 0)
     sp = registers['a7']
     return AtomicPlan(
-        cycles=_TRUNK_CYCLES + x_cycles + y_cycles,
-        instructions=_TRUNK_INSTRUCTIONS + x_instructions + y_instructions,
+        cycles=_TRUNK_CYCLES + x_cycles + xl_cycles + y_cycles,
+        instructions=_TRUNK_INSTRUCTIONS + x_instructions + xl_instructions + y_instructions,
         writes=writes,
         registers={'d0': d0, 'a7': (sp + 4) & 0xFFFFFFFF,
                    'pc': int.from_bytes(machine.peek_ram(sp & 0xFFFF, 4), 'big') & 0xFFFFFF,
