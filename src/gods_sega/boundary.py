@@ -2787,3 +2787,84 @@ def walker_resume_plan(machine, registers):
     writes = tuple(pair for address, (value, size) in stores.items() for pair in _bytes(address, value, size))
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
                       last_pc=_WR_RTS[walk.phase])
+
+
+# --- 0091BC: the projectile launch (game/projectiles.py: launch) ------------
+#
+# No save/restore frame at all: D0-D7/A3 are live scratch, exactly the
+# hazard tick's own shape.  Cost from the tracer (artifacts/gods/evidence/
+# census-0091BC*): the pool scan's own head/skip/found fragments, then the
+# projectile cold start's own quadrant-dependent setup (before the per-step
+# loop) -- WALKER_RESUME_ENTRY's own _WR_STEP/_WR_TAIL are reused directly
+# for the loop and the re-arm tail, the shape this routine's own body
+# proves cost-identical to 00FFF0's (the loop bodies are the same
+# instructions; the projectile's own unconditional `bra.b` costs exactly
+# what the object copy's `dbra` costs on every witnessed step, so the same
+# per-step table serves both copies).  The pool exhausted (`0091DE`) is
+# real ROM code no recording enters: declined.
+LAUNCH_ENTRY, LAUNCH_LAST_PC = 0x0091BC, 0x0091F6
+_PL_HEAD = (56, 7)                        # the two FFF18C/8E reads and biases, the budget store, the pool setup
+_PL_SKIP = (38, 4)                        # tst.l; bmi not taken; lea.l +0x16,a3; dbra taken
+_PL_FOUND = (22, 2)                       # tst.l; bmi taken
+_PL_STORE_AND_CALL = (50, 4)              # the two aux-word stores; bsr.w
+_PL_TAIL = (32, 2)                        # move.w #1,$f386.w; rts (the last flag-setter: N=Z=V=C=0, always)
+_PL_OUTER = {'+x': (16, 2), '-x': (14, 2)}                     # cmp.w d2,d0; bgt.w (word branch)
+_PL_XSETUP = {'+x': (12, 3), '-x': (18, 4)}                    # position + dx, the '-x' arm's own extra exg.l
+_PL_YSIGN = {('+x', False): (22, 3), ('+x', True): (32, 5),    # y_sign setup: move.w #imm,d0 ('+x') vs moveq ('-x')
+             ('-x', False): (18, 3), ('-x', True): (24, 5)}
+_PL_SLOPE_TEST = {'shallow': (12, 2), 'steep': (14, 2)}        # cmp.w d3,d2; bcs.b (not-taken=shallow/taken=steep)
+_PL_PRELOOP = (16, 3)                                          # move.w major,d7; move.w major,d5; lsr.w #1,d5
+
+
+def launch_plan(machine, registers):
+    """0091BC: scan the 20-entry pool for a free slot and start a projectile walk toward the tracked
+    position; the pool exhausted (0091DE) is declined, unwitnessed by any recording."""
+    from .game import projectiles, walker
+    if registers['pc'] != LAUNCH_ENTRY:
+        raise UnsupportedCandidate('launch planner needs the machine parked at 0091BC')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    budget, flag = registers['d4'] & 0xFFFF, registers['d6'] & 0xFFFF
+    result = projectiles.launch(_reader(machine), registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF, budget, flag)
+    if result['arm'] != 'launched':
+        raise UnsupportedCandidate('projectile pool exhausted: not witnessed by a recording')
+    _spans_disjoint([('projectile pool', projectiles.POOL_BASE & 0xFFFFFF, projectiles.POOL_STRIDE * projectiles.POOL_COUNT),
+                     ('projectile budget', projectiles.BUDGET_WORD & 0xFFFFFF, 2),
+                     ('projectile launched flag', projectiles.LAUNCHED_FLAG & 0xFFFFFF, 2),
+                     ('launch call return', sp - 4, 4)])
+    walk, after = result['walk'], result['after']
+    steps, counter_before_subq = _walk_steps(walk, budget, 'projectile')
+    toward, slope = walk.phase
+    y_negative = walk.y_sign == 0xFFFF
+    setup_cost = _add(_PL_OUTER[toward], _PL_XSETUP[toward], _PL_YSIGN[(toward, y_negative)],
+                      _PL_SLOPE_TEST[slope], _PL_PRELOOP)
+    call_cost = _add(setup_cost, *(_WR_STEP[step] for step in steps), _WR_TAIL)
+    tries_cost = _add(*([_PL_SKIP] * result['tries']))
+    cost = _add(_PL_HEAD, tries_cost, _PL_FOUND, _PL_STORE_AND_CALL, call_cost, _PL_TAIL)
+    high = lambda name: registers[name] & 0xFFFF0000
+    sign32 = lambda word: 0xFFFFFFFF if word & 0x8000 else word
+    # Every register here is scratch from the caller's own entry, threaded through plain word ops (which
+    # preserve the upper word from whatever this call's own entry held) except: d0's upper word survives
+    # only on the '+x' arm (move.w #imm,d0); the '-x' arm's moveq sign-extends the whole register, losing
+    # it; d2 inherits d0's own upper word on '-x' (the exg.l swap) and its own otherwise; d5 is always
+    # freshly zeroed (moveq #$13,d5 in this routine's own head, never widened again).
+    d0 = sign32(after.y_sign) if toward == '-x' else (high('d0') | after.y_sign)
+    d2 = (high('d0') | after.dx) if toward == '-x' else (high('d2') | after.dx)
+    d3 = high('d3') | after.dy
+    d4 = high('d4') | after.x
+    d6 = high('d6') | after.y
+    d7 = high('d7') | after.counter
+    a3 = (result['slot'] + 10) & 0xFFFFFFFF
+    writes = (_bytes(sp - 4, 0x0091F0, 4)
+              + tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size)))
+    # The last flag-setting instruction is move.w #1,$f386.w (a positive constant: N=Z=V=C=0, always); X
+    # is the walk's own residue (the final subq.w #1,d7's borrow -- for the projectile copy this is
+    # always the walk's own untouched counter, never decremented mid-loop).
+    x = 0x10 if counter_before_subq == 0 else 0
+    exit_registers = {'d0': d0 & 0xFFFFFFFF, 'd2': d2 & 0xFFFFFFFF, 'd3': d3, 'd4': d4, 'd5': after.error,
+                      'd6': d6, 'd7': d7, 'a3': a3, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                      'pc': _return(machine, sp), 'sr': (sr & ~0x1F) | x}
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                      last_pc=LAUNCH_LAST_PC)

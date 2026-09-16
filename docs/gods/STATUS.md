@@ -77,7 +77,7 @@ into work RAM only); it is not changed by this baseline.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with twenty-four gates armed, the camera follow step `002806`, the
+  original with twenty-five gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -87,12 +87,13 @@ into work RAM only); it is not changed by this baseline.
   conversion `00364C`, the trigger evaluator's non-firing arm `00462C`, the
   proximity table search-and-add `00F828`/`00F86A`, the pickup award
   `013264`, the next-random draw `014A3C`, the effect pool add `00932C`, the
-  pickup check `00BA8E` and the pickup probe `010CD2`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
+  pickup check `00BA8E`, the pickup probe `010CD2`, the line walker's object
+  resume `00FFF0` and the projectile launch `0091BC`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
   `particle-emit`, `hazard-tick`, `score-convert`, `evaluator`,
-  `proximity`, `next-random`, `effect-pool-add`, `pickup-check` and
-  `pickup-probe` arm each alone.
+  `proximity`, `next-random`, `effect-pool-add`, `pickup-check`,
+  `pickup-probe`, `walker` and `projectile-launch` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -191,7 +192,10 @@ ids, never to `main`:
 | **`00FFF0` line walker resume**: every fact on 35 retained fixtures over four recordings; consecutive invocations over 300 real frames continue from the re-armed record | `factcheck check`; `segment_verify` from a retained walker state | `tests/games/gods/test_walker.py`, `test_walker_resume.py` |
 | `walker` reproduces the original on `fb408bc7…`: **PASS, 34,904 frames, 169 hits of 170 calls (one Z80 bank refusal)**; `camera-sprites` (twenty-four gates) on the tree: **PASS, 107,519 frames, 1,047,974 hits, 6,906 fallbacks** | `history-verify fb408bc75597 --candidate walker`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-walker-fb408bc7-b`, `artifacts/gods/verify-camera-sprites-tree-walker-b` |
 | the walker negative control (the re-armed x one off) diverges at frame 2,260 | `--candidate walker-mutant-result` | `artifacts/gods/verify-walker-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 55 s | 1,613 tests | — |
+| **`0091BC` projectile launch**: the plan reproduces every fact of the original on all 40 retained fixtures over four recordings (0-3 pool skips, all four quadrants, both y-sign cases -- the cold start into the walker's own projectile copy, `game/walker.py`); the pool exhausted (`0091DE`) declined, unwitnessed | `factcheck check` on every fixture | `tests/games/gods/test_projectiles.py` |
+| `projectile-launch` reproduces the original on `fb408bc7…`: **PASS, 34,904 frames, 50 hits (every witnessed occurrence), 0 fallbacks**; `camera-sprites` (twenty-five gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,048,034 hits, 6,586 fallbacks, tree bit-exact** | `history-verify fb408bc75597 --candidate projectile-launch`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-projectile-launch-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17b` |
+| the projectile launch's negative control (the re-armed x one off) diverges at frame 29,278, the tree's first entry | `--candidate projectile-launch-mutant-result` | `artifacts/gods/verify-projectile-launch-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 58 s | 1,651 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -321,19 +325,32 @@ its own callees `00FEC0`/`00FF54` (a per-object-type waypoint dispatch,
 four handlers each, both fully disassembled) were freshly censused this
 session over all eight recordings and fired on **none** of them — real
 ROM code, unwitnessed, per the grinder-protocol's own rule ("every arm no
-recording entered stays declined"), not a mechanism gap.  (2) `0091BC` —
-the pool scan (declined when full, unwitnessed) then the projectile
-copy's cold start (`walker.run(walker.start(...), budget, 'projectile')`;
-mind `move.w #$ffff,d0` versus `moveq` in the residue) and `010332`'s
-`trigger-deep` arm over it: `0091BC` fires 50 times on `fb408bc75597…`
-alone (census-0091BC, 32 real path classes, all retained) but from a
-caller at `009D12`-ish, *not* from `010332`'s own declined `trigger-deep`
-arm (still 0 occurrences on every four-recording census of `010332`,
-though the eight-recording tree above shows it firing 8 times overall) —
-the true call site is not yet identified; (3) the driver `009210`'s
-resume call (`0093D2`) — census it; the driver itself only as far as the
-walker's contract needs (completion is the driver's: who frees a slot,
-who runs the tile test, where `00932C` belongs).
+recording entered stays declined"), not a mechanism gap.  (2) DONE, 17
+Sep — `0091BC` recovered as its own candidate `projectile-launch`: the
+pool scan (declined when full, unwitnessed) then the projectile copy's
+cold start (`walker.run(walker.start(...), budget, 'projectile')`; the
+`move.w #$ffff,d0` versus `moveq` residue difference between the '+x'
+and '-x' quadrants modelled directly).  40 fixtures over four recordings
+MATCH; `fb408bc75597…`: PASS, 50/50 hits, 0 fallbacks; the tree stays
+bit-exact at twenty-five gates.  Composing `010332`'s own `'trigger-deep'`
+arm over it is *not* done: that arm's own tail (`0103AA`-`0103C8`, one
+instruction past `COUNTDOWN_CHECK_LAST_PC`) is now identified by a fresh
+disassembly (the record's own position `+0x10` in x, a budget
+`(rate>>1)+2`, a full 15-register frame, `D6=1` fixed, `jsr 0091BC`, full
+restore) and accounts for the 9 `f40d7bcc9dda…` occurrences and the
+tree's own 8 remaining `countdown check trigger arm calls unrecovered
+0091BC` declines — a real next bite (simpler than `animation-step`'s own
+composition, since every register is restored afterward).  A second
+caller (`009D16` on `fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…`,
+accounting for the bulk of the 50+1+1 occurrences on those three) is
+still not `010332`'s own code and remains unidentified.  (3) the driver
+`009210`'s resume call (`0093D2`) — censused fresh 17 Sep over the four
+recordings that fire projectiles (32 real path classes on
+`fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…`, `artifacts/gods/
+evidence/census-009210-<node>`) but not yet read past its own census;
+the driver itself only as far as the walker's contract needs (completion
+is the driver's: who frees a slot, who runs the tile test, where
+`00932C` belongs).
 
 Screened over the full `fb408bc75597…` history (`recovery_census.py
 --classifier entry`, not a direct park -- the 600-frame window's tight
@@ -535,10 +552,47 @@ blocker* — none for the resume, and (17 Sep) none for `00FE08`'s own call
 into it (`animation-step`, above); the cold start proper (`00FE5C`–`00FE8C`
 → `010002`, reached only when a finished walk has at most one waypoint
 left) stays declined -- unwitnessed on all eight recordings, not a missing
-mechanism (`walker.start` already models the cold-start arithmetic).  The
-projectile copy's own cold start (`0091BC` → `0093E4`) and driver
-(`009210` → `0093D2`) are the next bites, with the same semantics
-(`walker.start`, `walker.run(..., 'projectile')`).
+mechanism (`walker.start` already models the cold-start arithmetic).
+
+Semantic-operation card, the projectile copy's cold start (`0091BC`,
+candidate `projectile-launch`, recovered 17 Sep): *operation* — find a
+free pool slot and start a walk toward the tracked position (the player,
+biased `+8`/`+6`), taking the caller's own budget of steps immediately;
+*boundary* — entry with D0/D1 the walk's own starting position, D4 the
+budget, D6 a flag (bit 0 kept), no save/restore frame at all (D0-D7/A3
+live scratch, the hazard tick's own shape); exit at `0091F6`'s RTS, the
+shared budget word left at what remains; *persistent state* — the found
+slot's own 18-byte walker record plus its own two aux words (`+0x12` the
+budget again, `+0x14` the flag) and the pool's own free/occupied
+convention (the first long negative); *external observations* — none
+(RAM only); *pending effects* — none of this call's own (`LAUNCHED_FLAG`
+`FFF386` is set unconditionally, read by something later, not traced);
+*permitted interference* — the vertical interrupt anywhere inside, not
+yet slide-checked; *ordering boundaries* — the slot must be written
+before the driver's own next poll; *timing dependency* — none beyond the
+budget; *evidence* — 40 fixtures over four recordings MATCH (all four
+quadrants, both y-sign cases, 0-3 pool skips; the cold-start setup's own
+cost reuses `WALKER_RESUME_ENTRY`'s per-step and re-arm-tail fragments,
+confirmed instruction-for-instruction identical), `fb408bc75597…`:
+PASS, every one of 50 witnessed calls hits, 0 fallbacks, the mutant
+diverges at the tree's first entry (frame 29,278); *remaining blocker* —
+none for the launch itself.  Two callers are now identified from the
+retained fixtures' own return addresses: on `f40d7bcc9dda…` it is
+`010332`'s own `'trigger-deep'` tail, one instruction past the current
+`COUNTDOWN_CHECK_LAST_PC` (`0103AA`-`0103C8`: the record's own position
+`+0x10` in x, a budget `(rate>>1)+2` from the rate byte, a full
+15-register frame, `D6=1` fixed, `jsr 0091BC`, full restore) — not yet
+composed into `countdown_check_plan` (every register is restored
+afterward, so this composition is simpler than `animation-step`'s: a
+real next bite); on `fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…` the
+return address (`009D16`) is not inside `010332`'s own code at all — a
+second, still undisassembled caller remains open.  The driver
+(`009210` → `0093D2`'s resume) was censused fresh over the four
+recordings that fire projectiles (32 real path classes on each of
+`fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…`, `artifacts/gods/evidence/
+census-009210-<node>`) but not yet read past its own census; it is the
+next bite, with the same semantics (`walker.run(..., 'projectile')`, the
+already-recovered resume machinery `00FFF0` shares).
 
 **The pickups** (the subsystem `013264` belongs to): a byte grid at
 `FFBBDE` (8×8-pixel cells, 48 per row) holds pickup codes; the pickup

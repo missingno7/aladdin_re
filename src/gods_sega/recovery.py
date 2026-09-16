@@ -14,11 +14,11 @@ from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
-                       NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY, PICKUP_PROBE_ENTRY,
+                       LAUNCH_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY, PICKUP_PROBE_ENTRY,
                        PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
                        STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
-                       footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, next_random_plan,
+                       footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, next_random_plan,
                        particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, proximity_plan,
                        score_convert_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan,
                        walker_resume_plan, zone_check_plan)
@@ -52,6 +52,16 @@ def _mutate_walk(plan: AtomicPlan) -> AtomicPlan:
     address, value = plan.writes[7]
     return AtomicPlan(plan.cycles, plan.instructions,
                       plan.writes[:7] + ((address, (value + 1) & 0xFF),) + plan.writes[8:],
+                      plan.registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_launch(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for the projectile launch: the new slot's own re-armed x position one off (the
+    twelfth stored byte, after the internal call's own return address, the budget word and the
+    continuation) -- the same field `_mutate_walk` flips for the resume, offset by the call return."""
+    address, value = plan.writes[11]
+    return AtomicPlan(plan.cycles, plan.instructions,
+                      plan.writes[:11] + ((address, (value + 1) & 0xFF),) + plan.writes[12:],
                       plan.registers, plan.last_pc, plan.direct_calls)
 
 
@@ -95,6 +105,7 @@ PLANNERS = {
     'conditions': {CONDITION_ENTRY: condition_plan},
     'pickups': {PICKUP_AWARD_ENTRY: pickup_award_plan},
     'walker': {WALKER_RESUME_ENTRY: walker_resume_plan},
+    'projectile-launch': {LAUNCH_ENTRY: launch_plan},
     'score-convert': {SCORE_CONVERT_ENTRY: score_convert_plan},
     'evaluator': {EVALUATOR_ENTRY: evaluator_plan},
     'proximity': {PROXIMITY_ENTRY: proximity_plan},
@@ -112,7 +123,8 @@ PLANNERS = {
                        CONDITION_ENTRY: condition_plan, SCORE_CONVERT_ENTRY: score_convert_plan,
                        EVALUATOR_ENTRY: evaluator_plan, PROXIMITY_ENTRY: proximity_plan, PICKUP_AWARD_ENTRY: pickup_award_plan,
                        NEXT_RANDOM_ENTRY: next_random_plan, EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan,
-                       PICKUP_CHECK_ENTRY: pickup_check_plan, PICKUP_PROBE_ENTRY: pickup_probe_plan, WALKER_RESUME_ENTRY: walker_resume_plan},
+                       PICKUP_CHECK_ENTRY: pickup_check_plan, PICKUP_PROBE_ENTRY: pickup_probe_plan, WALKER_RESUME_ENTRY: walker_resume_plan,
+                       LAUNCH_ENTRY: launch_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -153,7 +165,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # 010CF8 coroutine system this same table feeds, which can fault the 68000 outright on a
              # corrupted value rather than diverge cleanly): dropping the writes entirely still leaves
              # the caller with the wrong (unset) record field, a clean and safe divergence.
-             'pickup-probe-mutant-result': ('pickup-probe', _mutate_outcome)}
+             'pickup-probe-mutant-result': ('pickup-probe', _mutate_outcome),
+             'projectile-launch-mutant-result': ('projectile-launch', _mutate_launch)}
 
 
 @dataclass
