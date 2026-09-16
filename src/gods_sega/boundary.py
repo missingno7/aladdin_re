@@ -109,6 +109,18 @@ def _add_sr(sr, left, right, width):
     return out
 
 
+def _margin_add_x(sr, operand, margin, width=2):
+    """The X (=C) bit an ADD of ``margin`` into ``operand`` leaves; a later CMP does not touch X.
+
+    Unlike ``_cmp_sr``, X here cannot be retained from the caller's SR: the
+    routine's own ADD (the screen-margin test) sets it fresh from this
+    addition's carry, overwriting whatever X the entry SR held.
+    """
+    mask = (1 << (8 * width)) - 1
+    total = (operand & mask) + (margin & mask)
+    return (sr & ~0x10) | (0x10 if total > mask else 0)
+
+
 def _bytes(address, value, size):
     return tuple((address + index, (value >> (8 * (size - index - 1))) & 0xFF) for index in range(size))
 
@@ -244,6 +256,79 @@ def sprite_emit_plan(machine, registers):
     return Seam(prefix=prefix, resume_pc=SPRITE_EMIT_RESUME,
                 stack_basis=(sp32 - SPRITE_EMIT_FRAME) & 0xFFFFFFFF,
                 guards=((sp - SPRITE_EMIT_FRAME, SPRITE_EMIT_FRAME + 4),), suffix=sprite_emit_suffix)
+
+
+# --- 001164: the sibling without a cache (game/sprites.py: emit_static_sprite) ---------------
+#
+# Cost table from the tracer (artifacts/gods/evidence/census-001164*), per
+# path fragment: (cycles, instructions).  No platform operation: a plain plan.
+STATIC_EMIT_ENTRY, STATIC_EMIT_LAST_PC = 0x001164, 0x0011E4
+STATIC_EMIT_FRAME = 24                              # movem.l d0-d3/a0-a1,-(a7)
+_STATIC_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'a0', 'a1')
+_SK_HEAD = (80, 3)                     # movem, sub.w CAMERA_X,d0; sub.w CAMERA_Y,d1
+_SK_X_TEST = (16, 3)                   # moveq #$20,d3; add.w d0,d3; cmpi.w #$160,d3
+_SK_Y_TEST = (16, 3)                   # moveq #$20,d3; add.w d1,d3; cmpi.w #$e0,d3
+_SK_TAKEN, _SK_NOT_TAKEN = (10, 1), (8, 1)             # a Bcc.b outcome
+_SK_SETUP_NOFLIP = (76, 8)             # move d2,d3; lea; lea; add d2,d2; adda; move 6(a0),d2; andi; beq (taken)
+_SK_SETUP_FLIP = (94, 10)              # ... beq (not taken); move #$800,d3; move 8(a0),d2
+_SK_POSITION = (46, 4)                 # add d2,d0; add $a(a0),d1; movea LIST_HEAD,a1; cmpa #LIST_FULL,a1
+_SK_WRITE = (128, 12)                  # the four record words, the list pointers, addq LIST_COUNT
+_SK_RESTORE = (76, 2)                  # movem.l (a7)+; rts
+WITNESSED_STATIC_ARMS = {'offscreen-x', 'offscreen-y', 'placed'}   # 'full' (the list-full guard): unwitnessed
+
+
+def _static_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(_STATIC_FRAME_REGISTERS)
+                 for pair in _bytes(sp - STATIC_EMIT_FRAME + 4 * index, registers[name], 4))
+
+
+def static_emit_plan(machine, registers):
+    """001164: the RAM-only sprite emitter sibling; the list-full guard is declined (unwitnessed)."""
+    from .game import sprites
+    if registers['pc'] != STATIC_EMIT_ENTRY:
+        raise UnsupportedCandidate('static sprite emit planner needs the machine parked at 001164')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    frame = ('static sprite frame', sp - STATIC_EMIT_FRAME, STATIC_EMIT_FRAME + 4)
+    _ram_span(*frame)
+    result = sprites.emit_static_sprite(_reader(machine), registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                                        registers['d2'] & 0xFFFF)
+    arm = result['arm']
+    if arm not in WITNESSED_STATIC_ARMS:
+        raise UnsupportedCandidate(f'static sprite arm not witnessed by a recording: {arm}')
+    screen_x, screen_y = result['screen']
+    writes = _static_frame_writes(sp, registers)
+    if arm == 'offscreen-x':
+        cost = (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_TAKEN[0] + _SK_RESTORE[0],
+                _SK_HEAD[1] + _SK_X_TEST[1] + _SK_TAKEN[1] + _SK_RESTORE[1])
+        exit_sr = _cmp_sr(_margin_add_x(sr, screen_x, sprites.SCREEN_MARGIN),
+                          (screen_x + sprites.SCREEN_MARGIN) & 0xFFFF, sprites.SCREEN_X_LIMIT, 2)
+    elif arm == 'offscreen-y':
+        cost = (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_NOT_TAKEN[0] + _SK_Y_TEST[0] + _SK_TAKEN[0] + _SK_RESTORE[0],
+                _SK_HEAD[1] + _SK_X_TEST[1] + _SK_NOT_TAKEN[1] + _SK_Y_TEST[1] + _SK_TAKEN[1] + _SK_RESTORE[1])
+        exit_sr = _cmp_sr(_margin_add_x(sr, screen_y, sprites.SCREEN_MARGIN),
+                          (screen_y + sprites.SCREEN_MARGIN) & 0xFFFF, sprites.SCREEN_Y_LIMIT, 2)
+    if arm.startswith('offscreen'):
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=STATIC_EMIT_LAST_PC)
+    # 'placed': the descriptor lookup, the list-full guard (not taken), the record append.
+    record, count = result['record'], result['count']
+    spans = [frame, ('static sprite record', record, sprites.RECORD_SIZE), *_SPRITE_GLOBALS]
+    _spans_disjoint(spans)
+    setup = _SK_SETUP_FLIP if result['flip'] else _SK_SETUP_NOFLIP
+    cycles = (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_NOT_TAKEN[0] + _SK_Y_TEST[0] + _SK_NOT_TAKEN[0]
+             + setup[0] + _SK_POSITION[0] + _SK_NOT_TAKEN[0] + _SK_WRITE[0] + _SK_RESTORE[0])
+    instructions = (_SK_HEAD[1] + _SK_X_TEST[1] + _SK_NOT_TAKEN[1] + _SK_Y_TEST[1] + _SK_NOT_TAKEN[1]
+                   + setup[1] + _SK_POSITION[1] + _SK_NOT_TAKEN[1] + _SK_WRITE[1] + _SK_RESTORE[1])
+    writes += tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # The last flag-setting instruction is addq.w #1,LIST_COUNT; the registers come back from the frame.
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+                                 'sr': _add_sr(sr, count, 1, 2)},
+                      last_pc=STATIC_EMIT_LAST_PC)
 
 
 def sprite_emit_suffix(machine, registers):

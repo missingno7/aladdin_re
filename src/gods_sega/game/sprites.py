@@ -100,3 +100,60 @@ def emit_sprite(read, x, y, sprite):
     stores[LIST_HEAD] = ((head + RECORD_SIZE) & 0xFFFFFFFF, 4)
     stores[LIST_COUNT] = ((count + 1) & 0xFFFF, 2)
     return {**result, 'arm': arm, 'record': record, 'descriptor': descriptor, 'count': count}
+
+
+# --- 001164: the same emitter without a tile cache -------------------------
+#
+# Called by six sites (the particle drawer's siblings) with a world position
+# and a sprite id, the same screen test and descriptor layout as
+# ``emit_sprite`` (the flip bit, ``X_OFFSET``/``X_OFFSET_FLIPPED``,
+# ``Y_OFFSET``, ``SIZE_ATTRIBUTE``), but the tile is a fixed word already
+# resident in VRAM (descriptor + ``TILE_INDEX``): no per-frame cache, no
+# upload, hence no platform operation -- and a guard the dynamic emitter does
+# not have, the sprite list's capacity (``LIST_FULL``).  The id-to-descriptor
+# offset table is this routine's own (``STATIC_DESCRIPTOR_OFFSETS``), not the
+# dynamic emitter's (``DESCRIPTOR_OFFSETS``).
+
+STATIC_DESCRIPTOR_OFFSETS = 0x0011E6                # ROM: word offset of each id's descriptor, this routine's own table
+TILE_INDEX = 0x000E                                 # descriptor field: the fixed VRAM tile index (no cache, no upload)
+LIST_FULL = 0xFFFFEE30                              # LIST_HEAD (sign-extended) at or beyond this: the list is full
+
+
+def emit_static_sprite(read, x, y, sprite):
+    """What ``001164`` does for world position ``(x, y)`` and sprite id ``sprite``.
+
+    Returns the arm (``'offscreen-x'``, ``'offscreen-y'``, ``'full'``,
+    ``'placed'``), whether the sprite is flipped, and for ``'placed'`` the
+    durable stores, the record's address, the descriptor used and the
+    sprite count before the append.
+    """
+    screen_x = (x - read(CAMERA_X, 2)) & 0xFFFF
+    screen_y = (y - read(CAMERA_Y, 2)) & 0xFFFF
+    flip = bool(sprite & FLIP_ID_BIT)
+    result = {'flip': flip, 'stores': {}, 'record': None, 'descriptor': None, 'screen': (screen_x, screen_y)}
+    if ((screen_x + SCREEN_MARGIN) & 0xFFFF) > SCREEN_X_LIMIT:
+        return {**result, 'arm': 'offscreen-x'}
+    if ((screen_y + SCREEN_MARGIN) & 0xFFFF) > SCREEN_Y_LIMIT:
+        return {**result, 'arm': 'offscreen-y'}
+    key = (sprite * 2) & 0xFFFF
+    descriptor = (DESCRIPTORS + _signed_word(read(STATIC_DESCRIPTOR_OFFSETS + _signed_word(key), 2))) & 0xFFFFFF
+    result['descriptor'] = descriptor
+    head = read(LIST_HEAD, 4)
+    if head >= LIST_FULL:
+        return {**result, 'arm': 'full'}
+    x_offset = read(descriptor + (X_OFFSET_FLIPPED if flip else X_OFFSET), 2)
+    attribute = FLIP_ATTRIBUTE if flip else 0
+    record_x = (screen_x + x_offset) & 0xFFFF
+    record_y = (screen_y + read(descriptor + Y_OFFSET, 2)) & 0xFFFF
+    record = head & 0xFFFFFF
+    count = read(LIST_COUNT, 2)
+    tile = read(descriptor + TILE_INDEX, 2)
+    stores = result['stores']
+    stores[LIST_LAST] = (head, 4)
+    stores[record] = (record_y, 2)
+    stores[record + 2] = (count | read(descriptor + SIZE_ATTRIBUTE, 2), 2)
+    stores[record + 4] = (tile | attribute | PRIORITY_ATTRIBUTE, 2)
+    stores[record + 6] = (record_x, 2)
+    stores[LIST_HEAD] = ((head + RECORD_SIZE) & 0xFFFFFFFF, 4)
+    stores[LIST_COUNT] = ((count + 1) & 0xFFFF, 2)
+    return {**result, 'arm': 'placed', 'record': record, 'count': count}

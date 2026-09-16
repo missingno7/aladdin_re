@@ -146,7 +146,8 @@ def test_the_flipped_arm_is_declined_and_the_seam_names_its_contract():
 
 def test_candidate_names_are_explicit():
     assert recovery.Candidate('sprites').gate_pcs == (boundary.SPRITE_EMIT_ENTRY,)
-    assert recovery.Candidate('camera-sprites').gate_pcs == (boundary.CAMERA_FOLLOW_ENTRY, boundary.SPRITE_EMIT_ENTRY)
+    assert recovery.Candidate('camera-sprites').gate_pcs == (
+        boundary.CAMERA_FOLLOW_ENTRY, boundary.SPRITE_EMIT_ENTRY, boundary.STATIC_EMIT_ENTRY)
     assert recovery.Candidate('sprites-mutant-result').mutation is recovery._mutate_result
     assert recovery.Candidate('sprites-mutant-register').mutation is recovery._mutate_register
 

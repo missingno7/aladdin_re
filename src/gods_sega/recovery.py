@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
-from .boundary import CAMERA_FOLLOW_ENTRY, SPRITE_EMIT_ENTRY, camera_follow_plan, sprite_emit_plan
+from .boundary import (CAMERA_FOLLOW_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY, camera_follow_plan,
+                       sprite_emit_plan, static_emit_plan)
 
 
 def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
@@ -34,11 +35,14 @@ def _mutate_register(plan: AtomicPlan) -> AtomicPlan:
 PLANNERS = {
     'camera': {CAMERA_FOLLOW_ENTRY: camera_follow_plan},
     'sprites': {SPRITE_EMIT_ENTRY: sprite_emit_plan},
-    'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan},
+    'sprites-static': {STATIC_EMIT_ENTRY: static_emit_plan},
+    'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
+                       STATIC_EMIT_ENTRY: static_emit_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'sprites-mutant-result': ('sprites', _mutate_result),
-             'sprites-mutant-register': ('sprites', _mutate_register)}
+             'sprites-mutant-register': ('sprites', _mutate_register),
+             'sprites-static-mutant-result': ('sprites-static', _mutate_result)}
 
 
 @dataclass

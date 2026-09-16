@@ -20,8 +20,9 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with two gates armed, the camera follow step `002806` and the
-  sprite emitter `0018C8`; `camera` and `sprites` arm each alone.
+  original with three gates armed, the camera follow step `002806`, the
+  sprite emitter `0018C8` and its RAM-only sibling `001164`; `camera`,
+  `sprites` and `sprites-static` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -41,6 +42,7 @@ ids, never to `main`:
 | `7251bbd0ecf7…` | 25,264 | census `census-002806-7251bbd0ecf7` |
 | `f40d7bcc9dda…` | 17,620 | census `census-002806-f40d7bcc9dda` (the three x-limit path classes); `census-0018C8-f40d7bcc9dda` |
 | `fb408bc75597…`, `7251bbd0ecf7…`, `f40d7bcc9dda…` | — | the sprite emitter's census `census-0018C8-<node>` (27, 32 and 30 path classes; 134 fixtures) |
+| `f0ac19738f19…`, `fb408bc75597…`, `7251bbd0ecf7…`, `f40d7bcc9dda…` | — | `001164`'s census `census-001164[-<node>]` (4, 20, 20 and 24 path classes; 23 fixtures free of an interposed VBlank, 82 total) |
 
 ## Evidence that passes
 
@@ -54,33 +56,41 @@ ids, never to `main`:
 | **`0018C8` sprite emitter**: the plan reproduces every fact of the original on all 134 retained fixtures over three recordings (off-screen x/y, cache hit after 1–8 slots, cache miss into an empty slot or the ninth; a miss is a seam: the prefix is checked to the VDP control write, the suffix from the resume) | `factcheck check` on every fixture (`MATCH (seam ...)` for the miss arm) | `tests/games/gods/test_sprites.py` |
 | `sprites` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 40,935 hits (13,218 seams entered, 13,108 completed), 306 scheduler refusals, 0 foreign returns**; `camera-sprites` on the tree of all eight recordings: **PASS, 107,519 frames, 306,295 hits, 82,757 seams entered, 81,822 completed, 344 seam deadlines, 1,733 scheduler refusals, 9,443,248 instructions replaced** | `history-verify f0ac19738f19 --candidate sprites`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-sprites-f0ac1973b`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16b` |
 | both sprite negative controls diverge at the first gameplay frame (a stored byte off; `d0` off in every admitted plan, which breaks the VDP command the machine reads at the seam) | `--candidate sprites-mutant-result`, `sprites-mutant-register` | `artifacts/gods/verify-sprites-mutant-result`, `verify-sprites-mutant-register` (frame 429) |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 25 s | 337 tests | — |
+| **`001164` sprite emitter sibling**: the plan reproduces every fact of the original on all 23 retained fixtures free of an interposed VBlank, over four recordings (off-screen x, off-screen y, a placed record with and without the flip attribute); the list-full guard (`0011B8`) is unwitnessed | `factcheck check` on every fixture | `tests/games/gods/test_static_sprites.py` |
+| `sprites-static` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 15,551 hits, 134 fallbacks (all scheduler admission: an interrupt due mid-activation)**; `camera-sprites` (all three gates) on the tree of all eight recordings: **PASS, 107,519 frames, 454,447 hits, 3,571 fallbacks (3,227 scheduler admission incl. 1,494 at `001164`, 344 seam deadline), 15,024,355 instructions replaced** | `history-verify f0ac19738f19 --candidate sprites-static`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-sprites-static-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16c` |
+| the negative control diverges at the first frame that enters the region | `--candidate sprites-static-mutant-result` | `artifacts/gods/verify-sprites-static-mutant` (frame 457) |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 45 s | 367 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
 suffix because an interrupt is due inside its span (about one per cent of
-`0018C8`'s activations; the original runs it), and a `seam deadline` is the
-frame's observation instant falling inside the ceded upload loop (the
-committed prefix stands; the original finishes the activation).  Neither
-is an arm the candidate declined.
+`0018C8`'s activations, and `001164`'s activations are long enough that an
+interposed VBlank shows up as roughly one retained census fixture in three;
+the original runs it), and a `seam deadline` is the frame's observation
+instant falling inside the ceded upload loop (the committed prefix stands;
+the original finishes the activation).  Neither is an arm the candidate
+declined.
 
 Declined on purpose (the original runs them): the two negative clamps of
-the camera step (`002822`, `00283A`) and the flipped-sprite arm of the
-emitter (`001928`/`00199C`, sprite ids with bit 15 set), which no recording
-has entered through `0018C8`.
+the camera step (`002822`, `00283A`), the flipped-sprite arm of the emitter
+(`001928`/`00199C`, sprite ids with bit 15 set) and `001164`'s list-full
+guard (`0011B8`, `LIST_FULL` at `FFEE30`), none of which any recording has
+entered.
 
 ## What is not recovered
 
-Everything else.  Two routines are recovered: the camera follow step
-(`game/camera.py`, six words) and the sprite emitter (`game/sprites.py`:
-the sprite list at `FFEBF6`–`FFEBFF`, the per-frame tile cache at
-`FFEE98`/`FFEEAA`, the dynamic-tile cursor `FFEE84`, the ROM descriptor
-table `066794` indexed through `0019D2`).  The emitter's siblings
-(`001164`, `001256`/`001260`/`00126A`, `001312`) share its descriptor
-layout and list conventions but are not recovered.  There is no
-object-table convention, no semantic map, no native runtime, no
-sound-driver knowledge.  The seam for a platform operation inside a region
-exists and is shared (`src/genesis_re/seam.py`); Gods has one seam plan.
+Everything else.  Three routines are recovered: the camera follow step
+(`game/camera.py`, six words), the sprite emitter and its RAM-only sibling
+(`game/sprites.py`: the sprite list at `FFEBF6`–`FFEBFF`, the per-frame
+tile cache at `FFEE98`/`FFEEAA`, the dynamic-tile cursor `FFEE84`, the ROM
+descriptor table `066794` indexed through `0019D2` for the dynamic emitter
+and its own table at `0011E6` for the sibling, whose tile is a fixed
+descriptor field instead of a cache slot).  The emitter's remaining
+siblings (`001256`/`001260`/`00126A`, `001312`) share its descriptor layout
+and list conventions but are not recovered.  There is no object-table
+convention, no semantic map, no native runtime, no sound-driver knowledge.
+The seam for a platform operation inside a region exists and is shared
+(`src/genesis_re/seam.py`); Gods has one seam plan.
 
 ## Next bites
 
@@ -97,8 +107,7 @@ longest recordings before choosing:
 | `002806` | 300 | 17–21 | recovered (`camera`) |
 | `0018C8` | 742 | 10–145 | recovered (`sprites`): the dynamic sprite emitter with a per-frame tile cache; a miss uploads the tiles inline (`001974`–`001988`), the first Gods seam |
 | `00126A` (`001256`, `001260`) | 412 | 305–307 | from `010248` (the particle drawer's jump table at `0100F2`): the emitter's sibling without the cache — the same seam shape (record composition, inline upload `0012F4`–`001308`, restore) |
-| `001164` | 1,015 | 13–40 | the emitter's RAM-only sibling: bounds test, a record from the same descriptor table with a fixed tile word, the list-full guard at `FFEE30` (six callers) |
-| `001164` | 1,015 | 13–40 | the screen-bounds test before a sprite record is emitted (six callers) |
+| `001164` | 1,015 | 9–40 | recovered (`sprites-static`): the emitter's RAM-only sibling, its own descriptor-offset table (`0011E6`) and a fixed tile field instead of a cache (six callers) |
 
 Deferred, not first candidates: `003BEC` (the tile-pair VDP writer inside
 the map streaming interpreter `003158`/`003480`, which does not return
