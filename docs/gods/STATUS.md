@@ -20,10 +20,11 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with five gates armed, the camera follow step `002806`, the
+  original with six gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
-  reset `004150` and the spawn queue `0049DA`; `camera`, `sprites`,
-  `sprites-static`, `table-reset` and `spawn-queue` arm each alone.
+  reset `004150`, the spawn queue `0049DA` and the grid cell lookup
+  `0063FA`; `camera`, `sprites`, `sprites-static`, `table-reset`,
+  `spawn-queue` and `grid-cell` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -46,6 +47,7 @@ ids, never to `main`:
 | `f0ac19738f19…`, `fb408bc75597…`, `7251bbd0ecf7…`, `f40d7bcc9dda…` | — | `001164`'s census `census-001164[-<node>]` (4, 20, 20 and 24 path classes; 23 fixtures free of an interposed VBlank, 82 total) |
 | `f0ac19738f19…`, `fb408bc75597…`, `7251bbd0ecf7…`, `f40d7bcc9dda…` | — | `004150`'s census `census-004150[-<node>]` (1, 2, 1 and 1 path classes; 9 fixtures; the poison-fill arm is witnessed only on `fb408bc75597…`) |
 | `f0ac19738f19…`, `fb408bc75597…`, `7251bbd0ecf7…`, `f40d7bcc9dda…` | — | `0049DA`'s census `census-0049DA[-<node>]` (5, 5, 3 and 1 path classes; 18 fixtures: 0-2 active slots, continuing or retiring; the only witnessed active occurrences fall at frames 428-2800 of the main history) |
+| `f0ac19738f19…`, `fb408bc75597…`, `7251bbd0ecf7…`, `f40d7bcc9dda…` | — | `0063FA`'s census `census-0063FA[-<node>]` (a single path class on every recording; 6 fixtures) |
 
 ## Evidence that passes
 
@@ -68,7 +70,10 @@ ids, never to `main`:
 | **`0049DA` spawn queue**: the plan reproduces every fact of the original on all 18 retained fixtures over four recordings (0-2 active slots per tick, continuing or retiring); a RAM-only leaf that calls the already-recovered `001164` once per active slot | `factcheck check` on every fixture | `tests/games/gods/test_spawn_queue.py` |
 | `spawn-queue` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 6,597 hits, 72 fallbacks (all scheduler admission)**; `camera-sprites` (all five gates) on the tree of all eight recordings: **PASS, 107,519 frames, 536,020 hits, 3,939 fallbacks (3,595 scheduler admission incl. 368 at `0049DA`, 344 seam deadline), 17,357,029 instructions replaced** | `history-verify f0ac19738f19 --candidate spawn-queue`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-spawn-queue-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16e` |
 | the negative control diverges at the first frame that enters the region (an active slot; frame 1,021 is the first witnessed occurrence) | `--candidate spawn-queue-mutant-result` | `artifacts/gods/verify-spawn-queue-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 403 tests | — |
+| **`0063FA` grid cell lookup**: the plan reproduces every fact of the original on all 6 retained fixtures over four recordings (a single path class: no branch, no store) | `factcheck check` on every fixture | `tests/games/gods/test_grid.py` |
+| `grid-cell` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 6,709 hits, 86 fallbacks (all scheduler admission)**; `camera-sprites` (all six gates) on the tree of all eight recordings: **PASS, 107,519 frames, 577,899 hits, 4,366 fallbacks (4,022 scheduler admission incl. 427 at `0063FA`, 344 seam deadline), 17,733,940 instructions replaced** | `history-verify f0ac19738f19 --candidate grid-cell`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-grid-cell-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16f` |
+| the negative control (a register, since the routine stores nothing) diverges at frame 6,185 | `--candidate grid-cell-mutant-result` | `artifacts/gods/verify-grid-cell-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 413 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -88,7 +93,7 @@ entered.
 
 ## What is not recovered
 
-Everything else.  Five routines are recovered: the camera follow step
+Everything else.  Six routines are recovered: the camera follow step
 (`game/camera.py`, six words); the sprite emitter and its RAM-only sibling
 (`game/sprites.py`: the sprite list at `FFEBF6`–`FFEBFF`, the per-frame
 tile cache at `FFEE98`/`FFEEAA`, the dynamic-tile cursor `FFEE84`, the ROM
@@ -100,11 +105,14 @@ descriptor field instead of a cache slot); the work-table reset
 not known); the spawn queue (`game/spawn_queue.py`: four fixed 6-byte
 slots at `FFF39A`, each an animation counter and a world position, that
 call `001164` -- the first recovered example of "calls to routines already
-recovered", the shape Aladdin's platform tail generalises to a plain call).
-The emitter's remaining siblings (`001256`/`001260`/`00126A`, `001312`)
-share its descriptor layout and list conventions but are not recovered.
-There is no object-table convention, no semantic map, no native runtime,
-no sound-driver knowledge.  The seam for a platform operation inside a
+recovered", the shape Aladdin's platform tail generalises to a plain call);
+the grid cell lookup (`game/grid.py`: a pure address computation over
+`FFF18C`/`FFF18E` into a ROM table at `00885E` that `00FDB8` also indexes,
+by a different transform -- what the table holds is not known).  The
+emitter's remaining siblings (`001256`/`001260`/`00126A`, `001312`) share
+its descriptor layout and list conventions but are not recovered.  There
+is no object-table convention, no semantic map, no native runtime, no
+sound-driver knowledge.  The seam for a platform operation inside a
 region exists and is shared (`src/genesis_re/seam.py`); Gods has one seam
 plan.
 
@@ -124,6 +132,27 @@ longest recordings before choosing:
 | `0018C8` | 742 | 10–145 | recovered (`sprites`): the dynamic sprite emitter with a per-frame tile cache; a miss uploads the tiles inline (`001974`–`001988`), the first Gods seam |
 | `00126A` (`001256`, `001260`) | 412 | 305–307 | from `010248` (the particle drawer's jump table at `0100F2`): the emitter's sibling without the cache — the same seam shape (record composition, inline upload `0012F4`–`001308`, restore); `factcheck facts --park 00126A` does not reach the routine from `boundary-6000.state` within the default step budget.  A full census of `f0ac1973…` alone (15,148 frames) finds **32 retained path classes plus 17 more that overflowed retention** -- far more arms than a bounded leaf; likely the same per-object-type diversity as `00FDB8` below.  Census every recording and look for a bound (a fixed small set of object types, or a size the ROM tables themselves cap) before spending more on this one |
 | `001164` | 1,015 | 9–40 | recovered (`sprites-static`): the emitter's RAM-only sibling, its own descriptor-offset table (`0011E6`) and a fixed tile field instead of a cache (six callers) |
+| `0063FA` | 309 | 9 (constant) | recovered (`grid-cell`): a pure address computation, one path, no branch, no store; three callers (`006468`, `006FFE`, `007282`) |
+
+From a wider callee census (top 20 by call count, same window), not yet
+screened -- promising by call count and a tight or constant instruction
+range:
+
+| entry | calls / 600 frames | length | callers |
+|---|---|---|---|
+| `00FE08` | 600 | 10 (constant) | `00FBEE` |
+| `010A14` | 412 | 12–40 | `010200` |
+| `00BCCE` | 412 | 27–31 | `00BA8E` |
+| `00470C` | 309 | 6–15 | `00465A`, `004668`, `004676` |
+
+Screened and set aside, not first candidates: `013362` (600 calls, 3–1,047
+instructions -- an interpreter or unbounded loop, not a leaf), `00052E`
+(600 calls, 434–9,152 instructions -- likewise), `00FC8E` (600 calls,
+33–47, the continuation of `00FDB8`'s own caller `00FC08` -- inherits
+`00FDB8`'s per-object-type diversity), `00BA8E`/`010CD2` (412 calls each,
+116–268 / 125–277 -- wide range, seam-shaped candidates for later, once a
+smaller leaf or two has established more of the object/descriptor
+vocabulary).
 
 A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback

@@ -104,7 +104,7 @@ def test_candidate_names_are_explicit():
     assert recovery.Candidate('spawn-queue').gate_pcs == (boundary.SPAWN_QUEUE_ENTRY,)
     assert recovery.Candidate('camera-sprites').gate_pcs == (
         boundary.CAMERA_FOLLOW_ENTRY, boundary.SPRITE_EMIT_ENTRY, boundary.STATIC_EMIT_ENTRY,
-        boundary.TABLE_RESET_ENTRY, boundary.SPAWN_QUEUE_ENTRY)
+        boundary.TABLE_RESET_ENTRY, boundary.SPAWN_QUEUE_ENTRY, boundary.GRID_CELL_ENTRY)
     assert recovery.Candidate('spawn-queue-mutant-result').mutation is recovery._mutate_result
 
 

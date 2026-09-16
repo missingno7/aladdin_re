@@ -121,6 +121,28 @@ def _margin_add_x(sr, operand, margin, width=2):
     return (sr & ~0x10) | (0x10 if total > mask else 0)
 
 
+def _asl_sr(sr, value, shift, width=2):
+    """68000 ASL flags of a left shift by a fixed, nonzero count: N/Z from the result, X=C the last bit
+    shifted out, V set if any of the bits shifted past the sign (plus the sign itself) were not uniform.
+    """
+    bits = 8 * width
+    mask, sign = (1 << bits) - 1, 1 << (bits - 1)
+    value &= mask
+    result = (value << shift) & mask
+    out = sr & ~0x1F
+    if result & sign:
+        out |= 0x08
+    if result == 0:
+        out |= 0x04
+    span = min(shift + 1, bits)
+    top = (value >> (bits - span)) & ((1 << span) - 1)
+    if top not in (0, (1 << span) - 1):
+        out |= 0x02
+    if shift and (value >> (bits - shift)) & 1:
+        out |= 0x11
+    return out
+
+
 def _bytes(address, value, size):
     return tuple((address + index, (value >> (8 * (size - index - 1))) & 0xFF) for index in range(size))
 
@@ -450,6 +472,31 @@ def table_reset_plan(machine, registers):
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
                       registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
                       last_pc=TABLE_RESET_LAST_PC)
+
+
+# --- 0063FA: the grid cell lookup (game/grid.py: grid_cell) -------------------
+#
+# A straight-line leaf: one path, no writes, no branch.  Cost from the
+# tracer (artifacts/gods/evidence/census-0063FA*).
+GRID_CELL_ENTRY, GRID_CELL_LAST_PC = 0x0063FA, 0x006412
+GRID_CELL_COST = (100, 9)
+
+
+def grid_cell_plan(machine, registers):
+    """0063FA: the grid cell address; the last flag-setter is asl.w #3,d1 (adda/lea/rts do not touch CCR)."""
+    from .game import grid
+    if registers['pc'] != GRID_CELL_ENTRY:
+        raise UnsupportedCandidate('grid cell planner needs the machine parked at 0063FA')
+    sr = registers['sr']
+    result = grid.grid_cell(_reader(machine))
+    exit_sr = _asl_sr(sr, result['row_source'], 3, 2)
+    d0 = (registers['d0'] & 0xFFFF0000) | result['d0']
+    d1 = (registers['d1'] & 0xFFFF0000) | result['d1']
+    sp = registers['a7']
+    return AtomicPlan(cycles=GRID_CELL_COST[0], instructions=GRID_CELL_COST[1], writes=(),
+                      registers={'d0': d0, 'd1': d1, 'a0': result['address'] & 0xFFFFFFFF,
+                                 'a7': (sp + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp & 0xFFFFFF), 'sr': exit_sr},
+                      last_pc=GRID_CELL_LAST_PC)
 
 
 def sprite_emit_suffix(machine, registers):
