@@ -12,9 +12,10 @@ from dataclasses import dataclass, field
 
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
-from .boundary import (CAMERA_FOLLOW_ENTRY, GRID_CELL_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
-                       STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, camera_follow_plan, grid_cell_plan,
-                       spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan)
+from .boundary import (CAMERA_FOLLOW_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, SPAWN_QUEUE_ENTRY,
+                       SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, camera_follow_plan,
+                       footprint_stamp_plan, grid_cell_plan, spawn_queue_plan, sprite_emit_plan,
+                       static_emit_plan, table_reset_plan)
 
 
 def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
@@ -40,9 +41,11 @@ PLANNERS = {
     'table-reset': {TABLE_RESET_ENTRY: table_reset_plan},
     'spawn-queue': {SPAWN_QUEUE_ENTRY: spawn_queue_plan},
     'grid-cell': {GRID_CELL_ENTRY: grid_cell_plan},
+    'footprint': {FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
-                       SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan},
+                       SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
+                       FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'sprites-mutant-result': ('sprites', _mutate_result),
@@ -50,7 +53,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'sprites-static-mutant-result': ('sprites-static', _mutate_result),
              'table-reset-mutant-result': ('table-reset', _mutate_result),
              'spawn-queue-mutant-result': ('spawn-queue', _mutate_result),
-             'grid-cell-mutant-result': ('grid-cell', _mutate_register)}
+             'grid-cell-mutant-result': ('grid-cell', _mutate_register),
+             'footprint-mutant-result': ('footprint', _mutate_result)}
 
 
 @dataclass

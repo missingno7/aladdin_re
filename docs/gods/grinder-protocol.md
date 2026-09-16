@@ -268,6 +268,20 @@ Take first: frequently executed, small or medium, clear entry/return,
 RAM-only, no device access, few arms, every arm recorded, deterministic cost
 per arm.
 
+A **caller-supplied record is not a reason to defer.**  A routine that
+reads its inputs through a pointer register (a definition in `A2`, an
+output cursor in `A5`, a position in `D0`/`D1`) is a leaf like any other:
+the semantics take the pointer as an argument (`grid.stamp_footprint(read,
+x, y, definition, cursor)`), the boundary reads the registers, the alias
+guard covers the record and every span the plan writes.  A loop whose
+count is a byte of that record is admissible: the cost is a formula in
+the count, verified on every count the recordings witnessed (the
+footprint stamp `00FDB8`: rows × cells, four combinations), and a count
+outside the verified domain is declined.  What genuinely needs the
+object-record convention is a *dispatch* through a type byte into
+handlers that are not recovered (a `jsr (a4)` from a table indexed by a
+record field) — that is a composition question, not a leaf's.
+
 Take next: a region whose only device work is one contiguous block with a
 RAM-only prefix and suffix (a seam, section 6b), including a region that
 *calls* one such routine once (Aladdin's "one native call inside the

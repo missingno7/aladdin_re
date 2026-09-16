@@ -20,11 +20,11 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with six gates armed, the camera follow step `002806`, the
+  original with seven gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
-  reset `004150`, the spawn queue `0049DA` and the grid cell lookup
-  `0063FA`; `camera`, `sprites`, `sprites-static`, `table-reset`,
-  `spawn-queue` and `grid-cell` arm each alone.
+  reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`
+  and the footprint stamp `00FDB8`; `camera`, `sprites`, `sprites-static`,
+  `table-reset`, `spawn-queue`, `grid-cell` and `footprint` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -71,9 +71,12 @@ ids, never to `main`:
 | `spawn-queue` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 6,597 hits, 72 fallbacks (all scheduler admission)**; `camera-sprites` (all five gates) on the tree of all eight recordings: **PASS, 107,519 frames, 536,020 hits, 3,939 fallbacks (3,595 scheduler admission incl. 368 at `0049DA`, 344 seam deadline), 17,357,029 instructions replaced** | `history-verify f0ac19738f19 --candidate spawn-queue`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-spawn-queue-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16e` |
 | the negative control diverges at the first frame that enters the region (an active slot; frame 1,021 is the first witnessed occurrence) | `--candidate spawn-queue-mutant-result` | `artifacts/gods/verify-spawn-queue-mutant` |
 | **`0063FA` grid cell lookup**: the plan reproduces every fact of the original on all 6 retained fixtures over four recordings (a single path class: no branch, no store) | `factcheck check` on every fixture | `tests/games/gods/test_grid.py` |
-| `grid-cell` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 6,709 hits, 86 fallbacks (all scheduler admission)**; `camera-sprites` (all six gates) on the tree of all eight recordings: **PASS, 107,519 frames, 577,899 hits, 4,366 fallbacks (4,022 scheduler admission incl. 427 at `0063FA`, 344 seam deadline), 17,733,940 instructions replaced** | `history-verify f0ac19738f19 --candidate grid-cell`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-grid-cell-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16f` |
+| `grid-cell` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 6,709 hits, 86 fallbacks (all scheduler admission)**; `camera-sprites` (six gates) on the tree of all eight recordings: PASS, 107,519 frames, 577,899 hits, 4,366 fallbacks (4,022 scheduler admission incl. 427 at `0063FA`, 344 seam deadline), 17,733,940 instructions replaced | `history-verify f0ac19738f19 --candidate grid-cell`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-grid-cell-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16f` |
+| **`00FDB8` footprint stamp**: the plan reproduces every fact of the original on all 27 retained fixtures over four recordings (four rows × cells combinations; the VBlank-pre-empted fixtures through `pathfacts.region_only`) | `factcheck check` on every fixture | `tests/games/gods/test_footprint.py` |
+| `footprint` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 11,517 hits, 65 fallbacks (all scheduler admission)**; `camera-sprites` (all seven gates) on the tree of all eight recordings: **PASS, 107,519 frames, 648,130 hits, 4,882 fallbacks (4,538 scheduler admission, 344 seam deadline)** | `history-verify f0ac19738f19 --candidate footprint`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-footprint-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16g` |
+| the footprint negative control diverges at frame 429 | `--candidate footprint-mutant-result` | `artifacts/gods/verify-footprint-mutant` |
 | the negative control (a register, since the routine stores nothing) diverges at frame 6,185 | `--candidate grid-cell-mutant-result` | `artifacts/gods/verify-grid-cell-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 413 tests | — |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 506 tests, none skipped | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -129,7 +132,7 @@ longest recordings before choosing:
 |---|---|---|---|
 | `0049DA` | 300 | 19-113 | recovered (`spawn-queue`): a scan of four 6-byte slots at `FFF39A` (an animation counter, a world position); an active slot calls the already-recovered `001164` once, then advances or retires the counter -- 0-2 calls witnessed per tick |
 | `004150` | 301 | 38 or 40 (3,806 / 3,940 cycles) | recovered (`table-reset`): an unconditional 1,600-byte fill below `FFC1BA` by unrolled `movem` bursts, zero or (rarely) 0xFE per `FFF210`'s sign |
-| `00FDB8` | 600 | 27 | from `00FC08`: appends a 6-byte(ish) record at A5 from the work-RAM grid table (`FFFF885E`, the same table `0063FA`/`010CBC` index), reading two fields of a caller-supplied object pointer (A2 `+0x1A`/`+0x1B`); the 600-frame window shows one path class, but a 34,904-frame census shows **16 distinct path classes** with differing loop trip counts -- looks like a per-object-type dispatch (varying tile sizes, record counts), not a bounded single-shape leaf; census every recording before treating this as a small candidate, or treat it as the first case needing an object-record convention |
+| `00FDB8` | 600 | 27–47 | recovered (`footprint`): a solid's footprint stamped into the level grid `FF885E` (32×16-pixel cells, 128 bytes per row), each cell's old byte queued on the undo list at A5; rows and cells are the definition's height and width bytes (A2 `+0x1B`, `+0x1A`); the no-footprint arm (width bit 7) unwitnessed, declined one path class, but a 34,904-frame census shows **16 distinct path classes** with differing loop trip counts -- looks like a per-object-type dispatch (varying tile sizes, record counts), not a bounded single-shape leaf; census every recording before treating this as a small candidate, or treat it as the first case needing an object-record convention |
 | `002806` | 300 | 17–21 | recovered (`camera`) |
 | `0018C8` | 742 | 10–145 | recovered (`sprites`): the dynamic sprite emitter with a per-frame tile cache; a miss uploads the tiles inline (`001974`–`001988`), the first Gods seam |
 | `00126A` (`001256`, `001260`) | 412 | 305–307 | from `010248` (the particle drawer's jump table at `0100F2`): the emitter's sibling without the cache — the same seam shape (record composition, inline upload `0012F4`–`001308`, restore); `factcheck facts --park 00126A` does not reach the routine from `boundary-6000.state` within the default step budget.  A full census of `f0ac1973…` alone (15,148 frames) finds **32 retained path classes plus 17 more that overflowed retention** -- far more arms than a bounded leaf; likely the same per-object-type diversity as `00FDB8` below.  Census every recording and look for a bound (a fixed small set of object types, or a size the ROM tables themselves cap) before spending more on this one |
@@ -153,7 +156,7 @@ a grinder's to invent:
 | `010332` | 7, but every arm with any work calls unrecovered `01158C`/`0115D4` | — |
 | `014084` | 32 retained + 25 more overflowed | — |
 | `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | the sprite-emitter-sibling seam shape, but per-object-type like `00FDB8` |
-| `00FDB8` | 16 | see above |
+| `00FDB8` | 16 (4 real: 13 were VBlank variants) | recovered — see the solids below |
 
 `010CBC` is worth flagging on its own: it is exactly `0063FA`'s grid
 computation with X/Y taken from D0/D1 instead of the fixed words
@@ -170,12 +173,34 @@ inherits `00FDB8`'s per-object-type diversity), `00BA8E`/`010CD2` (412
 calls each, 116–268 / 125–277 -- wide range, seam-shaped candidates for
 later, once the object-record convention exists).
 
-What every deferred candidate above has in common, and what would unblock
-them: a convention for a caller-supplied object record (which fields
-exist, what a "type" is, how many types the ROM tables actually bound)
-and a name for what the work-RAM table at `FFFF885E` (`0063FA`, `00FDB8`,
-`010CBC` all index it, by different transforms) holds.  That is
-`NEW_GODS_SUBSYSTEM` work, not a leaf.
+Two corrections to that screening, from the supervisor's iteration on
+`00FDB8`: (1) a caller-supplied record is not by itself a reason to defer
+— the footprint stamp reads its definition through `A2` and its loop
+counts are the definition's bytes, and it went through the whole ladder as
+a plain leaf (`grinder-protocol.md` §"Candidate selection rules"); what
+needs a convention is a dispatch through a type byte into unrecovered
+handlers.  (2) Most of the "path classes" above were VBlank landing
+positions, which the tracer now sets aside (`00FDB8`: 16 → 4).  Re-screen
+`00FE08`, `010A14`, `00BCCE`, `00470C`, `010332`, `014084`, `00126A` with
+the current tracer before taking their class counts at face value.
+
+**The solids** (the subsystem `00FDB8` belongs to): 25 solid objects,
+each a live record at `FF4AAE` (0x18 bytes: world x, y at `+0`/`+2`, an
+active flag at `+4` — negative is empty — a frame index at `+5`, four
+longs from `+6`) with a definition at `FF65A2` (0x1C bytes: a type id at
+`+4`, an index at `+5`, four longs at `+6`, the footprint width and height
+at `+0x1A`/`+0x1B`).  Every game tick `00FBB6` replays the undo list
+(`00FAF4`, 50 entries at `FF4982`), then for each active solid: steps its
+animation (`00FE08`, which calls `00FFF0`), stamps its footprint
+(`00FDB8`), and draws it (`00FC8E`: the sprite records for a width×height
+grid of 32×16 cells, tile index from the table at `FFF2D6` by type id; a
+negative entry means the tiles are uploaded by an inline VDP block from
+`FFEA2C`-relative data — a platform tail from that block's first access
+to the routine's own RTS).  The grid `FF885E` is what `0063FA` (the
+player) and `010CBC` (the movers) consult.  Next bites in this subsystem:
+`00FC8E` (a plain leaf on the positive-entry arm, a platform-tail seam
+on the negative one), `00FE08`/`00FFF0` (the animation step), then the
+whole per-tick pass `00FBB6` as a composition of recovered leaves.
 
 A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback

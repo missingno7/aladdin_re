@@ -510,3 +510,63 @@ def sprite_emit_suffix(machine, registers):
     restored.update(a7=(sp + 4) & 0xFFFFFFFF, pc=_return(machine, sp))
     return AtomicPlan(cycles=_SE_RESTORE[0], instructions=_SE_RESTORE[1], writes=(), registers=restored,
                       last_pc=SPRITE_EMIT_LAST_PC)
+
+
+# --- 00FDB8: the footprint stamp (game/grid.py: stamp_footprint) --------------
+#
+# Cost from the tracer (artifacts/gods/evidence/census-00FDB8*): the head
+# through the height read, then per row the width reload, the row push,
+# the cells and the row pop; loop counts are the definition's own bytes,
+# so the cost is a formula in (rows, cells) verified on four (rows, cells)
+# combinations.
+FOOTPRINT_STAMP_ENTRY, FOOTPRINT_STAMP_LAST_PC = 0x00FDB8, 0x00FE06
+_FS_HEAD = (140, 15)                   # btst not taken ... movem.l d6-d7,-(a7); move.b $1b(a2),d7; ext.w
+_FS_ROW = (62, 5)                      # move.b $1a(a2),d6; andi; pea $80(a0); movea.l (a7)+,a0; dbra d7 taken; the cells' last dbra +4
+_FS_CELL = (58, 5)                     # move.l a0,(a5)+; clr.b; move.b (a0),(a5)+; move.b #1,(a0)+; dbra d6 (taken)
+_FS_LAST = 4                           # the rows' dbra falling through costs 14, not 10
+_FS_TAIL = (44, 2)                     # movem.l (a7)+,d6-d7; rts
+FOOTPRINT_FRAME = 8                    # d6, d7
+FOOTPRINT_MAX_CELLS = 64               # the verified domain (and well inside the atomic write limit)
+
+
+def footprint_stamp_plan(machine, registers):
+    """00FDB8: the solid's cells set and their old bytes queued for undo; the no-footprint arm is declined."""
+    from .game import grid
+    if registers['pc'] != FOOTPRINT_STAMP_ENTRY:
+        raise UnsupportedCandidate('footprint stamp planner needs the machine parked at 00FDB8')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    definition, cursor = registers['a2'] & 0xFFFFFF, registers['a5']
+    if (sp | definition | cursor) & 1:
+        raise UnsupportedCandidate('unaligned stack, definition or undo cursor')
+    result = grid.stamp_footprint(_reader(machine), registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                                  definition, cursor)
+    if result['arm'] == 'none':
+        raise UnsupportedCandidate('no-footprint arm (width bit 7) not witnessed by a recording')
+    rows, cells = result['rows'], result['cells']
+    if result['height'] < 0:
+        raise UnsupportedCandidate('negative footprint height wraps the row count')
+    if rows * cells > FOOTPRINT_MAX_CELLS:
+        raise UnsupportedCandidate('footprint larger than the verified domain')
+    total = rows * cells
+    spans = [('footprint frame', sp - FOOTPRINT_FRAME - 4, FOOTPRINT_FRAME + 4 + 4),
+             ('footprint definition', definition, 0x1C),
+             ('footprint undo entries', cursor & 0xFFFFFF, grid.UNDO_ENTRY * total)]
+    first_row = result['first_row'] & 0xFFFFFF
+    spans += [('footprint row %d' % index, (first_row + grid.GRID_ROW_BYTES * index) & 0xFFFFFF, cells)
+              for index in range(rows)]
+    _spans_disjoint(spans)
+    cycles = _FS_HEAD[0] + rows * (_FS_ROW[0] + cells * _FS_CELL[0]) + _FS_LAST + _FS_TAIL[0]
+    instructions = _FS_HEAD[1] + rows * (_FS_ROW[1] + cells * _FS_CELL[1]) + _FS_TAIL[1]
+    # The frame: d6/d7 saved below the stack pointer, and the last row's pushed row-after value beneath them.
+    writes = (_bytes(sp - FOOTPRINT_FRAME, registers['d6'], 4) + _bytes(sp - FOOTPRINT_FRAME + 4, registers['d7'], 4)
+              + _bytes(sp - FOOTPRINT_FRAME - 4, result['row_after'], 4)
+              + tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size)))
+    # N/Z/V/C from the last move.b #1,(a0)+ (a positive, nonzero byte: all clear); X from asl.w #3,d3.
+    exit_sr = (_asl_sr(sr, result['row_source'], 3, 2) & 0x10) | (sr & ~0x1F)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'d2': result['column'],
+                                 'd3': (registers['d3'] & 0xFFFF0000) | result['row'],
+                                 'a0': result['row_after'], 'a5': result['cursor'],
+                                 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=FOOTPRINT_STAMP_LAST_PC)
