@@ -775,32 +775,70 @@ def countdown_check_plan(machine, registers):
 # --- 010A14: the collision gate (game/movement.py: collision_gate) -----------
 #
 # Cost from the tracer (artifacts/gods/evidence/census-010A14{,-f0ac19738f19}):
-# every arm shares a head and a tail; the 'held' and 'gated' arms are
-# admitted, the 'collision' arm (calls 010CBC then dereferences the level
-# grid) is declined, and so is the phase>7 arm -- real ROM code, but no
-# recording on either history that reaches this entry takes it.
+# every arm shares a head and a tail; 'held' and 'gated' need only the head
+# and the tail.  A residue of zero calls 010CBC (game/grid.py:
+# grid_cell_at, a straight-line 9-instruction body, 84cy) and runs a bounded
+# near/mid/far grid test in the direction 'moving' selects: a match on near
+# or mid, or a miss on far, ends in 'collision-clear' (the moving-state word
+# toggled); a match on far alone reaches a further gate byte in A3 -- zero
+# on every witnessed occurrence ('collision-held', the tail runs untouched)
+# -- or, unwitnessed, an unbounded grid search this module does not model
+# ('collision-deep', declined).  The phase>7 arm ('over') is real ROM code,
+# but no recording on either history that reaches this entry takes it.
 COLLISION_GATE_ENTRY, COLLISION_GATE_LAST_PC = 0x010A14, 0x010AAC
 _CG_HEAD_TAKEN, _CG_HEAD_NOT_TAKEN = (50, 5), (48, 5)      # ble taken (phase<=7) vs not (phase>7, declined)
 _CG_FLAG_TAKEN, _CG_FLAG_NOT_TAKEN = (22, 2), (20, 2)      # tst.w GLOBAL_GATE; bne
 _CG_ADVANCE_TAKEN, _CG_ADVANCE_NOT_TAKEN = (46, 5), (44, 5)  # addq/andi/move/tst(a5+0xA)/bne
 _CG_DIR_TAKEN, _CG_DIR_NOT_TAKEN = (26, 4), (24, 4)        # addq-or-subq #4,d0; move; andi; bne
 _CG_TAIL_TAKEN, _CG_TAIL_NOT_TAKEN = (64, 5), (70, 6)      # asl/add/tst/bne[/ori]/rts
+_CG_CALL = (18 + 84, 1 + 9)                                # bsr.w $10cbc (18cy) + 010CBC's own body (84cy, 9 instr)
+_CG_NEAR_TEST = _CG_MID_TEST = _CG_FAR_TEST = (16, 1)      # cmpi.b #1,(offset)(a0)
+_CG_NEAR_TAKEN = _CG_MID_TAKEN = (10, 1)                   # beq.b taken -> collision-clear
+_CG_NEAR_NOT_TAKEN = _CG_MID_NOT_TAKEN = (8, 1)            # beq.b not taken
+_CG_FAR_TAKEN_BACK, _CG_FAR_NOT_TAKEN_BACK = (10, 1), (12, 1)          # moving==0: beq.w $10afc taken / not
+_CG_FAR_TAKEN_FWD = (8 + 10, 1 + 1)                        # moving!=0: bne.b not taken (8) + bra.b taken (10)
+_CG_FAR_NOT_TAKEN_FWD = (10, 1)                            # moving!=0: bne.b taken -> straight to eori
+_CG_EORI, _CG_EORI_BRA = (20, 1), (10, 1)                  # eori.w #1,$a(a5); bra.b $10a9c
+_CG_DEEP_GATE_TEST, _CG_DEEP_GATE_CLEAR = (12, 1), (10, 1)  # tst.b $12(a3); beq.b taken (gate zero) -> tail
+# bsr.w $10cbc's own return address, pushed at (entry a7 - 4) and popped by 010CBC's rts: the four bytes
+# are durable stack residue (net a7 unchanged, but nothing else overwrites them before this activation's own rts).
+_CG_COLLISION_RETURN_BACK, _CG_COLLISION_RETURN_FWD = 0x010A52, 0x010A82
+
+
+def _collision_test_cost(result, moving):
+    """The near/mid/far grid test's own cost and which shared tail it reaches ('clear' or 'deep')."""
+    cycles, instructions = _CG_CALL
+    cycles, instructions = cycles + _CG_NEAR_TEST[0], instructions + _CG_NEAR_TEST[1]
+    if result['near'] == 1:
+        return cycles + _CG_NEAR_TAKEN[0], instructions + _CG_NEAR_TAKEN[1], 'clear'
+    cycles, instructions = cycles + _CG_NEAR_NOT_TAKEN[0], instructions + _CG_NEAR_NOT_TAKEN[1]
+    cycles, instructions = cycles + _CG_MID_TEST[0], instructions + _CG_MID_TEST[1]
+    if result['mid'] == 1:
+        return cycles + _CG_MID_TAKEN[0], instructions + _CG_MID_TAKEN[1], 'clear'
+    cycles, instructions = cycles + _CG_MID_NOT_TAKEN[0], instructions + _CG_MID_NOT_TAKEN[1]
+    cycles, instructions = cycles + _CG_FAR_TEST[0], instructions + _CG_FAR_TEST[1]
+    far_taken = _CG_FAR_TAKEN_FWD if moving != 0 else _CG_FAR_TAKEN_BACK
+    far_not_taken = _CG_FAR_NOT_TAKEN_FWD if moving != 0 else _CG_FAR_NOT_TAKEN_BACK
+    if result['far'] == 1:
+        return cycles + far_taken[0], instructions + far_taken[1], 'deep'
+    return cycles + far_not_taken[0], instructions + far_not_taken[1], 'clear'
 
 
 def collision_gate_plan(machine, registers):
-    """010A14: the phase advance and the +-4 residue gate; the 'collision' arm (calls 010CBC) is declined."""
+    """010A14: phase advance, +-4 residue gate and (residue zero) the near/mid/far grid test."""
     from .game import movement
     if registers['pc'] != COLLISION_GATE_ENTRY:
         raise UnsupportedCandidate('collision gate planner needs the machine parked at 010A14')
     sp32, sr = registers['a7'], registers['sr']
     sp = sp32 & 0xFFFFFF
     state = registers['a5'] & 0xFFFFFF
-    result = movement.collision_gate(_reader(machine), state, registers['d0'] & 0xFFFF)
+    a3 = registers['a3'] & 0xFFFFFF
+    result = movement.collision_gate(_reader(machine), state, a3, registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF)
     arm = result['arm']
-    if arm == 'collision':
-        raise UnsupportedCandidate('collision gate arm calls unrecovered 010CBC')
     if arm == 'over':
         raise UnsupportedCandidate('collision gate phase>7 arm not witnessed by a recording')
+    if arm == 'collision-deep':
+        raise UnsupportedCandidate('collision gate deep arm (A3 gate nonzero) not witnessed by a recording')
     cycles, instructions = _CG_HEAD_TAKEN
     if arm == 'held':
         cycles, instructions = cycles + _CG_FLAG_TAKEN[0], instructions + _CG_FLAG_TAKEN[1]
@@ -812,8 +850,19 @@ def collision_gate_plan(machine, registers):
         cycles, instructions = cycles + advance[0], instructions + advance[1]
         gated = _CG_DIR_TAKEN if arm == 'gated' else _CG_DIR_NOT_TAKEN
         cycles, instructions = cycles + gated[0], instructions + gated[1]
-    moving_now = machine.peek_ram((state + movement.MOVING_STATE) & 0xFFFF, 2)
-    moving_now = int.from_bytes(moving_now, 'big')
+        if arm in ('collision-clear', 'collision-held'):
+            test_cycles, test_instructions, outcome = _collision_test_cost(result, moving)
+            cycles, instructions = cycles + test_cycles, instructions + test_instructions
+            if outcome == 'clear':
+                cycles, instructions = cycles + _CG_EORI[0] + _CG_EORI_BRA[0], instructions + _CG_EORI[1] + _CG_EORI_BRA[1]
+            else:
+                cycles, instructions = cycles + _CG_DEEP_GATE_TEST[0], instructions + _CG_DEEP_GATE_TEST[1]
+                cycles, instructions = cycles + _CG_DEEP_GATE_CLEAR[0], instructions + _CG_DEEP_GATE_CLEAR[1]
+    if 'moving_after' in result:
+        moving_now = result['moving_after']
+    else:
+        moving_now = machine.peek_ram((state + movement.MOVING_STATE) & 0xFFFF, 2)
+        moving_now = int.from_bytes(moving_now, 'big')
     tail = _CG_TAIL_TAKEN if moving_now != 0 else _CG_TAIL_NOT_TAKEN
     cycles, instructions = cycles + tail[0], instructions + tail[1]
     tail_d2_before_add = (result['tail_d2'] << 4) & 0xFFFF
@@ -828,7 +877,16 @@ def collision_gate_plan(machine, registers):
     if arm == 'gated':
         # d3 = d0 & 0x1F survives (no frame restores it): the residue that gated this arm.
         exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | (result['d0'] & movement.RESIDUE_MASK)
+    elif arm in ('collision-clear', 'collision-held'):
+        # 010CBC's own results survive to the RTS: A0 the grid address, D3 the column, D4 the row.
+        cell = result['cell']
+        exit_registers['a0'] = cell['address'] & 0xFFFFFFFF
+        exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | cell['column']
+        exit_registers['d4'] = (registers['d4'] & 0xFFFF0000) | cell['row']
     writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    if arm in ('collision-clear', 'collision-held'):
+        return_pc = _CG_COLLISION_RETURN_FWD if moving != 0 else _CG_COLLISION_RETURN_BACK
+        writes += _bytes((sp32 - 4) & 0xFFFFFF, return_pc, 4)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
                       last_pc=COLLISION_GATE_LAST_PC)
 

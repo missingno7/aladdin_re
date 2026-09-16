@@ -23,6 +23,21 @@ def _signed_word(value):
     return value - 0x10000 if value & 0x8000 else value
 
 
+def _grid_cell_address(x, y):
+    """The shared arithmetic ``0063FA`` and ``010CBC`` both run: x, y in, a grid address out.
+
+    ``0063FA`` reads x, y from the fixed words ``GRID_X``/``GRID_Y``;
+    ``010CBC`` takes them from D0/D1 instead -- otherwise byte-for-byte the
+    same instructions (``andi.w #$fff0`` on y, ``asr.w #5`` on x,
+    ``asl.w #3`` on the masked y, both added to the table base).
+    """
+    column = (_signed_word(x) >> 5) & 0xFFFF        # asr.w #5: arithmetic, floor toward -inf like the 68000
+    row_source = y & GRID_Y_MASK
+    row = (row_source << 3) & 0xFFFF                 # asl.w #3
+    address = (GRID_TABLE + _signed_word(column) + _signed_word(row)) & 0xFFFFFFFF
+    return {'address': address, 'column': column, 'row': row, 'row_source': row_source}
+
+
 def grid_cell(read):
     """What ``0063FA`` computes: the table address for the current grid cell.
 
@@ -33,11 +48,22 @@ def grid_cell(read):
     D1 (the shifted row).
     """
     x, y = read(GRID_X, 2), read(GRID_Y, 2)
-    column = (_signed_word(x) >> 5) & 0xFFFF        # asr.w #5: arithmetic, floor toward -inf like the 68000
-    row_source = y & GRID_Y_MASK
-    row = (row_source << 3) & 0xFFFF                 # asl.w #3
-    address = (GRID_TABLE + _signed_word(column) + _signed_word(row)) & 0xFFFFFFFF
-    return {'address': address, 'd0': column, 'd1': row, 'row_source': row_source}
+    result = _grid_cell_address(x, y)
+    return {'address': result['address'], 'd0': result['column'], 'd1': result['row'],
+            'row_source': result['row_source']}
+
+
+def grid_cell_at(x, y):
+    """What ``010CBC`` computes: ``0063FA``'s own arithmetic parameterised on D0 (x), D1 (y).
+
+    A pure register computation -- it reads no RAM at all.  Returns the
+    address (left in A0, as ``0063FA`` leaves it), the column (left in D3,
+    ``asr.w #5,d3``) and the row (left in D4, ``asl.w #3,d4``); the
+    pre-shift row word is exposed for the boundary's ASL flag bookkeeping,
+    same as ``grid_cell``'s.  Called from ``010A14``'s 'collision' arm with
+    the phase-adjusted D0 and the caller's own D1, both words.
+    """
+    return _grid_cell_address(x & 0xFFFF, y & 0xFFFF)
 
 
 # What 00FDB8 stamps: a solid's footprint.  The grid is the level's map of
