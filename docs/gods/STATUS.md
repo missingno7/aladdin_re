@@ -77,7 +77,7 @@ into work RAM only); it is not changed by this baseline.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with twenty-five gates armed, the camera follow step `002806`, the
+  original with twenty-six gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -88,12 +88,14 @@ into work RAM only); it is not changed by this baseline.
   proximity table search-and-add `00F828`/`00F86A`, the pickup award
   `013264`, the next-random draw `014A3C`, the effect pool add `00932C`, the
   pickup check `00BA8E`, the pickup probe `010CD2`, the line walker's object
-  resume `00FFF0` and the projectile launch `0091BC`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
+  resume `00FFF0`, the projectile launch `0091BC` and the line walker's
+  projectile resume `0093D2`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
   `particle-emit`, `hazard-tick`, `score-convert`, `evaluator`,
   `proximity`, `next-random`, `effect-pool-add`, `pickup-check`,
-  `pickup-probe`, `walker` and `projectile-launch` arm each alone.
+  `pickup-probe`, `walker`, `projectile-launch` and `projectile-resume`
+  arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -195,7 +197,11 @@ ids, never to `main`:
 | **`0091BC` projectile launch**: the plan reproduces every fact of the original on all 40 retained fixtures over four recordings (0-3 pool skips, all four quadrants, both y-sign cases -- the cold start into the walker's own projectile copy, `game/walker.py`); the pool exhausted (`0091DE`) declined, unwitnessed | `factcheck check` on every fixture | `tests/games/gods/test_projectiles.py` |
 | `projectile-launch` reproduces the original on `fb408bc7…`: **PASS, 34,904 frames, 50 hits (every witnessed occurrence), 0 fallbacks**; `camera-sprites` (twenty-five gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,048,034 hits, 6,586 fallbacks, tree bit-exact** | `history-verify fb408bc75597 --candidate projectile-launch`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-projectile-launch-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17b` |
 | the projectile launch's negative control (the re-armed x one off) diverges at frame 29,278, the tree's first entry | `--candidate projectile-launch-mutant-result` | `artifacts/gods/verify-projectile-launch-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 58 s | 1,651 tests | — |
+| **`0093D2` line walker resume, projectile copy**: a byte-for-byte duplicate of `00FFF0`'s own body at a second ROM address; every fact reproduced on all 147 retained fixtures over four recordings (all four bodies, the yield on the budget, with and without the minor-axis wrap; the projectile copy never completes via a counter) | `factcheck check` on every fixture | `tests/games/gods/test_projectile_resume.py` |
+| `projectile-resume` reproduces the original on `fb408bc7…`: **PASS, 34,904 frames, 628 hits of 630 calls (2 exact adapter refusals)**; `camera-sprites` (twenty-six gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,049,180 hits, 6,597 fallbacks, tree bit-exact** | `history-verify fb408bc75597 --candidate projectile-resume`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-projectile-resume-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17c` |
+| the projectile resume's negative control (the re-armed x one off) diverges at frame 12,971, the frame after the tree's first entry (12,970) | `--candidate projectile-resume-mutant-result` | `artifacts/gods/verify-projectile-resume-mutant` |
+| the walker's own review-gate VBlank-slide check (`scripts/gods/vblank_slide.py --ticks 20`) on a retained gameplay-tick fixture: **DIFFERS** at every placement tried, but only in the global VBlank counter and its own elapsed-field mirror (both off by exactly one, the tool's documented artifact of a large burn shifting which tick boundary the interrupt lands inside) -- every live RAM byte, register and the sound block agree; not a byte the region and the handler share, so `00FFF0`'s own admission (proven through the full ladder) is not reopened | `scripts/gods/vblank_slide.py census-00FFF0/00FFF0-entry-p0.state --ticks 20` | ledger.md 2026-09-17 |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 43 s | 1,798 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -343,14 +349,21 @@ tree's own 8 remaining `countdown check trigger arm calls unrecovered
 composition, since every register is restored afterward).  A second
 caller (`009D16` on `fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…`,
 accounting for the bulk of the 50+1+1 occurrences on those three) is
-still not `010332`'s own code and remains unidentified.  (3) the driver
-`009210`'s resume call (`0093D2`) — censused fresh 17 Sep over the four
-recordings that fire projectiles (32 real path classes on
-`fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…`, `artifacts/gods/
-evidence/census-009210-<node>`) but not yet read past its own census;
-the driver itself only as far as the walker's contract needs (completion
-is the driver's: who frees a slot, who runs the tile test, where
-`00932C` belongs).
+still not `010332`'s own code and remains unidentified.  (3) DONE
+(the resume half), 17 Sep — `0093D2` (the projectile copy's own resume,
+called by the driver `009210`) recovered as its own candidate
+`projectile-resume`: a byte-for-byte duplicate of `00FFF0`'s own body at
+a second ROM address, reusing `WALKER_RESUME_ENTRY`'s own cost fragments
+directly (`_WR_HEAD`/`_WR_STEP`/`_WR_TAIL`, confirmed identical) with
+only the re-arm table and the RTS addresses of its own.  147 fixtures
+over four recordings MATCH; `fb408bc75597…`: PASS, 628/630 hits;
+the tree stays bit-exact at twenty-six gates.  The driver `009210`
+itself was censused fresh over the four recordings that fire projectiles
+(32 real path classes on `fb408bc75597…`/`4492103be245…`/
+`7251bbd0ecf7…`, `artifacts/gods/evidence/census-009210-<node>`) but not
+yet read past its own census; the driver itself only as far as the
+walker's contract needs (completion is the driver's: who frees a slot,
+who runs the tile test, where `00932C` belongs) remains the next bite.
 
 Screened over the full `fb408bc75597…` history (`recovery_census.py
 --classifier entry`, not a direct park -- the 600-frame window's tight
@@ -586,13 +599,31 @@ composed into `countdown_check_plan` (every register is restored
 afterward, so this composition is simpler than `animation-step`'s: a
 real next bite); on `fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…` the
 return address (`009D16`) is not inside `010332`'s own code at all — a
-second, still undisassembled caller remains open.  The driver
-(`009210` → `0093D2`'s resume) was censused fresh over the four
-recordings that fire projectiles (32 real path classes on each of
+second, still undisassembled caller remains open.
+
+Semantic-operation card, the projectile copy's resume (`0093D2`,
+candidate `projectile-resume`, recovered 17 Sep): identical in every
+respect to `00FFF0`'s own card above except the record it steps (a
+pooled projectile's, at the slot `0091BC` found rather than a solid's
+own `+6`) and the completion signal (the projectile copy never
+"completes": `_walk_steps`'s own 'projectile' copy only ever yields
+`'continue'` or `'budget'` steps, never `'counter'`, so the caller -- the
+driver `009210` -- owns deciding when a walk is done, not this routine).
+A byte-for-byte duplicate of `00FFF0`'s own body at a second ROM address
+(`0093D2`-`0094D8`), reusing `WALKER_RESUME_ENTRY`'s own cost fragments
+directly; *evidence* — 147 fixtures over four recordings MATCH (all four
+bodies, the yield on the budget, with and without the minor-axis wrap);
+`fb408bc75597…`: PASS, 628 hits of 630 calls (2 exact adapter refusals);
+the tree stays bit-exact at twenty-six gates; mutant DIVERGENCE at frame
+12,971 (the frame after the tree's first entry, 12,970); *remaining
+blocker* — none for the resume itself.  The driver (`009210` →
+`0093D2`'s resume) was censused fresh over the four recordings that fire
+projectiles (32 real path classes on each of
 `fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…`, `artifacts/gods/evidence/
 census-009210-<node>`) but not yet read past its own census; it is the
-next bite, with the same semantics (`walker.run(..., 'projectile')`, the
-already-recovered resume machinery `00FFF0` shares).
+next bite (who frees a slot, who runs the tile test, where `00932C`
+belongs), per grinder-protocol not recovered wholesale without a parent
+composition requiring it.
 
 **The pickups** (the subsystem `013264` belongs to): a byte grid at
 `FFBBDE` (8×8-pixel cells, 48 per row) holds pickup codes; the pickup

@@ -2789,6 +2789,58 @@ def walker_resume_plan(machine, registers):
                       last_pc=_WR_RTS[walk.phase])
 
 
+# --- 0093D2: the line walker's resume, projectile copy (game/walker.py) -----
+#
+# A byte-for-byte duplicate of WALKER_RESUME_ENTRY's own body at a second ROM
+# address, over the projectile pool's own records (game/projectiles.py) --
+# same cost fragments (_WR_HEAD/_WR_STEP/_WR_TAIL, confirmed identical), the
+# projectile's own re-arm table and RTS addresses, and no `dbra`-driven
+# completion (the loop only ever ends on the budget: `_walk_steps`'s own
+# 'projectile' copy never emits a 'counter' step).
+PROJECTILE_RESUME_ENTRY = 0x0093D2
+_WR_PROJECTILE_RTS = {('+x', 'shallow'): 0x00942E, ('+x', 'steep'): 0x00945C,
+                      ('-x', 'shallow'): 0x0094A0, ('-x', 'steep'): 0x0094CE}
+
+
+def walker_resume_projectile_plan(machine, registers):
+    """0093D2: resume the projectile walk in the record at A3 with the budget in FFF1FE."""
+    from .game import walker
+    if registers['pc'] != PROJECTILE_RESUME_ENTRY:
+        raise UnsupportedCandidate('projectile resume planner needs the machine parked at 0093D2')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    record32 = registers['a3']
+    record = record32 & 0xFFFFFF
+    if (sp | record) & 1:
+        raise UnsupportedCandidate('unaligned stack or walker record')
+    read = _reader(machine)
+    _spans_disjoint([('walker frame', sp, 4), ('walker record', record, walker.RECORD_SIZE), ('walker budget', walker.BUDGET, 2)])
+    walk = walker.load(read, record, 'projectile')
+    if walk is None:
+        raise UnsupportedCandidate('record continuation is not one of the projectile walker bodies')
+    budget = read(walker.BUDGET, 2)
+    if budget == 0:
+        raise UnsupportedCandidate('a zero budget wraps the budget word: not witnessed')
+    after, left, count, completed = walker.run(walk, budget, 'projectile')
+    steps, counter_before_subq = _walk_steps(walk, budget, 'projectile')
+    assert len(steps) == count
+    cost = _add(_WR_HEAD, *(_WR_STEP[step] for step in steps), _WR_TAIL)
+    high = lambda name: registers[name] & 0xFFFF0000
+    x = 0x10 if counter_before_subq == 0 else 0
+    nz = 0x08 if after.y_sign & 0x8000 else (0x04 if after.y_sign == 0 else 0)
+    loaded = lambda word: 0xFFFF0000 if word & 0x8000 else 0
+    exit_registers = {
+        'd0': high('d0') | after.y_sign, 'd2': loaded(walk.dx) | after.dx, 'd3': loaded(walk.dy) | after.dy,
+        'd4': high('d4') | after.x, 'd5': loaded(walk.error) | after.error, 'd6': high('d6') | after.y,
+        'd7': loaded(walk.counter) | after.counter,
+        'a0': walker.PROJECTILE_BODIES[walk.phase], 'a3': (record32 + 10) & 0xFFFFFFFF, 'a5': record32,
+        'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': (sr & ~0x1F) | x | nz}
+    stores = {walker.BUDGET: (left, 2), **walker.stores(after, record, 'projectile')}
+    writes = tuple(pair for address, (value, size) in stores.items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                      last_pc=_WR_PROJECTILE_RTS[walk.phase])
+
+
 # --- 0091BC: the projectile launch (game/projectiles.py: launch) ------------
 #
 # No save/restore frame at all: D0-D7/A3 are live scratch, exactly the

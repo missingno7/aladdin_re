@@ -15,13 +15,13 @@ from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY, PICKUP_PROBE_ENTRY,
-                       PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
+                       PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
                        STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, next_random_plan,
                        particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, proximity_plan,
                        score_convert_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan,
-                       walker_resume_plan, zone_check_plan)
+                       walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
 
 def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
@@ -106,6 +106,7 @@ PLANNERS = {
     'pickups': {PICKUP_AWARD_ENTRY: pickup_award_plan},
     'walker': {WALKER_RESUME_ENTRY: walker_resume_plan},
     'projectile-launch': {LAUNCH_ENTRY: launch_plan},
+    'projectile-resume': {PROJECTILE_RESUME_ENTRY: walker_resume_projectile_plan},
     'score-convert': {SCORE_CONVERT_ENTRY: score_convert_plan},
     'evaluator': {EVALUATOR_ENTRY: evaluator_plan},
     'proximity': {PROXIMITY_ENTRY: proximity_plan},
@@ -124,7 +125,7 @@ PLANNERS = {
                        EVALUATOR_ENTRY: evaluator_plan, PROXIMITY_ENTRY: proximity_plan, PICKUP_AWARD_ENTRY: pickup_award_plan,
                        NEXT_RANDOM_ENTRY: next_random_plan, EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan,
                        PICKUP_CHECK_ENTRY: pickup_check_plan, PICKUP_PROBE_ENTRY: pickup_probe_plan, WALKER_RESUME_ENTRY: walker_resume_plan,
-                       LAUNCH_ENTRY: launch_plan},
+                       LAUNCH_ENTRY: launch_plan, PROJECTILE_RESUME_ENTRY: walker_resume_projectile_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -166,7 +167,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # corrupted value rather than diverge cleanly): dropping the writes entirely still leaves
              # the caller with the wrong (unset) record field, a clean and safe divergence.
              'pickup-probe-mutant-result': ('pickup-probe', _mutate_outcome),
-             'projectile-launch-mutant-result': ('projectile-launch', _mutate_launch)}
+             'projectile-launch-mutant-result': ('projectile-launch', _mutate_launch),
+             'projectile-resume-mutant-result': ('projectile-resume', _mutate_walk)}
 
 
 @dataclass
