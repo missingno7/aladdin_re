@@ -20,12 +20,13 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with eight gates armed, the camera follow step `002806`, the
+  original with ten gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
-  the footprint stamp `00FDB8` and the solid drawer `00FC8E`; `camera`,
-  `sprites`, `sprites-static`, `table-reset`, `spawn-queue`, `grid-cell`,
-  `footprint` and `solid-draw` arm each alone.
+  the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
+  step `00FE08` and the countdown check `010332`; `camera`, `sprites`,
+  `sprites-static`, `table-reset`, `spawn-queue`, `grid-cell`, `footprint`,
+  `solid-draw`, `animation-step` and `countdown-check` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -80,7 +81,13 @@ ids, never to `main`:
 | **`00FC8E` solid drawer**: the plan reproduces every fact of the original on all 51 retained fixtures over four recordings (0-9 cells, off-screen cells skipped on the x or the y test, the table scan matching within 1-2 mismatches); the inline VDP upload arm (a table entry with the tile index's sign bit set) and an unterminated or unmatched table scan are declined (unwitnessed) | `factcheck check` on every fixture | `tests/games/gods/test_solids.py` |
 | `solid-draw` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 11,472 hits, 110 fallbacks (all scheduler admission)**; `camera-sprites` (all eight gates) on the tree of all eight recordings: **PASS, 107,519 frames, 718,111 hits, 5,648 fallbacks (5,304 scheduler admission incl. 766 at `00FC8E`, 344 seam deadline)** | `history-verify f0ac19738f19 --candidate solid-draw`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-solid-draw-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16h` |
 | the solid drawer's negative control (a register: the routine's own last write is the unconditional list-head pointer, corrupting it risks an address error in the unrecovered sprite-list flush) diverges at frame 429 | `--candidate solid-draw-mutant-result` | `artifacts/gods/verify-solid-draw-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 566 tests, none skipped | — |
+| **`00FE08` animation step**: the plan reproduces every fact of the original on the 6 retained 'idle'-arm fixtures over four recordings; the 'moving' arm (common, not merely unwitnessed) is declined -- it calls the unrecovered coroutine/dispatch at `00FFF0` | `factcheck check` on every fixture | `tests/games/gods/test_animation.py` |
+| `animation-step` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 11,542 hits, 40 fallbacks (38 scheduler admission, 2 unsupported domain)**; `camera-sprites` (nine gates) on the tree of all eight recordings: **PASS, 107,519 frames, 788,232 hits, 6,274 fallbacks (5,609 scheduler admission, 344 seam deadline, 321 unsupported domain at `00FE08`)** | `history-verify f0ac19738f19 --candidate animation-step`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-animation-step-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16i` |
+| the animation step's negative control (the last write is the shared frame-budget word, not a pointer) diverges at frame 430 | `--candidate animation-step-mutant-result` | `artifacts/gods/verify-animation-step-mutant` |
+| **`010332` countdown check**: the plan reproduces every fact of the original on the 10 retained 'idle'/'waiting'-arm fixtures over four recordings; the 'trigger' arm (the countdown reaching zero) is declined -- it calls one of two unrecovered routines (`01158C`/`0115D4`) | `factcheck check` on every fixture | `tests/games/gods/test_timers.py` |
+| `countdown-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,238 hits, 68 fallbacks (33 scheduler admission, 35 unsupported domain)**; `camera-sprites` (all ten gates) on the tree of all eight recordings: **PASS, 107,519 frames, 801,195 hits, 6,610 fallbacks (5,713 scheduler admission, 344 seam deadline, 553 unsupported domain across `00FE08`/`010332`)** | `history-verify f0ac19738f19 --candidate countdown-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-countdown-check-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16j` |
+| the countdown check's negative control (a register, since the 'idle' arm stores nothing) diverges at frame 469 | `--candidate countdown-check-mutant-result` | `artifacts/gods/verify-countdown-check-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 667 tests, none skipped | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -100,7 +107,7 @@ entered.
 
 ## What is not recovered
 
-Everything else.  Eight routines are recovered: the camera follow step
+Everything else.  Ten routines are recovered: the camera follow step
 (`game/camera.py`, six words); the sprite emitter and its RAM-only sibling
 (`game/sprites.py`: the sprite list at `FFEBF6`–`FFEBFF`, the per-frame
 tile cache at `FFEE98`/`FFEEAA`, the dynamic-tile cursor `FFEE84`, the ROM
@@ -125,7 +132,13 @@ definition's rows x cells grid appended as sprite records into the sprite
 list, the tile index looked up by type id in a work-RAM table pointer
 (`SOLID_TILE_TABLE`) -- a found entry with the tile index's sign bit set
 means the tiles are uploaded fresh by an inline VDP block instead, an arm
-no recording enters).  The
+no recording enters); the animation step (`game/animation.py`: the
+'idle' arm only -- the shared frame-budget word `FRAME_BUDGET` refreshed
+from the definition's own field, on both arms; the common 'moving' arm
+calls the unrecovered coroutine and per-type dispatch at `00FFF0` and is
+declined); and the countdown check (`game/timers.py`: a caller-supplied
+control byte and countdown word, 'idle' and 'waiting' recovered, the
+'trigger' arm declined -- it calls one of two unrecovered routines).  The
 emitter's remaining siblings (`001256`/`001260`/`00126A`, `001312`) share
 its descriptor layout and list conventions but are not recovered.  There
 is no object-table convention, no semantic map, no native runtime, no
@@ -162,11 +175,11 @@ a grinder's to invent:
 
 | entry | path classes (full history) | why |
 |---|---|---|
-| `00FE08` | 19 | calls unrecovered `00FFF0`; arms range 10-165 instructions |
+| `00FE08` | 19 | recovered as `animation-step` (the 'idle' arm; 'moving' calls unrecovered `00FFF0`) |
 | `010A14` | 10, but several branch points (`(a5+4)>7`, two `(a5+0xA)==0` arms, `(a3+0x12)!=0`) show only one side -- unwitnessed arms dominate | calls `010CBC`, a parameterised twin of `0063FA`'s own grid computation (recoverable once a leaf needs it on its own), then dereferences the computed grid cell (3 checks, 0x80-byte stride) and a second object pointer `a3` |
 | `00BCCE` | 28 | — |
 | `00470C` | 30 | — |
-| `010332` | 7, but every arm with any work calls unrecovered `01158C`/`0115D4` | — |
+| `010332` | 7 | recovered as `countdown-check` (the 'idle' and 'waiting' arms; 'trigger' calls unrecovered `01158C`/`0115D4`) |
 | `014084` | 32 retained + 25 more overflowed | — |
 | `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | the sprite-emitter-sibling seam shape, but per-object-type like `00FDB8` |
 | `00FDB8` | 16 (4 real: 13 were VBlank variants) | recovered — see the solids below |
@@ -195,8 +208,10 @@ a plain leaf (`grinder-protocol.md` §"Candidate selection rules"); what
 needs a convention is a dispatch through a type byte into unrecovered
 handlers.  (2) Most of the "path classes" above were VBlank landing
 positions, which the tracer now sets aside (`00FDB8`: 16 → 4).  Re-screen
-`00FE08`, `010A14`, `00BCCE`, `00470C`, `010332`, `014084`, `00126A` with
-the current tracer before taking their class counts at face value.  (3)
+`010A14`, `00BCCE`, `00470C`, `014084`, `00126A` with the current tracer
+before taking their class counts at face value (`00FE08` and `010332` were
+re-screened and are now recovered, each as a dominant bounded arm plus a
+declined call into unrecovered code).  (3)
 `00FC8E`'s own worry ("per-object-type diversity" like `00FDB8`'s pre-fix
 screening) also did not hold once censused with the current tracer: over
 107,519 tree frames the routine only ever takes the positive (tile-table)
@@ -214,15 +229,22 @@ objects, each a live record at `FF4AAE` (0x18 bytes: world x, y at
 type id at `+4`, an index at `+5`, four longs at `+6`, the footprint width
 and height at `+0x1A`/`+0x1B`).  Every game tick `00FBB6` replays the undo
 list (`00FAF4`, 50 entries at `FF4982`), then for each active solid: steps
-its animation (`00FE08`, which calls `00FFF0`), stamps its footprint
+its animation (`00FE08`, recovered as `animation-step`: the shared
+frame-budget refresh and the 'idle' immediate return; the common 'moving'
+arm calls `00FFF0`, a resumable Bresenham-style line walk that stores its
+own continuation address back into the live record, then a per-object-type
+jump-table dispatch on a state byte -- a coroutine and dispatch engine, not
+a leaf, and the next real gap in this subsystem), stamps its footprint
 (`00FDB8`), and draws it (`00FC8E`, recovered as `solid-draw`: the sprite
 records for a width×height grid of 32×16 cells, tile index from the table
 at `FFF2D6` by type id; a negative entry means the tiles are uploaded by an
 inline VDP block from `FFEA2C`-relative data, unwitnessed and declined).
 The grid `FF885E` is what `0063FA` (the player) and `010CBC` (the movers)
-consult.  Next bites in this subsystem: `00FE08`/`00FFF0` (the animation
-step, census both), then the whole per-tick pass `00FBB6` as a composition
-of recovered leaves.
+consult.  Next bites in this subsystem: `00FFF0`'s coroutine and its
+`00FEC0`/`00FF54` per-type dispatch (a `NEW_GODS_SUBSYSTEM`-shaped gap, not
+a leaf -- census the state-byte values it actually dispatches on before
+attempting anything), then the whole per-tick pass `00FBB6` as a
+composition of recovered leaves.
 
 A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback

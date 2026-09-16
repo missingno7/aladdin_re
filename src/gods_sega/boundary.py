@@ -109,6 +109,12 @@ def _add_sr(sr, left, right, width):
     return out
 
 
+def _sub_sr(sr, left, right, width):
+    """68000 SUB/SUBQ flags of ``left - right``: N/Z/V/C as CMP, but X set with C (CMP leaves X alone)."""
+    out = _cmp_sr(sr, left, right, width)
+    return (out & ~0x10) | (0x10 if out & 0x01 else 0)
+
+
 def _margin_add_x(sr, operand, margin, width=2):
     """The X (=C) bit an ADD of ``margin`` into ``operand`` leaves; a later CMP does not touch X.
 
@@ -681,4 +687,87 @@ def draw_solid_plan(machine, registers):
     exit_registers.update(d2=d2, a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=exit_sr)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
                       last_pc=SOLID_DRAW_LAST_PC)
+
+
+# --- 00FE08: the animation step (game/animation.py: animation_step) ----------
+#
+# Cost from the tracer (artifacts/gods/evidence/census-00FE08*): the
+# 'idle' arm only -- a plain leaf, constant cost.  The 'moving' arm (common,
+# not merely unwitnessed) calls the unrecovered coroutine/dispatch at
+# 00FFF0 and is declined: the boundary cannot reproduce a call into code
+# that has not itself been recovered.
+ANIMATION_STEP_ENTRY, ANIMATION_STEP_LAST_PC = 0x00FE08, 0x00FE5A
+ANIMATION_STEP_FRAME = 24                              # movem.l d0-d3/a1-a2,-(a7)
+_AS_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'a1', 'a2')
+ANIMATION_STEP_IDLE_COST = (194, 10)
+
+
+def _animation_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(_AS_FRAME_REGISTERS)
+                 for pair in _bytes(sp - ANIMATION_STEP_FRAME + 4 * index, registers[name], 4))
+
+
+def animation_step_plan(machine, registers):
+    """00FE08: the frame-budget refresh and the immediate return; the 'moving' arm is declined."""
+    from .game import animation
+    if registers['pc'] != ANIMATION_STEP_ENTRY:
+        raise UnsupportedCandidate('animation step planner needs the machine parked at 00FE08')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    record, definition = registers['a1'] & 0xFFFFFF, registers['a2'] & 0xFFFFFF
+    if (sp | record | definition) & 1:
+        raise UnsupportedCandidate('unaligned stack, record or definition')
+    result = animation.animation_step(_reader(machine), record, definition)
+    if result['arm'] != 'idle':
+        raise UnsupportedCandidate('animation step arm calls unrecovered 00FFF0: ' + result['arm'])
+    _spans_disjoint([('animation step frame', sp - ANIMATION_STEP_FRAME, ANIMATION_STEP_FRAME),
+                     ('animation frame budget', animation.FRAME_BUDGET & 0xFFFFFF, 2)])
+    moving_flag = machine.peek_ram((record + animation.LIVE_MOVING_FLAG) & 0xFFFF, 1)[0]
+    # N/Z/V/C are tst.b $5(a1)'s own (the last flag-setter before the rts); X is the earlier
+    # addq.w #1,d4's own carry (tst does not touch X, so it survives from there to the exit).
+    exit_sr = (_logic_sr(sr, moving_flag, 1) & ~0x10) | (_add_sr(sr, result['budget_before'], 1, 2) & 0x10)
+    d4 = (registers['d4'] & 0xFFFF0000) | result['budget']
+    writes = (_animation_frame_writes(sp, registers)
+              + tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size)))
+    return AtomicPlan(cycles=ANIMATION_STEP_IDLE_COST[0], instructions=ANIMATION_STEP_IDLE_COST[1], writes=writes,
+                      registers={'d4': d4, 'a3': (registers['a1'] + 6) & 0xFFFFFFFF,
+                                 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=ANIMATION_STEP_LAST_PC)
+
+
+# --- 010332: the rate-gated countdown check (game/timers.py: countdown_check) --
+#
+# Cost from the tracer (artifacts/gods/evidence/census-010332): two tiny
+# straight-line arms, no frame, no calls; the 'trigger' arm (the countdown
+# reaching zero) calls one of two unrecovered routines and is declined.
+COUNTDOWN_CHECK_ENTRY, COUNTDOWN_CHECK_LAST_PC = 0x010332, 0x010386
+_CC_IDLE_COST = (38, 3)                # tst.b not zero-taken? no: tst.b; beq taken; rts
+_CC_WAITING_COST = (62, 5)             # tst.b; beq not taken; subq.w; bne taken; rts
+
+
+def countdown_check_plan(machine, registers):
+    """010332: the countdown decrement; the 'trigger' arm (calls 01158C/0115D4) is declined."""
+    from .game import timers
+    if registers['pc'] != COUNTDOWN_CHECK_ENTRY:
+        raise UnsupportedCandidate('countdown check planner needs the machine parked at 010332')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    control, countdown = registers['a3'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
+    result = timers.countdown_check(_reader(machine), control, countdown)
+    arm = result['arm']
+    if arm == 'trigger':
+        raise UnsupportedCandidate('countdown check trigger arm calls unrecovered 01158C/0115D4')
+    if arm == 'idle':
+        # The control byte itself is the last (and only) flag-setter: tst.b $13(a3).
+        control_byte = machine.peek_ram((control + timers.RATE_ENABLE) & 0xFFFF, 1)[0]
+        exit_sr = _logic_sr(sr, control_byte, 1)
+        return AtomicPlan(cycles=_CC_IDLE_COST[0], instructions=_CC_IDLE_COST[1], writes=(),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=COUNTDOWN_CHECK_LAST_PC)
+    # 'waiting': the last flag-setter is subq.w #1,$c(a5), which also sets X (unlike a plain CMP).
+    exit_sr = _sub_sr(sr, result['before'], 1, 2)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=_CC_WAITING_COST[0], instructions=_CC_WAITING_COST[1], writes=writes,
+                      registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=COUNTDOWN_CHECK_LAST_PC)
 

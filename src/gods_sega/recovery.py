@@ -12,9 +12,10 @@ from dataclasses import dataclass, field
 
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
-from .boundary import (CAMERA_FOLLOW_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, SOLID_DRAW_ENTRY,
-                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY,
-                       camera_follow_plan, draw_solid_plan, footprint_stamp_plan, grid_cell_plan,
+from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COUNTDOWN_CHECK_ENTRY, FOOTPRINT_STAMP_ENTRY,
+                       GRID_CELL_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
+                       STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, animation_step_plan, camera_follow_plan,
+                       countdown_check_plan, draw_solid_plan, footprint_stamp_plan, grid_cell_plan,
                        spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan)
 
 
@@ -43,10 +44,13 @@ PLANNERS = {
     'grid-cell': {GRID_CELL_ENTRY: grid_cell_plan},
     'footprint': {FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan},
     'solid-draw': {SOLID_DRAW_ENTRY: draw_solid_plan},
+    'animation-step': {ANIMATION_STEP_ENTRY: animation_step_plan},
+    'countdown-check': {COUNTDOWN_CHECK_ENTRY: countdown_check_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
-                       FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan, SOLID_DRAW_ENTRY: draw_solid_plan},
+                       FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan, SOLID_DRAW_ENTRY: draw_solid_plan,
+                       ANIMATION_STEP_ENTRY: animation_step_plan, COUNTDOWN_CHECK_ENTRY: countdown_check_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'sprites-mutant-result': ('sprites', _mutate_result),
@@ -59,7 +63,9 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # a register, not the stored list: the routine's own last write is the unconditional
              # LIST_HEAD pointer, and corrupting it can cascade into an address error in the
              # (unrelated, unrecovered) sprite-list flush that reads it later in the same frame.
-             'solid-draw-mutant-result': ('solid-draw', _mutate_register)}
+             'solid-draw-mutant-result': ('solid-draw', _mutate_register),
+             'animation-step-mutant-result': ('animation-step', _mutate_result),
+             'countdown-check-mutant-result': ('countdown-check', _mutate_register)}
 
 
 @dataclass
