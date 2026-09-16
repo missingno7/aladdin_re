@@ -176,7 +176,7 @@ longest recordings before choosing:
 | `00FDB8` | 600 | 27–47 | recovered (`footprint`): a solid's footprint stamped into the level grid `FF885E` (32×16-pixel cells, 128 bytes per row), each cell's old byte queued on the undo list at A5; rows and cells are the definition's height and width bytes (A2 `+0x1B`, `+0x1A`); the no-footprint arm (width bit 7) unwitnessed, declined one path class, but a 34,904-frame census shows **16 distinct path classes** with differing loop trip counts -- looks like a per-object-type dispatch (varying tile sizes, record counts), not a bounded single-shape leaf; census every recording before treating this as a small candidate, or treat it as the first case needing an object-record convention |
 | `002806` | 300 | 17–21 | recovered (`camera`) |
 | `0018C8` | 742 | 10–145 | recovered (`sprites`): the dynamic sprite emitter with a per-frame tile cache; a miss uploads the tiles inline (`001974`–`001988`), the first Gods seam |
-| `00126A` (`001256`, `001260`) | 412 | 305–307 | from `010248` (the particle drawer's jump table at `0100F2`): the emitter's sibling without the cache — the same seam shape (record composition, inline upload `0012F4`–`001308`, restore); `factcheck facts --park 00126A` does not reach the routine from `boundary-6000.state` within the default step budget.  A full census of `f0ac1973…` alone (15,148 frames) finds **32 retained path classes plus 17 more that overflowed retention** -- far more arms than a bounded leaf; likely the same per-object-type diversity as `00FDB8` below.  Census every recording and look for a bound (a fixed small set of object types, or a size the ROM tables themselves cap) before spending more on this one |
+| `00126A` (`001256`, `001260`) | 412 | 305–307 | from `010248` (the particle drawer's jump table at `0100F2`): the emitter's sibling without the cache — the same seam shape (record composition, inline upload `0012F4`–`001308`, restore); `factcheck facts --park 00126A` does not reach the routine from `boundary-6000.state` within the default step budget.  A full census of `f0ac1973…` alone (15,148 frames) finds **32 retained path classes plus 17 more that overflowed retention**.  Read from the disassembly (not re-censused this session): not a per-object-type dispatch after all -- it is `0018C8`'s own seam shape, and its own class diversity is almost certainly the same cache/descriptor cost variation `0018C8` already has a formula for.  The next candidate |
 | `001164` | 1,015 | 9–40 | recovered (`sprites-static`): the emitter's RAM-only sibling, its own descriptor-offset table (`0011E6`) and a fixed tile field instead of a cache (six callers) |
 | `0063FA` | 309 | 9 (constant) | recovered (`grid-cell`): a pure address computation, one path, no branch, no store; three callers (`006468`, `006FFE`, `007282`) |
 | `00FC8E` | 600 | 33–106 | recovered (`solid-draw`): the same definition `00FDB8` reads drawn as sprites, a work-RAM `(type id, tile index)` table scan then a rows x cells grid appended to the sprite list, off-screen cells skipped; the inline VDP upload arm (a negative table entry) declined, unwitnessed on every recording |
@@ -194,10 +194,10 @@ a grinder's to invent:
 | `00FE08` | 19 | recovered as `animation-step` (the 'idle' arm; 'moving' calls unrecovered `00FFF0`) |
 | `010A14` | 10 | recovered as `collision-gate` (the 'held' and 'gated' arms; 'collision' calls unrecovered `010CBC`; phase>7 unwitnessed on either of the two recordings that reach this entry) |
 | `00BCCE` | 28 (15 real: 13 were the same VBlank-in-interrupt-handler misattribution `00FDB8`'s screening hit) | recovered as `zone-check`: fully witnessed, no declines |
-| `00470C` | 30 | — |
+| `00470C` | 30 (re-censused, current tracer) | a genuine per-type dispatch: `move.w d5,d0; add.w d0,d0; add.w d0,d0; movea.l $4718(pc,d0.w),a5; jmp (a5)` into a ROM jump table at `004718` (disassembles as `ori.b` data -- it is a table of handler addresses, not code) with at least a dozen distinct handler bodies; the census's 30 small (6-15 instruction) classes are those handlers' own bodies, not variants of one shape.  Leave for the supervisor: not a leaf, needs an object/kind convention |
 | `010332` | 7 | recovered as `countdown-check` (the 'idle' and 'waiting' arms; 'trigger' calls unrecovered `01158C`/`0115D4`) |
-| `014084` | 32 retained + 25 more overflowed | — |
-| `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | the sprite-emitter-sibling seam shape, but per-object-type like `00FDB8` |
+| `014084` | 32 retained + 25 more overflowed | two disjoint bodies behind one early `tst.b $48(a1); beq`: the active arm dereferences the level grid (`FF885E`, `0063FA`'s and `00FDB8`'s own table), rarely calls unrecovered `00F828`, then searches a bounded 20-entry pool at `FFF90E` (a `dbra`-counted scan, cost climbing steadily with scan depth -- matches the instruction counts 42..112) and fills an empty slot; the inactive arm (and a failed grid check) fall into a second body writing byte pairs into two fixed tile arrays (`FFBBDE`/`FFBBAA`) keyed by world position.  Plausibly two more RAM-mostly leaves (the pool scan bounded like `0018C8`'s cache scan, the tile-array write unconditional), but needs a full census and fact read of both bodies before treating it as one candidate -- not attempted this session |
+| `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | **not** a per-type dispatch: disassembly through `0012F4` is exactly `0018C8`'s own shape (camera subtraction, the same two screen-margin tests, a descriptor lookup at `066794`, the four-word sprite record, the inline VDP upload `0012F4`+); the earlier "per-object-type like `00FDB8`" worry was the same kind of false alarm this session's other three corrections were.  The next candidate: reproduce `0018C8`'s seam shape here with `00126A`'s own addresses and cost formula (its own descriptor field layout differs slightly -- read the fact traces before assuming they match `0018C8`'s exactly); not attempted this session for lack of remaining time, not for any structural reason |
 | `00FDB8` | 16 (4 real: 13 were VBlank variants) | recovered — see the solids below |
 
 `010CBC` is worth flagging on its own: it is exactly `0063FA`'s grid
@@ -224,10 +224,13 @@ a plain leaf (`grinder-protocol.md` §"Candidate selection rules"); what
 needs a convention is a dispatch through a type byte into unrecovered
 handlers.  (2) Most of the "path classes" above were VBlank landing
 positions, which the tracer now sets aside (`00FDB8`: 16 → 4).  Re-screen
-`00470C`, `014084`, `00126A` with the current tracer
-before taking their class counts at face value (`00FE08` and `010332` were
-re-screened and are now recovered, each as a dominant bounded arm plus a
-declined call into unrecovered code).  (3)
+`014084` with the current tracer before taking its class count at face
+value (`00FE08` and `010332` were re-screened and are now recovered, each
+as a dominant bounded arm plus a declined call into unrecovered code;
+`00470C` was re-screened and confirmed a genuine per-type dispatch, not a
+tracer artifact; `00126A` was read from the disassembly rather than
+re-censused and turned out to be `0018C8`'s own seam shape, not a
+dispatch).  (3)
 `00FC8E`'s own worry ("per-object-type diversity" like `00FDB8`'s pre-fix
 screening) also did not hold once censused with the current tracer: over
 107,519 tree frames the routine only ever takes the positive (tile-table)
