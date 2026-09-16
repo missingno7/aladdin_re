@@ -570,3 +570,115 @@ def footprint_stamp_plan(machine, registers):
                                  'a0': result['row_after'], 'a5': result['cursor'],
                                  'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
                       last_pc=FOOTPRINT_STAMP_LAST_PC)
+
+
+# --- 00FC8E: the solid drawer (game/solids.py: draw_solid) --------------------
+#
+# Cost from the tracer (artifacts/gods/evidence/census-00FC8E*): the head
+# through the table scan and the tile lookup, then per row a reload of the
+# column count, and per cell the two screen-bound tests, a skip or a
+# four-word record write, and the loop bookkeeping; the negative (inline
+# VDP upload) arm and an unmatched-and-unterminated table scan are declined
+# -- no recording enters either.  Everything else (rows, cells, the visible
+# count) is bounded by the same definition bytes 00FDB8 already reads.
+SOLID_DRAW_ENTRY, SOLID_DRAW_LAST_PC = 0x00FC8E, 0x00FD26
+SOLID_DRAW_FRAME = 36                                  # movem.l d0-d4/d6-d7/a0-a1,-(a7)
+_SOLID_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'd4', 'd6', 'd7', 'a0', 'a1')
+SOLID_DRAW_CELL_FRAME = 8                              # the per-cell movem.l d0-d1,-(a7): the last one is never popped by hand
+SOLID_DRAW_MAX_CELLS = 64                              # the verified domain (rows x cells; witnessed up to 1x3 and 3x1)
+_SD_HEAD = (12 + 4 + 80, 3)                            # move.b $4(a2),d2; ext.w; movem push
+_SD_LOOKUP = (16, 1)                                   # movea.l $f2d6.w,a0
+_SD_SCAN_MISMATCH = (8 + 4 + 8 + 4 + 10, 5)            # move.w (a0)+,d6; cmp.b; beq not taken; tst; bne taken
+_SD_SCAN_MATCH = (8 + 4 + 10, 3)                       # move.w (a0)+,d6; cmp.b; beq taken
+_SD_POST_MATCH = (4 + 12, 2)                           # tst.w d6; bmi.w not taken
+_SD_TILE = (22 + 4, 2)                                 # lsr.w #8,d6; move.w d6,d2
+_SD_PRELOOP = (12 + 12 + 16 + 12 + 4 + 4, 6)           # sub.w x2; movea.l LIST_HEAD,a0; move.b height,d7; ext.w; move.w d0,d3
+_SD_ROW_HEAD = (12 + 8, 2)                             # move.b width,d6; andi.w #7,d6
+_SD_ROW_TAIL = (4 + 8, 2)                              # move.w d3,d0; addi.w #$10,d1
+_SD_CELL_HEAD = (24 + 4 + 4 + 8, 4)                    # movem.l d0-d1,-(a7); moveq #$20,d4; add.w d0,d4; cmpi.w #$160,d4
+_SD_X_TAKEN = (10, 1)                                  # bhi.b taken: off the left/right edge, cell skipped
+_SD_Y_TEST = (4 + 4 + 8, 3)                            # moveq #$10,d4; add.w d1,d4; cmpi.w #$e0,d4
+_SD_Y_TAKEN = (10, 1)                                  # bhi.b taken: off the top/bottom edge, cell skipped
+_SD_X_NOT_TAKEN, _SD_Y_NOT_TAKEN = 8, 8                # the same bhi.b, on-screen
+_SD_VISIBLE_BODY = (16 + 8 + 8 + 12 + 8 + 8 + 8 + 8 + 8 + 16, 10)   # the four-word record write and the count bump
+_SD_REJOIN = (28 + 8, 2)                               # movem.l (a7)+,d0-d1; addi.w #$20,d0
+_SD_DBRA_TAKEN, _SD_DBRA_LAST = 10, 14                 # dbra: mid-loop vs. the count's final (not-taken) iteration
+_SD_TAIL = (16 + 84 + 16, 3)                           # move.l a0,LIST_HEAD; movem pop (9 regs); rts
+_SD_X_SKIP = (_SD_CELL_HEAD[0] + _SD_X_TAKEN[0], _SD_CELL_HEAD[1] + _SD_X_TAKEN[1])
+_SD_Y_SKIP = (_SD_CELL_HEAD[0] + _SD_X_NOT_TAKEN + _SD_Y_TEST[0] + _SD_Y_TAKEN[0],
+              _SD_CELL_HEAD[1] + 1 + _SD_Y_TEST[1] + _SD_Y_TAKEN[1])
+_SD_VISIBLE = (_SD_CELL_HEAD[0] + _SD_X_NOT_TAKEN + _SD_Y_TEST[0] + _SD_Y_NOT_TAKEN + _SD_VISIBLE_BODY[0],
+               _SD_CELL_HEAD[1] + 1 + _SD_Y_TEST[1] + 1 + _SD_VISIBLE_BODY[1])
+
+
+def _solid_frame_writes(sp, registers, d2):
+    values = {**{name: registers[name] for name in _SOLID_FRAME_REGISTERS}, 'd2': d2}
+    return tuple(pair for index, name in enumerate(_SOLID_FRAME_REGISTERS)
+                 for pair in _bytes(sp - SOLID_DRAW_FRAME + 4 * index, values[name], 4))
+
+
+def draw_solid_plan(machine, registers):
+    """00FC8E: sprite records for one active solid's rows x cells grid; the upload arm is declined."""
+    from .game import solids
+    if registers['pc'] != SOLID_DRAW_ENTRY:
+        raise UnsupportedCandidate('solid draw planner needs the machine parked at 00FC8E')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    definition = registers['a2'] & 0xFFFFFF
+    if (sp | definition) & 1:
+        raise UnsupportedCandidate('unaligned stack or definition')
+    result = solids.draw_solid(_reader(machine), registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF, definition)
+    arm = result['arm']
+    if arm != 'sprite':
+        raise UnsupportedCandidate(f'solid draw arm not witnessed by a recording: {arm}')
+    rows, cells, visible = result['rows'], result['cells'], result['visible']
+    if rows * cells > SOLID_DRAW_MAX_CELLS:
+        raise UnsupportedCandidate('solid grid larger than the verified domain')
+    scanned, mismatches = result['scanned'], result['scanned'] - 1
+    frame = ('solid draw frame', sp - SOLID_DRAW_FRAME - SOLID_DRAW_CELL_FRAME, SOLID_DRAW_FRAME + SOLID_DRAW_CELL_FRAME)
+    initial_head = (result['final_head'] - visible * solids.RECORD_SIZE) & 0xFFFFFF
+    spans = [frame, ('solid definition', definition, 0x1C), *_SPRITE_GLOBALS]
+    if visible:
+        spans.append(('solid sprite records', initial_head, visible * solids.RECORD_SIZE))
+    _spans_disjoint(spans)
+    # d2's pushed (and later restored) value is the sign-extended type-id byte the routine read for
+    # itself at entry, not the tile index move.w d6,d2 leaves live during the routine's own body.
+    type_byte = machine.peek_ram((definition + solids.SOLID_TYPE) & 0xFFFF, 1)[0]
+    signed_type = type_byte - 0x100 if type_byte & 0x80 else type_byte
+    d2 = (registers['d2'] & 0xFFFF0000) | (signed_type & 0xFFFF)
+
+    x_skips, y_skips = result['x_skips'], result['y_skips']
+    cycles = (_SD_HEAD[0] + _SD_LOOKUP[0] + mismatches * _SD_SCAN_MISMATCH[0] + _SD_SCAN_MATCH[0]
+              + _SD_POST_MATCH[0] + _SD_TILE[0] + _SD_PRELOOP[0]
+              + rows * (_SD_ROW_HEAD[0] + _SD_ROW_TAIL[0])
+              + x_skips * _SD_X_SKIP[0] + y_skips * _SD_Y_SKIP[0] + visible * _SD_VISIBLE[0]
+              + rows * cells * _SD_REJOIN[0]
+              + rows * (cells - 1) * _SD_DBRA_TAKEN + rows * _SD_DBRA_LAST
+              + (rows - 1) * _SD_DBRA_TAKEN + _SD_DBRA_LAST
+              + _SD_TAIL[0])
+    instructions = (_SD_HEAD[1] + _SD_LOOKUP[1] + mismatches * _SD_SCAN_MISMATCH[1] + _SD_SCAN_MATCH[1]
+                    + _SD_POST_MATCH[1] + _SD_TILE[1] + _SD_PRELOOP[1]
+                    + rows * (_SD_ROW_HEAD[1] + _SD_ROW_TAIL[1])
+                    + x_skips * _SD_X_SKIP[1] + y_skips * _SD_Y_SKIP[1] + visible * _SD_VISIBLE[1]
+                    + rows * cells * _SD_REJOIN[1]
+                    + rows * (cells - 1) * 1 + rows * 1
+                    + (rows - 1) * 1 + 1
+                    + _SD_TAIL[1])
+    # The transient per-cell frame (movem.l d0-d1,-(a7)) is popped every iteration but never
+    # cleared: at RTS it still holds the last row's y and the last column's x, pre-POSITION_BIAS,
+    # from whichever cell (visible or skipped) the loop reached last.
+    cell_writes = (_bytes(sp - SOLID_DRAW_FRAME - SOLID_DRAW_CELL_FRAME,
+                          (registers['d0'] & 0xFFFF0000) | result['last_col_x'], 4)
+                   + _bytes(sp - SOLID_DRAW_FRAME - SOLID_DRAW_CELL_FRAME + 4,
+                           (registers['d1'] & 0xFFFF0000) | result['last_row_y'], 4))
+    writes = (_solid_frame_writes(sp, registers, d2) + cell_writes
+              + tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size)))
+    # The last flag-setting instruction is addi.w #$10,d1 (the final row's own height advance,
+    # which runs even on the routine's last row); N/Z come from the unconditional final
+    # move.l a0,LIST_HEAD, which does not touch X.
+    exit_sr = (_logic_sr(sr, result['final_head'], 4) & ~0x10) | (_add_sr(sr, result['last_row_y'], solids.ROW_HEIGHT, 2) & 0x10)
+    exit_registers = {name: registers[name] for name in ('d0', 'd1', 'd3', 'd4', 'd6', 'd7', 'a0', 'a1')}
+    exit_registers.update(d2=d2, a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=exit_sr)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=SOLID_DRAW_LAST_PC)
+

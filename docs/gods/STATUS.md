@@ -20,11 +20,12 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with seven gates armed, the camera follow step `002806`, the
+  original with eight gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
-  reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`
-  and the footprint stamp `00FDB8`; `camera`, `sprites`, `sprites-static`,
-  `table-reset`, `spawn-queue`, `grid-cell` and `footprint` arm each alone.
+  reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
+  the footprint stamp `00FDB8` and the solid drawer `00FC8E`; `camera`,
+  `sprites`, `sprites-static`, `table-reset`, `spawn-queue`, `grid-cell`,
+  `footprint` and `solid-draw` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -76,7 +77,10 @@ ids, never to `main`:
 | `footprint` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 11,517 hits, 65 fallbacks (all scheduler admission)**; `camera-sprites` (all seven gates) on the tree of all eight recordings: **PASS, 107,519 frames, 648,130 hits, 4,882 fallbacks (4,538 scheduler admission, 344 seam deadline)** | `history-verify f0ac19738f19 --candidate footprint`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-footprint-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16g` |
 | the footprint negative control diverges at frame 429 | `--candidate footprint-mutant-result` | `artifacts/gods/verify-footprint-mutant` |
 | the negative control (a register, since the routine stores nothing) diverges at frame 6,185 | `--candidate grid-cell-mutant-result` | `artifacts/gods/verify-grid-cell-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 506 tests, none skipped | — |
+| **`00FC8E` solid drawer**: the plan reproduces every fact of the original on all 51 retained fixtures over four recordings (0-9 cells, off-screen cells skipped on the x or the y test, the table scan matching within 1-2 mismatches); the inline VDP upload arm (a table entry with the tile index's sign bit set) and an unterminated or unmatched table scan are declined (unwitnessed) | `factcheck check` on every fixture | `tests/games/gods/test_solids.py` |
+| `solid-draw` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 11,472 hits, 110 fallbacks (all scheduler admission)**; `camera-sprites` (all eight gates) on the tree of all eight recordings: **PASS, 107,519 frames, 718,111 hits, 5,648 fallbacks (5,304 scheduler admission incl. 766 at `00FC8E`, 344 seam deadline)** | `history-verify f0ac19738f19 --candidate solid-draw`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-solid-draw-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16h` |
+| the solid drawer's negative control (a register: the routine's own last write is the unconditional list-head pointer, corrupting it risks an address error in the unrecovered sprite-list flush) diverges at frame 429 | `--candidate solid-draw-mutant-result` | `artifacts/gods/verify-solid-draw-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 566 tests, none skipped | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -96,7 +100,7 @@ entered.
 
 ## What is not recovered
 
-Everything else.  Six routines are recovered: the camera follow step
+Everything else.  Eight routines are recovered: the camera follow step
 (`game/camera.py`, six words); the sprite emitter and its RAM-only sibling
 (`game/sprites.py`: the sprite list at `FFEBF6`–`FFEBFF`, the per-frame
 tile cache at `FFEE98`/`FFEEAA`, the dynamic-tile cursor `FFEE84`, the ROM
@@ -113,7 +117,15 @@ the grid cell lookup (`game/grid.py`: a pure address computation over
 `FFF18C`/`FFF18E` into a work-RAM table (register value `FFFF885E`, i.e.
 `FF885E`, not a ROM address) that `00FDB8` and `010CBC` also index, by
 different transforms -- what the table holds is not known, but it is
-live state, likely a per-level tile/collision grid).  The
+live state, likely a per-level tile/collision grid); the footprint stamp
+(`game/grid.py: stamp_footprint`: a solid's cells set into that same grid
+and queued on the undo list, rows and cells bounded by the definition's own
+height and width bytes); and the solid drawer (`game/solids.py`: the same
+definition's rows x cells grid appended as sprite records into the sprite
+list, the tile index looked up by type id in a work-RAM table pointer
+(`SOLID_TILE_TABLE`) -- a found entry with the tile index's sign bit set
+means the tiles are uploaded fresh by an inline VDP block instead, an arm
+no recording enters).  The
 emitter's remaining siblings (`001256`/`001260`/`00126A`, `001312`) share
 its descriptor layout and list conventions but are not recovered.  There
 is no object-table convention, no semantic map, no native runtime, no
@@ -138,6 +150,7 @@ longest recordings before choosing:
 | `00126A` (`001256`, `001260`) | 412 | 305–307 | from `010248` (the particle drawer's jump table at `0100F2`): the emitter's sibling without the cache — the same seam shape (record composition, inline upload `0012F4`–`001308`, restore); `factcheck facts --park 00126A` does not reach the routine from `boundary-6000.state` within the default step budget.  A full census of `f0ac1973…` alone (15,148 frames) finds **32 retained path classes plus 17 more that overflowed retention** -- far more arms than a bounded leaf; likely the same per-object-type diversity as `00FDB8` below.  Census every recording and look for a bound (a fixed small set of object types, or a size the ROM tables themselves cap) before spending more on this one |
 | `001164` | 1,015 | 9–40 | recovered (`sprites-static`): the emitter's RAM-only sibling, its own descriptor-offset table (`0011E6`) and a fixed tile field instead of a cache (six callers) |
 | `0063FA` | 309 | 9 (constant) | recovered (`grid-cell`): a pure address computation, one path, no branch, no store; three callers (`006468`, `006FFE`, `007282`) |
+| `00FC8E` | 600 | 33–106 | recovered (`solid-draw`): the same definition `00FDB8` reads drawn as sprites, a work-RAM `(type id, tile index)` table scan then a rows x cells grid appended to the sprite list, off-screen cells skipped; the inline VDP upload arm (a negative table entry) declined, unwitnessed on every recording |
 
 Screened over the full `fb408bc75597…` history (`recovery_census.py
 --classifier entry`, not a direct park -- the 600-frame window's tight
@@ -167,11 +180,12 @@ through `010A14`).
 
 Screened and set aside earlier, not first candidates: `013362` (600
 calls, 3–1,047 instructions -- an interpreter or unbounded loop, not a
-leaf), `00052E` (600 calls, 434–9,152 instructions -- likewise), `00FC8E`
-(600 calls, 33–47, the continuation of `00FDB8`'s own caller `00FC08` --
-inherits `00FDB8`'s per-object-type diversity), `00BA8E`/`010CD2` (412
-calls each, 116–268 / 125–277 -- wide range, seam-shaped candidates for
-later, once the object-record convention exists).
+leaf), `00052E` (600 calls, 434–9,152 instructions -- likewise), `00BA8E`/
+`010CD2` (412 calls each, 116–268 / 125–277 -- wide range, seam-shaped
+candidates for later, once the object-record convention exists).
+`00FC8E` was screened aside on the same "inherits `00FDB8`'s per-object-type
+diversity" worry; it did not hold (see the third correction below) and the
+routine is now recovered (`solid-draw`).
 
 Two corrections to that screening, from the supervisor's iteration on
 `00FDB8`: (1) a caller-supplied record is not by itself a reason to defer
@@ -182,25 +196,33 @@ needs a convention is a dispatch through a type byte into unrecovered
 handlers.  (2) Most of the "path classes" above were VBlank landing
 positions, which the tracer now sets aside (`00FDB8`: 16 → 4).  Re-screen
 `00FE08`, `010A14`, `00BCCE`, `00470C`, `010332`, `014084`, `00126A` with
-the current tracer before taking their class counts at face value.
+the current tracer before taking their class counts at face value.  (3)
+`00FC8E`'s own worry ("per-object-type diversity" like `00FDB8`'s pre-fix
+screening) also did not hold once censused with the current tracer: over
+107,519 tree frames the routine only ever takes the positive (tile-table)
+arm, in a small number of rows x cells shapes (1-3 rows, 1-3 cells) bounded
+by the same definition bytes `00FDB8` reads; the negative (inline VDP
+upload) arm is real ROM code but no recording enters it, so it is declined
+like any other unwitnessed arm -- not a platform-tail seam that had to be
+built.  A routine flagged as "per-object-type diversity" from a raw path-class
+count is worth a real census before being set aside a second time.
 
-**The solids** (the subsystem `00FDB8` belongs to): 25 solid objects,
-each a live record at `FF4AAE` (0x18 bytes: world x, y at `+0`/`+2`, an
-active flag at `+4` — negative is empty — a frame index at `+5`, four
-longs from `+6`) with a definition at `FF65A2` (0x1C bytes: a type id at
-`+4`, an index at `+5`, four longs at `+6`, the footprint width and height
-at `+0x1A`/`+0x1B`).  Every game tick `00FBB6` replays the undo list
-(`00FAF4`, 50 entries at `FF4982`), then for each active solid: steps its
-animation (`00FE08`, which calls `00FFF0`), stamps its footprint
-(`00FDB8`), and draws it (`00FC8E`: the sprite records for a width×height
-grid of 32×16 cells, tile index from the table at `FFF2D6` by type id; a
-negative entry means the tiles are uploaded by an inline VDP block from
-`FFEA2C`-relative data — a platform tail from that block's first access
-to the routine's own RTS).  The grid `FF885E` is what `0063FA` (the
-player) and `010CBC` (the movers) consult.  Next bites in this subsystem:
-`00FC8E` (a plain leaf on the positive-entry arm, a platform-tail seam
-on the negative one), `00FE08`/`00FFF0` (the animation step), then the
-whole per-tick pass `00FBB6` as a composition of recovered leaves.
+**The solids** (the subsystem `00FDB8` and `00FC8E` belong to): 25 solid
+objects, each a live record at `FF4AAE` (0x18 bytes: world x, y at
+`+0`/`+2`, an active flag at `+4` — negative is empty — a frame index at
+`+5`, four longs from `+6`) with a definition at `FF65A2` (0x1C bytes: a
+type id at `+4`, an index at `+5`, four longs at `+6`, the footprint width
+and height at `+0x1A`/`+0x1B`).  Every game tick `00FBB6` replays the undo
+list (`00FAF4`, 50 entries at `FF4982`), then for each active solid: steps
+its animation (`00FE08`, which calls `00FFF0`), stamps its footprint
+(`00FDB8`), and draws it (`00FC8E`, recovered as `solid-draw`: the sprite
+records for a width×height grid of 32×16 cells, tile index from the table
+at `FFF2D6` by type id; a negative entry means the tiles are uploaded by an
+inline VDP block from `FFEA2C`-relative data, unwitnessed and declined).
+The grid `FF885E` is what `0063FA` (the player) and `010CBC` (the movers)
+consult.  Next bites in this subsystem: `00FE08`/`00FFF0` (the animation
+step, census both), then the whole per-tick pass `00FBB6` as a composition
+of recovered leaves.
 
 A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback
