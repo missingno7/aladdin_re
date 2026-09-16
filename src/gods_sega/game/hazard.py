@@ -110,6 +110,30 @@ def _spawn(read, cell, row, a3, d0, d1):
     return result
 
 
+def effect_pool_add(read, d0, d1, d2, d3):
+    """00932C: the general form of the pool fill ``_spawn`` inlines with ``d2=d3=0``.
+
+    Scans the same 20-entry pool for a free slot (a word < 0) and, when one
+    exists, fills it with ``(d0+OBJECT_X, d1+OBJECT_Y, d2, d3, 0)`` and
+    advances ``POOL_COUNTER``; an exhausted pool is the ``'full'`` arm
+    (no store).  Called separately from the pickup check ``00BA8E``
+    (``game/pickups.py: pickup_check``) with the caller's own D2/D3.
+    """
+    for index in range(POOL_COUNT):
+        entry = POOL_BASE + POOL_STRIDE * index
+        if _signed_word(read(entry, 2)) < 0:
+            obj_x = (d0 + read(OBJECT_X, 2)) & 0xFFFF
+            obj_y = (d1 + read(OBJECT_Y, 2)) & 0xFFFF
+            counter_before = read(POOL_COUNTER, 2)
+            stores = {entry & 0xFFFFFF: (0, 2), (entry + 2) & 0xFFFFFF: (obj_x, 2),
+                     (entry + 4) & 0xFFFFFF: (obj_y, 2), (entry + 6) & 0xFFFFFF: (d2 & 0xFFFF, 2),
+                     (entry + 8) & 0xFFFFFF: (d3 & 0xFFFF, 2), (entry + 0xA) & 0xFFFFFF: (0, 2),
+                     POOL_COUNTER & 0xFFFFFF: ((counter_before + 1) & 0xFFFF, 2)}
+            return {'arm': 'added', 'index': index, 'slot': entry, 'stores': stores,
+                    'obj_x': obj_x, 'obj_y': obj_y, 'counter_before': counter_before}
+    return {'arm': 'full', 'index': None, 'slot': None, 'stores': {}}
+
+
 def hazard_tick(read, a1, a3, d0, d1):
     """What ``014084`` does for object ``a1``, the secondary record ``a3`` and position ``(d0, d1)``.
 

@@ -35,20 +35,21 @@ productive, and what evidence would justify the native phase.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with nineteen gates armed, the camera follow step `002806`, the
+  original with twenty-two gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
   step `00FE08`, the countdown check `010332`, the collision gate `010A14`,
   the zone check `00BCCE`, the particle drawer's own emitter `00126A`, the
   hazard tick `014084`, the trigger conditions `00470C`, the score
-  conversion `00364C`, the trigger evaluator's non-firing arm `00462C` and
-  the proximity table search-and-add `00F828`/`00F86A` and the pickup
-  award `013264`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
+  conversion `00364C`, the trigger evaluator's non-firing arm `00462C`, the
+  proximity table search-and-add `00F828`/`00F86A`, the pickup award
+  `013264`, the next-random draw `014A3C`, the effect pool add `00932C` and
+  the pickup check `00BA8E`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
-  `particle-emit`, `hazard-tick`, `score-convert`, `evaluator` and
-  `proximity` arm each alone.
+  `particle-emit`, `hazard-tick`, `score-convert`, `evaluator`,
+  `proximity`, `next-random`, `effect-pool-add` and `pickup-check` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -134,7 +135,14 @@ ids, never to `main`:
 | **`013264` pickup award**: the plan reproduces every fact of the original on the 25 retained item and special fixtures over four recordings; the 11 code −4 fixtures decline | `factcheck check` on every fixture | `tests/games/gods/test_pickups.py` |
 | `pickups` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 154 hits, 2 fallbacks**; `camera-sprites` (all nineteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,033,633 hits, 11,631 fallbacks (7,199 scheduler admission, 3,728 seam deadline, 704 declined arms incl. 12 code −4 pickups), 31.0M instructions replaced** | `history-verify f0ac19738f19 --candidate pickups`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-pickups-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16t` |
 | the pickup negative control diverges at the first award | `--candidate pickups-mutant-result` | `artifacts/gods/verify-pickups-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 45 s | 1,360 tests | — |
+| **`014A3C` next-random draw**: a single path (no branch); the plan reproduces every fact on both retained fixtures | `factcheck check` on every fixture | `tests/games/gods/test_pickup_check.py` |
+| `next-random` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 727 hits, 5 fallbacks (all scheduler admission)**; mutant DIVERGENCE at frame 1,340 (a register: the drawn word, not the stored cursor -- the cursor itself can wrap onto an odd address and fault the 68000 on its own next read) | `history-verify f0ac19738f19 --candidate next-random` | `artifacts/gods/verify-next-random-f0ac1973`, `verify-next-random-mutant2` |
+| **`00932C` effect pool add**: the general form `hazard.py`'s own `_spawn` inlines with `d2=d3=0`; the plan reproduces every fact on all 21 retained fixtures (0-19 skips before the found test, and the pool-full arm itself) | `factcheck check` on every fixture | `tests/games/gods/test_pickup_check.py` |
+| `effect-pool-add` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 89 hits, 0 fallbacks**; mutant DIVERGENCE at frame 1,340 | `history-verify f0ac19738f19 --candidate effect-pool-add` | `artifacts/gods/verify-effect-pool-add-f0ac1973`, `verify-effect-pool-add-mutant` |
+| **`00BA8E` pickup check**: a composition over the already-recovered zone check, pickup award, next-random and effect-pool-add; the plan reproduces every fact on 155 retained fixtures over four recordings (the clean arm's own near/far/none/bail sub-arms per axis, the array-append side effect, found-sound, found-effect); found-special, found-message, the award-zero bare exit, either jitter's default-mask branch, the second jitter's negative branch and the pool-full arm within this composition decline as unwitnessed | `factcheck check` on every fixture | `tests/games/gods/test_pickup_check.py` |
+| `pickup-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 4,260 hits, 91 fallbacks (34 scheduler admission, 12 declined −4 continuations across both gates, 15 award-zero, 41 second-jitter-negative)**; `camera-sprites` (all twenty-two gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,041,739 hits, 13,151 fallbacks (7,939 scheduler admission, 3,728 seam deadline, 1,483 declined arms, 1 gate-without-planner foreign-return edge, tree bit-exact)** | `history-verify f0ac19738f19 --candidate pickup-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-pickup-check-f0ac1973b`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16v` |
+| the pickup check's negative control diverges at the first found award | `--candidate pickup-check-mutant-result` | `artifacts/gods/verify-pickup-check-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 55 s | 1,521 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -277,9 +285,11 @@ needs one only when the callee has a direct call site elsewhere too.
 
 Screened and set aside earlier, not first candidates: `013362` (600
 calls, 3–1,047 instructions -- an interpreter or unbounded loop, not a
-leaf), `00052E` (600 calls, 434–9,152 instructions -- likewise), `00BA8E`/
-`010CD2` (412 calls each, 116–268 / 125–277 -- wide range, seam-shaped
-candidates for later, once the object-record convention exists).
+leaf), `00052E` (600 calls, 434–9,152 instructions -- likewise), `010CD2`
+(412 calls, 125–277 instructions -- calls the now-recovered `00BA8E` and
+the unrecovered `0091BC`; still open).  `00BA8E` itself, screened the
+same way (412 calls, 116–268 instructions), is now recovered
+(`pickup-check`).
 `00FC8E` was screened aside on the same "inherits `00FDB8`'s per-object-type
 diversity" worry; it did not hold (see the third correction below) and the
 routine is now recovered (`solid-draw`).
@@ -310,8 +320,14 @@ called from here) on the others, plus a branch on a literal state value
 (`010D7C`: `cmpi.w #$3d,d2`) that smells like a per-state dispatch.
 Confirms the earlier assessment: these need the object-record convention
 (and, for `010D7C`, possibly a dispatch read) before either is a full
-candidate; `00BA8E`'s own clean arm is the next bite once that convention
--- or the time to derive its cost by hand -- exists.
+candidate.  `00BA8E` itself is now recovered (16 Sep, `pickup-check`): the
+"per-type dispatch" the earlier note read at `013264`'s own table was
+resolved the same day (`docs/gods/blockers/2026-09-16-00BA8E.md`
+Resolution) -- a record table, not handlers -- which freed `00BA8E`'s own
+clean and found arms as an ordinary composition (the caller-supplied-record
+rule, not the object-record convention).  `010CD2` remains open: it calls
+`00BA8E` (now recovered) and, further in, the unrecovered `0091BC` on one
+path and a literal-value branch (`010D7C`) on others -- the next bite here.
 
 Two corrections to that screening, from the supervisor's iteration on
 `00FDB8`: (1) a caller-supplied record is not by itself a reason to defer
@@ -395,8 +411,26 @@ slot consumed when the record's byte `+0x49` says so.  Codes −1/−2/−3 are
 special awards; −4 and below (a third of the witnessed hits) continue
 into the routine at `013316` (the grid inverse, a loop over `FF12xx`) and
 are declined until that routine is recovered.  `013264` is recovered
-(`pickups`); the check `00BA8E`'s clean arm, its found arm's other callees
-(`014A3C`, `00932C`) and `013316` are the next bites of this subsystem.
+(`pickups`); the check `00BA8E` is recovered (`pickup-check`,
+`game/pickups.py: pickup_check`): the clean arm (a two-axis box clamp over
+`FFF382`/`FFF384` bounding the grid scan, several near/far/bail sub-arms
+per axis, an array-append side effect into `FFF1E8`/`FFF1E2` common on
+some recordings) and the found arm's own two compositions -- found-sound
+(the box's own D2 residue at or below the award: an immediate cue) and
+found-effect (residue above a nonzero award: two draws from the random
+table `014A3C` jitter a spawn position, then `00932C` adds it to a shared
+20-entry effect pool at `FF090E`, the same pool hazard.py's own `_spawn`
+fills with `d2=d3=0`).  `014A3C` and `00932C` are recovered on their own
+(`next-random`, `effect-pool-add`): both have real callers beyond
+`00BA8E` (`014A3C` 3,971 times / 34,904 frames from many sites; `00932C`
+almost entirely from the hazard tick's own spawn arm, already owned
+inline there).  Declined within the composition: the special-1 pickup's
+own further call (a timer decrement, then an unrecovered routine at
+`011540`), the message/digit-split tail (`FFEF46` set), the award-zero
+bare exit, either jitter draw's own default-mask branch, the second
+draw's own negative branch and the pool-full arm reached from here --
+none witnessed by any of the four censused recordings.  `013316` (the
+continuation for codes −4 and below) is the next bite of this subsystem.
 
 **The triggers** (the subsystem `00470C` belongs to): the level's trigger
 records at `FFB01A` (0x18 bytes each) carry three (kind, argument)

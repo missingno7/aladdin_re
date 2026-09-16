@@ -13,11 +13,13 @@ from dataclasses import dataclass, field
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
-                       EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY,
+                       EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
+                       NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
                        STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
-                       collision_gate_plan, countdown_check_plan, draw_solid_plan, evaluator_plan, footprint_stamp_plan,
-                       condition_plan, grid_cell_plan, hazard_tick_plan, particle_emit_plan, pickup_award_plan, proximity_plan,
+                       collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
+                       footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, next_random_plan,
+                       particle_emit_plan, pickup_award_plan, pickup_check_plan, proximity_plan,
                        score_convert_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan,
                        zone_check_plan)
 
@@ -70,6 +72,9 @@ PLANNERS = {
     'score-convert': {SCORE_CONVERT_ENTRY: score_convert_plan},
     'evaluator': {EVALUATOR_ENTRY: evaluator_plan},
     'proximity': {PROXIMITY_ENTRY: proximity_plan},
+    'next-random': {NEXT_RANDOM_ENTRY: next_random_plan},
+    'effect-pool-add': {EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan},
+    'pickup-check': {PICKUP_CHECK_ENTRY: pickup_check_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -78,7 +83,9 @@ PLANNERS = {
                        COLLISION_GATE_ENTRY: collision_gate_plan, ZONE_CHECK_ENTRY: zone_check_plan,
                        PARTICLE_EMIT_ENTRY: particle_emit_plan, HAZARD_TICK_ENTRY: hazard_tick_plan,
                        CONDITION_ENTRY: condition_plan, SCORE_CONVERT_ENTRY: score_convert_plan,
-                       EVALUATOR_ENTRY: evaluator_plan, PROXIMITY_ENTRY: proximity_plan, PICKUP_AWARD_ENTRY: pickup_award_plan},
+                       EVALUATOR_ENTRY: evaluator_plan, PROXIMITY_ENTRY: proximity_plan, PICKUP_AWARD_ENTRY: pickup_award_plan,
+                       NEXT_RANDOM_ENTRY: next_random_plan, EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan,
+                       PICKUP_CHECK_ENTRY: pickup_check_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -105,7 +112,13 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'hazard-tick-mutant-result': ('hazard-tick', _mutate_result),
              'score-convert-mutant-result': ('score-convert', _mutate_result),
              'evaluator-mutant-outcome': ('evaluator', _mutate_outcome),
-             'proximity-mutant-result': ('proximity', _mutate_result)}
+             'proximity-mutant-result': ('proximity', _mutate_result),
+             # a register (the drawn word), not the stored cursor: the generic "flip the last write"
+             # mutation corrupts the cursor itself, which can wrap onto an odd address and fault the
+             # 68000 on its own next read -- a real crash, not the clean divergence a control needs.
+             'next-random-mutant-result': ('next-random', _mutate_register),
+             'effect-pool-add-mutant-result': ('effect-pool-add', _mutate_result),
+             'pickup-check-mutant-result': ('pickup-check', _mutate_result)}
 
 
 @dataclass

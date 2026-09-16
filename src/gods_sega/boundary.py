@@ -1031,24 +1031,11 @@ def _zone_frame_writes(sp, registers):
                  for pair in _bytes(sp - ZONE_CHECK_FRAME + 4 * index, registers[name], 4))
 
 
-def zone_check_plan(machine, registers):
-    """00BCCE: the box test over the player's own position; every witnessed arm is admitted."""
+def _zone_check_cost(machine, result):
+    """00BCCE's own (cycles, instructions) for one call -- shared with a caller (00BA8E) composing the call."""
     from .game import zones
-    if registers['pc'] != ZONE_CHECK_ENTRY:
-        raise UnsupportedCandidate('zone check planner needs the machine parked at 00BCCE')
-    sp32, sr = registers['a7'], registers['sr']
-    sp = sp32 & 0xFFFFFF
-    result = zones.zone_check(_reader(machine), registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
-                              registers['d2'] & 0xFFFF)
-    arm = result['arm']
-    if arm == 'held':
-        hold_flag = machine.peek_ram(zones.HOLD_FLAG & 0xFFFF, 2)
-        exit_sr = _logic_sr(sr, int.from_bytes(hold_flag, 'big'), 2)
-        return AtomicPlan(cycles=_ZC_HELD_COST[0], instructions=_ZC_HELD_COST[1], writes=(),
-                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
-                          last_pc=ZONE_CHECK_HELD_LAST_PC)
-    frame = ('zone check frame', sp - ZONE_CHECK_FRAME, ZONE_CHECK_FRAME)
-    _spans_disjoint([frame, ('zone check cooldown', zones.COOLDOWN & 0xFFFFFF, 2)])
+    if result['arm'] == 'held':
+        return _ZC_HELD_COST
     cycles, instructions = _ZC_HEAD[0] + _ZC_PUSH[0] + _ZC_CAMERA_SETUP[0], _ZC_HEAD[1] + _ZC_PUSH[1] + _ZC_CAMERA_SETUP[1]
     # The level shape (narrow-low / narrow-high / wide) only needs the level number itself.
     level_value = machine.peek_ram(zones.LEVEL_NUMBER & 0xFFFF, 2)
@@ -1073,10 +1060,56 @@ def zone_check_plan(machine, registers):
         cycles, instructions = cycles + _ZC_BCC_NOT_TAKEN[0], instructions + _ZC_BCC_NOT_TAKEN[1]  # test 4: not taken = fail
     else:
         cycles, instructions = cycles + _ZC_BCC_TAKEN[0], instructions + _ZC_BCC_TAKEN[1]      # test 4: taken = success
+    if result['arm'] == 'outside':
+        cycles, instructions = cycles + _ZC_TAIL_OUTSIDE[0], instructions + _ZC_TAIL_OUTSIDE[1]
+        return cycles, instructions
+    # 'inside'
+    cycles, instructions = cycles + _ZC_INSIDE_HEAD[0], instructions + _ZC_INSIDE_HEAD[1]
+    if result['suppressed']:
+        cycles, instructions = cycles + _ZC_SUPPRESS_TAKEN[0], instructions + _ZC_SUPPRESS_TAKEN[1]
+    else:
+        cycles, instructions = cycles + _ZC_SUPPRESS_NOT_TAKEN[0], instructions + _ZC_SUPPRESS_NOT_TAKEN[1]
+    cycles, instructions = (cycles + _ZC_INSIDE_POP[0] + _ZC_RESULT_TST[0],
+                            instructions + _ZC_INSIDE_POP[1] + _ZC_RESULT_TST[1])
+    if result['result_flag'] != 0:
+        cycles, instructions = cycles + _ZC_RESULT_TAKEN[0], instructions + _ZC_RESULT_TAKEN[1]
+    else:
+        cycles, instructions = cycles + _ZC_RESULT_NOT_TAKEN[0], instructions + _ZC_RESULT_NOT_TAKEN[1]
+    cycles, instructions = cycles + _ZC_RTS[0], instructions + _ZC_RTS[1]
+    return cycles, instructions
+
+
+def _zone_check_exit_x(sr, result):
+    """00BCCE's own exit X bit for the 'inside' arm -- shared with a caller composing the call, since
+    nothing in the caller's own code between the call and its next flag-setter touches X either."""
+    if result['suppressed']:
+        return _add_sr(sr, result['shifted'], 5, 2) & 0x10
+    return _sub_sr(sr, result['cooldown_before'], result['scale'], 2) & 0x10
+
+
+def zone_check_plan(machine, registers):
+    """00BCCE: the box test over the player's own position; every witnessed arm is admitted."""
+    from .game import zones
+    if registers['pc'] != ZONE_CHECK_ENTRY:
+        raise UnsupportedCandidate('zone check planner needs the machine parked at 00BCCE')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    result = zones.zone_check(_reader(machine), registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                              registers['d2'] & 0xFFFF)
+    arm = result['arm']
+    if arm == 'held':
+        hold_flag = machine.peek_ram(zones.HOLD_FLAG & 0xFFFF, 2)
+        exit_sr = _logic_sr(sr, int.from_bytes(hold_flag, 'big'), 2)
+        cycles, instructions = _zone_check_cost(machine, result)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=ZONE_CHECK_HELD_LAST_PC)
+    frame = ('zone check frame', sp - ZONE_CHECK_FRAME, ZONE_CHECK_FRAME)
+    _spans_disjoint([frame, ('zone check cooldown', zones.COOLDOWN & 0xFFFFFF, 2)])
+    cycles, instructions = _zone_check_cost(machine, result)
     x_left, x_right = result['x_operands']
     x_bit = _add_sr(sr, x_left, x_right, 2) & 0x10
     if arm == 'outside':
-        cycles, instructions = cycles + _ZC_TAIL_OUTSIDE[0], instructions + _ZC_TAIL_OUTSIDE[1]
         left, right = result['test_operands']
         exit_sr = (_cmp_sr(sr, left, right, 2) & ~0x10) | x_bit
         writes = _zone_frame_writes(sp, registers)
@@ -1084,25 +1117,14 @@ def zone_check_plan(machine, registers):
                           registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
                           last_pc=ZONE_CHECK_HELD_LAST_PC)
     # 'inside'
-    cycles, instructions = cycles + _ZC_INSIDE_HEAD[0], instructions + _ZC_INSIDE_HEAD[1]
-    if result['suppressed']:
-        cycles, instructions = cycles + _ZC_SUPPRESS_TAKEN[0], instructions + _ZC_SUPPRESS_TAKEN[1]
-        x_bit = _add_sr(sr, result['shifted'], 5, 2) & 0x10
-    else:
-        cycles, instructions = cycles + _ZC_SUPPRESS_NOT_TAKEN[0], instructions + _ZC_SUPPRESS_NOT_TAKEN[1]
-        x_bit = _sub_sr(sr, result['cooldown_before'], result['scale'], 2) & 0x10
-    cycles, instructions = cycles + _ZC_INSIDE_POP[0] + _ZC_RESULT_TST[0], instructions + _ZC_INSIDE_POP[1] + _ZC_RESULT_TST[1]
-    result_flag = machine.peek_ram(zones.RESULT_FLAG & 0xFFFF, 2)
-    result_flag = int.from_bytes(result_flag, 'big')
+    x_bit = _zone_check_exit_x(sr, result)
+    result_flag = result['result_flag']
     exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
     if result_flag != 0:
-        cycles, instructions = cycles + _ZC_RESULT_TAKEN[0], instructions + _ZC_RESULT_TAKEN[1]
         exit_sr = (_logic_sr(sr, result_flag, 2) & ~0x10) | x_bit
     else:
-        cycles, instructions = cycles + _ZC_RESULT_NOT_TAKEN[0], instructions + _ZC_RESULT_NOT_TAKEN[1]
         exit_registers['d2'] = 0xFFFFFFFF
         exit_sr = (0x08 & ~0x10) | x_bit          # moveq #$ff,d2: N=1, Z=V=C=0
-    cycles, instructions = cycles + _ZC_RTS[0], instructions + _ZC_RTS[1]
     exit_registers['sr'] = exit_sr
     writes = (_zone_frame_writes(sp, registers)
               + tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size)))
@@ -1803,3 +1825,576 @@ def pickup_award_plan(machine, registers):
     writes = _bytes(sp - 4, registers['a1'], 4) + writes
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
                       last_pc=_PA_LAST_PC[arm])
+
+
+# --- 014A3C: the next-random draw (game/effects.py: next_random) ------------
+#
+# A trivial RAM-only leaf, no branch: called 3,971 times / 34,904 frames from
+# many sites (only two of them the pickup check's own found-effect
+# composition, game/pickups.py: pickup_check).  Cost from the tracer
+# (artifacts/gods/evidence/census-014A3C): fixed, since there is no branch.
+NEXT_RANDOM_ENTRY, NEXT_RANDOM_LAST_PC = 0x014A3C, 0x014A56
+_NR_COST = (110, 8)
+
+
+def next_random_plan(machine, registers):
+    """014A3C: draw one word from the wrapping random table and advance the cursor."""
+    from .game import effects
+    if registers['pc'] != NEXT_RANDOM_ENTRY:
+        raise UnsupportedCandidate('next random planner needs the machine parked at 014A3C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    result = effects.next_random(_reader(machine))
+    new_cursor = result['stores'][effects.RANDOM_CURSOR & 0xFFFFFF][0]
+    writes = _bytes(sp - 4, registers['a0'], 4)
+    writes += tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # andi.w #$1ff,RANDOM_CURSOR is the last flag-setter: the cursor's own new value, not the drawn word.
+    return AtomicPlan(cycles=_NR_COST[0], instructions=_NR_COST[1], writes=writes,
+                      registers={'d0': (registers['d0'] & 0xFFFF0000) | result['value'], 'a0': registers['a0'],
+                                 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+                                 'sr': _logic_sr(sr, new_cursor, 2)},
+                      last_pc=NEXT_RANDOM_LAST_PC)
+
+
+# --- 00932C: the effect pool add (game/hazard.py: effect_pool_add) ----------
+#
+# The general form of the pool fill hazard.py's own '_spawn' inlines with
+# d2=d3=0; called 452 times / 34,904 frames over this history, almost all
+# from the hazard tick's own spawn arm (013F3A's own bsr, already owned
+# inline by hazard_tick_plan) and twice from the pickup check's own
+# found-effect composition (00BA8E, game/pickups.py: pickup_check).  Cost
+# from the tracer (artifacts/gods/evidence/census-00932C), per fragment:
+# the scan is bounded by the pool's own 20 slots (the same shape 0018C8's
+# cache scan and 00F828's table search share), and the pool-full arm (all
+# 20 occupied) is itself witnessed (46/452 occurrences).
+EFFECT_POOL_ADD_ENTRY, EFFECT_POOL_ADD_LAST_PC = 0x00932C, 0x009368
+EFFECT_POOL_ADD_FULL_LAST_PC = 0x009348   # the pool-full arm has its own separate tail/rts, not shared
+_EP_HEAD = (56, 3)                      # movem.l d0-d1/d4/a0,-(a7); lea.l POOL_BASE,a0; moveq #$13,d4
+_EP_SKIP = (34, 4)                      # tst.w (a0); bmi.b not taken; lea.l $c(a0),a0; dbra taken
+_EP_SKIP_LAST = (38, 4)                 # ... dbra not taken (expired): DBcc's own 14cy, not 10
+_EP_FOUND_TEST = (18, 2)                # tst.w (a0); bmi.b taken
+_EP_FILL = (96, 9)                      # clr.w; add.w x2; move.w x4; move.w #0; addq.w #1,POOL_COUNTER
+_EP_TAIL = (60, 2)                      # movem.l (a7)+,d0-d1/d4/a0; rts
+
+
+def effect_pool_add_plan(machine, registers):
+    """00932C: fill the first free slot of the 20-entry effect pool; the pool-full arm is witnessed too."""
+    from .game import hazard
+    if registers['pc'] != EFFECT_POOL_ADD_ENTRY:
+        raise UnsupportedCandidate('effect pool add planner needs the machine parked at 00932C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    result = hazard.effect_pool_add(read, registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                                    registers['d2'] & 0xFFFF, registers['d3'] & 0xFFFF)
+    frame = ('effect pool frame', sp - 16, 16)
+    _ram_span(*frame)
+    # d0/d1/d4/a0 are pushed then popped from this same frame, unconditionally: pure scratch.
+    writes = (_bytes(sp - 16, registers['d0'], 4) + _bytes(sp - 12, registers['d1'], 4)
+             + _bytes(sp - 8, registers['d4'], 4) + _bytes(sp - 4, registers['a0'], 4))
+    exit_registers = {'d0': registers['d0'], 'd1': registers['d1'], 'd4': registers['d4'], 'a0': registers['a0'],
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    if result['arm'] == 'full':
+        last_index = hazard.POOL_COUNT - 1
+        cycles, instructions = _add(_EP_HEAD, *([_EP_SKIP] * last_index), _EP_SKIP_LAST, _EP_TAIL)
+        # The dbra chain sets no flags at all: the last flag-setter is the final slot's own tst.w.
+        last_value = read(hazard.POOL_BASE + hazard.POOL_STRIDE * last_index, 2)
+        exit_registers['sr'] = _logic_sr(sr, last_value, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=EFFECT_POOL_ADD_FULL_LAST_PC)
+    index = result['index']
+    _spans_disjoint([frame, ('effect pool slot', result['slot'] & 0xFFFFFF, hazard.POOL_STRIDE)])
+    cycles, instructions = _add(_EP_HEAD, *([_EP_SKIP] * index), _EP_FOUND_TEST, _EP_FILL, _EP_TAIL)
+    exit_registers['sr'] = _add_sr(sr, result['counter_before'], 1, 2)
+    writes += tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=EFFECT_POOL_ADD_LAST_PC)
+
+
+# --- 00BA8E: the pickup check (game/pickups.py: pickup_check) ---------------
+#
+# A composition: the already-recovered zone check (00BCCE) owned as a call
+# (the shape 00462C's evaluator proved), then a two-axis box clamp bounding
+# a scan of the pickup grid (the same "unrolled test count" shape 00FDB8's
+# row scan and 0018C8's cache scan share), and on a hit the already-recovered
+# pickup award (013264) owned as a call, then -- when the box's own residue
+# exceeds a nonzero award -- an effect queued through two calls to the
+# already-recovered random draw (014A3C) and one to the already-recovered
+# effect pool add (00932C).  Cost fragments from the tracer
+# (artifacts/gods/evidence/census-00BA8E-fresh), byte/word-branch timing
+# confirmed on real fixtures throughout (68000 Bcc.b: taken 10, not taken 8;
+# Bcc.w: taken 10, not taken 12; DBcc: taken 10, expired 14).
+PICKUP_CHECK_ENTRY = 0x00BA8E
+PICKUP_CHECK_ZONE_CUE_LAST_PC = 0x00BAE2      # the sound-off arm's own rts
+PICKUP_CHECK_ZONE_CUE_SOUND_ON_LAST_PC = 0x00BADA   # the sound-on arm has its OWN separate rts
+PICKUP_CHECK_CLEAN_LAST_PC = 0x00BBCA
+PICKUP_CHECK_SOUND_LAST_PC = 0x00BC42
+PICKUP_CHECK_EFFECT_LAST_PC = 0x00BCCC
+
+_PK_ZONE_CALL = (18, 1)                 # bsr.w $bcce (00BCCE's own cost is added separately, via _zone_check_cost)
+_PK_TST_D2 = (4, 1)                     # tst.w d2
+_PK_BMI_D2_TAKEN, _PK_BMI_D2_NOTTAKEN = (10, 1), (8, 1)      # bmi.b $bace
+
+_PK_CUE_TST = (12, 1)                   # tst.w CHECK_SOUND_ON
+_PK_CUE_BEQ_TAKEN, _PK_CUE_BEQ_NOTTAKEN = (10, 1), (8, 1)    # beq.b (sound-off arm taken)
+_PK_CUE_STORE = (16, 1)                 # move.w #imm,CHECK_SOUND_CUE
+_PK_CUE_RTS = (16, 1)
+_PK_CUE_BRA = (10, 1)                   # bra.b $bc38 (the sound-on arm's own skip past the sound-off store)
+_PK_CUE_MOVEQ = (4, 1)                  # moveq #$ff,d2 (found-sound's own tail; N=1, but never touches X)
+
+_PK_BOX_COPY = (28, 1)                  # move.l HALF_WIDTH,BOX_COPY_X (both words at once)
+_PK_PUSH_FRAME = (72, 1)                # movem.l d0-d7,-(a7)
+_PK_ROUND_BOTH = (48, 6)                # sub/addq/andi for both d0 and d1, interleaved
+
+_AC_TEST = (8, 1)                       # cmpi.w #$fff0,Dn
+_AC_BGT_TAKEN, _AC_BGT_NOTTAKEN = (10, 1), (8, 1)            # bgt.b (byte: near test)
+_AC_NEAR_HEAD = (24, 2)                 # addi.w #$10,Dn; add.w Dn,size
+_AC_NEAR_TAIL = (14, 2)                 # moveq #$f0,Dn; bra.b (continuing only)
+_AC_FAR_HEAD = (24, 3)                  # move.w size,d4; add.w Dn,d4; cmpi.w #imm,(d4 or Dn)
+_AC_FAR_BLT_TAKEN, _AC_FAR_BLT_NOTTAKEN = (10, 1), (8, 1)    # blt.b (byte: in-range arm taken)
+_AC_FARCLAMP_HEAD = (24, 2)             # subi.w #imm,d4; sub.w d4,size
+_AC_BMI_TAKEN, _AC_BMI_NOTTAKEN = (10, 1), (12, 1)           # bmi.w $bbc6 (word: far target)
+_AC_BEQ_TAKEN, _AC_BEQ_NOTTAKEN = (10, 1), (12, 1)           # beq.w $bbc6
+
+_PK_BAIL_TAIL = (76 + 16, 2)            # movem.l (a7)+,d0-d7; rts (no a0-a2 frame: the scan was never entered)
+
+_PK_APPEND_TST = (12, 1)                # tst.w ARRAY_GATE
+_PK_APPEND_SKIP = (10, 1)               # bmi.b taken (append skipped)
+_PK_APPEND_NOTTAKEN = (8, 1)            # bmi.b not taken (appending)
+_PK_APPEND_MOVEA = (16, 1)              # movea.l ARRAY_CURSOR,a4
+_PK_APPEND_MOVE_W = (24, 3)             # move.w Dn,(a4)+ x3 (d0, d1, d2): 8cy each
+_PK_APPEND_ADDQ_L = (24, 1)             # addq.l #6,ARRAY_CURSOR
+_PK_APPEND_ADDQ_W = (16, 1)             # addq.w #1,ARRAY_COUNT
+
+_PK_SCAN_PUSH = (32, 1)                 # movem.l a0-a2,-(a7)
+_PK_SCAN_BASE = (8 + 8 + 12 + 8 + 8 + 4 + 8 + 4 + 8, 9)      # lea a2; lea a0; asr d0; adda d0; andi d1; add d1,d1;
+                                                              # adda d1; add d1,d1; adda d1
+_PK_SCAN_ROWS_HEAD = (12 + 12 + 4, 3)   # move.w size_y,d7; asr.w #3,d7; subq.w #1,d7
+_PK_SCAN_BPL_TAKEN, _PK_SCAN_BPL_NOTTAKEN = (10, 1), (8, 1)  # bpl.b (byte)
+_PK_SCAN_ROWS_FORCE = (4, 1)            # moveq #0,d7 (only when forced)
+_PK_SCAN_COLS_HEAD = (12 + 12 + 4, 3)   # move.w size_x,d6; asr.w #3,d6; subq.w #1,d6
+_PK_SCAN_BMI_TAKEN, _PK_SCAN_BMI_NOTTAKEN = (10, 1), (8, 1)  # bmi.b (byte)
+_PK_SCAN_BNE_TAKEN, _PK_SCAN_BNE_NOTTAKEN = (10, 1), (8, 1)  # bne.b (byte)
+_PK_SCAN_COLS_FORCE = (4, 1)            # moveq #1,d6 (only when forced)
+_PK_SCAN_TABLE = (8 + 4 + 4 + 4 + 4 + 8, 6)   # lea a1; moveq #$30,d5; sub d6,d5; add d6,d6 x2; suba d6,a1
+
+_PK_ROW_JMP = (8, 1)                    # jmp (a1)
+_PK_TEST_NOTFOUND = (16, 2)             # tst.b (a0)+; bne.b not taken
+_PK_TEST_FOUND = (18, 2)                # tst.b (a0)+; bne.b taken
+_PK_ROW_ADVANCE = (8, 1)                # adda.w d5,a0
+_PK_DBRA_TAKEN, _PK_DBRA_LAST = (10, 1), (14, 1)
+
+_PK_EXHAUSTED_TAIL = (36 + 76 + 16, 3)  # movem.l (a7)+,a0-a2; movem.l (a7)+,d0-d7; rts
+
+_PK_PUSH_D2 = (12, 1)                   # move.l d2,-(a7)
+_PK_JSR_AWARD = (20, 1)                 # jsr $13264.l (013264's own cost added separately, via _pickup_award_cost)
+_PK_POP_D2 = (12, 1)                    # move.l (a7)+,d2
+_PK_READ_AWARD = (12, 1)                # move.w AWARD,d3
+_PK_TST_D4 = (4, 1)                     # tst.w d4
+_PK_BEQ_D4_TAKEN = (10, 1)              # beq.b (d4==0, the only witnessed continuation)
+_PK_TST_EF46 = (12, 1)                  # tst.w MESSAGE_FLAG
+_PK_BEQ_EF46_TAKEN = (10, 1)            # beq.b (ef46==0, the only witnessed continuation)
+_PK_SUB_D3_D2 = (4, 1)                  # sub.w d3,d2
+_PK_BMI_RESULT_TAKEN, _PK_BMI_RESULT_NOTTAKEN = (10, 1), (8, 1)     # bmi.b $bc24
+_PK_BNE_RESULT_TAKEN, _PK_BNE_RESULT_NOTTAKEN = (10, 1), (8, 1)     # bne.b $bc4e
+_PK_STORE_F3D4 = (12, 1)                # move.w d2,RESULT_WORD
+_PK_TST_D3 = (4, 1)                     # tst.w d3
+_PK_BEQ_D3_NOTTAKEN = (8, 1)            # beq.b not taken (d3!=0, the effect chain)
+
+_PK_EFFECT_RESTORE_A0A2 = (36, 1)       # movem.l (a7)+,a0-a2
+_PK_EFFECT_PEEK_D2D3 = (28, 1)          # movem.l (a7),d2-d3 (peek, not pop)
+_PK_EFFECT_HALF = (12 + 8 + 4, 3)       # move.w size,d4; asr.w #1,d4; add.w d4,Dn
+_PK_EFFECT_MASK = (8, 1)                # andi.w #$fff0,d4
+_PK_EFFECT_MASK_BNE = (10, 1)           # bne.b taken (the only witnessed arm: the default-mask branch declines)
+_PK_EFFECT_MASK_SUBQ = (4, 1)           # subq.w #1,d4
+_PK_JSR_RANDOM = (20, 1)                # jsr $14a3c.l (014A3C's own cost added separately, via _NR_COST)
+_PK_TST_DRAW = (4, 1)                   # tst.w d0
+_PK_BMI_DRAW_TAKEN, _PK_BMI_DRAW_NOTTAKEN = (10, 1), (8, 1)  # bmi.b
+_PK_DRAW_AND = (4, 1)                   # and.w d4,d0
+_PK_DRAW_ADD = (4, 1)                   # add.w d0,Dn (positive arm)
+_PK_DRAW_SUB = (4, 1)                   # sub.w d0,Dn (negative arm)
+_PK_DRAW_BRA = (10, 1)                  # bra.b (positive arm only, skipping the negative arm's own code)
+_PK_EFFECT_TAIL = (4 + 4 + 4 + 4 + 4 + 4 + 12 + 12, 8)       # subq d2 x2; move d2,d0; move d3,d1; clr d2; clr d3;
+                                                              # sub F3EE,d0; sub F3F0,d1
+_PK_JSR_POOL = (20, 1)                  # jsr $932c.l (00932C's own cost added separately, via _effect_pool_add_cost)
+_PK_EFFECT_RESTORE_D0D7 = (76, 1)       # movem.l (a7)+,d0-d7
+_PK_LOAD_D2 = (12, 1)                   # move.w RESULT_WORD,d2
+_PK_RTS = (16, 1)
+
+
+def _pk_axis_cost(clamp):
+    """One axis's own (cycles, instructions), the cost twin of pickups._axis_clamp."""
+    cycles, instructions = _add(_AC_TEST)
+    if clamp['arm'] == 'near':
+        c, i = _add(_AC_BGT_NOTTAKEN, _AC_NEAR_HEAD)
+        cycles += c
+        instructions += i
+        if clamp['bail']:
+            c, i = _AC_BMI_TAKEN if clamp['new_size'] & 0x8000 else _add(_AC_BMI_NOTTAKEN, _AC_BEQ_TAKEN)
+            return cycles + c, instructions + i
+        c, i = _add(_AC_BMI_NOTTAKEN, _AC_BEQ_NOTTAKEN, _AC_NEAR_TAIL)
+        return cycles + c, instructions + i
+    c, i = _add(_AC_BGT_TAKEN, _AC_FAR_HEAD)
+    cycles += c
+    instructions += i
+    if clamp['arm'] == 'none':
+        c, i = _AC_FAR_BLT_TAKEN
+        return cycles + c, instructions + i
+    c, i = _add(_AC_FAR_BLT_NOTTAKEN, _AC_FARCLAMP_HEAD)
+    cycles += c
+    instructions += i
+    if clamp['bail']:
+        c, i = _AC_BMI_TAKEN if clamp['new_size'] & 0x8000 else _add(_AC_BMI_NOTTAKEN, _AC_BEQ_TAKEN)
+        return cycles + c, instructions + i
+    c, i = _add(_AC_BMI_NOTTAKEN, _AC_BEQ_NOTTAKEN)
+    return cycles + c, instructions + i
+
+
+def _pk_scan_setup_cost(rows_shifted, cols_shifted):
+    cycles, instructions = _add(_PK_SCAN_PUSH, _PK_SCAN_BASE, _PK_SCAN_ROWS_HEAD)
+    rows_after_subq = rows_shifted - 1
+    if rows_after_subq >= 0:
+        c, i = _PK_SCAN_BPL_TAKEN
+    else:
+        c, i = _add(_PK_SCAN_BPL_NOTTAKEN, _PK_SCAN_ROWS_FORCE)
+    cycles += c
+    instructions += i
+    c, i = _PK_SCAN_COLS_HEAD
+    cycles += c
+    instructions += i
+    cols_after_subq = cols_shifted - 1
+    if cols_after_subq < 0:
+        c, i = _add(_PK_SCAN_BMI_TAKEN, _PK_SCAN_COLS_FORCE)
+    elif cols_after_subq == 0:
+        c, i = _add(_PK_SCAN_BMI_NOTTAKEN, _PK_SCAN_BNE_NOTTAKEN, _PK_SCAN_COLS_FORCE)
+    else:
+        c, i = _add(_PK_SCAN_BMI_NOTTAKEN, _PK_SCAN_BNE_TAKEN)
+    cycles += c
+    instructions += i
+    c, i = _PK_SCAN_TABLE
+    return cycles + c, instructions + i
+
+
+def _pk_scan_walk_cost(rows, cols, scan):
+    cycles, instructions = 0, 0
+    complete_rows = scan['row'] if scan['found'] else rows
+    for row in range(complete_rows):
+        c, i = _PK_ROW_JMP
+        cycles += c
+        instructions += i
+        c, i = _add(*([_PK_TEST_NOTFOUND] * cols))
+        cycles += c
+        instructions += i
+        c, i = _PK_ROW_ADVANCE
+        cycles += c
+        instructions += i
+        c, i = _PK_DBRA_TAKEN if row < rows - 1 else _PK_DBRA_LAST
+        cycles += c
+        instructions += i
+    if scan['found']:
+        c, i = _PK_ROW_JMP
+        cycles += c
+        instructions += i
+        c, i = _add(*([_PK_TEST_NOTFOUND] * scan['col']), _PK_TEST_FOUND)
+        cycles += c
+        instructions += i
+    return cycles, instructions
+
+
+def _pickup_award_cost(read, collected):
+    if collected['arm'] == 'item':
+        return _add(_PA_HEAD, _PA_GROUP[collected['group']], _PA_COMMON, _PA_BONUS[collected['bonus']],
+                   _PA_CUE[collected['cue']], _PA_CONSUME[collected['consumed']], _PA_TAIL)
+    if collected['arm'] == 'unrecovered':
+        # code -4 and below: the caller must decline before ever reaching here.
+        raise UnsupportedCandidate(f"pickup award code {collected['code']} is not recovered")
+    from .game import pickups
+    sound_on = bool(read(pickups.SOUND_ON, 2))
+    if collected['arm'] == 'special-2' and sound_on:
+        return _PA_SPECIAL_SOUND_ON
+    return _PA_SPECIAL[collected['code']]
+
+
+def _effect_pool_add_cost(added):
+    from .game import hazard
+    if added['arm'] == 'full':
+        last_index = hazard.POOL_COUNT - 1
+        return _add(_EP_HEAD, *([_EP_SKIP] * last_index), _EP_SKIP_LAST, _EP_TAIL)
+    return _add(_EP_HEAD, *([_EP_SKIP] * added['index']), _EP_FOUND_TEST, _EP_FILL, _EP_TAIL)
+
+
+def _pk_push(order, sp_top, values, size=4):
+    """Write a movem-style push of ``values`` (a list of ints, one per pushed register) below
+    ``sp_top``: the FIRST value lands at the lowest address of the frame (movem's own
+    register-ascending order for ``-(An)``), matching ``_zone_frame_writes``'s convention.
+    Last-write-wins per byte (later pushes at the same stack depth overwrite earlier ones, exactly
+    as real memory ends this activation)."""
+    span = size * len(values)
+    for index, value in enumerate(values):
+        for address, byte in _bytes(sp_top - span + size * index, value, size):
+            order[address] = byte
+
+
+def pickup_check_plan(machine, registers):
+    """00BA8E: the pickup check; a composition over the already-recovered zone check, award, random draw and pool add.
+
+    Every internal call (00BCCE, 013264, 014A3C x2, 00932C) pushes its own transient frame on the
+    SAME stack the caller is using; later pushes at a stack depth a later call also uses overwrite
+    the earlier one's bytes for good (nothing pops the ORIGINAL value back in) -- ``order`` accumulates
+    every write in execution order so the last one at each address wins, matching the machine exactly.
+    """
+    from .game import pickups
+    if registers['pc'] != PICKUP_CHECK_ENTRY:
+        raise UnsupportedCandidate('pickup check planner needs the machine parked at 00BA8E')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    result = pickups.pickup_check(read, registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF, registers['d2'] & 0xFFFF)
+    arm = result['arm']
+    zone_cost = _zone_check_cost(machine, result['zone'])
+    cycles, instructions = _add(_PK_ZONE_CALL, zone_cost, _PK_TST_D2)
+    order = {}
+    for address, (value, size) in result['stores'].items():
+        for a, b in _bytes(address, value, size):
+            order[a] = b
+    _ram_span('pickup check bsr return slot', sp - 4, 4)
+    _pk_push(order, sp, [0x00BA92])
+    _AXES = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7')
+    if result['zone']['arm'] != 'held':
+        _ram_span('zone check frame (inside the composition)', sp - 4 - 32, 32)
+        _pk_push(order, sp - 4, [registers[name] for name in _AXES])
+
+    if arm == 'zone-cue':
+        c, i = _add(_PK_BMI_D2_TAKEN, _PK_CUE_TST)
+        cycles += c
+        instructions += i
+        sound_on = read(pickups.CHECK_SOUND_ON, 2) != 0
+        cue_value = pickups.ZONE_CUE_SOUND_ON if sound_on else pickups.ZONE_CUE_SOUND_OFF
+        c, i = _PK_CUE_BEQ_NOTTAKEN if sound_on else _PK_CUE_BEQ_TAKEN
+        cycles += c
+        instructions += i
+        c, i = _add(_PK_CUE_STORE, _PK_CUE_RTS)
+        cycles += c
+        instructions += i
+        # D2 is already -1 here (zone_check's own moveq set it); the last flag-setter in THIS routine's
+        # own code is move.w #imm,CHECK_SOUND_CUE (a positive constant: N=Z=V=C=0); X survives from
+        # 00BCCE's own exit (nothing between the call and here touches it).
+        x_bit = _zone_check_exit_x(sr, result['zone'])
+        exit_sr = (_logic_sr(sr, cue_value, 2) & ~0x10) | x_bit
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers={'d2': 0xFFFFFFFF, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                                     'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=(PICKUP_CHECK_ZONE_CUE_SOUND_ON_LAST_PC if sound_on
+                                   else PICKUP_CHECK_ZONE_CUE_LAST_PC))
+
+    c, i = _add(_PK_BMI_D2_NOTTAKEN, _PK_BOX_COPY, _PK_PUSH_FRAME, _PK_ROUND_BOTH)
+    cycles += c
+    instructions += i
+    y_cost = _pk_axis_cost(result['y_clamp'])
+    cycles += y_cost[0]
+    instructions += y_cost[1]
+    _ram_span('pickup check frame', sp - 32, 32)
+    _pk_push(order, sp, [registers[name] for name in _AXES])
+
+    if result['y_clamp']['bail']:
+        c, i = _PK_BAIL_TAIL
+        cycles += c
+        instructions += i
+        clamp = result['y_clamp']
+        exit_sr = (_add_sr if clamp['op'] == 'add' else _sub_sr)(sr, clamp['left'], clamp['right'], 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=PICKUP_CHECK_CLEAN_LAST_PC)
+
+    # X's own clamp code (00BB00 onward) is only reached when Y did not bail.
+    x_cost = _pk_axis_cost(result['x_clamp'])
+    cycles += x_cost[0]
+    instructions += x_cost[1]
+
+    if result['x_clamp']['bail']:
+        c, i = _PK_BAIL_TAIL
+        cycles += c
+        instructions += i
+        clamp = result['x_clamp']
+        exit_sr = (_add_sr if clamp['op'] == 'add' else _sub_sr)(sr, clamp['left'], clamp['right'], 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=PICKUP_CHECK_CLEAN_LAST_PC)
+
+    if result['appended']:
+        c, i = _add(_PK_APPEND_TST, _PK_APPEND_NOTTAKEN, _PK_APPEND_MOVEA, _PK_APPEND_MOVE_W,
+                   _PK_APPEND_ADDQ_L, _PK_APPEND_ADDQ_W)
+        # a4 is never touched again after this (the a0-a2 restores below don't include it).
+        a4_exit = {'a4': (result['array_cursor'] + 6) & 0xFFFFFFFF}
+    else:
+        c, i = _add(_PK_APPEND_TST, _PK_APPEND_SKIP)
+        a4_exit = {}
+    cycles += c
+    instructions += i
+
+    # From here on (BB4E) the routine also pushes a0-a2 in their own 12-byte frame, just below the
+    # d0-d7 frame; they are pure scratch too, restored (via movem pop) on every arm reached from here.
+    _ram_span('pickup check scan frame', sp - 44, 12)
+    _pk_push(order, sp - 32, [registers['a0'], registers['a1'], registers['a2']])
+
+    c, i = _pk_scan_setup_cost(result['rows_shifted'], result['cols_shifted'])
+    cycles += c
+    instructions += i
+    c, i = _pk_scan_walk_cost(result['rows'], result['cols'], result['scan'])
+    cycles += c
+    instructions += i
+
+    # The scan table setup's own last flag-setter is "add.w d6,d6" (the second doubling, always run):
+    # N/Z/V/C from that alone; X follows the same instruction (ADD sets X=C), so it flows unchanged
+    # through every tst.b/bne/adda/dbra of the walk itself (none of which touch X).
+    scan_x_bit = _add_sr(sr, result['cols'], result['cols'], 2) & 0x10
+
+    if not result['scan']['found']:
+        c, i = _PK_EXHAUSTED_TAIL
+        cycles += c
+        instructions += i
+        last_value = result['scan']['last_value'] or 0
+        exit_sr = (_logic_sr(sr, last_value, 1) & ~0x10) | scan_x_bit
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr,
+                                     **a4_exit},
+                          last_pc=PICKUP_CHECK_CLEAN_LAST_PC)
+
+    if arm in ('found-special', 'found-message'):
+        raise UnsupportedCandidate(f'pickup check {arm} arm not witnessed by a recording')
+
+    collect_result = result['collect']
+    if collect_result['arm'] == 'unrecovered':
+        # A grid code of -4 or below: 013264 itself declines this (the continuation into 013316,
+        # not yet recovered), so the composition must decline it too rather than fall through.
+        raise UnsupportedCandidate(f"pickup check found a code {collect_result['code']} 013264 declines")
+    c, i = _add(_PK_PUSH_D2, _PK_JSR_AWARD, _pickup_award_cost(read, collect_result), _PK_POP_D2, _PK_READ_AWARD,
+               _PK_TST_D4, _PK_BEQ_D4_TAKEN, _PK_TST_EF46, _PK_BEQ_EF46_TAKEN, _PK_SUB_D3_D2)
+    cycles += c
+    instructions += i
+    # a1 at this point is the SCAN's own jump-table entry address (set at 00BB84-00BB90), not the
+    # caller's original a1: the scan overwrote it, and nothing restores it before this push.
+    scan_a1 = (0x00BBBC - 4 * result['cols']) & 0xFFFFFFFF
+    _ram_span('pickup check award call frame', sp - 56, 12)
+    _pk_push(order, sp - 44, [registers['d2']])          # move.l d2,-(a7)
+    _pk_push(order, sp - 48, [0x00BBD4])                 # jsr $13264.l's own return address
+    _pk_push(order, sp - 52, [scan_a1])                  # 013264's own move.l a1,-(a7)
+    # collect_result['stores'] is NOT re-applied here: result['stores'] (seeded into order at the top
+    # of this function) already carries it, merged by pickup_check() in the ROM's own order -- 013264's
+    # own award cue (SOUND_CUE=0x38) first, then this routine's own cue store (0x3C/0x4F) overwriting
+    # it on the found-sound arm.  Re-applying it here would undo that overwrite (the bug the tree
+    # divergence at fb408bc75597 frame 6840 traced to: FFFDF5 left 0x38 instead of 0x3C).
+
+    if arm == 'found-sound':
+        box_result = result['box_result']
+        if pickups._signed_word(box_result) < 0:
+            c, i = _add(_PK_BMI_RESULT_TAKEN, _PK_CUE_TST)
+        else:
+            c, i = _add(_PK_BMI_RESULT_NOTTAKEN, _PK_BNE_RESULT_NOTTAKEN, _PK_CUE_TST)
+        cycles += c
+        instructions += i
+        sound_on = read(pickups.CHECK_SOUND_ON, 2) != 0
+        c, i = _PK_CUE_BEQ_NOTTAKEN if sound_on else _PK_CUE_BEQ_TAKEN
+        cycles += c
+        instructions += i
+        # The sound-on arm has its own bra.b $bc38 after the store (the sound-off arm falls straight
+        # through instead); then 00BC38/BC3C: two movem restores (a0-a2, then d0-d7, neither touching
+        # CCR) and the tail's own moveq #$ff,d2 (N=1, but MOVEQ never touches X).
+        pieces = [_PK_CUE_STORE] + ([_PK_CUE_BRA] if sound_on else []) + [
+            _PK_EFFECT_RESTORE_A0A2, _PK_EFFECT_RESTORE_D0D7, _PK_CUE_MOVEQ, _PK_RTS]
+        c, i = _add(*pieces)
+        cycles += c
+        instructions += i
+        # moveq #$ff,d2 sets N=1/Z=V=C=0 but never touches X: X survives from the sub.w d3,d2 that
+        # produced box_result, untouched by every MOVE/TST/movem between here and there.
+        x_bit = _sub_sr(sr, result['d2_before_award'], result['d3'], 2) & 0x10
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers={'d2': 0xFFFFFFFF, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                                     'pc': _return(machine, sp), 'sr': 0x08 | x_bit, **a4_exit},
+                          last_pc=PICKUP_CHECK_SOUND_LAST_PC)
+
+    if arm == 'found-bare':
+        raise UnsupportedCandidate('pickup check found-bare (award zero) arm not witnessed by a recording')
+    if arm in ('found-jitter-x-default', 'found-jitter-y-default', 'found-jitter-y-negative'):
+        raise UnsupportedCandidate(f'pickup check {arm} arm not witnessed by a recording')
+    if arm != 'found-effect':
+        raise UnsupportedCandidate(f'pickup check unknown arm {arm}')
+
+    c, i = _add(_PK_BMI_RESULT_NOTTAKEN, _PK_BNE_RESULT_TAKEN, _PK_STORE_F3D4, _PK_TST_D3, _PK_BEQ_D3_NOTTAKEN)
+    cycles += c
+    instructions += i
+    for a, b in _bytes(pickups.RESULT_WORD & 0xFFFFFF, result['box_result'], 2):
+        order[a] = b
+
+    c, i = _add(_PK_EFFECT_RESTORE_A0A2, _PK_EFFECT_PEEK_D2D3, _PK_EFFECT_HALF, _PK_EFFECT_MASK, _PK_EFFECT_MASK_BNE,
+               _PK_EFFECT_MASK_SUBQ, _PK_JSR_RANDOM)
+    cycles += c
+    instructions += i
+    cycles, instructions = cycles + _NR_COST[0], instructions + _NR_COST[1]
+    c, i = _PK_TST_DRAW
+    cycles += c
+    instructions += i
+    if result['dx_negative']:
+        c, i = _add(_PK_BMI_DRAW_TAKEN, _PK_DRAW_AND, _PK_DRAW_SUB)
+    else:
+        c, i = _add(_PK_BMI_DRAW_NOTTAKEN, _PK_DRAW_AND, _PK_DRAW_ADD, _PK_DRAW_BRA)
+    cycles += c
+    instructions += i
+    # jsr 014a3c (first draw): return address, then 014A3C's own move.l a0,-(a7) -- both at sp-32's
+    # own two slots; a0 is still the entry value (the scan's own a0-a2 frame was just restored above).
+    _ram_span('pickup check first random call frame', sp - 40, 8)
+    _pk_push(order, sp - 32, [0x00BC76])
+    _pk_push(order, sp - 36, [registers['a0']])
+
+    c, i = _add(_PK_EFFECT_HALF, _PK_EFFECT_MASK, _PK_EFFECT_MASK_BNE, _PK_EFFECT_MASK_SUBQ, _PK_JSR_RANDOM)
+    cycles += c
+    instructions += i
+    cycles, instructions = cycles + _NR_COST[0], instructions + _NR_COST[1]
+    c, i = _PK_TST_DRAW
+    cycles += c
+    instructions += i
+    # The second draw's negative branch declines above (result['arm'] would be 'found-jitter-y-negative').
+    c, i = _add(_PK_BMI_DRAW_NOTTAKEN, _PK_DRAW_AND, _PK_DRAW_ADD, _PK_DRAW_BRA)
+    cycles += c
+    instructions += i
+    # jsr 014a3c (second draw): the identical two stack slots as the first call, overwritten again.
+    _pk_push(order, sp - 32, [0x00BC9C])
+    _pk_push(order, sp - 36, [registers['a0']])
+
+    c, i = _add(_PK_EFFECT_TAIL, _PK_JSR_POOL)
+    cycles += c
+    instructions += i
+    added = result['effect']
+    if added['arm'] == 'full':
+        raise UnsupportedCandidate('pickup check found-effect pool-full arm not witnessed by a recording')
+    pool_cost = _effect_pool_add_cost(added)
+    cycles += pool_cost[0]
+    instructions += pool_cost[1]
+    # jsr 00932c: its own return address, then its own movem.l d0-d1/d4/a0,-(a7) (16 bytes) --
+    # d0/d1 are the computed pool position, d4 the second jitter's own mask-minus-one, a0 unchanged.
+    _ram_span('pickup check pool call frame', sp - 52, 20)
+    _pk_push(order, sp - 32, [0x00BCC4])
+    # D0/D1's own upper 16 bits are never cleared anywhere in this whole chain (every touch is a
+    # .W op): they still carry whatever was in the entry registers, UNLESS the axis's own clamp used
+    # moveq (the 'near' arm sets the WHOLE 32-bit register to -16).
+    d0_high = 0xFFFF0000 if result['x_clamp']['arm'] == 'near' else registers['d0'] & 0xFFFF0000
+    d1_high = 0xFFFF0000 if result['y_clamp']['arm'] == 'near' else registers['d1'] & 0xFFFF0000
+    _pk_push(order, sp - 36, [d0_high | result['pool_x'], d1_high | result['pool_y'],
+                              result['mask_y'], registers['a0']])
+    for address, (value, size) in added['stores'].items():
+        for a, b in _bytes(address, value, size):
+            order[a] = b
+
+    c, i = _add(_PK_EFFECT_RESTORE_D0D7, _PK_LOAD_D2, _PK_RTS)
+    cycles += c
+    instructions += i
+    # move.w RESULT_WORD,d2 is the last N/Z/V/C setter (MOVE never touches X); X instead survives
+    # from 00932C's OWN last flag-setter, addq.w #1,POOL_COUNTER (the 'added' arm's own X/C).
+    x_bit = _add_sr(sr, added['counter_before'], 1, 2) & 0x10
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers={'d2': (registers['d2'] & 0xFFFF0000) | result['box_result'],
+                                 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+                                 'sr': (_logic_sr(sr, result['box_result'], 2) & ~0x10) | x_bit, **a4_exit},
+                      last_pc=PICKUP_CHECK_EFFECT_LAST_PC)
