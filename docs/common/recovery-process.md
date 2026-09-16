@@ -254,6 +254,62 @@ about one history, one candidate name, one native build and one source tree
   model can answer) and the next candidate.  Grinders do not build
   mechanisms.
 
+## The three things a game is, and the order of work
+
+There are exactly three concepts: the **original** (the oracle: the ROM on
+the shared machine, replayed from recorded inputs), the **recovery
+workbench** (the original with recovered regions admitted inside it —
+gates, plans, seams, the exact temporal machinery, every comparison in
+this document), and the **native source port** (the game as readable,
+maintainable, extendable source, verified against the oracle and the
+recordings).  Nothing else is a mode, a stage or a progress category.
+Exact temporal machinery belongs to the workbench; the port is what
+remains when the workbench's adapters are taken away.
+
+The lasting artifact is the recovered semantic implementation.  During
+recovery it runs as *original machine → boundary adapter → recovered
+semantic function*; in the port it runs as *native subsystem → the same
+semantic function*.  Adapters own guest registers, stack conventions,
+timing facts, resume identities, machine side effects and comparison
+mechanics.  Semantic functions own gameplay behaviour, meaningful state
+and meaningful ordering.  There is one implementation: no separate exact
+and native versions, and no gameplay decision accumulates in an adapter.
+A small native-composition test that drives a recovered subsystem
+through a native-state adapter is useful evidence that the semantics are
+not tied to the machine; a native runtime, scheduler or whole-frame
+driver is not built until the phase below says so.
+
+The order of work is the one Aladdin converged on, and the port is built
+last: bounded leaves → their callers → dispatcher families → larger owned
+regions → grind the bounded frontier → concentrate the remaining gaps →
+understand the tick → only then compose the native driver.  Ownership
+rises through the original call graph (leaf → handler → dispatcher family
+→ subsystem → subsystem caller → larger owned region) and verification
+rises with it: leaf boundary → caller → dispatcher family → subsystem →
+tick region, the original remaining the strongest oracle while the
+regions are discovered.  The signal to start composing the native driver
+is architectural, not a percentage: most remaining work is composing
+already-recovered subsystems into the loop rather than discovering
+isolated semantics — the cheap frontier largely exhausted, the important
+dispatcher families owned as parents, the remaining original execution
+concentrated in a few understood hard regions, the tick semantically
+mapped.  Aladdin still had concentrated hard gaps when it got there; that
+is allowed.  Then: map the loop, build the driver around the recovered
+implementations, fail loudly on the gaps, verify steps, ticks, device
+effects and full recordings against the oracle.
+
+A **temporal adapter** — recovered code that stays owned across a machine
+event such as a VBlank inside an activation — is recovery scaffolding, to
+be added only for a specific witnessed region/event interaction that the
+seam and atomic mechanisms demonstrably cannot own, with the intermediate
+state that must survive named, the smallest extension that solves the
+case, interruption/resumption/ordering tests, and an explicit retirement
+condition.  It is never a second runtime, a project phase or the default
+model of recovered functions.  Where composition later shows the real
+ordering to be *update phase A → video commit → update phase B*, the port
+keeps that ordering directly; guest PCs, resume labels and register
+restoration recipes are not game concepts and do not survive into it.
+
 ## What is shared and what is per game
 
 Shared (`src/genesis_re`, `scripts/`): the machine and its atomic admission,

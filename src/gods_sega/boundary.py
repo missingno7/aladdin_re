@@ -1727,3 +1727,79 @@ def proximity_plan(machine, registers):
     writes.extend(pair for address, (value, size) in added['stores'].items() for pair in _bytes(address, value, size))
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(writes), registers=exit_registers,
                       last_pc=PROXIMITY_ADD_LAST_PC)
+
+
+# --- 013264: the pickup award (game/pickups.py: collect) -----------------------
+#
+# A leaf over the pickup grid byte A0 points past: the code ranges into a
+# group table, the group's active id selects an item record through the ROM
+# table at 012D04, and the record's value is awarded.  Cost from the tracer
+# (artifacts/gods/evidence/census-013264-*), per fragment (cycles,
+# instructions); the fragments (group, bonus, cue, consume) are independent
+# straight-line pieces, each witnessed, and compose.
+PICKUP_AWARD_ENTRY = 0x013264
+_PA_HEAD = (36, 4)                                    # move.l a1,-(a7); move.b -1(a0),d3; ext.w; bmi not taken
+_PA_GROUP = {0: (26, 3), 1: (58, 7), 2: (72, 9)}      # lea/cmpi/ble chains selecting the group table
+_PA_COMMON = (102, 10)                                # subq; asl; move.w (a0),d4; add; add; lea; movea.l (a1,d4.w); move.w 8(a1),AWARD; move.w NOW,d5; sub.w MARK,d5
+_PA_BONUS = {True: (48, 4), False: (8, 1)}            # bgt taken; asr.w #3,d5; add.w d5,AWARD; bra  /  bgt not taken
+_PA_CUE = {True: (36, 3), False: (22, 2)}             # tst.w SOUND_ON; beq not taken; move.w #$38,CUE  /  beq taken
+_PA_CONSUME = {True: (38, 3), False: (22, 2)}         # tst.b $49(a1); beq not taken; clr.w 2(a0,d3.w)  /  beq taken
+_PA_TAIL = (32, 3)                                    # moveq #0,d4; movea.l (a7)+,a1; rts
+_PA_SPECIAL = {-1: (102, 10), -2: (134, 14), -3: (126, 14)}   # the whole path for each special code (-2: sound off)
+_PA_SPECIAL_SOUND_ON = (144, 15)                      # -2 with sound on: beq not taken, clr.w AWARD
+_PA_LAST_PC = {'item': 0x0132CA, 'special-1': 0x0132DA, 'special-2': 0x0132FC, 'special-3': 0x01330A}
+
+
+def pickup_award_plan(machine, registers):
+    """013264: the award for the pickup code before A0; codes of -4 and below (and 0, beyond the slots) are declined."""
+    from .game import pickups
+    if registers['pc'] != PICKUP_AWARD_ENTRY:
+        raise UnsupportedCandidate('pickup award planner needs the machine parked at 013264')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    result = pickups.collect(read, registers['a0'] & 0xFFFFFF)
+    arm, code = result['arm'], result['code']
+    if arm == 'unrecovered':
+        raise UnsupportedCandidate(f'pickup code {code} continues into the routine after 013264: not recovered')
+    frame = ('pickup frame', sp - 4, 8)                                # the saved a1 and the caller's return slot
+    high = lambda name: registers[name] & 0xFFFF0000
+    exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'd4': result['d4']}
+    if arm == 'item':
+        slot, table = result['slot'], result['table']
+        if not 0 <= slot < pickups.GROUP_SIZE:
+            raise UnsupportedCandidate(f'pickup code {code} addresses no slot of its group: not witnessed')
+        spans = [frame, ('pickup award', pickups.AWARD, 2), ('pickup group table', table & 0xFFFFFF,
+                                                               pickups.SLOT_BASE + pickups.SLOT_SIZE * pickups.GROUP_SIZE),
+                 ('pickup item record', result['record'] & 0xFFFFFF, 0x50), ('pickup cue', pickups.SOUND_CUE, 2)]
+        _spans_disjoint(spans)
+        bonus, cue, consumed = result['bonus'], result['cue'], result['consumed']
+        cost = _add(_PA_HEAD, _PA_GROUP[result['group']], _PA_COMMON, _PA_BONUS[bonus], _PA_CUE[cue],
+                    _PA_CONSUME[consumed], _PA_TAIL)
+        difference = result['time_difference'] & 0xFFFF
+        if bonus:
+            # X from add.w d5,AWARD (the carry of value + bonus); the asr before it set X too, the add wins.
+            base = read((result['record'] + pickups.ITEM_VALUE) & 0xFFFFFF, 2)
+            x = _add_sr(sr, base, (result['time_difference'] >> 3) & 0xFFFF, 2) & 0x10
+            d5 = high('d5') | ((result['time_difference'] >> 3) & 0xFFFF)
+        else:
+            # X from sub.w MARK,d5: the borrow of NOW - MARK.
+            x = _cmp_sr(sr, read(pickups.TIME_NOW, 2), read(pickups.TIME_MARK, 2), 2) & 0x01
+            x = 0x10 if x else 0
+            d5 = high('d5') | difference
+        exit_registers.update(d3=high('d3') | ((slot * pickups.SLOT_SIZE) & 0xFFFF), d5=d5, a0=table)
+    else:
+        _spans_disjoint([frame, ('pickup award', pickups.AWARD, 2)])
+        sound_on = bool(read(pickups.SOUND_ON, 2))
+        cost = _PA_SPECIAL_SOUND_ON if (arm == 'special-2' and sound_on) else _PA_SPECIAL[code]
+        # The addq.w #1,d3 chain ends with -1 + 1: X (and C) set by that last carry.
+        x = 0x10
+        exit_registers.update(d3=high('d3'))
+    # moveq #n,d4 is the last N/Z/V/C setter: Z for 0, nothing for 1; X as derived.
+    exit_registers['sr'] = (sr & ~0x1F) | x | (0x04 if result['d4'] == 0 else 0)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    writes = _bytes(sp - 4, registers['a1'], 4) + writes
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                      last_pc=_PA_LAST_PC[arm])

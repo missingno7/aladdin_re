@@ -13,11 +13,11 @@ from dataclasses import dataclass, field
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
-                       EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY, PARTICLE_EMIT_ENTRY,
+                       EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY,
                        PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
                        STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, evaluator_plan, footprint_stamp_plan,
-                       condition_plan, grid_cell_plan, hazard_tick_plan, particle_emit_plan, proximity_plan,
+                       condition_plan, grid_cell_plan, hazard_tick_plan, particle_emit_plan, pickup_award_plan, proximity_plan,
                        score_convert_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan,
                        zone_check_plan)
 
@@ -66,6 +66,7 @@ PLANNERS = {
     'particle-emit': {PARTICLE_EMIT_ENTRY: particle_emit_plan},
     'hazard-tick': {HAZARD_TICK_ENTRY: hazard_tick_plan},
     'conditions': {CONDITION_ENTRY: condition_plan},
+    'pickups': {PICKUP_AWARD_ENTRY: pickup_award_plan},
     'score-convert': {SCORE_CONVERT_ENTRY: score_convert_plan},
     'evaluator': {EVALUATOR_ENTRY: evaluator_plan},
     'proximity': {PROXIMITY_ENTRY: proximity_plan},
@@ -77,10 +78,11 @@ PLANNERS = {
                        COLLISION_GATE_ENTRY: collision_gate_plan, ZONE_CHECK_ENTRY: zone_check_plan,
                        PARTICLE_EMIT_ENTRY: particle_emit_plan, HAZARD_TICK_ENTRY: hazard_tick_plan,
                        CONDITION_ENTRY: condition_plan, SCORE_CONVERT_ENTRY: score_convert_plan,
-                       EVALUATOR_ENTRY: evaluator_plan, PROXIMITY_ENTRY: proximity_plan},
+                       EVALUATOR_ENTRY: evaluator_plan, PROXIMITY_ENTRY: proximity_plan, PICKUP_AWARD_ENTRY: pickup_award_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
+             'pickups-mutant-result': ('pickups', _mutate_result),
              'sprites-mutant-result': ('sprites', _mutate_result),
              'sprites-mutant-register': ('sprites', _mutate_register),
              'sprites-static-mutant-result': ('sprites-static', _mutate_result),

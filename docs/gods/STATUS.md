@@ -16,11 +16,26 @@ It runs on the shared machine with no game-specific change; the three
 platform fixes its boot path needed were made in PortForge and pinned
 (`695bc65`).  The game runs its logic every other frame (30 Hz).
 
+## Phase
+
+Recover and compose upward inside the original execution.  The goal of
+this phase is not a native Gods runtime: it is to push recovered
+ownership up the original call graph until the bounded frontier is
+substantially exhausted (`../common/recovery-process.md`, "The three
+things a game is").  Native readiness is a design property of the
+semantics (`game/` functions take readers and arguments, never the
+machine), not the frontier.  Progress is reported as: behaviour
+recovered and proven, boundaries newly owned, leaf-to-parent
+compositions, dispatcher families closed, subsystem structure found,
+original execution removed by upward composition, hard blockers, any
+temporary adapter and why, whether the bounded frontier is still
+productive, and what evidence would justify the native phase.
+
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with eighteen gates armed, the camera follow step `002806`, the
+  original with nineteen gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -28,8 +43,8 @@ platform fixes its boot path needed were made in PortForge and pinned
   the zone check `00BCCE`, the particle drawer's own emitter `00126A`, the
   hazard tick `014084`, the trigger conditions `00470C`, the score
   conversion `00364C`, the trigger evaluator's non-firing arm `00462C` and
-  the proximity table search-and-add `00F828`/`00F86A`; `camera`,
-  `sprites`, `sprites-static`, `conditions`,
+  the proximity table search-and-add `00F828`/`00F86A` and the pickup
+  award `013264`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
   `particle-emit`, `hazard-tick`, `score-convert`, `evaluator` and
@@ -116,7 +131,10 @@ ids, never to `main`:
 | **`00F828`/`00F86A` proximity table search-and-add**: `00F828` owns its own call into `00F86A`; the plan reproduces every fact on all 14 'not-found'+'added' retained fixtures over two recordings (not exercised on `f0ac1973…`/`f40d7bcc…`); 'trigger' (19) and 'pool-full' (0, unwitnessed) decline | `factcheck check` on every fixture | `tests/games/gods/test_proximity.py` |
 | `proximity` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 8 hits, 25 fallbacks (all the declined trigger arm)**; mutant DIVERGENCE at frame 12,890 | `history-verify fb408bc75597 --candidate proximity` | `artifacts/gods/verify-proximity-fb408bc75597`, `verify-proximity-mutant` |
 | `camera-sprites` (all eighteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,032,299 hits, 11,608 fallbacks (7,188 scheduler admission, 3,728 seam deadline, 692 declined arms across nine reasons, 1 gate-without-planner foreign-return edge), 30.9M instructions replaced** | `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-camera-sprites-tree-2026-09-16q` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 50 s | 1,319 tests, 1 skipped | — |
+| **`013264` pickup award**: the plan reproduces every fact of the original on the 25 retained item and special fixtures over four recordings; the 11 code −4 fixtures decline | `factcheck check` on every fixture | `tests/games/gods/test_pickups.py` |
+| `pickups` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 154 hits, 2 fallbacks**; `camera-sprites` (all nineteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,033,633 hits, 11,631 fallbacks (7,199 scheduler admission, 3,728 seam deadline, 704 declined arms incl. 12 code −4 pickups), 31.0M instructions replaced** | `history-verify f0ac19738f19 --candidate pickups`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-pickups-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16t` |
+| the pickup negative control diverges at the first award | `--candidate pickups-mutant-result` | `artifacts/gods/verify-pickups-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 45 s | 1,360 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -361,6 +379,24 @@ A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback
 at that gate on the tree (exact by construction, not a declined arm) --
 `001164` and `0049DA` both do this; do not mistake it for a missed arm.
+
+**The pickups** (the subsystem `013264` belongs to): a byte grid at
+`FFBBDE` (8×8-pixel cells, 48 per row) holds pickup codes; the pickup
+check `00BA8E` scans the player's box (`FFF382`/`FFF384`) against it every
+tick after the zone check, and a hit calls the award `013264` with A0 past
+the found byte.  Codes 1–27 are item slots in three groups of nine (the
+group tables `FFEF8C`/`FFF01E`/`FFF0B0`: an active-id word, then nine
+8-byte slots); the active id selects the group's item record through the
+ROM table at `012D04` — eleven work-RAM records of 0x50 bytes at `FFF552`,
+the table the 16 September blocker misread as handlers — and the record's
+word `+8` is the value awarded to `FFF35A` (plus an eighth of
+`FFF362 − FFF36C` when positive), with a cue when `FFEF14` is set and the
+slot consumed when the record's byte `+0x49` says so.  Codes −1/−2/−3 are
+special awards; −4 and below (a third of the witnessed hits) continue
+into the routine at `013316` (the grid inverse, a loop over `FF12xx`) and
+are declined until that routine is recovered.  `013264` is recovered
+(`pickups`); the check `00BA8E`'s clean arm, its found arm's other callees
+(`014A3C`, `00932C`) and `013316` are the next bites of this subsystem.
 
 **The triggers** (the subsystem `00470C` belongs to): the level's trigger
 records at `FFB01A` (0x18 bytes each) carry three (kind, argument)
