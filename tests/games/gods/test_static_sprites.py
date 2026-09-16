@@ -124,7 +124,7 @@ def test_the_list_full_arm_is_declined_and_the_original_runs_it():
 def test_candidate_names_are_explicit():
     assert recovery.Candidate('sprites-static').gate_pcs == (boundary.STATIC_EMIT_ENTRY,)
     assert recovery.Candidate('camera-sprites').gate_pcs == (
-        boundary.CAMERA_FOLLOW_ENTRY, boundary.SPRITE_EMIT_ENTRY, boundary.STATIC_EMIT_ENTRY, boundary.TABLE_RESET_ENTRY)
+        boundary.CAMERA_FOLLOW_ENTRY, boundary.SPRITE_EMIT_ENTRY, boundary.STATIC_EMIT_ENTRY, boundary.TABLE_RESET_ENTRY, boundary.SPAWN_QUEUE_ENTRY)
     assert recovery.Candidate('sprites-static-mutant-result').mutation is recovery._mutate_result
 
 

@@ -282,6 +282,21 @@ def _static_frame_writes(sp, registers):
                  for pair in _bytes(sp - STATIC_EMIT_FRAME + 4 * index, registers[name], 4))
 
 
+def _static_emit_cost(arm, flip):
+    """001164's own cost (cycles, instructions) for one call, by arm -- shared with a caller composing several calls."""
+    if arm == 'offscreen-x':
+        return (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_TAKEN[0] + _SK_RESTORE[0],
+                _SK_HEAD[1] + _SK_X_TEST[1] + _SK_TAKEN[1] + _SK_RESTORE[1])
+    if arm == 'offscreen-y':
+        return (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_NOT_TAKEN[0] + _SK_Y_TEST[0] + _SK_TAKEN[0] + _SK_RESTORE[0],
+                _SK_HEAD[1] + _SK_X_TEST[1] + _SK_NOT_TAKEN[1] + _SK_Y_TEST[1] + _SK_TAKEN[1] + _SK_RESTORE[1])
+    setup = _SK_SETUP_FLIP if flip else _SK_SETUP_NOFLIP
+    return (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_NOT_TAKEN[0] + _SK_Y_TEST[0] + _SK_NOT_TAKEN[0]
+           + setup[0] + _SK_POSITION[0] + _SK_NOT_TAKEN[0] + _SK_WRITE[0] + _SK_RESTORE[0],
+            _SK_HEAD[1] + _SK_X_TEST[1] + _SK_NOT_TAKEN[1] + _SK_Y_TEST[1] + _SK_NOT_TAKEN[1]
+           + setup[1] + _SK_POSITION[1] + _SK_NOT_TAKEN[1] + _SK_WRITE[1] + _SK_RESTORE[1])
+
+
 def static_emit_plan(machine, registers):
     """001164: the RAM-only sprite emitter sibling; the list-full guard is declined (unwitnessed)."""
     from .game import sprites
@@ -300,14 +315,11 @@ def static_emit_plan(machine, registers):
         raise UnsupportedCandidate(f'static sprite arm not witnessed by a recording: {arm}')
     screen_x, screen_y = result['screen']
     writes = _static_frame_writes(sp, registers)
+    cost = _static_emit_cost(arm, result['flip'])
     if arm == 'offscreen-x':
-        cost = (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_TAKEN[0] + _SK_RESTORE[0],
-                _SK_HEAD[1] + _SK_X_TEST[1] + _SK_TAKEN[1] + _SK_RESTORE[1])
         exit_sr = _cmp_sr(_margin_add_x(sr, screen_x, sprites.SCREEN_MARGIN),
                           (screen_x + sprites.SCREEN_MARGIN) & 0xFFFF, sprites.SCREEN_X_LIMIT, 2)
     elif arm == 'offscreen-y':
-        cost = (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_NOT_TAKEN[0] + _SK_Y_TEST[0] + _SK_TAKEN[0] + _SK_RESTORE[0],
-                _SK_HEAD[1] + _SK_X_TEST[1] + _SK_NOT_TAKEN[1] + _SK_Y_TEST[1] + _SK_TAKEN[1] + _SK_RESTORE[1])
         exit_sr = _cmp_sr(_margin_add_x(sr, screen_y, sprites.SCREEN_MARGIN),
                           (screen_y + sprites.SCREEN_MARGIN) & 0xFFFF, sprites.SCREEN_Y_LIMIT, 2)
     if arm.startswith('offscreen'):
@@ -318,17 +330,90 @@ def static_emit_plan(machine, registers):
     record, count = result['record'], result['count']
     spans = [frame, ('static sprite record', record, sprites.RECORD_SIZE), *_SPRITE_GLOBALS]
     _spans_disjoint(spans)
-    setup = _SK_SETUP_FLIP if result['flip'] else _SK_SETUP_NOFLIP
-    cycles = (_SK_HEAD[0] + _SK_X_TEST[0] + _SK_NOT_TAKEN[0] + _SK_Y_TEST[0] + _SK_NOT_TAKEN[0]
-             + setup[0] + _SK_POSITION[0] + _SK_NOT_TAKEN[0] + _SK_WRITE[0] + _SK_RESTORE[0])
-    instructions = (_SK_HEAD[1] + _SK_X_TEST[1] + _SK_NOT_TAKEN[1] + _SK_Y_TEST[1] + _SK_NOT_TAKEN[1]
-                   + setup[1] + _SK_POSITION[1] + _SK_NOT_TAKEN[1] + _SK_WRITE[1] + _SK_RESTORE[1])
     writes += tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
     # The last flag-setting instruction is addq.w #1,LIST_COUNT; the registers come back from the frame.
-    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
                       registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
                                  'sr': _add_sr(sr, count, 1, 2)},
                       last_pc=STATIC_EMIT_LAST_PC)
+
+
+# --- 0049DA: the spawn queue (game/spawn_queue.py: scan_spawn_queue) ---------
+#
+# A RAM-only leaf that calls the already-recovered 001164 once per active
+# slot (0-2 witnessed at once); its own cost fragments, from the tracer
+# (artifacts/gods/evidence/census-0049DA*).  001164 pushes and pops its own
+# frame at the current stack pointer, which 0049DA itself never moves, so
+# every call's frame lands at the same 28 bytes below entry a7 -- only the
+# last call's frame write need be declared (the rest are overwritten before
+# the routine returns).
+SPAWN_QUEUE_ENTRY, SPAWN_QUEUE_LAST_PC = 0x0049DA, 0x004A08
+SPAWN_CALL_RETURN = 0x0049F6                        # the PC bsr.w 001164 pushes and returns to
+SPAWN_CALL_FRAME = STATIC_EMIT_FRAME + 4            # the callee's frame plus the pushed return address
+_SQ_HEAD = (16, 2)                     # lea.l SLOT_BASE,a4; moveq #3,d7
+_SQ_SKIP_BASE = (22, 3)                # tst.w (a4); bmi.b taken; addq.w #6,a4
+_SQ_ACTIVE_PRE = (70, 7)               # tst; bmi not taken; move.w x2; moveq; add.w (a4),d2; bsr.w 001164
+_SQ_POST_CONTINUE_BASE = (38, 4)       # addq.w #1,(a4); cmpi.w #7,(a4); blt.b taken; addq.w #6,a4
+_SQ_POST_RETIRE_BASE = (48, 5)         # addq.w #1,(a4); cmpi.w #7,(a4); blt.b not taken; move.w #-1,(a4); addq.w #6,a4
+_SQ_DBRA_TAKEN, _SQ_DBRA_LAST = 10, 14                # dbra d7: mid-loop vs the final (4th) iteration
+_SQ_RETURN = (16, 1)                   # rts
+
+
+def spawn_queue_plan(machine, registers):
+    """0049DA: up to four calls to the static sprite emitter, one per active slot."""
+    from .game import sprites, spawn_queue
+    if registers['pc'] != SPAWN_QUEUE_ENTRY:
+        raise UnsupportedCandidate('spawn queue planner needs the machine parked at 0049DA')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    frame = ('spawn queue call frame', sp - SPAWN_CALL_FRAME, SPAWN_CALL_FRAME)
+    _ram_span(*frame)
+    slots = spawn_queue.scan_spawn_queue(_reader(machine))
+    cycles, instructions = _SQ_HEAD
+    writes, last_call_writes, last_active_registers = (), (), None
+    for index, slot in enumerate(slots):
+        last = index == len(slots) - 1
+        dbra = _SQ_DBRA_LAST if last else _SQ_DBRA_TAKEN
+        if not slot['active']:
+            sr = _logic_sr(sr, slot['counter'], 2)
+            cycles += _SQ_SKIP_BASE[0] + dbra
+            instructions += _SQ_SKIP_BASE[1] + 1
+            continue
+        emitted = slot['emitted']
+        arm = emitted['arm']
+        if arm not in WITNESSED_STATIC_ARMS:
+            raise UnsupportedCandidate(f'spawn queue slot {index}: static sprite arm not witnessed: {arm}')
+        call_cost = _static_emit_cost(arm, emitted['flip'])
+        base = _SQ_POST_RETIRE_BASE if slot['retire'] else _SQ_POST_CONTINUE_BASE
+        cycles += _SQ_ACTIVE_PRE[0] + call_cost[0] + base[0] + dbra
+        instructions += _SQ_ACTIVE_PRE[1] + call_cost[1] + base[1] + 1
+        sr = _add_sr(sr, slot['counter'], 1, 2)
+        sr = _logic_sr(sr, 0xFFFF, 2) if slot['retire'] else _cmp_sr(sr, slot['counter_store'], 7, 2)
+        slot_base = spawn_queue.SLOT_BASE + spawn_queue.SLOT_SIZE * index
+        writes += ((slot_base, (slot['counter_store'] >> 8) & 0xFF), (slot_base + 1, slot['counter_store'] & 0xFF))
+        writes += tuple(pair for address, (value, size) in emitted['stores'].items() for pair in _bytes(address, value, size))
+        registers_at_call = {'d0': slot['x'], 'd1': slot['y'], 'd2': slot['sprite'],
+                             'd3': registers['d3'], 'a0': registers['a0'], 'a1': registers['a1']}
+        last_call_writes = (_static_frame_writes(sp - 4, registers_at_call)
+                            + tuple(_bytes(sp - 4, SPAWN_CALL_RETURN, 4)))
+        last_active_registers = registers_at_call
+    cycles += _SQ_RETURN[0]
+    instructions += _SQ_RETURN[1]
+    final_a4 = 0xFFFF0000 | ((spawn_queue.SLOT_BASE + spawn_queue.SLOT_SIZE * spawn_queue.SLOT_COUNT) & 0xFFFFFF)
+    exit_registers = {'a4': final_a4, 'd7': 0xFFFF, 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': sr}
+    if last_active_registers is not None:
+        # d0-d2 carry the last active slot's x/y/sprite (the pushed-and-popped frame restores them
+        # unchanged across every call); d3/a0/a1 are never touched by 0049DA itself.
+        exit_registers.update(d0=last_active_registers['d0'] & 0xFFFF | (registers['d0'] & 0xFFFF0000),
+                              d1=last_active_registers['d1'] & 0xFFFF | (registers['d1'] & 0xFFFF0000),
+                              d2=last_active_registers['d2'] & 0xFFFF | (registers['d2'] & 0xFFFF0000))
+    # The frame/return-address bytes lead: they are dead scratch by the time the routine returns
+    # (each call's own RTS already consumed its return address), so the negative control's generic
+    # "flip the last write" must land on the last slot's own durable store, not that scratch.
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=last_call_writes + writes,
+                      registers=exit_registers, last_pc=SPAWN_QUEUE_LAST_PC)
 
 
 # --- 004150: the work-table reset (game/tables.py: reset_table) --------------
