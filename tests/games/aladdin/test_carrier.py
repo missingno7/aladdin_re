@@ -21,7 +21,7 @@ def sound_machine(monkeypatch, *, foreign=False, corrupt=None, deadline=False, s
     machine._registers["pc"] = machine.info["pc"] = TRANSITION_ENTRY
     put(machine, 0xffefe0, 0x3030, 2)
     put(machine, 0xfff57d, 1, 1)
-    machine.in_sound_call = False
+    machine.in_seam = False
     machine.atomic_calls = 0
     def atomic(**plan):
         machine.atomic_calls += 1
@@ -37,8 +37,8 @@ def sound_machine(monkeypatch, *, foreign=False, corrupt=None, deadline=False, s
         if instructions:
             machine.run_call = instructions
             return "limit"
-        assert machine.in_sound_call
-        with pytest.raises(ValueError, match="synchronous sound"):
+        assert machine.in_seam
+        with pytest.raises(ValueError, match="inside a seam"):
             safe_state(machine)
         if deadline:
             machine.info.update(pc=0x1e57ac, tick=target)
@@ -62,7 +62,7 @@ def test_foreign_return_does_not_resume_and_snapshot_is_forbidden_in_call(monkey
     assert candidate.on_gate(machine, 100000)
     assert candidate.stats["foreign_returns"] == 1
     assert candidate.stats["legacy_returns"] == candidate.stats["carrier_completed"] == 1
-    assert not machine.in_sound_call
+    assert not machine.in_seam
     assert machine.armed == candidate.gate_pcs
 
 
@@ -72,7 +72,7 @@ def test_wrong_outer_return_saved_frame_or_return_slot_is_rejected(monkeypatch, 
     with pytest.raises(ValueError, match="return/frame"):
         Candidate("carrier").on_gate(machine, 100000)
     assert machine.atomic_calls == 1
-    assert not machine.in_sound_call
+    assert not machine.in_seam
 
 
 def test_deadline_relinquishes_original_suffix_without_advancing_again(monkeypatch):
@@ -83,7 +83,7 @@ def test_deadline_relinquishes_original_suffix_without_advancing_again(monkeypat
     assert machine.peek_ram(0xefe0, 2) == b"01"
     assert candidate.stats["legacy_deadline_fallbacks"] == 1
     assert candidate.stats["legacy_returns"] == 0
-    assert not machine.in_sound_call
+    assert not machine.in_seam
 
 
 def test_suffix_refusal_keeps_prefix_and_delegates_only_suffix(monkeypatch):
@@ -92,7 +92,7 @@ def test_suffix_refusal_keeps_prefix_and_delegates_only_suffix(monkeypatch):
     assert candidate.on_gate(machine, 100000)
     assert machine.peek_ram(0xefe0, 2) == b"01"
     assert machine.gate_call == (SOUND_RETURN, True)
-    assert machine.run_call == 1 and not machine.in_sound_call
+    assert machine.run_call == 1 and not machine.in_seam
     assert candidate.stats["local_fallbacks"] == candidate.stats["legacy_returns"] == 1
 
 
@@ -103,7 +103,7 @@ def test_prefix_refusal_does_not_enter_sound_or_commit_counter(monkeypatch):
     assert not candidate.on_gate(machine, 100000)
     assert machine.peek_ram(0xefe0, 2) == b"00"
     assert machine.gate_call == (TRANSITION_ENTRY, True)
-    assert not machine.in_sound_call and candidate.stats["legacy_entries"] == 0
+    assert not machine.in_seam and candidate.stats["legacy_entries"] == 0
 
 
 @pytest.mark.parametrize("digits", [0x3939, 0x2930, 0x3040])
@@ -167,7 +167,7 @@ def test_native_connected_region_branches_match_original(monkeypatch, digits, so
         policy.arm(candidate)
         assert candidate.run(instructions=1) == "gate"
         assert policy.on_gate(candidate, candidate.info["tick"] + 1_000_000)
-        assert not candidate.in_sound_call
+        assert not candidate.in_seam
         assert policy.stats["legacy_returns"] == bool(sound)
         assert policy.stats["foreign_returns"] == int(reentrant)
         assert (candidate.snapshot(), candidate.audio()) == expected

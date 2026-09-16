@@ -249,18 +249,9 @@ SPAWN_UPPER_FIFTH_POOL_EXHAUSTED = 0xFF842E
 ROM_SHA256 = "a3779fc77994780e80d05bb557f800110d0398d34b951baa8c0a14910014ded3"
 
 
-class UnsupportedCandidate(RuntimeError):
-    """The current stopped machine is outside this small candidate domain."""
-
-
-@dataclass(frozen=True)
-class AtomicPlan:
-    cycles: int
-    instructions: int
-    writes: tuple[tuple[int, int], ...]
-    registers: dict[str, int]
-    last_pc: int
-    direct_calls: int = 0
+# The admission contract (a plan, a refusal) is the shared layer's; Aladdin's
+# planners and tests keep importing it from here.
+from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate  # noqa: F401  (re-exported)
 
 
 @dataclass(frozen=True)
@@ -269,7 +260,10 @@ class SoundSeam:
 
     Construction binds the concrete suffix with the stack/frame facts for the
     surrounding wrapper, so the runner never infers a route from the prefix's
-    final instruction.
+    final instruction.  ``seam()`` states the same contract in the shared
+    form ``genesis_re.seam.run_seam`` executes: the saved frame is a guard
+    (unchanged across the sound call), the return slot an expected value
+    (the last JSR inside the call rewrites it with the resume address).
     """
     prefix: AtomicPlan
     stack_basis: int
@@ -280,6 +274,12 @@ class SoundSeam:
     return_delta: int
     counts_contact: bool = False
     suffix: object | None = None
+
+    def seam(self) -> Seam:
+        sp = self.stack_basis
+        return Seam(prefix=self.prefix, resume_pc=self.resume_pc, stack_basis=(sp - self.saved_frame) & 0xFFFFFFFF,
+                    guards=(((sp - self.saved_frame) & 0xFFFFFF, self.frame_size),),
+                    suffix=self.suffix, expect=(((sp - self.return_delta) & 0xFFFFFF, 4, self.return_slot),))
 
 
 def _logic_sr(sr: int, value: int, width: int) -> int:

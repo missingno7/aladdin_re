@@ -175,9 +175,15 @@ The common layer provides mechanisms, not knowledge.  Aladdin's PCs, object
 table, RAM map, sound commands, title state and native sequences stay under
 `aladdin_sega`; Gods' camera addresses stay under `gods_sega`.  Only when both
 games independently reveal the same recovery mechanism is it worth lifting.
-The first such case is already visible: `AtomicPlan`, `UnsupportedCandidate`
-and the gate dispatcher (`Candidate.arm/on_gate/stats`) exist in both
-`aladdin_sega` and `gods_sega` with the same contract (Aladdin's carries the
-sound seam and family routing on top).  They are left duplicated on purpose
-until a third game repeats them; `recovery-process.md` §8 describes the
-contract the replay runner expects.
+The first such case happened on 16 September 2026: when Gods reached a
+region with a platform operation inside it and reproduced the seam shape
+Aladdin's sound requests had proven, the admission contract (`AtomicPlan`,
+`UnsupportedCandidate`), the `Seam` and its runner (`run_seam`: pause
+recovered execution, let the machine run the operation, resume) moved into
+`src/genesis_re/seam.py`; both games' boundaries import them, both
+dispatchers call the runner and keep their own counters.  What did not
+move: the seam *plans* (where each game's regions resume, their frames,
+their suffixes), the 68000 flag helpers and alias guards (small, copied),
+the gate dispatcher (`Candidate.arm/on_gate/stats` — the same contract in
+both games, left duplicated until a third game repeats it).
+`recovery-process.md` §8 describes the contract the replay runner expects.

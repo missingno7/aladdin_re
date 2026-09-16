@@ -14,8 +14,8 @@ EMPTY_PCM = digest(b"")
 
 def safe_state(machine):
     """Capture raw implementation state only at a recovery-safe boundary."""
-    if getattr(machine, "in_sound_call", False):
-        raise ValueError("Checkpoint unavailable inside synchronous sound call")
+    if getattr(machine, "in_seam", False):
+        raise ValueError("Checkpoint unavailable inside a seam: the machine is running a platform operation")
     return machine.snapshot()
 
 

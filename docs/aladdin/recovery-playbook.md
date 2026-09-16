@@ -99,6 +99,14 @@ exemplar; do not invent a fifth shape (that is an escalation).
 5. **Anything else** is `UnsupportedCandidate` for that arm and a blocker
    package (section 7).
 
+Since 16 September 2026 the pause/resume mechanism under recipes 2–4 is
+the shared `genesis_re.seam.run_seam` (Gods reproduced the shape on an
+inline VDP upload); `SoundSeam` is still Aladdin's plan form and
+`SoundSeam.seam()` states it as the shared `Seam` (the saved frame as a
+guard, the return slot as an expected value).  `AtomicPlan` and
+`UnsupportedCandidate` are imported from `genesis_re.seam`; the exemplars
+above are unchanged.
+
 Dispatcher topology the recipes assume: the collection dispatcher `1ABC82`
 (return `1ABCA0`), the contact tick `1ABB40` and its scan `1ABBD6`
 (callbacks return through `1AE6B4`), the object transition `1AF468` with the

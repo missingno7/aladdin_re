@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 
+from genesis_re.seam import run_seam
 from .boundary import (AtomicPlan, SoundSeam, UnsupportedCandidate, LEAF_ENTRY, PAIR_ENTRY, CALLER_ENTRY,
                         INIT_ENTRY, FINISH_ENTRY, ROM_SHA256, clear_auxiliary_buffer,
                         COUNTED_REPLACE_ENTRY, REPLACE_ENTRY, clear_object_pair, detach_object,
@@ -218,48 +219,28 @@ class Candidate:
         a 24-byte saved frame plus argument; type-13's fixed helper saves the
         five registers alone in a measured 20-byte frame.
         """
-        sp, resume, return_slot = seam.stack_basis, seam.resume_pc, seam.return_slot
-        saved_frame, frame_size, return_delta = (seam.saved_frame, seam.frame_size,
-                                                  seam.return_delta)
-        frame_base = (sp - saved_frame) & 0xFFFF
-        frame = machine.peek_ram(frame_base, frame_size)
+        if seam.suffix is None:
+            raise ValueError('sound seam has no concrete suffix')
         self.stats['legacy_entries'] += 1
-        machine.in_sound_call = True
-        try:
-            machine.gates([resume])
-            while machine.run(target=target) == 'gate':
-                self.stats['gates'] += 1
-                returned = machine.registers()
-                if returned['a7'] != sp - saved_frame:
-                    self.stats['foreign_returns'] += 1
-                    machine.gate(resume, bypass_once=True)
-                    continue
-                if (returned['pc'] != resume or machine.peek_ram(frame_base, frame_size) != frame
-                        or int.from_bytes(machine.peek_ram((sp - return_delta) & 0xFFFF, 4), 'big') != return_slot):
-                    raise ValueError('Object sound return/frame mismatch')
-                self.stats['legacy_returns'] += 1
-                reason = 'scheduler admission'
-                try:
-                    if seam.suffix is None:
-                        raise ValueError('sound seam has no concrete suffix')
-                    plan = seam.suffix(machine, returned)
-                    if self._apply(machine, suffix_transform(plan), target):
-                        on_complete()
-                        return True
-                except UnsupportedCandidate as error:
-                    reason = f'unsupported domain: {error}'
-                self.stats['local_fallbacks'] += 1
-                self._fallback(machine, resume, reason)
-                return True
+        outcome = run_seam(machine, target, seam.seam(),
+                           admit=lambda plan: self._apply(machine, suffix_transform(plan), target),
+                           gates=self.gate_pcs)
+        self.stats['gates'] += outcome.stops
+        self.stats['foreign_returns'] += outcome.foreign_returns
+        if outcome.status == 'completed':
+            self.stats['legacy_returns'] += 1
+            on_complete()
+            return True
+        self.stats['local_fallbacks'] += 1
+        if outcome.status == 'deadline':
             # The prefix remains committed.  Let original code own the rest
             # once the caller's scheduling deadline is reached.
-            self.stats['local_fallbacks'] += 1
             self.stats['legacy_deadline_fallbacks'] += 1
             self._fallback(machine, None, 'legacy deadline')
             return True
-        finally:
-            machine.in_sound_call = False
-            machine.gates(list(self.gate_pcs))
+        self.stats['legacy_returns'] += 1
+        self._fallback(machine, seam.resume_pc, outcome.reason)
+        return True
 
     def _transition(self, machine, target, entry=TRANSITION_ENTRY, *, count_gate=True,
                     registers=None, planner=None, prefix=None, fallback_entry=None):

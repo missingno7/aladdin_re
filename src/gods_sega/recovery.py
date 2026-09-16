@@ -1,22 +1,44 @@
-"""Gate dispatch for recovered Gods regions: one planner per gate, admission through ``Machine.atomic``."""
+"""Gate dispatch for recovered Gods regions: one planner per gate, admission through ``Machine.atomic``.
+
+A planner returns an ``AtomicPlan`` (the whole region as one admitted
+operation) or a ``Seam`` (a recovered prefix, a platform operation the
+original machine runs, a recovered suffix); ``genesis_re.seam.run_seam``
+is the shared mechanism that pauses and resumes, this dispatcher admits
+the plans and counts what happened.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .boundary import AtomicPlan, UnsupportedCandidate, CAMERA_FOLLOW_ENTRY, camera_follow_plan
+from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
+
+from .boundary import CAMERA_FOLLOW_ENTRY, SPRITE_EMIT_ENTRY, camera_follow_plan, sprite_emit_plan
 
 
 def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
     """Negative control: one stored byte off by one.  A PASS with this candidate would mean nothing is compared."""
+    if not plan.writes:
+        return plan
     address, value = plan.writes[-1]
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes[:-1] + ((address, (value + 1) & 0xFF),),
                       plan.registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_register(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for a seam's register contract: d0 off by one in every admitted plan."""
+    registers = dict(plan.registers)
+    registers['d0'] = (registers.get('d0', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
 PLANNERS = {
     'camera': {CAMERA_FOLLOW_ENTRY: camera_follow_plan},
+    'sprites': {SPRITE_EMIT_ENTRY: sprite_emit_plan},
+    'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan},
 }
-MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result)}
+MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
+             'sprites-mutant-result': ('sprites', _mutate_result),
+             'sprites-mutant-register': ('sprites', _mutate_register)}
 
 
 @dataclass
@@ -30,7 +52,8 @@ class Candidate:
     name: str = 'camera'
     stats: dict = field(default_factory=lambda: {
         'gates': 0, 'candidate_hits': 0, 'fallbacks': 0, 'fallback_reasons': {}, 'fallbacks_by_gate': {},
-        'replaced_m68k_instructions': 0, 'charged_m68k_cycles': 0, 'direct_python_calls': 0})
+        'replaced_m68k_instructions': 0, 'charged_m68k_cycles': 0, 'direct_python_calls': 0,
+        'seam_entries': 0, 'seam_completions': 0, 'seam_foreign_returns': 0, 'seam_deadline_fallbacks': 0})
 
     def __post_init__(self):
         if self.name not in PLANNERS and self.name not in MUTATIONS:
@@ -60,23 +83,51 @@ class Candidate:
             plan = planner(machine, registers)
         except UnsupportedCandidate as error:
             return self._fallback(machine, pc, f'unsupported domain: {error}')
+        if isinstance(plan, Seam):
+            return self._run_seam(machine, deadline, plan, pc)
+        if not self._admit(machine, deadline, plan):
+            return self._fallback(machine, pc, 'scheduler admission')
+        return True
+
+    def _admit(self, machine, deadline, plan):
         if self.mutation is not None:
             plan = self.mutation(plan)
         if not machine.atomic(target=deadline, cycles=plan.cycles, instructions=plan.instructions,
                               writes=list(plan.writes), registers=plan.registers, last_pc=plan.last_pc):
-            return self._fallback(machine, pc, 'scheduler admission')
+            return False
         self.stats['candidate_hits'] += 1
         self.stats['replaced_m68k_instructions'] += plan.instructions
         self.stats['charged_m68k_cycles'] += plan.cycles
         self.stats['direct_python_calls'] += plan.direct_calls
         return True
 
+    def _run_seam(self, machine, deadline, seam, pc):
+        """Commit the prefix, let the original run the platform operation, admit the suffix at the resume."""
+        if not self._admit(machine, deadline, seam.prefix):
+            return self._fallback(machine, pc, 'scheduler admission')
+        self.stats['seam_entries'] += 1
+        outcome = run_seam(machine, deadline, seam, admit=lambda plan: self._admit(machine, deadline, plan),
+                           gates=self.gate_pcs)
+        self.stats['gates'] += outcome.stops
+        self.stats['seam_foreign_returns'] += outcome.foreign_returns
+        if outcome.status == 'completed':
+            self.stats['seam_completions'] += 1
+            return True
+        if outcome.status == 'deadline':
+            # The frame's observation instant fell inside the platform operation:
+            # the committed prefix stands and the original owns the rest of the activation.
+            self.stats['seam_deadline_fallbacks'] += 1
+            return self._fallback(machine, None, outcome.reason)
+        # A declined or refused suffix: the original runs it from the resume.
+        return self._fallback(machine, seam.resume_pc, outcome.reason)
+
     def _fallback(self, machine, pc, reason):
         self.stats['fallbacks'] += 1
         reasons = self.stats['fallback_reasons']
         reasons[reason] = reasons.get(reason, 0) + 1
-        gate = f'{pc:06X}'
+        gate = f'{(machine.info["pc"] if pc is None else pc):06X}'
         self.stats['fallbacks_by_gate'][gate] = self.stats['fallbacks_by_gate'].get(gate, 0) + 1
-        machine.gate(pc, bypass_once=True)
-        machine.run(instructions=1)
+        if pc is not None:
+            machine.gate(pc, bypass_once=True)
+            machine.run(instructions=1)
         return False

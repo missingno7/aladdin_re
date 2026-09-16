@@ -2,10 +2,15 @@
 
 One recovery iteration on Gods, step by step, with the exact commands.  It
 is the loop of `../common/recovery-process.md` instantiated on this game and
-is a transcript of the iteration that recovered the camera follow step
-`002806` (`STATUS.md`, `ledger.md`), which is the canonical example: when in
-doubt, do what that iteration did.  Nothing here requires Aladdin's
-documentation; Aladdin's recipes are not Gods' recipes.
+is a transcript of the two iterations that recovered the camera follow
+step `002806` (a RAM-only leaf) and the sprite emitter `0018C8` (a leaf with
+a platform operation inside it, recovered as a seam) — `STATUS.md`,
+`ledger.md`.  They are the canonical examples: when in doubt, do what they
+did.  Nothing here requires Aladdin's documentation for a leaf of either
+shape.  Aladdin is the reference implementation of *execution shapes*
+(`../aladdin/recovery-playbook.md` §4): before calling a shape new, check
+whether Aladdin has proven it; adapt the shape, never its addresses,
+dispatchers or object layouts.
 
 ## 0. Environment and rules
 
@@ -57,11 +62,18 @@ shortlist with the tracer before deciding:
 ```
 
 Look at the executed path: absolute addresses and address-register targets
-must lie in work RAM (`FF0000`–`FFFFFF`) or ROM (`000000`–`0FFFFF`).  Any
-`A0xxxx` (Z80 window, I/O) or `C000xx` (VDP) access, any `jsr`/`bsr` to an
-unrecovered routine, any interrupt inside the trace, any loop whose count no
-RAM byte bounds: defer the region and pick another.  Write the chosen entry
-and the reason as the first line of the session notes.
+must lie in work RAM (`FF0000`–`FFFFFF`) or ROM (`000000`–`0FFFFF`).  A
+device access (`A0xxxx` Z80 window or I/O, `C000xx` VDP, or `(a6)` with
+`a6 = C00000`, which is how Gods writes the VDP) is not a deferral by
+itself: if the device accesses form **one contiguous block** with a
+RAM-only prefix before it and a RAM-only suffix after it (a VDP control
+write followed by a data loop, then the register restore and the RTS, as
+in `0018C8`), the region is a seam candidate (section 6b).  Defer when the
+device accesses are interleaved with RAM work in more than one block, when
+the region calls an unrecovered routine that is not itself the platform
+operation, when an interrupt handler is entered inside the trace, or when a
+loop's count no RAM byte or ROM table bounds.  Write the chosen entry and
+the reason as the first line of the session notes.
 
 ## 3. Census the entry over the recorded histories
 
@@ -111,7 +123,59 @@ registers the routine changes (upper halves preserved as the original does),
 flag-setting instruction (N/Z/V/C from that instruction, X only from the last
 shift/arithmetic that set it), `instructions` and `cycles` per path from the
 trace, `last_pc` (the RTS).  Raise `UnsupportedCandidate` for every arm the
-recordings did not witness.  Model: `camera_follow_plan`.
+recordings did not witness.  Model: `camera_follow_plan`.  A routine that
+saves registers (`movem.l ...,-(a7)`) writes its whole frame in the plan
+(`_frame_writes`); the tracer only sees the bytes that changed, and
+`check_plan` accepts a planned write of a byte RAM already held.
+
+`AtomicPlan`, `UnsupportedCandidate` and `Seam` are the shared admission
+contract (`src/genesis_re/seam.py`); the boundary imports them.  The 68000
+flag helpers (`_logic_sr`, `_cmp_sr`, `_add_sr`) and the alias guard
+(`_spans_disjoint`) are Gods' own copies in `boundary.py`.
+
+## 6b. Boundary plan with a platform operation inside: the seam
+
+The shape Aladdin proved for its sound requests and platform tails, on
+Gods' inline VDP upload (`sprite_emit_plan`): the planner returns a `Seam`
+instead of a plan when the executed arm reaches the device block.
+
+- **prefix**: an `AtomicPlan` of everything before the first device
+  access, ending with `pc` at that instruction (`SPRITE_EMIT_UPLOAD`) and
+  *every* register the platform operation reads in place (the VDP
+  command in `d0`, the descriptor in `a0`, the counters...), `a7` after the
+  frame push, `sr` from the last flag-setter before the block, `last_pc`
+  the instruction before the block.  Its cost is the prefix's own; the
+  machine charges the ceded block itself.
+- **the ceded block**: from the first device access to the resume PC —
+  the control write, the data loop, and any RAM work between them (the
+  tile-cursor advance inside `0018C8`'s block stays with the machine; do
+  not chain a second seam to own it — Aladdin's lesson).
+- **resume_pc**: the first instruction after the block (`00198C`), gated
+  alone while the machine runs.
+- **identity**: `stack_basis` (the expected `a7` at the resume) and
+  `guards` (the saved frame plus the caller's return slot, read after the
+  prefix, unchanged at the resume); `expect` for a slot the operation
+  itself rewrites (Aladdin's sound seam checks the last JSR's return
+  address that way; Gods' upload pushes nothing).
+- **suffix**: `<region>_suffix(machine, registers)` planning the rest from
+  the live state at the resume — here the `movem.l (a7)+` restore read from
+  RAM, `a7` after the RTS, `pc` from the stack, the machine's own `sr`
+  (movem/rts leave the CCR the data loop left).
+
+The dispatcher (`recovery.Candidate._run_seam`) admits the prefix, calls
+`genesis_re.seam.run_seam`, and records the outcome: `completed`, a
+`refused` or `declined` suffix (the original runs the suffix from the
+resume: exact, counted as a fallback at the resume gate), or `deadline`
+(the frame's observation instant fell inside the block; the prefix stands
+and the original owns the rest).  No checkpoint is taken inside a seam
+(`machine.in_seam`).  Foreign returns (another activation at the resume
+PC) are bypassed and counted.
+
+What the recordings must witness for a seam: every prefix arm (as for a
+leaf), and that the suffix's identity holds on every retained path
+(`factcheck check` parks the original at the resume and checks the suffix
+plan there).  A device access in the *prefix or suffix* is not a seam:
+that is a blocker.
 
 ## 7. Dispatcher
 
@@ -131,12 +195,14 @@ original runs them; the segment tier (below).
 
 ```powershell
 & $py scripts\run_tests.py gods -- -k <concern>
-foreach ($f in Get-ChildItem artifacts\gods\evidence\census-<PC>\*.state) { & $py scripts\factcheck.py check $f.FullName gods_sega.boundary:<region>_plan --game gods }
+foreach ($f in Get-ChildItem artifacts\gods\evidence\census-<PC>*\*-p*.state) { & $py scripts\factcheck.py check $f.FullName gods_sega.boundary:<region>_plan --game gods }
 ```
 
 Every fixture must print `MATCH`.  `MISMATCH` names the wrong fact: fix the
 plan.  `DECLINED` on a claimed arm: the guard is wrong.  Never touch the
-fixture.
+fixture.  For a seam, `check` compares the prefix against the trace up to
+the platform entry, then parks the original at the resume and compares the
+suffix against the trace from there (`MATCH (seam ...)`); both must hold.
 
 ## 9. Future continuation
 
@@ -145,7 +211,10 @@ fixture.
 & $py scripts\segment_verify.py artifacts\gods\evidence\main\boundary-12000.state --game gods --candidate <candidate> --frames 300
 ```
 
-PASS with `candidate hits > 0` and `fallbacks 0` on witnessed arms.  The
+PASS with `candidate hits > 0`; the only fallback reason a witnessed arm
+may leave is `scheduler admission` (the native scheduler refuses a plan or
+a suffix when an interrupt is due inside its span — about one per cent of
+`0018C8`'s activations; the original runs those, which is exact).  The
 reference is `artifacts\gods\evidence\main\reference.json`, the reference
 worker's observations of the last original-vs-original PASS of that history
 (`f0ac19738f19…`); if you retain states from another history, verify it with
@@ -193,12 +262,19 @@ Take first: frequently executed, small or medium, clear entry/return,
 RAM-only, no device access, few arms, every arm recorded, deterministic cost
 per arm.
 
-Defer (a deferral is a result, write it in the session notes): direct VDP
-access (`C00000`/`C00004`), Z80 window or I/O access (`A0xxxx`, `A1xxxx`), the
-VBlank handler and anything reached from it, loops without a RAM-named
+Take next: a region whose only device work is one contiguous block with a
+RAM-only prefix and suffix (a seam, section 6b), including a region that
+*calls* one such routine once (Aladdin's "one native call inside the
+branch": the prefix ends at the JSR with the frame pushed, the resume is
+the return site) or a run of them (Aladdin's platform tail: end the prefix
+at the first platform entry, resume at the region's own RTS).
+
+Defer (a deferral is a result, write it in the session notes): device
+accesses interleaved with RAM work in several blocks, Z80 window or I/O
+access in the region's own prefix or suffix (`A0xxxx`, `A1xxxx`), the VBlank
+handler and anything reached from it, loops without a RAM- or ROM-named
 bound, command or script interpreters, routines whose arms are mostly
-unwitnessed, anything needing a mechanism `recovery.py` does not have (Gods
-has no seam for a platform call inside a region yet).
+unwitnessed.
 
 ## Escalation
 
@@ -207,7 +283,7 @@ admissible candidate.  Do not spend more than three attempts on one fact.
 
 | code | condition |
 |---|---|
-| `NEW_SHARED_MECHANISM` | the region needs something `Machine.atomic` and a plain plan cannot express: a platform call inside the region (a seam), writes between two platform calls, an interrupt inside the region, a device register in the region's own code |
+| `NEW_SHARED_MECHANISM` | the region needs an execution shape **no game in the repository has proven**: check `../aladdin/recovery-playbook.md` §4 and section 6b here first.  A shape Aladdin proved and Gods has not implemented yet is not this code: reproduce it, verify it through the full ladder, and only then write up what (if anything) turned out to be a genuinely different contract.  What remains this code: writes that must be recovered *between* two platform blocks, an interrupt handler inside the region, a device register in the prefix or suffix itself |
 | `NEW_GODS_SUBSYSTEM` | the region is an interpreter, a dispatcher family or a data structure that needs its own semantic module and naming before any leaf can be planned |
 | `INSUFFICIENT_EVIDENCE` | the recordings reach fewer arms than the routine has and the unwitnessed arms dominate; ask for a recording that reaches them |
 | `ORACLE_OR_TOOL_DISAGREEMENT` | `check` says MATCH but a segment or the cold run diverges, or a tool crashes |
@@ -219,6 +295,17 @@ caller, census directory), Code, Observed (the fact report, the branch table),
 Why the current mechanism does not fit (one paragraph), Fixtures used (paths
 and SHA-256), What was tried (one line each), Next question (one sentence a
 stronger model can answer).  Commit it alone: `Escalate <PC>: <code>`.
+
+## Reporting
+
+## Review gate
+
+Gods has no `leaf_review` yet.  Until enough leaves exist to define one,
+the review is: every retained fixture `MATCH` (a seam: prefix and suffix),
+the segment tier from both retained boundary states, the mutant
+divergence, and a diff read for removed guards or assertions — a guard
+removed without a fact that justifies it is a failure even when every test
+passes.
 
 ## Reporting
 

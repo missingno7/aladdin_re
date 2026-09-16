@@ -17,8 +17,12 @@ hand.  PYTHONPATH must include src, scripts and tests.
                                     [--vary ADDR[.b|.w|.l]=v1,v2,...]...
       Park the machine, call the boundary planner MODULE:FUNCTION(machine,
       registers), trace the original over the same span and report every
-      fact the plan gets wrong.  A planner returning a SoundSeam is checked
-      through its prefix up to the native sound entry.  With --vary the same
+      fact the plan gets wrong.  A planner returning a shared Seam
+      (genesis_re.seam) is checked in two spans: the prefix up to the
+      platform entry, then the suffix from the resume PC once the original
+      has run the platform operation.  A planner returning a game's own
+      seam type with a ``prefix`` (Aladdin's SoundSeam) is checked through
+      its prefix only.  With --vary the same
       check runs on every combination of poked RAM values (this is what
       catches fixture-specific constants).  Exit 0 MATCH, 1 MISMATCH,
       2 DECLINED (UnsupportedCandidate; the original facts are printed).
@@ -130,11 +134,23 @@ def command_check(args):
     return worst
 
 
+def _compare(label, plan, facts, regs):
+    problems = pathfacts.check_plan(plan, facts, regs)
+    notes = [p for p in problems if p.startswith('note')]
+    problems = [p for p in problems if not p.startswith('note')]
+    print('%splan: cycles %d instructions %d last_pc %06X writes %d registers %s' % (
+        label, plan.cycles, plan.instructions, plan.last_pc, len(plan.writes), sorted(plan.registers)))
+    print('%soriginal: cycles %d instructions %d last_pc %06X exit %06X' % (
+        label, facts['cycles'], facts['instructions'], facts['last_pc'], facts['exit_pc']))
+    for note in notes:
+        print(note)
+    return problems
+
+
 def _check_state(state, args):
     planner = load_planner(args.planner)
-    from aladdin_sega.boundary import UnsupportedCandidate, SoundSeam
-    declined = plan = None
-    seam = False
+    from genesis_re.seam import UnsupportedCandidate, Seam
+    declined = plan = seam = None
     with Machine(args.game.read_rom(), args.game) as m:
         m.restore(state)
         regs = m.registers()
@@ -143,14 +159,18 @@ def _check_state(state, args):
         except UnsupportedCandidate as error:
             declined = str(error)
         else:
-            seam = isinstance(result, SoundSeam)
-            plan = result.prefix if seam else result
+            if isinstance(result, Seam):
+                seam, plan = result, result.prefix
+            elif hasattr(result, 'prefix'):          # a game's own seam type: its prefix only
+                plan = result.prefix
+                print('seam: checking the prefix up to native entry %06X; the suffix planner %s is not checked here'
+                      % (plan.registers.get('pc'), getattr(result.suffix, '__name__', result.suffix)))
+            else:
+                plan = result
     # Only one native machine may be live per process: trace after the planner's machine is closed.
     stop = args.stop
-    if stop is None and seam:
+    if stop is None and plan is not None and plan is not result:
         stop = plan.registers.get('pc')
-        print('seam: checking the prefix up to native entry %06X; the suffix planner %s is not checked here'
-              % (stop, getattr(result.suffix, '__name__', result.suffix)))
     facts = pathfacts.trace(state, game=args.game, stop_pc=stop, max_instructions=args.max)
     if declined is not None:
         print('DECLINED: %s' % declined)
@@ -161,21 +181,25 @@ def _check_state(state, args):
         print('NOTE: plan continues at %06X but the original returns to its caller at %06X;'
               ' pass --stop %06X to compare the plan span' % (
                   plan.registers.get('pc', 0), facts['exit_pc'], plan.registers.get('pc', 0)))
-    problems = pathfacts.check_plan(plan, facts, regs)
-    notes = [p for p in problems if p.startswith('note')]
-    problems = [p for p in problems if not p.startswith('note')]
-    print('plan: cycles %d instructions %d last_pc %06X writes %d registers %s' % (
-        plan.cycles, plan.instructions, plan.last_pc, len(plan.writes), sorted(plan.registers)))
-    print('original: cycles %d instructions %d last_pc %06X exit %06X' % (
-        facts['cycles'], facts['instructions'], facts['last_pc'], facts['exit_pc']))
-    for note in notes:
-        print(note)
+    problems = _compare('prefix ' if seam is not None else '', plan, facts, regs)
+    if seam is not None and not problems:
+        # The platform operation runs on the original; the suffix is planned from the live state at the resume.
+        resumed = pathfacts.park(state, seam.resume_pc, game=args.game)
+        with Machine(args.game.read_rom(), args.game) as m:
+            m.restore(resumed)
+            returned = m.registers()
+            if returned['a7'] != seam.stack_basis:
+                problems.append('resume a7: original %08X vs seam stack basis %08X' % (returned['a7'], seam.stack_basis))
+            suffix = seam.suffix(m, returned)
+        if not problems:
+            resumed_facts = pathfacts.trace(resumed, game=args.game, stop_pc=suffix.registers.get('pc'), max_instructions=args.max)
+            problems = _compare('suffix ', suffix, resumed_facts, returned)
     if problems:
         print('MISMATCH:')
         for p in problems:
             print('  ' + p)
         return 1
-    print('MATCH')
+    print('MATCH' if seam is None else 'MATCH (seam: prefix to %06X, suffix from %06X)' % (stop, seam.resume_pc))
     return 0
 
 

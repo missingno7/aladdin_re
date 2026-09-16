@@ -83,7 +83,7 @@ class Machine:
         self.board = NTSC if profile is None else profile.board
         identity = (self.board.id, self.board.sha256) if profile is None else (profile.profile_id, profile.profile_sha256)
         self.candidate_identity = "original"
-        self.in_sound_call = False
+        self.in_seam = False
         self.calls = {}  # Diagnostic API counts, not emulated or persisted state.
         self._snapshot_buffer = None
         self.lib = load_library()

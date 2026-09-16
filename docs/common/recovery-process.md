@@ -90,8 +90,11 @@ trajectory (the terminal observation is recorded so a cold run can confirm).
 A good first candidate has a clear entry and return (JSR target, RTS), small
 size (tens to a few hundred instructions), work-RAM-only effects, no device
 access, no calls (or only calls the game's playbook already knows how to seam),
-a bounded loop count, and every path class covered by recordings.  Regions
-that touch the VDP, the Z80 window, the controller ports, interrupts,
+a bounded loop count, and every path class covered by recordings.  A region
+whose device work is one bounded block — a call to a sound or video helper,
+or an inline upload loop — with recovered code before and after it is the
+next shape, the seam (§7b).  Regions with device accesses interleaved with
+RAM work in several blocks, the controller ports, interrupt handlers,
 command interpreters or unbounded loops are deferred until the game has a
 mechanism for them; that deferral is a result, not a failure.
 
@@ -125,6 +128,29 @@ from the stack, `SR` with the CCR the last flag-setting instruction leaves,
 including `X`), the instruction and cycle cost of the path taken, and the
 last PC.  It raises `UnsupportedCandidate` for anything outside what has been
 witnessed.  Every constant in it comes from the fact report.
+
+### 7b. The seam: a platform operation inside a region
+
+When the executed path contains one bounded platform operation (Aladdin: a
+JSR to the sound request or the VDP tile upload; Gods: an inline VDP data
+loop), the planner returns a `Seam` (`src/genesis_re/seam.py`) instead of a
+plan: a **prefix** plan that ends with the PC at the operation's first
+instruction and every register it reads in place, the **resume PC** after
+the operation, the activation's **identity** at the resume (the expected
+`A7`, guarded stack spans that must be unchanged, slots that must hold a
+known return address), and a **suffix** planner that reads the live state
+at the resume.  `run_seam` is the shared mechanism: the prefix is admitted
+and committed, only the resume PC is gated while the machine runs the
+operation, a foreign activation at the resume is bypassed, a changed guard
+raises, the suffix is planned from live RAM and admitted, and a frame
+deadline inside the operation leaves the rest of the activation to the
+original (the prefix was exact).  Two rules Aladdin paid for: never chain
+seams to own the wrapper code between two platform calls — cede the whole
+tail to the machine and resume at the region's own RTS; and never put a
+device access in the prefix or suffix.  What the recordings must witness
+is the same as for a leaf, plus the suffix's identity on every retained
+path; the strict check (`factcheck check`) compares the prefix to the
+platform entry and the suffix from the resume.
 
 Keeping semantics and boundary apart is what makes recovered source readable
 and the machine contract exact at the same time: the semantics survive the
@@ -216,22 +242,29 @@ about one history, one candidate name, one native build and one source tree
   Fallbacks are the frontier.
 - A **refusal** by the planner (`UnsupportedCandidate`) is the honest edge
   of the evidence: an arm not witnessed, a state outside the guards.
-- A **blocker** is a candidate the current mechanisms cannot express: a
-  device access in the region's own code, a platform call the game has no
-  seam for, an interrupt inside the region, an unbounded loop, a data
-  structure nobody has named.  The right result is a blocker package
-  (where, code, observed facts, fixtures, what was tried, the one question
-  a stronger model can answer) and the next candidate.  Grinders do not
-  build mechanisms.
+- A **blocker** is a candidate whose execution shape no game in the
+  repository has proven: recovered writes needed between two platform
+  operations, a device access in the prefix or suffix itself, an interrupt
+  handler inside the region, an unbounded loop, a data structure nobody
+  has named.  A shape one game has proven and another has not implemented
+  yet is not a blocker: the second game reproduces the shape (its own
+  addresses, its own semantics) and verifies it through the full ladder.
+  The right result for a real blocker is a blocker package (where, code,
+  observed facts, fixtures, what was tried, the one question a stronger
+  model can answer) and the next candidate.  Grinders do not build
+  mechanisms.
 
 ## What is shared and what is per game
 
 Shared (`src/genesis_re`, `scripts/`): the machine and its atomic admission,
-histories, the replay runner and its deadlines, verification, the tracer
-(`pathfacts`, `factcheck`), the census, the segment check, the status
-classifier, the frontier ledger, the callee census.  Per game
-(`src/<game>/`): the profile, the semantics, the boundary planners, the
-dispatcher and its candidate names, the seams it has (Aladdin has a sound
-seam and a platform-tail bridge; Gods has none yet), the fixtures and the
-tests.  A mechanism moves into the shared layer only after a second game has
-needed the same one.
+the admission contract (`AtomicPlan`, `UnsupportedCandidate`), the seam and
+its runner (`Seam`, `run_seam`), histories, the replay runner and its
+deadlines, verification, the tracer (`pathfacts`, `factcheck`), the census,
+the segment check, the status classifier, the frontier ledger, the callee
+census.  Per game (`src/<game>/`): the profile, the semantics, the boundary
+planners and their seam plans (where a region resumes, what its frame looks
+like, what the suffix means), the dispatcher and its candidate names and
+counters, the fixtures and the tests.  A mechanism moves into the shared
+layer only after a second game has needed the same one: the seam runner
+moved when Gods' sprite emitter reproduced the shape Aladdin's sound
+requests had proven.

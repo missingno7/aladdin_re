@@ -26,7 +26,7 @@ September 2026.
 
 | claim | evidence | artifact |
 |---|---|---|
-| `lifecycle` reproduces the original on the 82,161-frame route: every frame's state, video, PCM equal; **92,588 candidate hits, 137 fallbacks, 18.13M instructions replaced** | `history-verify 44223150… --game aladdin --candidate lifecycle` (two fresh workers, 414 s) | `artifacts/multi-game-aladdin-main` (after the multi-game split; the same count as `artifacts/audit-frontier17` before it) |
+| `lifecycle` reproduces the original on the 82,161-frame route: every frame's state, video, PCM equal; **92,588 candidate hits, 137 fallbacks, 18.13M instructions replaced** | `history-verify 44223150… --game aladdin --candidate lifecycle` (two fresh workers, 414 s) | `artifacts/multi-game-aladdin-main` (after the multi-game split; the same count as `artifacts/audit-frontier17` before it); `artifacts/seam-extraction-aladdin-main` (16 September, after the seam runner moved to `genesis_re.seam`: the same 92,588 hits, 137 fallbacks, 703 sound seams entered and returned) |
 | the native runtime runs the whole 82,161-frame route from its first main-loop frame to the end, byte- and sound-exact (aligned clock) | `scripts/aladdin/native_diff.py --cold 44223150 82161` | `native-frontier.md` §3c |
 | cold start from power-on reproduces the four cold recordings; the boot's VDP port-write stream is identical (307,570 words on `43ec25b7`) | `native_diff.py --native-boot`, `verify_ports.py --boot` | `native-frontier.md` §3b–3e |
 | independent mode (no oracle feedback) holds to frame 26,798 of the long route, then the declined-continue → title gap | `native_diff.py --independent` | `native-frontier.md` §1, §3 |
