@@ -310,6 +310,99 @@ ordering to be *update phase A → video commit → update phase B*, the port
 keeps that ordering directly; guest PCs, resume labels and register
 restoration recipes are not game concepts and do not survive into it.
 
+## Two gaps, one rule, and what rises with ownership
+
+The goal is not to reproduce the original's instruction schedule in
+native code; it is to reconstruct the same causal game model.  Two gaps
+are being closed: the **game gap** (machine code → recovered game
+semantics; what the bottom-up grind recovers) and the **platform gap**
+(implicit historical hardware behaviour → an explicit, minimal native
+platform and scheduling contract; what matters as boundaries rise and,
+last, when the VM-less runtime is composed).  The platform gap is never
+closed by carrying the original machine's execution model into the port.
+
+The governing rule: **an instruction-level mechanism may be removed; the
+information that can distinguish future game behaviour may not.**  A
+guest PC that merely marks an internal continuation may go; a stored
+walker phase the game reads back must stay.  An exact cycle sequence may
+go; "completed before / after the relevant platform deadline" must stay
+where it changes the future.  An interrupt at a particular instruction
+may go once its legal placements are proven equivalent; "a sound request
+before / after the commit" must stay where the consumer would receive
+something else.  The objective is the smallest semantic model sufficient
+to reproduce the future, not the least state: a slightly redundant state
+is safer than an elegant abstraction that merges distinguishable futures.
+
+State that persists because the game remembers it is recovered as
+semantic state (Gods' line-walker records: a stored continuation
+address becomes a phase and a progress).  State that persists only
+because the old CPU happened to be interrupted there is first tested for
+irrelevance — the VBlank-slide check is a proof technique, not a runtime
+feature: if every legal placement of the handler inside a region
+preserves the relevant state, the platform effects, the future and the
+deadlines, the region stays an ordinary synchronous function; if a
+placement changes the future, the actual dependency is named and kept
+explicitly.  Consequences of timing are preserved, not their cause: what
+a future needs is "crossed one commit window", "missed the parity slot",
+"the request was pending at the commit" — a duration model, if one is
+ever needed, belongs in the platform contract and is derived from
+semantic work and platform state, never from a recording.
+
+Semantic cuts rise as ownership does.  A display frame or even a whole
+tick is not assumed to be the final unit; a tick may decompose into
+*input latched → world update → spawn decisions → object changes
+published → video work submitted* when the platform interaction requires
+it.  Machine addresses stay as provenance and verification identities,
+not as the port's API.  When a region begins to own state, call several
+subsystems, touch the platform or become a candidate boundary, it gets a
+short **semantic-operation card** (in the game's STATUS): semantic
+operation; entry/exit boundary; persistent state; external observations;
+pending effects; permitted interference; proven movable events; required
+ordering boundaries; timing dependency; evidence and scope; remaining
+blocker — so that a blocker reads as unknown semantics, unknown
+persistent state, platform interaction, a real timing dependency, or
+merely missing evidence.  A tiny arithmetic leaf needs no card.
+
+An abstraction is falsified original-versus-original before it is
+trusted: if two reachable original states map to the same proposed
+semantic state but differ in state the abstraction discards, both are
+run under the same future inputs; if their futures differ, the
+abstraction lost something (timer phase, pending platform work, latches,
+queue state, coroutine progress, ordering-sensitive buffers are the
+suspects).  Platform events keep causal identities — *request created,
+published, consumed, completed*, with payload and phase — so that
+"sound A, commit, sound B, commit" stays distinguishable from "sound A,
+sound B, commit" even when RAM later agrees; pending operations belong in
+persistent state, completed ones in the verification event history.
+
+The verification hierarchy rises with the boundaries: **L0** exact
+machine region (architectural and effect equality, as today); **L1**
+semantic subsystem (complete subsystem state, effects, interference
+contract); **L2** closed-loop semantic execution (the recovered game
+making its own platform scheduling decisions); **L3** long independent
+execution (cold start, state trajectory, event trace, video and audio);
+**L4** adversarial verification (mutations continuously testing every
+layer — whenever a stronger abstraction is claimed, try to break the
+verifier).  A diagnostic verifier that hands the recovered kernel the
+oracle's already-derived schedule ("run this operation now, deliver this
+event here") proves the game logic under a supplied schedule, not the
+standalone runtime; the stronger test is closed-loop, where the harness
+supplies only external inputs and game data, never "drop this tick",
+"sample input again here", "commit sound now because the oracle did".
+Recovered code never depends on recording identity, expected future
+checkpoints, remaining input, oracle timing deltas or known outcomes:
+two runs with identical input prefixes behave identically over the
+prefix whatever their suffixes; snapshots are state, not history; the
+port cold-starts from game data and declared initial state.
+
+Two claims stay separate: the **historical recovery claim** (recovered
+semantics under the historical platform contract behave like the
+original machine) and the **product claim** (the same semantics under a
+deliberately chosen native platform policy).  The product may later
+choose not to reproduce performance-induced dropped ticks; that is an
+explicit contract change, never a weakened verifier, and there is one
+recovered game implementation, not exact and clean forks.
+
 ## What is shared and what is per game
 
 Shared (`src/genesis_re`, `scripts/`): the machine and its atomic admission,

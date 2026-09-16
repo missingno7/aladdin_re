@@ -77,7 +77,7 @@ into work RAM only); it is not changed by this baseline.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with twenty-three gates armed, the camera follow step `002806`, the
+  original with twenty-four gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -188,7 +188,10 @@ ids, never to `main`:
 | **`010CD2` pickup probe**: a caller-supplied record's own camera-relative call into the already-recovered pickup check, composed by calling `pickup_check_plan` itself with a synthetic register file for the point `00BA8E` is entered (one level deeper than the `0049DA`-calls-`001164` shape); the plan reproduces every fact on all 32 retained fixtures | `factcheck check` on every fixture | `tests/games/gods/test_pickup_check.py` |
 | `pickup-probe` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,248 hits, 58 fallbacks (23 scheduler admission, 35 unsupported domain: pickup check found-jitter-y-negative arm not witnessed)**; `camera-sprites` (all twenty-three gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,041,708 hits, 13,293 fallbacks, tree bit-exact** | `history-verify f0ac19738f19 --candidate pickup-probe`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-pickup-probe-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16x` |
 | the pickup probe's negative control (result-byte and register mutants either crash the 68000 on an unrecovered coroutine's own record read, or are blind on a scratch register) diverges at frame 469 by dropping all writes instead | `--candidate pickup-probe-mutant-result` | `artifacts/gods/verify-pickup-probe-mutant3` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 55 s | 1,558 tests | — |
+| **`00FFF0` line walker resume**: every fact on 35 retained fixtures over four recordings; consecutive invocations over 300 real frames continue from the re-armed record | `factcheck check`; `segment_verify` from a retained walker state | `tests/games/gods/test_walker.py`, `test_walker_resume.py` |
+| `walker` reproduces the original on `fb408bc7…`: **PASS, 34,904 frames, 169 hits of 170 calls (one Z80 bank refusal)**; `camera-sprites` (twenty-four gates) on the tree: **PASS, 107,519 frames, 1,047,974 hits, 6,906 fallbacks** | `history-verify fb408bc75597 --candidate walker`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-walker-fb408bc7-b`, `artifacts/gods/verify-camera-sprites-tree-walker-b` |
+| the walker negative control (the re-armed x one off) diverges at frame 2,260 | `--candidate walker-mutant-result` | `artifacts/gods/verify-walker-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 55 s | 1,613 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -302,6 +305,21 @@ longest recordings before choosing:
 | `001164` | 1,015 | 9–40 | recovered (`sprites-static`): the emitter's RAM-only sibling, its own descriptor-offset table (`0011E6`) and a fixed tile field instead of a cache (six callers) |
 | `0063FA` | 309 | 9 (constant) | recovered (`grid-cell`): a pure address computation, one path, no branch, no store; three callers (`006468`, `006FFE`, `007282`) |
 | `00FC8E` | 600 | 33–106 | recovered (`solid-draw`): the same definition `00FDB8` reads drawn as sprites, a work-RAM `(type id, tile index)` table scan then a rows x cells grid appended to the sprite list, off-screen cells skipped; the inline VDP upload arm (a negative table entry) declined, unwitnessed on every recording |
+
+Next bites of the walker subsystem, in order, all with `game/walker.py`
+as the semantics and `walker_resume_plan` as the boundary model: (1)
+`00FE08`'s `moving` arm — own the resume call the way `0049DA` owns
+`001164`, then its cold-start path (`00FE5C`–`00FE8C`: the next waypoint
+from the solid's table, the budget from the speed byte, `bra 010002` —
+`walker.start` then `walker.run`), so that the 321 declined `moving`
+arms on the tree disappear; (2) `0091BC` — the pool scan (declined when
+full, unwitnessed) then the projectile copy's cold start
+(`walker.run(walker.start(...), budget, 'projectile')`; mind `move.w
+#$ffff,d0` versus `moveq` in the residue) and `010332`'s `trigger-deep`
+arm over it; (3) the driver `009210`'s resume call (`0093D2`) — census it;
+the driver itself only as far as the walker's contract needs
+(completion is the driver's: who frees a slot, who runs the tile test,
+where `00932C` belongs).
 
 Screened over the full `fb408bc75597…` history (`recovery_census.py
 --classifier entry`, not a direct park -- the 600-frame window's tight
@@ -457,6 +475,51 @@ A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback
 at that gate on the tree (exact by construction, not a declined arm) --
 `001164` and `0049DA` both do this; do not mistake it for a missed arm.
+
+**The line walker** (the first stateful subsystem; `game/walker.py`):
+Gods walks straight lines with a Bresenham stepper whose progress lives in
+an 18-byte record inside the owner's object — the continuation address
+(which of four loop bodies: toward +x or −x, shallow or steep), the
+position, the y-step sign, |dx|, |dy|, the error accumulator and the
+walk's own step counter.  Each call gets a step budget in `FFF1FE` from
+its caller, takes steps until the budget is spent, writes the record back
+re-armed and returns; the next call continues from the record.  Two ROM
+copies differ in one thing: the **object copy** (`00FFF0` resume /
+`010002` cold start; the solids' movement between waypoints, record at
+`+6` of the solid's live record, driven by the animation step `00FE08`)
+counts the walk down with `dbra` and stops inside the call when the major
+axis is exhausted, the counter going negative — the completion `00FE08`
+tests to load the next waypoint; the **projectile copy** (`0093D2` /
+`0093E4`; the 20-entry pool at `FFE19E`, 22 bytes each, filled by `0091BC`
+and driven by `009210`) loops unconditionally, decrements the counter once
+per call, and re-arms its "toward −x, steep" body as "toward +x, steep"
+(`0094BC` stores `009436`) — a quirk of the ROM, kept.
+
+Semantic-operation card, the object copy's resume (`00FFF0`, candidate
+`walker`): *operation* — advance a solid's walk by up to the budget;
+*boundary* — entry with A3 at the record and the budget word set by the
+caller, exit at the body's RTS with the record re-armed; *persistent
+state* — the record (phase, position, sign, spans, error, counter), read
+at entry and written at exit, and the budget word (what is left);
+*external observations* — none (RAM only); *pending effects* — none;
+*permitted interference* — the vertical interrupt anywhere inside (the
+handler shares no byte with it; slide check pending on a retained
+fixture); *proven movable events* — the interrupt (by the handler's
+read/write set, not yet by the slide tool); *ordering boundaries* — the
+record must be written before the owner's next resume, which the tick
+order guarantees; *timing dependency* — none beyond the budget the caller
+computes from the solid's speed; *evidence* — 35 fixtures over four
+recordings MATCH (the step arithmetic, the yield on the budget or the
+counter, `movem.w`'s sign extension in the residue), consecutive
+invocations over 300 real frames continue from the re-armed record, the
+mutant (the re-armed x one off) diverges at the next invocation — a
+counter one off is not a usable control: it drives the original's own
+waypoint code into a write to the cartridge, a fault, which is itself a
+fact about the game's tolerance of its records; *remaining
+blocker* — none for the resume; the cold start inside `00FE08`'s `moving`
+arm (`00FE5C`–`00FE8C` → `010002`) and the projectile copy are the next
+bites, with the same semantics (`walker.start`, `walker.run(...,
+'projectile')`).
 
 **The pickups** (the subsystem `013264` belongs to): a byte grid at
 `FFBBDE` (8×8-pixel cells, 48 per row) holds pickup codes; the pickup

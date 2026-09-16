@@ -16,12 +16,12 @@ from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY, PICKUP_PROBE_ENTRY,
                        PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
-                       STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
+                       STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, next_random_plan,
                        particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, proximity_plan,
                        score_convert_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan,
-                       zone_check_plan)
+                       walker_resume_plan, zone_check_plan)
 
 
 def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
@@ -43,6 +43,16 @@ def _mutate_outcome(plan: AtomicPlan) -> AtomicPlan:
     hold then fires its action.
     """
     return AtomicPlan(plan.cycles, plan.instructions, (), plan.registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_walk(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for the line walker: the re-armed x position one off (the eighth stored byte, after the
+    budget word, the continuation and x's high byte).  The counter is not the control: a counter one off
+    drove the original's own waypoint code into a write to the cartridge -- a fault, not a divergence."""
+    address, value = plan.writes[7]
+    return AtomicPlan(plan.cycles, plan.instructions,
+                      plan.writes[:7] + ((address, (value + 1) & 0xFF),) + plan.writes[8:],
+                      plan.registers, plan.last_pc, plan.direct_calls)
 
 
 def _mutate_register(plan: AtomicPlan) -> AtomicPlan:
@@ -84,6 +94,7 @@ PLANNERS = {
     'hazard-tick': {HAZARD_TICK_ENTRY: hazard_tick_plan},
     'conditions': {CONDITION_ENTRY: condition_plan},
     'pickups': {PICKUP_AWARD_ENTRY: pickup_award_plan},
+    'walker': {WALKER_RESUME_ENTRY: walker_resume_plan},
     'score-convert': {SCORE_CONVERT_ENTRY: score_convert_plan},
     'evaluator': {EVALUATOR_ENTRY: evaluator_plan},
     'proximity': {PROXIMITY_ENTRY: proximity_plan},
@@ -101,11 +112,12 @@ PLANNERS = {
                        CONDITION_ENTRY: condition_plan, SCORE_CONVERT_ENTRY: score_convert_plan,
                        EVALUATOR_ENTRY: evaluator_plan, PROXIMITY_ENTRY: proximity_plan, PICKUP_AWARD_ENTRY: pickup_award_plan,
                        NEXT_RANDOM_ENTRY: next_random_plan, EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan,
-                       PICKUP_CHECK_ENTRY: pickup_check_plan, PICKUP_PROBE_ENTRY: pickup_probe_plan},
+                       PICKUP_CHECK_ENTRY: pickup_check_plan, PICKUP_PROBE_ENTRY: pickup_probe_plan, WALKER_RESUME_ENTRY: walker_resume_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
              'pickups-mutant-result': ('pickups', _mutate_result),
+             'walker-mutant-result': ('walker', _mutate_walk),
              'sprites-mutant-result': ('sprites', _mutate_result),
              'sprites-mutant-register': ('sprites', _mutate_register),
              'sprites-static-mutant-result': ('sprites-static', _mutate_result),

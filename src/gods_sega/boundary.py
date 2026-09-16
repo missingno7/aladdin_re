@@ -2610,3 +2610,94 @@ def pickup_probe_plan(machine, registers):
             exit_registers[name] = inner.registers[name]
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=PICKUP_PROBE_LAST_PC)
+
+
+# --- 00FFF0: the line walker's resume, object copy (game/walker.py) ----------
+#
+# The animation step resumes a solid's walk: the record at A3 is loaded, the
+# stored body runs steps until the budget word FFF1FE reaches zero or the
+# walk's own counter runs out, and the record is written back re-armed.
+# Cost from the tracer (artifacts/gods/evidence/census-00FFF0*), per
+# fragment (cycles, instructions): the resume head, one step (with or
+# without the minor-axis wrap) that continues, that ends on the budget, or
+# that ends on the counter, and the yield tail.  The step costs are the same
+# in the shallow and the steep bodies.
+WALKER_RESUME_ENTRY, WALKER_RESUME_LAST_PC = 0x00FFF0, None   # each body has its own rts
+_WR_HEAD = (80, 8)                     # movea; movea (a3)+; move.w x3; movem.w (a3)+; movea; jmp (a0)
+_WR_STEP = {                           # (wrapped, how the step ended) -> cost
+    (False, 'continue'): (52, 6), (True, 'continue'): (58, 8),
+    (False, 'budget'): (44, 5), (True, 'budget'): (50, 7),
+    (False, 'counter'): (56, 6), (True, 'counter'): (62, 8)}
+_WR_TAIL = (92, 8)                     # subq d7; move.l #body,(a3)+; move.w x3; addq #8,a3; movem.w -(a3); rts
+_WR_RTS = {('+x', 'shallow'): 0x01004A, ('+x', 'steep'): 0x01007A, ('-x', 'shallow'): 0x0100C0, ('-x', 'steep'): 0x0100F0}
+
+
+def _walk_steps(walk, budget, copy):
+    """The per-step facts the cost table needs: whether the minor axis wrapped and how the step ended."""
+    from .game import walker
+    bodies, rearm, counted = walker.COPIES[copy]
+    toward, slope = walk.phase
+    error, counter = walk.error, walk.counter
+    minor, major = (walk.dy, walk.dx) if slope == 'shallow' else (walk.dx, walk.dy)
+    steps = []
+    while True:
+        error = (error - minor) & 0xFFFF
+        wrapped = bool(error & 0x8000)
+        if wrapped:
+            error = (error + major) & 0xFFFF
+        budget = (budget - 1) & 0xFFFF
+        if budget == 0:
+            steps.append((wrapped, 'budget'))
+            break
+        if counted:
+            counter = (counter - 1) & 0xFFFF
+            if counter == 0xFFFF:
+                steps.append((wrapped, 'counter'))
+                break
+        steps.append((wrapped, 'continue'))
+    return steps, counter
+
+
+def walker_resume_plan(machine, registers):
+    """00FFF0: resume the walk in the record at A3 with the budget in FFF1FE; not-a-walk records decline."""
+    from .game import walker
+    if registers['pc'] != WALKER_RESUME_ENTRY:
+        raise UnsupportedCandidate('walker resume planner needs the machine parked at 00FFF0')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    record32 = registers['a3']
+    record = record32 & 0xFFFFFF
+    if (sp | record) & 1:
+        raise UnsupportedCandidate('unaligned stack or walker record')
+    read = _reader(machine)
+    _spans_disjoint([('walker frame', sp, 4), ('walker record', record, walker.RECORD_SIZE), ('walker budget', walker.BUDGET, 2)])
+    walk = walker.load(read, record, 'object')
+    if walk is None:
+        raise UnsupportedCandidate('record continuation is not one of the object walker bodies')
+    budget = read(walker.BUDGET, 2)
+    if budget == 0:
+        raise UnsupportedCandidate('a zero budget wraps the budget word: not witnessed')
+    after, left, count, completed = walker.run(walk, budget, 'object')
+    steps, counter_before_subq = _walk_steps(walk, budget, 'object')
+    assert len(steps) == count
+    cost = _add(_WR_HEAD, *(_WR_STEP[step] for step in steps), _WR_TAIL)
+    high = lambda name: registers[name] & 0xFFFF0000
+    # The last X-setter is subq.w #1,d7 after the loop (a borrow when the counter was zero); N/Z from the
+    # last move.w d0,(a3)+, the y step sign; V and C clear.
+    x = 0x10 if counter_before_subq == 0 else 0
+    nz = 0x08 if after.y_sign & 0x8000 else (0x04 if after.y_sign == 0 else 0)
+    # movem.w into data registers sign-extends the loaded words (d2, d3, d5, d7); the word arithmetic that
+    # follows leaves that upper half alone (d5, d7); move.w keeps the entry's upper word (d0, d4, d6).
+    loaded = lambda word: 0xFFFF0000 if word & 0x8000 else 0
+    exit_registers = {
+        'd0': high('d0') | after.y_sign, 'd2': loaded(walk.dx) | after.dx, 'd3': loaded(walk.dy) | after.dy,
+        'd4': high('d4') | after.x, 'd5': loaded(walk.error) | after.error, 'd6': high('d6') | after.y,
+        'd7': loaded(walk.counter) | after.counter,
+        'a0': walker.OBJECT_BODIES[walk.phase], 'a3': (record32 + 10) & 0xFFFFFFFF, 'a5': record32,
+        'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': (sr & ~0x1F) | x | nz}
+    # The budget first, the record last: the record's counter is the last written byte, so the result
+    # mutant (a stored byte off) alters what the next invocation reads instead of a word the caller resets.
+    stores = {walker.BUDGET: (left, 2), **walker.stores(after, record, 'object')}
+    writes = tuple(pair for address, (value, size) in stores.items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                      last_pc=_WR_RTS[walk.phase])
