@@ -20,13 +20,15 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with ten gates armed, the camera follow step `002806`, the
+  original with twelve gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
-  step `00FE08` and the countdown check `010332`; `camera`, `sprites`,
-  `sprites-static`, `table-reset`, `spawn-queue`, `grid-cell`, `footprint`,
-  `solid-draw`, `animation-step` and `countdown-check` arm each alone.
+  step `00FE08`, the countdown check `010332`, the collision gate `010A14`
+  and the zone check `00BCCE`; `camera`, `sprites`, `sprites-static`,
+  `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
+  `animation-step`, `countdown-check`, `collision-gate` and `zone-check`
+  arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -87,7 +89,13 @@ ids, never to `main`:
 | **`010332` countdown check**: the plan reproduces every fact of the original on the 10 retained 'idle'/'waiting'-arm fixtures over four recordings; the 'trigger' arm (the countdown reaching zero) is declined -- it calls one of two unrecovered routines (`01158C`/`0115D4`) | `factcheck check` on every fixture | `tests/games/gods/test_timers.py` |
 | `countdown-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,238 hits, 68 fallbacks (33 scheduler admission, 35 unsupported domain)**; `camera-sprites` (all ten gates) on the tree of all eight recordings: **PASS, 107,519 frames, 801,195 hits, 6,610 fallbacks (5,713 scheduler admission, 344 seam deadline, 553 unsupported domain across `00FE08`/`010332`)** | `history-verify f0ac19738f19 --candidate countdown-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-countdown-check-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16j` |
 | the countdown check's negative control (a register, since the 'idle' arm stores nothing) diverges at frame 469 | `--candidate countdown-check-mutant-result` | `artifacts/gods/verify-countdown-check-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 667 tests, none skipped | — |
+| **`010A14` collision gate**: the plan reproduces every fact of the original on the 20 retained fixtures over the two recordings that reach this entry; the 'collision' arm (a residue of zero, calling `010CBC`) and the phase>7 arm ('over', real ROM code but unwitnessed on either recording) are declined | `factcheck check` on every fixture | `tests/games/gods/test_movement.py` |
+| `collision-gate` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 1,347 hits, 93 fallbacks (13 scheduler admission, 80 unsupported domain)**; `camera-sprites` (eleven gates) on the tree of all eight recordings: **PASS, 107,519 frames, 806,765 hits, 6,983 fallbacks (5,748 scheduler admission, 344 seam deadline, 891 unsupported domain across three declined-call regions)** | `history-verify f0ac19738f19 --candidate collision-gate`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-collision-gate-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16k` |
+| the collision gate's negative control diverges at frame 469 | `--candidate collision-gate-mutant-result` | `artifacts/gods/verify-collision-gate-mutant` |
+| **`00BCCE` zone check**: the plan reproduces every fact of the original on all 69 retained fixtures over four recordings (a box test around the player's own position, widened on two levels; fully witnessed, no declines) | `factcheck check` on every fixture | `tests/games/gods/test_zones.py` |
+| `zone-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 4,316 hits, 35 fallbacks (all scheduler admission)**; `camera-sprites` (all twelve gates) on the tree of all eight recordings: **PASS, 107,519 frames, 881,371 hits, 7,335 fallbacks (6,100 scheduler admission, 344 seam deadline, 891 unsupported domain)** | `history-verify f0ac19738f19 --candidate zone-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-zone-check-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16l` |
+| the zone check's negative control (a register: 'held'/'outside', the great majority, store nothing durable at all) diverges at frame 475 | `--candidate zone-check-mutant-result` | `artifacts/gods/verify-zone-check-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 40 s | 767 tests, none skipped | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -107,7 +115,7 @@ entered.
 
 ## What is not recovered
 
-Everything else.  Ten routines are recovered: the camera follow step
+Everything else.  Twelve routines are recovered: the camera follow step
 (`game/camera.py`, six words); the sprite emitter and its RAM-only sibling
 (`game/sprites.py`: the sprite list at `FFEBF6`–`FFEBFF`, the per-frame
 tile cache at `FFEE98`/`FFEEAA`, the dynamic-tile cursor `FFEE84`, the ROM
@@ -136,9 +144,17 @@ no recording enters); the animation step (`game/animation.py`: the
 'idle' arm only -- the shared frame-budget word `FRAME_BUDGET` refreshed
 from the definition's own field, on both arms; the common 'moving' arm
 calls the unrecovered coroutine and per-type dispatch at `00FFF0` and is
-declined); and the countdown check (`game/timers.py`: a caller-supplied
+declined); the countdown check (`game/timers.py`: a caller-supplied
 control byte and countdown word, 'idle' and 'waiting' recovered, the
-'trigger' arm declined -- it calls one of two unrecovered routines).  The
+'trigger' arm declined -- it calls one of two unrecovered routines); the
+collision gate (`game/movement.py`: a phase counter and a +-4 residue test
+over a caller-supplied state struct; 'held' and 'gated' recovered, the
+'collision' arm declined -- calls `010CBC` -- and the phase>7 arm declined
+as unwitnessed); and the zone check (`game/zones.py`: a box test around
+the player's own position (`0063FA`'s own `GRID_X`/`GRID_Y`), widened on
+two levels -- fully recovered, no declines, the routine's own eight-register
+save/restore frame makes the whole box arithmetic scratch except a
+cooldown word and D2's own final value).  The
 emitter's remaining siblings (`001256`/`001260`/`00126A`, `001312`) share
 its descriptor layout and list conventions but are not recovered.  There
 is no object-table convention, no semantic map, no native runtime, no
@@ -176,8 +192,8 @@ a grinder's to invent:
 | entry | path classes (full history) | why |
 |---|---|---|
 | `00FE08` | 19 | recovered as `animation-step` (the 'idle' arm; 'moving' calls unrecovered `00FFF0`) |
-| `010A14` | 10, but several branch points (`(a5+4)>7`, two `(a5+0xA)==0` arms, `(a3+0x12)!=0`) show only one side -- unwitnessed arms dominate | calls `010CBC`, a parameterised twin of `0063FA`'s own grid computation (recoverable once a leaf needs it on its own), then dereferences the computed grid cell (3 checks, 0x80-byte stride) and a second object pointer `a3` |
-| `00BCCE` | 28 | — |
+| `010A14` | 10 | recovered as `collision-gate` (the 'held' and 'gated' arms; 'collision' calls unrecovered `010CBC`; phase>7 unwitnessed on either of the two recordings that reach this entry) |
+| `00BCCE` | 28 (15 real: 13 were the same VBlank-in-interrupt-handler misattribution `00FDB8`'s screening hit) | recovered as `zone-check`: fully witnessed, no declines |
 | `00470C` | 30 | — |
 | `010332` | 7 | recovered as `countdown-check` (the 'idle' and 'waiting' arms; 'trigger' calls unrecovered `01158C`/`0115D4`) |
 | `014084` | 32 retained + 25 more overflowed | — |
@@ -208,7 +224,7 @@ a plain leaf (`grinder-protocol.md` §"Candidate selection rules"); what
 needs a convention is a dispatch through a type byte into unrecovered
 handlers.  (2) Most of the "path classes" above were VBlank landing
 positions, which the tracer now sets aside (`00FDB8`: 16 → 4).  Re-screen
-`010A14`, `00BCCE`, `00470C`, `014084`, `00126A` with the current tracer
+`00470C`, `014084`, `00126A` with the current tracer
 before taking their class counts at face value (`00FE08` and `010332` were
 re-screened and are now recovered, each as a dominant bounded arm plus a
 declined call into unrecovered code).  (3)
@@ -220,7 +236,18 @@ by the same definition bytes `00FDB8` reads; the negative (inline VDP
 upload) arm is real ROM code but no recording enters it, so it is declined
 like any other unwitnessed arm -- not a platform-tail seam that had to be
 built.  A routine flagged as "per-object-type diversity" from a raw path-class
-count is worth a real census before being set aside a second time.
+count is worth a real census before being set aside a second time.  (4)
+`00BCCE`'s pre-staged census (28 path classes, 13 of them recorded as
+"calls `0F4472`") was stale in a different way: a VBlank interrupt landing
+mid-activation, whose own handler happens to call the sound Z80 transfer
+`0F4472`, was misattributed to the region's own call list by an older
+tracer -- re-censused, every one of those 13 classes collapses into the
+same 15 real, RAM-only classes the rest of the occurrences already show,
+and the region needed no decline at all.  A census directory's own
+generation date does not track the tracer that produced it; re-run
+`recovery_census.py` fresh rather than trust a pre-staged directory's
+`calls`/`natives` fields when a decline looks surprising for a routine
+this small.
 
 **The solids** (the subsystem `00FDB8` and `00FC8E` belong to): 25 solid
 objects, each a live record at `FF4AAE` (0x18 bytes: world x, y at

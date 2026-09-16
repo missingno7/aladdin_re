@@ -771,3 +771,181 @@ def countdown_check_plan(machine, registers):
                       registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
                       last_pc=COUNTDOWN_CHECK_LAST_PC)
 
+
+# --- 010A14: the collision gate (game/movement.py: collision_gate) -----------
+#
+# Cost from the tracer (artifacts/gods/evidence/census-010A14{,-f0ac19738f19}):
+# every arm shares a head and a tail; the 'held' and 'gated' arms are
+# admitted, the 'collision' arm (calls 010CBC then dereferences the level
+# grid) is declined, and so is the phase>7 arm -- real ROM code, but no
+# recording on either history that reaches this entry takes it.
+COLLISION_GATE_ENTRY, COLLISION_GATE_LAST_PC = 0x010A14, 0x010AAC
+_CG_HEAD_TAKEN, _CG_HEAD_NOT_TAKEN = (50, 5), (48, 5)      # ble taken (phase<=7) vs not (phase>7, declined)
+_CG_FLAG_TAKEN, _CG_FLAG_NOT_TAKEN = (22, 2), (20, 2)      # tst.w GLOBAL_GATE; bne
+_CG_ADVANCE_TAKEN, _CG_ADVANCE_NOT_TAKEN = (46, 5), (44, 5)  # addq/andi/move/tst(a5+0xA)/bne
+_CG_DIR_TAKEN, _CG_DIR_NOT_TAKEN = (26, 4), (24, 4)        # addq-or-subq #4,d0; move; andi; bne
+_CG_TAIL_TAKEN, _CG_TAIL_NOT_TAKEN = (64, 5), (70, 6)      # asl/add/tst/bne[/ori]/rts
+
+
+def collision_gate_plan(machine, registers):
+    """010A14: the phase advance and the +-4 residue gate; the 'collision' arm (calls 010CBC) is declined."""
+    from .game import movement
+    if registers['pc'] != COLLISION_GATE_ENTRY:
+        raise UnsupportedCandidate('collision gate planner needs the machine parked at 010A14')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    state = registers['a5'] & 0xFFFFFF
+    result = movement.collision_gate(_reader(machine), state, registers['d0'] & 0xFFFF)
+    arm = result['arm']
+    if arm == 'collision':
+        raise UnsupportedCandidate('collision gate arm calls unrecovered 010CBC')
+    if arm == 'over':
+        raise UnsupportedCandidate('collision gate phase>7 arm not witnessed by a recording')
+    cycles, instructions = _CG_HEAD_TAKEN
+    if arm == 'held':
+        cycles, instructions = cycles + _CG_FLAG_TAKEN[0], instructions + _CG_FLAG_TAKEN[1]
+    else:
+        cycles, instructions = cycles + _CG_FLAG_NOT_TAKEN[0], instructions + _CG_FLAG_NOT_TAKEN[1]
+        moving = machine.peek_ram((state + movement.MOVING_STATE) & 0xFFFF, 2)
+        moving = int.from_bytes(moving, 'big')
+        advance = _CG_ADVANCE_TAKEN if moving != 0 else _CG_ADVANCE_NOT_TAKEN
+        cycles, instructions = cycles + advance[0], instructions + advance[1]
+        gated = _CG_DIR_TAKEN if arm == 'gated' else _CG_DIR_NOT_TAKEN
+        cycles, instructions = cycles + gated[0], instructions + gated[1]
+    moving_now = machine.peek_ram((state + movement.MOVING_STATE) & 0xFFFF, 2)
+    moving_now = int.from_bytes(moving_now, 'big')
+    tail = _CG_TAIL_TAKEN if moving_now != 0 else _CG_TAIL_NOT_TAKEN
+    cycles, instructions = cycles + tail[0], instructions + tail[1]
+    tail_d2_before_add = (result['tail_d2'] << 4) & 0xFFFF
+    final_d2 = (tail_d2_before_add + movement.TAIL_BASE_VALUE) & 0xFFFF
+    if moving_now == 0:
+        final_d2 |= movement.RESULT_TAG
+    x_bit = _add_sr(sr, tail_d2_before_add, movement.TAIL_BASE_VALUE, 2) & 0x10
+    exit_sr = (_logic_sr(sr, moving_now if moving_now != 0 else final_d2, 2) & ~0x10) | x_bit
+    d0 = (registers['d0'] & 0xFFFF0000) | result['d0']
+    d2 = (registers['d2'] & 0xFFFF0000) | final_d2
+    exit_registers = {'d0': d0, 'd2': d2, 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+    if arm == 'gated':
+        # d3 = d0 & 0x1F survives (no frame restores it): the residue that gated this arm.
+        exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | (result['d0'] & movement.RESIDUE_MASK)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=COLLISION_GATE_LAST_PC)
+
+
+# --- 00BCCE: the zone check (game/zones.py: zone_check) ----------------------
+#
+# Cost from the tracer (artifacts/gods/evidence/census-00BCCE-fresh): every
+# arm shares a head, an 8-register save/restore frame the routine never
+# writes back through (the whole box arithmetic is scratch), and up to
+# four sequential box tests.  Fully witnessed: no declines.  (The stale
+# pre-staged census-00BCCE directory showed calls to 0F4472, but those were
+# an interrupt landing mid-activation misattributed to the region's own
+# signature by an older tracer; re-censused, every occurrence is RAM-only.)
+ZONE_CHECK_ENTRY, ZONE_CHECK_HELD_LAST_PC, ZONE_CHECK_INSIDE_LAST_PC = 0x00BCCE, 0x00BD30, 0x00BD50
+ZONE_CHECK_FRAME = 32                                  # movem.l d0-d7,-(a7)
+_ZC_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7')
+_ZC_HELD_COST = (38, 3)                                # tst.w; bmi.w taken; rts
+_ZC_HEAD = (12 + 12, 2)                                # tst.w; bmi.w not taken (word branch: 12cy not taken, not 8)
+_ZC_PUSH = (72, 1)                                     # movem.l d0-d7,-(a7)
+_ZC_CAMERA_SETUP = (52, 8)
+_ZC_LEVEL_NARROW_LOW = (16 + 10, 2)                    # cmpi; blt taken
+_ZC_LEVEL_NARROW_HIGH = (16 + 8 + 16 + 10, 4)          # cmpi; blt not taken; cmpi; bgt taken
+_ZC_LEVEL_WIDE = (16 + 8 + 16 + 8 + 8, 5)              # cmpi; blt nt; cmpi; bgt nt; addi
+_ZC_HALF = (12 + 8 + 4 + 4 + 4, 5)                     # move; asr; add; sub; add (HALF_X and HALF_Y alike)
+_ZC_BCC_TAKEN = (4 + 10, 2)                            # cmp; Bcc taken -- a failing test 1-3, or test 4's success
+_ZC_BCC_NOT_TAKEN = (4 + 8, 2)                         # cmp; Bcc not taken -- a passing test 1-3, or test 4's failure
+_ZC_TAIL_OUTSIDE = (76 + 16, 2)                        # movem pop; rts
+_ZC_INSIDE_HEAD = (4 + 4 + 16 + 4 + 12, 5)             # move; addq; asr; addq; tst.w SUPPRESS_COOLDOWN
+_ZC_SUPPRESS_TAKEN = (10, 1)                           # bne taken: no cooldown decrement
+_ZC_SUPPRESS_NOT_TAKEN = (8 + 16, 2)                   # bne not taken: sub.w
+_ZC_INSIDE_POP = (76, 1)
+_ZC_RESULT_TST = (12, 1)
+_ZC_RESULT_TAKEN = (10, 1)                             # bne taken: d2 unchanged
+_ZC_RESULT_NOT_TAKEN = (8 + 4, 2)                      # bne not taken: moveq #-1,d2
+_ZC_RTS = (16, 1)
+
+
+def _zone_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(_ZC_FRAME_REGISTERS)
+                 for pair in _bytes(sp - ZONE_CHECK_FRAME + 4 * index, registers[name], 4))
+
+
+def zone_check_plan(machine, registers):
+    """00BCCE: the box test over the player's own position; every witnessed arm is admitted."""
+    from .game import zones
+    if registers['pc'] != ZONE_CHECK_ENTRY:
+        raise UnsupportedCandidate('zone check planner needs the machine parked at 00BCCE')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    result = zones.zone_check(_reader(machine), registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                              registers['d2'] & 0xFFFF)
+    arm = result['arm']
+    if arm == 'held':
+        hold_flag = machine.peek_ram(zones.HOLD_FLAG & 0xFFFF, 2)
+        exit_sr = _logic_sr(sr, int.from_bytes(hold_flag, 'big'), 2)
+        return AtomicPlan(cycles=_ZC_HELD_COST[0], instructions=_ZC_HELD_COST[1], writes=(),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=ZONE_CHECK_HELD_LAST_PC)
+    frame = ('zone check frame', sp - ZONE_CHECK_FRAME, ZONE_CHECK_FRAME)
+    _spans_disjoint([frame, ('zone check cooldown', zones.COOLDOWN & 0xFFFFFF, 2)])
+    cycles, instructions = _ZC_HEAD[0] + _ZC_PUSH[0] + _ZC_CAMERA_SETUP[0], _ZC_HEAD[1] + _ZC_PUSH[1] + _ZC_CAMERA_SETUP[1]
+    # The level shape (narrow-low / narrow-high / wide) only needs the level number itself.
+    level_value = machine.peek_ram(zones.LEVEL_NUMBER & 0xFFFF, 2)
+    level_value = zones._signed_word(int.from_bytes(level_value, 'big'))
+    if level_value < zones.WIDE_LEVEL_LOW:
+        level_cost = _ZC_LEVEL_NARROW_LOW
+    elif level_value > zones.WIDE_LEVEL_HIGH:
+        level_cost = _ZC_LEVEL_NARROW_HIGH
+    else:
+        level_cost = _ZC_LEVEL_WIDE
+    cycles, instructions = cycles + level_cost[0], instructions + level_cost[1]
+    cycles, instructions = cycles + 2 * _ZC_HALF[0], instructions + 2 * _ZC_HALF[1]
+    order = ('x_near', 'x_far', 'y_near', 'y_far')
+    fail = result['fail']
+    fail_index = order.index(fail) if fail else 4
+    for index in range(min(fail_index, 3)):
+        # Tests 1-3 passing (not taken) to get this far.
+        cycles, instructions = cycles + _ZC_BCC_NOT_TAKEN[0], instructions + _ZC_BCC_NOT_TAKEN[1]
+    if fail_index < 3:
+        cycles, instructions = cycles + _ZC_BCC_TAKEN[0], instructions + _ZC_BCC_TAKEN[1]     # tests 1-3: taken = fail
+    elif fail_index == 3:
+        cycles, instructions = cycles + _ZC_BCC_NOT_TAKEN[0], instructions + _ZC_BCC_NOT_TAKEN[1]  # test 4: not taken = fail
+    else:
+        cycles, instructions = cycles + _ZC_BCC_TAKEN[0], instructions + _ZC_BCC_TAKEN[1]      # test 4: taken = success
+    x_left, x_right = result['x_operands']
+    x_bit = _add_sr(sr, x_left, x_right, 2) & 0x10
+    if arm == 'outside':
+        cycles, instructions = cycles + _ZC_TAIL_OUTSIDE[0], instructions + _ZC_TAIL_OUTSIDE[1]
+        left, right = result['test_operands']
+        exit_sr = (_cmp_sr(sr, left, right, 2) & ~0x10) | x_bit
+        writes = _zone_frame_writes(sp, registers)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=ZONE_CHECK_HELD_LAST_PC)
+    # 'inside'
+    cycles, instructions = cycles + _ZC_INSIDE_HEAD[0], instructions + _ZC_INSIDE_HEAD[1]
+    if result['suppressed']:
+        cycles, instructions = cycles + _ZC_SUPPRESS_TAKEN[0], instructions + _ZC_SUPPRESS_TAKEN[1]
+        x_bit = _add_sr(sr, result['shifted'], 5, 2) & 0x10
+    else:
+        cycles, instructions = cycles + _ZC_SUPPRESS_NOT_TAKEN[0], instructions + _ZC_SUPPRESS_NOT_TAKEN[1]
+        x_bit = _sub_sr(sr, result['cooldown_before'], result['scale'], 2) & 0x10
+    cycles, instructions = cycles + _ZC_INSIDE_POP[0] + _ZC_RESULT_TST[0], instructions + _ZC_INSIDE_POP[1] + _ZC_RESULT_TST[1]
+    result_flag = machine.peek_ram(zones.RESULT_FLAG & 0xFFFF, 2)
+    result_flag = int.from_bytes(result_flag, 'big')
+    exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    if result_flag != 0:
+        cycles, instructions = cycles + _ZC_RESULT_TAKEN[0], instructions + _ZC_RESULT_TAKEN[1]
+        exit_sr = (_logic_sr(sr, result_flag, 2) & ~0x10) | x_bit
+    else:
+        cycles, instructions = cycles + _ZC_RESULT_NOT_TAKEN[0], instructions + _ZC_RESULT_NOT_TAKEN[1]
+        exit_registers['d2'] = 0xFFFFFFFF
+        exit_sr = (0x08 & ~0x10) | x_bit          # moveq #$ff,d2: N=1, Z=V=C=0
+    cycles, instructions = cycles + _ZC_RTS[0], instructions + _ZC_RTS[1]
+    exit_registers['sr'] = exit_sr
+    writes = (_zone_frame_writes(sp, registers)
+              + tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size)))
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=ZONE_CHECK_INSIDE_LAST_PC)
+
