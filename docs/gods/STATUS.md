@@ -109,7 +109,14 @@ ids, never to `main`:
 | **`00470C` trigger conditions** (the first Gods dispatcher): the plan reproduces every fact of the original on all 129 retained fixtures over five census directories (fourteen kinds, every witnessed compare position) | `factcheck check` on every fixture | `tests/games/gods/test_conditions.py` |
 | `conditions` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 5,247 hits, 36 fallbacks (all scheduler admission)**; `camera-sprites` (all fifteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,055,949 hits, 11,521 fallbacks (7,366 scheduler admission, 3,728 seam deadline, 426 declined arms of other regions), 30.6M instructions replaced** | `history-verify f0ac19738f19 --candidate conditions`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-conditions-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16p` |
 | the conditions negative control (a failing condition reported as passing) diverges at frame 993; a register mutant was blind and was dropped | `--candidate conditions-mutant-outcome` | `artifacts/gods/verify-conditions-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 45 s | 1,120 tests | — |
+| **`00364C` score conversion**: 1-3 digit values (0-999), witnessed at both score-update call sites over four recordings; the plan reproduces every fact on all 12 retained fixtures | `factcheck check` on every fixture | `tests/games/gods/test_score.py` |
+| `score-convert` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 56 hits, 0 fallbacks**; mutant DIVERGENCE at frame 675 | `history-verify f0ac19738f19 --candidate score-convert` | `artifacts/gods/verify-score-convert-f0ac1973`, `verify-score-convert-mutant` |
+| **`00462C` trigger evaluator**: the non-firing arm, a composition of three calls into `00470C` (the boundary owns the call); the plan reproduces every fact on all 21 non-firing retained fixtures over four recordings; firing (11) and disabled (0, unwitnessed) decline | `factcheck check` on every fixture | `tests/games/gods/test_triggers.py` |
+| `evaluator` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 1,708 hits, 55 fallbacks (32 firing, 21 scheduler admission, 2 disabled)**; mutant DIVERGENCE at frame 993 | `history-verify f0ac19738f19 --candidate evaluator` | `artifacts/gods/verify-evaluator-f0ac1973`, `verify-evaluator-mutant` |
+| **`00F828`/`00F86A` proximity table search-and-add**: `00F828` owns its own call into `00F86A`; the plan reproduces every fact on all 14 'not-found'+'added' retained fixtures over two recordings (not exercised on `f0ac1973…`/`f40d7bcc…`); 'trigger' (19) and 'pool-full' (0, unwitnessed) decline | `factcheck check` on every fixture | `tests/games/gods/test_proximity.py` |
+| `proximity` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 8 hits, 25 fallbacks (all the declined trigger arm)**; mutant DIVERGENCE at frame 12,890 | `history-verify fb408bc75597 --candidate proximity` | `artifacts/gods/verify-proximity-fb408bc75597`, `verify-proximity-mutant` |
+| `camera-sprites` (all eighteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,032,299 hits, 11,608 fallbacks (7,188 scheduler admission, 3,728 seam deadline, 692 declined arms across nine reasons, 1 gate-without-planner foreign-return edge), 30.9M instructions replaced** | `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-camera-sprites-tree-2026-09-16q` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 50 s | 1,319 tests, 1 skipped | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -189,11 +196,20 @@ to bounds, 'spawn' requests a sound and fills a bounded 20-entry pool;
 'trigger', the pool scan's own rare gate, calls `00F828` (recovered
 separately, `proximity`, but not yet composed here) and is declined).  The
 emitter's remaining siblings (`001256`/`001260`, `001312`) share
-its descriptor layout and list conventions but are not recovered.  There
-is no object-table convention, no semantic map, no native runtime, no
-sound-driver knowledge.  The seam for a platform operation inside a
-region exists and is shared (`src/genesis_re/seam.py`); Gods has one seam
-plan.
+its descriptor layout and list conventions but are not recovered.  Three
+more regions recovered 16 Sep: the score conversion (`game/score.py`: BCD
+digit packing, threading the caller's own X flag as the first digit's
+carry-in); the trigger evaluator's non-firing arm (`game/triggers.py`: a
+composition of three calls into `00470C`, `00462C` owning the call; its
+firing arm -- message, then a fifteen-handler action table -- declined);
+and the proximity table search-and-add (`game/hazard.py:
+proximity_search`/`proximity_add`: `00F828` owning its own call into
+`00F86A`; the matching-and-still-fresh 'trigger' arm at `00F8A2`, a
+caller-record dispatch with its own deliberate double stack return,
+declined).  There is no object-table convention, no semantic map, no
+native runtime, no sound-driver knowledge.  The seam for a platform
+operation inside a region exists and is shared (`src/genesis_re/seam.py`);
+Gods has one seam plan.
 
 ## Next bites
 
@@ -260,16 +276,24 @@ existing matching entry (by two coordinate words) and, on a match, decrements
 a timer field and returns past *both* stack frames at once (`addq.w #4,a7`
 before its own `rts`, discarding `00F828`'s own return address -- a deliberate
 double-return, not a bug); only on no match does control fall into `00F828`'s
-own pool-add step.  A real shape, not a tracer artifact, but a sharper edge
-than any leaf recovered so far and not attempted this session.  `00BA8E`/
-`010CD2` were also re-disassembled: `00BA8E` calls the already-recovered
-`00BCCE` (zone check) and requests a sound (`FFFDEA`-style RAM write) inside
-a several-hundred-instruction screen-margin/cooldown block; `010CD2` calls
-`00BA8E` and, further in, all three of `01158C`/`0115D4`/`0091BC` plus a
-branch on a literal state value (`010D7C`: `cmpi.w #$3d,d2`) that smells like
-a per-state dispatch.  Confirms the earlier assessment: these need the
-object-record convention (and, for `010D7C`, possibly a dispatch read)
-before either is a candidate; not re-attempted.
+own pool-add step.  A real shape, not a tracer artifact -- recovered 16 Sep
+as `proximity` (the 'not-found'+'added' composition; the 'trigger' arm at
+`00F8A2` declined, unwitnessed real code).  `00BA8E`/`010CD2` were
+re-screened the same day (`docs/gods/blockers/2026-09-16-00BA8E.md`):
+`00BA8E` calls the already-recovered `00BCCE` (zone check) and requests a
+sound (`FFFDEA`-style RAM write), then a bounded neighbourhood scan whose
+"nothing found" tail (25 of 32 real path classes, `fb408bc75597…`) is
+RAM-only and admissible in principle but not carried through -- the arm
+that matters calls `013264`, which jumps through a ROM table at `12D04`
+indexed by an object-type value (a genuine per-type dispatch); `010CD2`
+calls `00BA8E` and, further in, the unrecovered `0091BC` on one path, and
+`01158C`/`0115D4` (already reproduced at `010332`'s own addresses, not
+called from here) on the others, plus a branch on a literal state value
+(`010D7C`: `cmpi.w #$3d,d2`) that smells like a per-state dispatch.
+Confirms the earlier assessment: these need the object-record convention
+(and, for `010D7C`, possibly a dispatch read) before either is a full
+candidate; `00BA8E`'s own clean arm is the next bite once that convention
+-- or the time to derive its cost by hand -- exists.
 
 Two corrections to that screening, from the supervisor's iteration on
 `00FDB8`: (1) a caller-supplied record is not by itself a reason to defer
