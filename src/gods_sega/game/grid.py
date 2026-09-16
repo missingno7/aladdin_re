@@ -1,17 +1,19 @@
 """The grid cell lookup (ROM 0063FA-006412): called from three sites (006468, 006FFE, 007282).
 
 A pure address computation over two fixed words (`GRID_X`, `GRID_Y`): no
-loop, no branch, no store.  It returns a pointer into a ROM table
-(`GRID_TABLE`, 0x00885E) also indexed -- by a different transform -- from
-`00FDB8`; what the table holds is not known.  The names are what the
-arithmetic supports, not more.
+loop, no branch, no store.  It returns a pointer into a work-RAM table
+(`GRID_TABLE`; the register value 0xFFFF885E resolves to RAM `FF885E`,
+not a ROM address) also indexed -- by a different transform -- from
+`00FDB8` and (parameterised on X/Y registers instead of the fixed words
+here) `010CBC`; what the table holds is not known, but it is live state,
+not ROM data.  The names are what the arithmetic supports, not more.
 """
 from __future__ import annotations
 
 GRID_X, GRID_Y = 0xFFF18C, 0xFFF18E                 # words: the position the grid cell is computed from
 # lea.l $885e.w,a0 is the 68000's absolute-short mode: the 16-bit immediate is sign-extended, so the
-# literal register value is 0xFFFF885E, not 0x00885E -- the table is shared with 00FDB8's own
-# (differently transformed) lookup, whatever it is.
+# literal register value is 0xFFFF885E -- work RAM FF885E, not a ROM address -- shared with 00FDB8's
+# and 010CBC's own (differently transformed) lookups, whatever the table holds.
 GRID_TABLE = 0xFFFF885E
 GRID_Y_MASK = 0xFFF0                                # the low four bits of Y are dropped before the row shift
 

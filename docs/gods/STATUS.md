@@ -107,8 +107,10 @@ slots at `FFF39A`, each an animation counter and a world position, that
 call `001164` -- the first recovered example of "calls to routines already
 recovered", the shape Aladdin's platform tail generalises to a plain call);
 the grid cell lookup (`game/grid.py`: a pure address computation over
-`FFF18C`/`FFF18E` into a ROM table at `00885E` that `00FDB8` also indexes,
-by a different transform -- what the table holds is not known).  The
+`FFF18C`/`FFF18E` into a work-RAM table (register value `FFFF885E`, i.e.
+`FF885E`, not a ROM address) that `00FDB8` and `010CBC` also index, by
+different transforms -- what the table holds is not known, but it is
+live state, likely a per-level tile/collision grid).  The
 emitter's remaining siblings (`001256`/`001260`/`00126A`, `001312`) share
 its descriptor layout and list conventions but are not recovered.  There
 is no object-table convention, no semantic map, no native runtime, no
@@ -127,32 +129,53 @@ longest recordings before choosing:
 |---|---|---|---|
 | `0049DA` | 300 | 19-113 | recovered (`spawn-queue`): a scan of four 6-byte slots at `FFF39A` (an animation counter, a world position); an active slot calls the already-recovered `001164` once, then advances or retires the counter -- 0-2 calls witnessed per tick |
 | `004150` | 301 | 38 or 40 (3,806 / 3,940 cycles) | recovered (`table-reset`): an unconditional 1,600-byte fill below `FFC1BA` by unrolled `movem` bursts, zero or (rarely) 0xFE per `FFF210`'s sign |
-| `00FDB8` | 600 | 27 | from `00FC08`: appends a 6-byte(ish) record at A5 from the ROM table at `00885E`, reading two fields of a caller-supplied object pointer (A2 `+0x1A`/`+0x1B`); the 600-frame window shows one path class, but a 34,904-frame census shows **16 distinct path classes** with differing loop trip counts -- looks like a per-object-type dispatch (varying tile sizes, record counts), not a bounded single-shape leaf; census every recording before treating this as a small candidate, or treat it as the first case needing an object-record convention |
+| `00FDB8` | 600 | 27 | from `00FC08`: appends a 6-byte(ish) record at A5 from the work-RAM grid table (`FFFF885E`, the same table `0063FA`/`010CBC` index), reading two fields of a caller-supplied object pointer (A2 `+0x1A`/`+0x1B`); the 600-frame window shows one path class, but a 34,904-frame census shows **16 distinct path classes** with differing loop trip counts -- looks like a per-object-type dispatch (varying tile sizes, record counts), not a bounded single-shape leaf; census every recording before treating this as a small candidate, or treat it as the first case needing an object-record convention |
 | `002806` | 300 | 17–21 | recovered (`camera`) |
 | `0018C8` | 742 | 10–145 | recovered (`sprites`): the dynamic sprite emitter with a per-frame tile cache; a miss uploads the tiles inline (`001974`–`001988`), the first Gods seam |
 | `00126A` (`001256`, `001260`) | 412 | 305–307 | from `010248` (the particle drawer's jump table at `0100F2`): the emitter's sibling without the cache — the same seam shape (record composition, inline upload `0012F4`–`001308`, restore); `factcheck facts --park 00126A` does not reach the routine from `boundary-6000.state` within the default step budget.  A full census of `f0ac1973…` alone (15,148 frames) finds **32 retained path classes plus 17 more that overflowed retention** -- far more arms than a bounded leaf; likely the same per-object-type diversity as `00FDB8` below.  Census every recording and look for a bound (a fixed small set of object types, or a size the ROM tables themselves cap) before spending more on this one |
 | `001164` | 1,015 | 9–40 | recovered (`sprites-static`): the emitter's RAM-only sibling, its own descriptor-offset table (`0011E6`) and a fixed tile field instead of a cache (six callers) |
 | `0063FA` | 309 | 9 (constant) | recovered (`grid-cell`): a pure address computation, one path, no branch, no store; three callers (`006468`, `006FFE`, `007282`) |
 
-From a wider callee census (top 20 by call count, same window), not yet
-screened -- promising by call count and a tight or constant instruction
-range:
+Screened over the full `fb408bc75597…` history (`recovery_census.py
+--classifier entry`, not a direct park -- the 600-frame window's tight
+min/max hid real diversity every time) and set aside, all for the same
+reason: many more path classes than a bounded leaf has, always tracing
+back to a caller-supplied object pointer (or a call into an unrecovered
+routine that itself depends on one) -- the object-record convention, not
+a grinder's to invent:
 
-| entry | calls / 600 frames | length | callers |
-|---|---|---|---|
-| `00FE08` | 600 | 10 (constant) | `00FBEE` |
-| `010A14` | 412 | 12–40 | `010200` |
-| `00BCCE` | 412 | 27–31 | `00BA8E` |
-| `00470C` | 309 | 6–15 | `00465A`, `004668`, `004676` |
+| entry | path classes (full history) | why |
+|---|---|---|
+| `00FE08` | 19 | calls unrecovered `00FFF0`; arms range 10-165 instructions |
+| `010A14` | 10, but several branch points (`(a5+4)>7`, two `(a5+0xA)==0` arms, `(a3+0x12)!=0`) show only one side -- unwitnessed arms dominate | calls `010CBC`, a parameterised twin of `0063FA`'s own grid computation (recoverable once a leaf needs it on its own), then dereferences the computed grid cell (3 checks, 0x80-byte stride) and a second object pointer `a3` |
+| `00BCCE` | 28 | — |
+| `00470C` | 30 | — |
+| `010332` | 7, but every arm with any work calls unrecovered `01158C`/`0115D4` | — |
+| `014084` | 32 retained + 25 more overflowed | — |
+| `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | the sprite-emitter-sibling seam shape, but per-object-type like `00FDB8` |
+| `00FDB8` | 16 | see above |
 
-Screened and set aside, not first candidates: `013362` (600 calls, 3–1,047
-instructions -- an interpreter or unbounded loop, not a leaf), `00052E`
-(600 calls, 434–9,152 instructions -- likewise), `00FC8E` (600 calls,
-33–47, the continuation of `00FDB8`'s own caller `00FC08` -- inherits
-`00FDB8`'s per-object-type diversity), `00BA8E`/`010CD2` (412 calls each,
-116–268 / 125–277 -- wide range, seam-shaped candidates for later, once a
-smaller leaf or two has established more of the object/descriptor
-vocabulary).
+`010CBC` is worth flagging on its own: it is exactly `0063FA`'s grid
+computation with X/Y taken from D0/D1 instead of the fixed words
+`FFF18C`/`FFF18E` -- a trivial leaf once some future candidate needs it
+as a callee (the `0049DA`-calls-`001164` shape), but not a candidate by
+itself (no direct caller was found in the census; it is only reached
+through `010A14`).
+
+Screened and set aside earlier, not first candidates: `013362` (600
+calls, 3–1,047 instructions -- an interpreter or unbounded loop, not a
+leaf), `00052E` (600 calls, 434–9,152 instructions -- likewise), `00FC8E`
+(600 calls, 33–47, the continuation of `00FDB8`'s own caller `00FC08` --
+inherits `00FDB8`'s per-object-type diversity), `00BA8E`/`010CD2` (412
+calls each, 116–268 / 125–277 -- wide range, seam-shaped candidates for
+later, once the object-record convention exists).
+
+What every deferred candidate above has in common, and what would unblock
+them: a convention for a caller-supplied object record (which fields
+exist, what a "type" is, how many types the ROM tables actually bound)
+and a name for what the work-RAM table at `FFFF885E` (`0063FA`, `00FDB8`,
+`010CBC` all index it, by different transforms) holds.  That is
+`NEW_GODS_SUBSYSTEM` work, not a leaf.
 
 A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback
