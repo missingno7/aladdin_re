@@ -194,8 +194,9 @@ means the tiles are uploaded fresh by an inline VDP block instead, an arm
 no recording enters); the animation step (`game/animation.py`: the
 'idle' arm only -- the shared frame-budget word `FRAME_BUDGET` refreshed
 from the definition's own field, on both arms; the common 'moving' arm
-calls the unrecovered coroutine and per-type dispatch at `00FFF0` and is
-declined); the countdown check (`game/timers.py`: a caller-supplied
+calls the unrecovered Bresenham-walker coroutine at `00FFF0`
+(`docs/gods/blockers/2026-09-16-0091BC.md`) and is declined); the
+countdown check (`game/timers.py`: a caller-supplied
 control byte and countdown record, 'idle' and 'waiting' recovered; a
 residue of zero reloads the countdown and a frequency word
 unconditionally, then either the unrecovered `0091BC` pool (`'trigger-deep'`,
@@ -338,7 +339,13 @@ never reaches.  `010CD2` is now recovered too (16 Sep, `pickup-probe`),
 composed the way `00BA8E` composes its own callees, one level deeper
 (calling `pickup_check_plan` itself with a synthetic register file for
 the point `00BA8E` is entered).  `0091BC` remains open, and is a
-different, harder shape: see "The coroutine engine" below.
+different, harder shape: a resumable coroutine that stores its own
+continuation address back into a live record and dispatches through it,
+in two independent ROM copies (`0093D2`/`0093E4`, `0091BC`'s own callee;
+`010000`/`010002`, `00FFF0`'s own body -- and `00FFF0`, `00FE08`'s own
+declined `'moving'` arm, turned out to be the *same* engine, not a
+separate shape) -- escalated together, `NEW_GODS_SUBSYSTEM`
+(`docs/gods/blockers/2026-09-16-0091BC.md`).
 
 Two corrections to that screening, from the supervisor's iteration on
 `00FDB8`: (1) a caller-supplied record is not by itself a reason to defer
@@ -388,19 +395,21 @@ list (`00FAF4`, 50 entries at `FF4982`), then for each active solid: steps
 its animation (`00FE08`, recovered as `animation-step`: the shared
 frame-budget refresh and the 'idle' immediate return; the common 'moving'
 arm calls `00FFF0`, a resumable Bresenham-style line walk that stores its
-own continuation address back into the live record, then a per-object-type
-jump-table dispatch on a state byte -- a coroutine and dispatch engine, not
-a leaf, and the next real gap in this subsystem), stamps its footprint
-(`00FDB8`), and draws it (`00FC8E`, recovered as `solid-draw`: the sprite
-records for a width×height grid of 32×16 cells, tile index from the table
-at `FFF2D6` by type id; a negative entry means the tiles are uploaded by an
-inline VDP block from `FFEA2C`-relative data, unwitnessed and declined).
-The grid `FF885E` is what `0063FA` (the player) and `010CBC` (the movers)
-consult.  Next bites in this subsystem: `00FFF0`'s coroutine and its
-`00FEC0`/`00FF54` per-type dispatch (a `NEW_GODS_SUBSYSTEM`-shaped gap, not
-a leaf -- census the state-byte values it actually dispatches on before
-attempting anything), then the whole per-tick pass `00FBB6` as a
-composition of recovered leaves.
+own continuation address back into the live record and dispatches through
+it -- disassembled fully 16 Sep, confirmed bounded (four internal,
+self-contained loop bodies, no per-object-type handler table after all;
+`docs/gods/blockers/2026-09-16-0091BC.md`), but not yet recovered: a
+coroutine engine, not a leaf, and the next real gap in this subsystem),
+stamps its footprint (`00FDB8`), and draws it (`00FC8E`, recovered as
+`solid-draw`: the sprite records for a width×height grid of 32×16 cells,
+tile index from the table at `FFF2D6` by type id; a negative entry means
+the tiles are uploaded by an inline VDP block from `FFEA2C`-relative data,
+unwitnessed and declined).  The grid `FF885E` is what `0063FA` (the
+player) and `010CBC` (the movers) consult.  Next bites in this subsystem:
+`00FFF0`'s coroutine (per the blocker above, likely two bounded
+compositions over one shared Bresenham-step semantic module, not a new
+convention), then the whole per-tick pass `00FBB6` as a composition of
+recovered leaves.
 
 A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback
