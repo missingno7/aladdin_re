@@ -154,7 +154,7 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverge
     report = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120, candidate='solid-draw',
                                   reference=EVIDENCE)
     assert report['status'] == 'PASS', report
-    assert set(report['fallback_reasons']) <= {'scheduler admission', 'unsupported domain'}
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS | {'unsupported domain'}
     mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
                                   candidate='solid-draw-mutant-result', reference=EVIDENCE)
     if mutant['candidate_hits'] == 0:

@@ -41,7 +41,11 @@ class GenesisRun:
         except BaseException:
             self.machine.close()     # one native machine per process: never leak it on a refused run
             raise
-        self.implementation = {"backend": "genesis", "cache_contract": 3, "game": game.id,
+        # cache_contract 4: the observation instant is part of what a cached
+        # observation means, so it is part of the key (the profile hash is the
+        # cartridge's identity and does not carry it).
+        self.implementation = {"backend": "genesis", "cache_contract": 4, "game": game.id,
+                               "observation": game.observation_offset_ticks,
                                "native": receipt["native_binary_sha256"],
                                "source": receipt["python_modules_sha256"],
                                "state_version": self.machine.state_version,

@@ -243,10 +243,13 @@ suffix against the trace from there (`MATCH (seam ...)`); both must hold.
 & $py scripts\segment_verify.py artifacts\gods\evidence\main\boundary-12000.state --game gods --candidate <candidate> --frames 300
 ```
 
-PASS with `candidate hits > 0`; the only fallback reason a witnessed arm
-may leave is `scheduler admission` (the native scheduler refuses a plan or
-a suffix when an interrupt is due inside its span — about one per cent of
-`0018C8`'s activations; the original runs those, which is exact).  The
+PASS with `candidate hits > 0`; the only fallback reasons a witnessed arm
+may leave are the adapter's refusals of an exact span
+(`recovery.ADAPTER_REFUSALS`: `observation deadline`, `z80 bank guard`,
+`vblank in span`, `machine admission`; the original runs the span, which
+is exact).  Since the observation instant moved to the parity wait just
+before the vertical interrupt (16 September) these are a fraction of a
+per cent of activations, most of them the Z80 bank guard.  The
 reference is `artifacts\gods\evidence\main\reference.json`, the reference
 worker's observations of the last original-vs-original PASS of that history
 (`f0ac19738f19…`); if you retain states from another history, verify it with
@@ -351,7 +354,19 @@ the review is: every retained fixture `MATCH` (a seam: prefix and suffix),
 the segment tier from both retained boundary states, the mutant
 divergence, and a diff read for removed guards or assertions — a guard
 removed without a fact that justifies it is a failure even when every test
-passes.
+passes.  For a region whose census retained VBlank-pre-empted occurrences
+(the tracer set the handler aside), also run the strict-original slide
+check on one such fixture:
+
+```powershell
+& $py scripts\gods\vblank_slide.py artifacts\gods\evidence\census-<PC>\<PC>-entry-p0.state --ticks 20
+```
+
+Every landing must be `EQUIVALENT` (the exit state and twenty tick starts
+equal with the interrupt slid inside the region); a `DIFFERS` names a live
+byte the handler and the region share and is a finding to write up, not a
+region to admit.  A fixture from a level intro or a transition reports
+that the tick loop stopped; use a gameplay fixture.
 
 ## Reporting
 

@@ -157,7 +157,7 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutants_diverg
                                   reference=EVIDENCE)
     assert report['status'] == 'PASS', report
     assert report['candidate_hits'] > 100
-    assert set(report['fallback_reasons']) <= {'scheduler admission'}, report['fallback_reasons']
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS, report['fallback_reasons']
     for mutant in ('sprites-mutant-result', 'sprites-mutant-register'):
         diverged = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
                                         candidate=mutant, reference=EVIDENCE)
@@ -187,5 +187,5 @@ def test_every_seam_entered_over_real_frames_completes_at_its_own_resume():
     # resume, which is exact: the only fallback reason a seam may leave is that refusal.
     refused = stats['fallbacks_by_gate'].get('%06X' % boundary.SPRITE_EMIT_RESUME, 0)
     assert stats['seam_entries'] > 0 and stats['seam_completions'] + refused == stats['seam_entries']
-    assert set(stats['fallback_reasons']) <= {'scheduler admission'}, stats['fallback_reasons']
+    assert set(stats['fallback_reasons']) <= recovery.ADAPTER_REFUSALS, stats['fallback_reasons']
     assert stats['seam_foreign_returns'] == 0 and stats['seam_deadline_fallbacks'] == 0

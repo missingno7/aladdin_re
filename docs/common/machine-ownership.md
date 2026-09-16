@@ -57,7 +57,11 @@ structs, replay policies, or verification results.
 
 The current native GenesisEngine remains useful for instruction-boundary
 scheduling, Z80 catch-up, IRQ/VDP admission and bounded atomic operations.
-Keep it behind the ABI while these facilities work. Extract it when a needed
+Keep it behind the ABI while these facilities work.  The adapter reports
+why it refused an atomic span (`Machine.refusal`, ABI 3: the caller's
+deadline, the Z80 bank guard, or the engine's own guards — an interrupt,
+DMA, raster or bus condition inside the span); a refusal changes nothing
+and the game's dispatchers account for the causes separately. Extract it when a needed
 scheduler change or framework entanglement warrants that work; no speculative
 second engine or Python scheduler is required now.
 

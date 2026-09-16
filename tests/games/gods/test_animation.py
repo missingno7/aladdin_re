@@ -87,7 +87,7 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverge
     report = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120, candidate='animation-step',
                                   reference=EVIDENCE)
     assert report['status'] == 'PASS', report
-    assert set(report['fallback_reasons']) <= {'scheduler admission', 'unsupported domain: animation step arm calls unrecovered 00FFF0: moving'}
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS | {'unsupported domain: animation step arm calls unrecovered 00FFF0: moving'}
     if report['candidate_hits'] == 0:
         pytest.skip('animation-step never hits in this window')
     mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,

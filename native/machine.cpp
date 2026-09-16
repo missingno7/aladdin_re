@@ -120,7 +120,7 @@ std::uint64_t snapshot_tick(Handle& h, const std::uint8_t* data, std::uint64_t s
 // Project state contract, independent of source/build provenance. Bump when
 // persisted state or continuation semantics change; early artifacts regenerate.
 AL_API std::uint32_t al_state_version() noexcept { return 1; }
-AL_API std::uint32_t al_abi() noexcept { return 2; }
+AL_API std::uint32_t al_abi() noexcept { return 3; }
 AL_API const char* al_source_id() noexcept { return AL_SOURCE_ID; }
 AL_API const char* al_build_info() noexcept { return AL_BUILD_INFO; }
 AL_API const char* al_error() noexcept { return error.c_str(); }
@@ -203,14 +203,21 @@ AL_API int al_atomic(void* ptr, std::uint64_t target, std::uint64_t cycles,
             if (fields[i] == 17) require(values[i] <= 65535 && ((values[i] ^ m.mem.cpu.status) & ~31u) == 0,
                                       "Atomic status updates may change CCR only");
         }
-        *accepted = 0;
+        // *accepted reports the outcome: 1 admitted; 0 the engine declined the
+        // span (an interrupt, DMA, raster or bus condition inside it); 2 the
+        // caller's deadline precedes the span's end; 3 the Z80 bank register
+        // points at work RAM.  The refusal causes are facts the dispatchers
+        // account for separately; none of them changes the machine.
+        *accepted = 2;
         require(target >= m.master_cycles, "Atomic deadline precedes gate");
         // Preserve the caller's input/checkpoint limit as well as the engine's
         // native-operation raster/IRQ/DMA/trace/instruction guards.
         if (cycles >= (target - m.master_cycles) / m.profile.m68k_divider) return;
         // A currently shared bank is outside this atomic domain. A bank change
         // during the span is also watched before its first RAM access below.
+        *accepted = 3;
         if (m.z80.running() && (std::uint32_t(m.z80.bank) << 15) >= 0xe00000u) return;
+        *accepted = 0;
         const auto entry = e.pc();
         auto& host = m.z80.host;
         require(!host.observe_window, "Atomic operation cannot replace a sound observer");

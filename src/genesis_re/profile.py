@@ -25,6 +25,10 @@ class Board:
     power_on: str = "zero-ram"
     scheduling: str = "instruction-boundaries-v1"
     audio: str = "nuked-opn2-ym2612+nuked-psg;pcm-s16-clamped"
+    # Where inside a frame the adapter delivers the vertical interrupt (raster
+    # line 224 of 262): measured on the machine, a fact about the board rather
+    # than a term of its identity (docs/gods/research/timing-verification-pass-2026-09-16.md).
+    vblank_offset_ticks: int = 766_522
 
     @property
     def record(self) -> dict[str, Any]:

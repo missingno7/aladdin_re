@@ -259,7 +259,7 @@ def test_pickup_check_candidate_matches_the_reference_from_a_retained_fixture_an
     else:
         pytest.skip('no retained fixture reaches a witnessed arm within 120 frames')
     assert report['status'] == 'PASS', report
-    assert set(report['fallback_reasons']) <= {'scheduler admission'}
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(fixture, game=GODS, frames=120, candidate='pickup-check-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

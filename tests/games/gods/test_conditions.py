@@ -117,7 +117,7 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverge
     report = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=300, candidate='conditions',
                                   reference=EVIDENCE)
     assert report['status'] == 'PASS', report
-    assert report['candidate_hits'] > 50 and set(report['fallback_reasons']) <= {'scheduler admission'}
+    assert report['candidate_hits'] > 50 and set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     # A register mutant is blind here (the residue is dead, a non-negative slot still reads as false):
     # the control that reaches the game is a false outcome reported as true.
     flipped = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=300,

@@ -107,7 +107,7 @@ def test_the_continuation_code_is_now_admitted_via_the_grid_inverse_composition(
             # scheduler's own admission refusal is exact (the original runs it), not a decline.
             admitted = candidate.on_gate(machine, machine.info['tick'] + 1_000_000)
             if not admitted:
-                assert set(candidate.stats['fallback_reasons']) <= {'scheduler admission'}
+                assert set(candidate.stats['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
                 continue
             assert candidate.stats['candidate_hits'] == 1 and candidate.stats['fallbacks'] == 0
     if not found:
@@ -125,6 +125,6 @@ def test_candidate_matches_the_reference_from_a_retained_pickup_and_its_mutant_d
     fixture = REFERENCE_FIXTURES[0]
     report = segment_verify.check(fixture, game=GODS, frames=120, candidate='pickups', reference=EVIDENCE)
     assert report['status'] == 'PASS', report
-    assert report['candidate_hits'] >= 1 and set(report['fallback_reasons']) <= {'scheduler admission'}
+    assert report['candidate_hits'] >= 1 and set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(fixture, game=GODS, frames=120, candidate='pickups-mutant-result', reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE' and mutant['first_difference']['frame'] == report['from_frame'] + 1

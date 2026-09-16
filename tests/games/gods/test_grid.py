@@ -59,7 +59,7 @@ def test_plan_reproduces_every_fact_of_the_original_on_each_retained_path(fixtur
 def test_candidate_names_are_explicit():
     assert recovery.Candidate('grid-cell').gate_pcs == (boundary.GRID_CELL_ENTRY,)
     assert boundary.GRID_CELL_ENTRY in recovery.Candidate('camera-sprites').gate_pcs   # the combined candidate grows with every leaf
-    assert recovery.Candidate('grid-cell-mutant-result').mutation is recovery._mutate_register
+    assert recovery.Candidate('grid-cell-mutant-result').mutation is recovery._mutate_address
 
 
 @needs_reference
@@ -68,9 +68,10 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverge
                                   reference=EVIDENCE)
     assert report['status'] == 'PASS', report
     assert report['candidate_hits'] > 0 and report['fallbacks'] == 0
-    # The routine only ever computes a value for its (unmodeled) caller to act on later; a wrong D0
-    # takes a couple hundred frames to reach an observable difference, unlike a wrong stored byte.
-    mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=300,
+    # The control is the cell address the caller dereferences (a0 one cell off): it is seen on the
+    # first frame.  The earlier d0 control was only architectural residue caught by the mid-frame
+    # observation instant; once the instant moved to the idle window it passed, blind.
+    mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
                                   candidate='grid-cell-mutant-result', reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE', mutant
-    assert mutant['first_difference']['frame'] == 6185
+    assert mutant['first_difference']['frame'] == 6001

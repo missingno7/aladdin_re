@@ -58,7 +58,7 @@ def load_library():
         except AttributeError as error:
             raise NativeError("Native library predates the required review API; rebuild/install the current adapter then regenerate artifacts if their contract changed.") from error
         f.restype, f.argtypes = result, args
-    if lib.al_abi() != 2:
+    if lib.al_abi() != 3:
         raise NativeError("Unsupported native ABI")
     return lib
 
@@ -84,6 +84,7 @@ class Machine:
         identity = (self.board.id, self.board.sha256) if profile is None else (profile.profile_id, profile.profile_sha256)
         self.candidate_identity = "original"
         self.in_seam = False
+        self.refusal = None  # why the last atomic() was refused: 'deadline', 'z80_bank', 'engine', or None
         self.calls = {}  # Diagnostic API counts, not emulated or persisted state.
         self._snapshot_buffer = None
         self.lib = load_library()
@@ -160,6 +161,8 @@ class Machine:
         self._call("registers", values, len(values))
         return dict(zip([f"d{i}" for i in range(8)] + [f"a{i}" for i in range(8)] + ["pc", "sr"], values))
 
+    REFUSALS = {1: None, 0: "engine", 2: "deadline", 3: "z80_bank"}
+
     def atomic(self, *, target, cycles, instructions, last_pc, writes, registers):
         names = [f"d{i}" for i in range(8)] + [f"a{i}" for i in range(8)] + ["pc", "sr"]
         for value in (target, cycles, instructions):
@@ -178,7 +181,11 @@ class Machine:
         accepted = U32()
         self._call("atomic", target, cycles, instructions, last_pc, addresses, data, len(writes),
                    fields, values, len(fields), C.byref(accepted))
-        return bool(accepted.value)
+        # The adapter reports why a span was refused (``refusal``): the caller's deadline,
+        # the Z80 bank guard, or the engine's own guards (an interrupt, DMA, raster or bus
+        # condition inside the span).  A refusal leaves the machine unchanged.
+        self.refusal = self.REFUSALS[accepted.value]
+        return accepted.value == 1
 
     def peek_ram(self, offset, size=1):
         if not self.handle:

@@ -133,7 +133,7 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverge
                                   reference=EVIDENCE)
     assert report['status'] == 'PASS', report
     assert report['candidate_hits'] > 0
-    assert set(report['fallback_reasons']) <= {'scheduler admission'}, report['fallback_reasons']
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS, report['fallback_reasons']
     mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
                                   candidate='sprites-static-mutant-result', reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE', mutant

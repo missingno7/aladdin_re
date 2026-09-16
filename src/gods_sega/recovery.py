@@ -52,6 +52,21 @@ def _mutate_register(plan: AtomicPlan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_address(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for a routine whose result is an address in a0 the caller dereferences: one cell
+    off.  (A residue register such as d0 is not a control the game can see: with the observation instant
+    in the idle window the caller has long overwritten it, and the mutant passed.)"""
+    registers = dict(plan.registers)
+    registers['a0'] = (registers.get('a0', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
+# The fallback reasons that are the adapter's refusal of an exact span (the original runs it; nothing
+# is declined): the caller's observation instant precedes the span's end, the sound driver's Z80
+# bank register points at work RAM, a vertical interrupt falls inside the span, or another condition
+# of the engine's.  Everything else a fallback reason names is a declined arm or a seam outcome.
+ADAPTER_REFUSALS = frozenset({'observation deadline', 'z80 bank guard', 'vblank in span', 'machine admission'})
+
 PLANNERS = {
     'camera': {CAMERA_FOLLOW_ENTRY: camera_follow_plan},
     'sprites': {SPRITE_EMIT_ENTRY: sprite_emit_plan},
@@ -96,7 +111,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'sprites-static-mutant-result': ('sprites-static', _mutate_result),
              'table-reset-mutant-result': ('table-reset', _mutate_result),
              'spawn-queue-mutant-result': ('spawn-queue', _mutate_result),
-             'grid-cell-mutant-result': ('grid-cell', _mutate_register),
+             'grid-cell-mutant-result': ('grid-cell', _mutate_address),
              'footprint-mutant-result': ('footprint', _mutate_result),
              # a register, not the stored list: the routine's own last write is the unconditional
              # LIST_HEAD pointer, and corrupting it can cascade into an address error in the
@@ -138,6 +153,7 @@ class Candidate:
     the deadline, and the original then runs the region (a fallback).
     """
     name: str = 'camera'
+    last_refusal: str = 'machine admission'   # why the adapter refused the last span (_refusal_cause)
     stats: dict = field(default_factory=lambda: {
         'gates': 0, 'candidate_hits': 0, 'fallbacks': 0, 'fallback_reasons': {}, 'fallbacks_by_gate': {},
         'replaced_m68k_instructions': 0, 'charged_m68k_cycles': 0, 'direct_python_calls': 0,
@@ -174,14 +190,31 @@ class Candidate:
         if isinstance(plan, Seam):
             return self._run_seam(machine, deadline, plan, pc)
         if not self._admit(machine, deadline, plan):
-            return self._fallback(machine, pc, 'scheduler admission')
+            return self._fallback(machine, pc, self.last_refusal)
         return True
+
+    def _refusal_cause(self, machine, plan):
+        """Why the adapter refused a span, as the fallback reason: the observation deadline (the caller's
+        instant precedes the span's end), the Z80 bank guard (the sound driver's bank register points
+        at work RAM), a vertical interrupt inside the span, or another condition of the engine's."""
+        if machine.refusal == 'deadline':
+            return 'observation deadline'
+        if machine.refusal == 'z80_bank':
+            return 'z80 bank guard'
+        board, tick = machine.board, machine.info['tick']
+        next_vblank = (tick // board.frame_ticks) * board.frame_ticks + board.vblank_offset_ticks
+        if next_vblank < tick:
+            next_vblank += board.frame_ticks
+        if (next_vblank - tick) // board.m68k_divider <= plan.cycles + 8:
+            return 'vblank in span'
+        return 'machine admission'
 
     def _admit(self, machine, deadline, plan):
         if self.mutation is not None:
             plan = self.mutation(plan)
         if not machine.atomic(target=deadline, cycles=plan.cycles, instructions=plan.instructions,
                               writes=list(plan.writes), registers=plan.registers, last_pc=plan.last_pc):
+            self.last_refusal = self._refusal_cause(machine, plan)
             return False
         self.stats['candidate_hits'] += 1
         self.stats['replaced_m68k_instructions'] += plan.instructions
@@ -192,7 +225,7 @@ class Candidate:
     def _run_seam(self, machine, deadline, seam, pc):
         """Commit the prefix, let the original run the platform operation, admit the suffix at the resume."""
         if not self._admit(machine, deadline, seam.prefix):
-            return self._fallback(machine, pc, 'scheduler admission')
+            return self._fallback(machine, pc, self.last_refusal)
         self.stats['seam_entries'] += 1
         outcome = run_seam(machine, deadline, seam, admit=lambda plan: self._admit(machine, deadline, plan),
                            gates=self.gate_pcs)
@@ -207,7 +240,8 @@ class Candidate:
             self.stats['seam_deadline_fallbacks'] += 1
             return self._fallback(machine, None, outcome.reason)
         # A declined or refused suffix: the original runs it from the resume.
-        return self._fallback(machine, seam.resume_pc, outcome.reason)
+        return self._fallback(machine, seam.resume_pc,
+                              self.last_refusal if outcome.status == 'refused' else outcome.reason)
 
     def _fallback(self, machine, pc, reason):
         self.stats['fallbacks'] += 1

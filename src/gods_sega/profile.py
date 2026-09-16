@@ -21,10 +21,20 @@ def candidate(name):
     return Candidate(name)
 
 
+# The replay observes the machine, and deadlines recovered operations, at
+# 0.845 of the frame (raster line ~221): the idle instant of the parity wait
+# just before the vertical interrupt, measured over every recording on 16
+# September 2026 (docs/gods/research/).  The default (mid-frame) sat inside
+# Gods' busy window in nine ticks of ten and refused a plan or a seam suffix
+# at the frame's end for no reason of the game's.  The input instant is the
+# frame wrap and is unchanged.
+OBSERVATION_OFFSET_TICKS = 757_154
+
 GODS = GameProfile(
     id="gods", title="Gods", package="gods_sega",
     profile_id="gods-usa-ntsc-v1", rom_sha256=ROM_SHA256, rom_size=1_048_576,
-    rom_filename="Gods (USA).md", history_root=HISTORY_ROOT, candidate=candidate)
+    rom_filename="Gods (USA).md", history_root=HISTORY_ROOT, candidate=candidate,
+    observation_offset_ticks=OBSERVATION_OFFSET_TICKS)
 DEFAULT_ROM = GODS.rom_path
 
 

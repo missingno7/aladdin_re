@@ -31,6 +31,48 @@ original execution removed by upward composition, hard blockers, any
 temporary adapter and why, whether the bounded frontier is still
 productive, and what evidence would justify the native phase.
 
+## The observation instant and the adapter's refusals
+
+The replay observes the machine, and deadlines recovered operations, at
+0.845 of the frame (raster line ~221, `OBSERVATION_OFFSET_TICKS` in
+`profile.py`): the idle instant of the parity wait just before the
+vertical interrupt, measured over every recording in the timing research
+of 16 September (`research/timing-and-verification-2026-09-16.md`,
+`research/timing-verification-pass-2026-09-16.md`).  The default
+(mid-frame) instant sat inside Gods' busy window in nine ticks of ten,
+so a plan or a seam suffix at the frame's end was refused for no reason of
+the game's.  The input instant is the frame wrap and did not move; the
+original's trajectory is the same at either instant (its observations are
+not: the cache key carries the instant, `cache_contract` 4).
+
+A fallback that is not a declined arm is the adapter refusing an exact
+span, and the dispatcher records why (`Machine.refusal`, ABI 3):
+`observation deadline` (the instant precedes the span's end), `z80 bank
+guard` (the sound driver's bit-serial bank switch leaves the Z80 bank
+register pointing at work RAM for a few raster lines; `al_atomic` refuses
+any span meanwhile — an adapter conservatism under separate, read-only
+investigation, not a game fact), `vblank in span` (a vertical interrupt is
+due inside the span), `machine admission` (another condition of the
+engine's).  All four are exact: the original runs the span.  The earlier
+explanation here — that the refusals were interrupts due inside spans —
+described the minority.
+
+Measured on the tree of all eight recordings with the twenty-three-gate
+candidate, before and after the instant moved (`artifacts/gods/verify-camera-sprites-tree-2026-09-16x`
+→ `verify-camera-sprites-tree-instant`): hits 1,041,708 → **1,047,654**,
+fallbacks 13,293 → **6,905**; of the 6,905: `z80 bank guard` 4,214,
+declined arms 1,588 (the walker and the firing-arm callees, below),
+`seam deadline` 443 (was 3,728), `observation deadline` 335, `vblank in
+span` 298, `machine admission` 27.  The original at the new instant is
+reproducible on the whole tree (`verify-original-tree-instant`) and the
+candidate equals it everywhere; the retained boundary states and the
+segment reference (`artifacts/gods/evidence/main`) were retained again at
+the new instant (the old ones are beside them in `main-mid-frame-instant`).
+The Z80 bank guard, the largest class, is an adapter conservatism with a
+read-only study and a candidate narrower rule
+(`research/z80-bank-guard-2026-09-16.md`, R1: refuse a *completed* bank
+into work RAM only); it is not changed by this baseline.
+
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.

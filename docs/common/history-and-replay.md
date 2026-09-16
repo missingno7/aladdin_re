@@ -25,8 +25,11 @@ observed, and recovered operations are deadlined, at the game's
 *observation instant* inside the frame (`GameProfile.observation_offset_ticks`;
 for Aladdin `n * 896,040 + 448,020`, raster line 131, the middle of the window
 in which that game idles waiting for the next VBlank — measured in
-`../archive/project/execution-model-research-2026-09-14.md`; Gods uses the
-same half-frame default until measured).  A recovered operation admitted
+`../archive/project/execution-model-research-2026-09-14.md`; for Gods
+`n * 896,040 + 757,154`, raster line ~221, the parity wait just before the
+vertical interrupt, measured in `../gods/research/`).  The instant is part
+of the replay cache key (`cache_contract` 4): the original's trajectory is
+the same at any instant, its observations are not.  A recovered operation admitted
 before the nominal tick may therefore end after it; recovered regions contain
 no controller read, so the game cannot observe whether the mask changed one
 instruction or one operation after the tick, and the recorded trajectory is
