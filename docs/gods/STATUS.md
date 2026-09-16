@@ -487,11 +487,21 @@ evaluator `00462C` is recovered on its non-firing arm: a composition of
 three calls into the already-recovered `00470C` (the boundary owns the
 whole call, the shape `0049DA` calling `001164` proved), ANDing the three
 slots (`game/triggers.py`, candidate `evaluator`); its firing arm (message,
-then the action dispatch table at `0046D0`, fifteen handlers) is a second
-dispatcher, declined and left for the supervisor.  The disabled arm
-(`FFEF38` nonzero, skipping evaluation entirely) is real ROM code no
-recording has ever entered: declined too.  Next in this subsystem: the
-action dispatch table's fifteen handlers, each its own leaf or seam.
+then the action dispatch table at `0046D0`, fifteen handlers) is declined
+and escalated 16 Sep, `NEW_GODS_SUBSYSTEM`
+(`docs/gods/blockers/2026-09-16-00462C-firing.md`): a fresh census showed
+it is not one bounded dispatcher family but three nested unrecovered
+mechanisms -- a second, independent per-kind message dispatcher inside
+`0079DC` (19+ kinds witnessed), a collectible/achievement-slot tracker
+(`004790`/`0047DA`, reached from both of the firing tail's two other
+unconditional calls `004800`/`00475E`) that on real, witnessed paths
+calls `001648`, which writes through what looks like a hardware port or
+DMA target rather than plain RAM, and the fifteen-entry action table
+itself, whose handlers range from a free `rts` (three of fifteen
+entries) to genuinely complex (`00772E`: 10 real path classes in 12
+occurrences, not yet disassembled).  The disabled arm (`FFEF38` nonzero,
+skipping evaluation entirely) is real ROM code no recording has ever
+entered: declined too.
 
 Deferred, not first candidates: `003BEC` (the tile-pair VDP writer inside
 the map streaming interpreter `003158`/`003480`, which does not return
