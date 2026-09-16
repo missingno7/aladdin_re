@@ -122,14 +122,13 @@ def test_pickup_check_plan_reproduces_every_fact_of_the_original_or_declines_an_
     assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
 
 
-def test_a_found_code_013264_itself_declines_is_declined_here_too_not_a_crash():
-    # 013264's own pickup_award_plan already declines code -4 and below (the continuation into
-    # 013316, not recovered); the composition must decline the whole found arm the same way instead
-    # of falling through to _pickup_award_cost's cost table, which only knows -1/-2/-3.
-    with pytest.raises(boundary.UnsupportedCandidate):
-        boundary._pickup_award_cost(lambda a, s: 0, {'arm': 'unrecovered', 'code': -4})
-    with pytest.raises(boundary.UnsupportedCandidate):
-        boundary._pickup_award_cost(lambda a, s: 0, {'arm': 'unrecovered', 'code': -100})
+def test_pickup_award_cost_of_an_unrecovered_code_is_013264_own_cascade_only():
+    # code -4 and below: _pickup_award_cost covers only 013264's own cascade-to-BIG_VALUE (the
+    # composition adds 013316's own cost separately, via _grid_inverse_debris_cost, once it knows
+    # whether the debris burst itself is witnessed for this occurrence -- see
+    # test_pickups.py for the full -4-and-below composition, now admitted end to end).
+    same = boundary._pickup_award_cost(lambda a, s: 0, {'arm': 'unrecovered', 'code': -4})
+    assert same == boundary._pickup_award_cost(lambda a, s: 0, {'arm': 'unrecovered', 'code': -100})
 
 
 def test_found_sound_leaves_the_check_own_cue_not_the_award_own_cue():

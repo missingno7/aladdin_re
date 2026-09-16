@@ -2099,6 +2099,38 @@ def _grid_inverse_award_plan(machine, registers, result, sp32, sr, sp):
                       last_pc=GRID_INVERSE_LAST_PC)
 
 
+def _grid_inverse_debris_cost(inverse):
+    """013316's own cost only (013264's own cascade-to-BIG_VALUE prefix is _pickup_award_cost's own,
+    added separately): reused by pickup_check_plan's own composition, where 013316 has no separate
+    call site of its own (013264's own cascade falls straight through, the way it does when 013264
+    is gated directly)."""
+    if inverse['arm'] != 'debris':
+        raise UnsupportedCandidate(f"grid inverse award {inverse['arm']} arm not witnessed by a recording")
+    cycles, instructions = _add(_GI_HEAD, _GI_TST_SOUND, _GI_BEQ_SOUND_TAKEN, _GI_RATE_TST, _GI_RATE_BEQ_NOTTAKEN,
+                                _GI_RATE_CMPI, _GI_RATE_BGE_NOTTAKEN, _GI_POOL_SETUP)
+    particles = inverse['particles']
+    for slot, particle in enumerate(particles):
+        c, i = _add(*([_GI_SKIP] * particle['skipped']))
+        cycles += c
+        instructions += i
+        c, i = _add(_GI_FOUND_TEST, _GI_FILL_HEAD, _GI_JSR_RANDOM)
+        cycles += c
+        instructions += i
+        cycles, instructions = cycles + _NR_COST[0], instructions + _NR_COST[1]
+        c, i = _add(_GI_MASK, _GI_RANGE_HIGH if particle['high_range'] else _GI_RANGE_LOW, _GI_CUE, _GI_RESTORE_X,
+                   _GI_TABLE_COPY, _GI_RATE_ARM_TST, _GI_RATE_ARM_SKIP)
+        cycles += c
+        instructions += i
+        last = slot == len(particles) - 1
+        c, i = _add(_GI_DBRA_LAST, _GI_BRA_LAST) if last else _add(_GI_DBRA_TAKEN, _GI_DBRA_TAKEN)
+        cycles += c
+        instructions += i
+    c, i = _GI_TAIL
+    cycles += c
+    instructions += i
+    return cycles, instructions
+
+
 # --- 014A3C: the next-random draw (game/effects.py: next_random) ------------
 #
 # A trivial RAM-only leaf, no branch: called 3,971 times / 34,904 frames from
@@ -2201,6 +2233,7 @@ PICKUP_CHECK_ZONE_CUE_LAST_PC = 0x00BAE2      # the sound-off arm's own rts
 PICKUP_CHECK_ZONE_CUE_SOUND_ON_LAST_PC = 0x00BADA   # the sound-on arm has its OWN separate rts
 PICKUP_CHECK_CLEAN_LAST_PC = 0x00BBCA
 PICKUP_CHECK_SOUND_LAST_PC = 0x00BC42
+PICKUP_CHECK_BARE_LAST_PC = 0x00BC4C
 PICKUP_CHECK_EFFECT_LAST_PC = 0x00BCCC
 
 _PK_ZONE_CALL = (18, 1)                 # bsr.w $bcce (00BCCE's own cost is added separately, via _zone_check_cost)
@@ -2263,7 +2296,9 @@ _PK_JSR_AWARD = (20, 1)                 # jsr $13264.l (013264's own cost added 
 _PK_POP_D2 = (12, 1)                    # move.l (a7)+,d2
 _PK_READ_AWARD = (12, 1)                # move.w AWARD,d3
 _PK_TST_D4 = (4, 1)                     # tst.w d4
-_PK_BEQ_D4_TAKEN = (10, 1)              # beq.b (d4==0, the only witnessed continuation)
+_PK_BEQ_D4_TAKEN, _PK_BEQ_D4_NOTTAKEN = (10, 1), (8, 1)             # beq.b $bbea (d4==0 vs the special-1 arm)
+_PK_SPECIAL_TIMER_SUB = (16, 1)         # sub.w d2, SPECIAL_TIMER (special-1's own extra decrement, 00BBDE)
+_PK_BPL_TIMER_TAKEN, _PK_BPL_TIMER_NOTTAKEN = (10, 1), (8, 1)       # bpl.b $bbea (00BBE2)
 _PK_TST_EF46 = (12, 1)                  # tst.w MESSAGE_FLAG
 _PK_BEQ_EF46_TAKEN = (10, 1)            # beq.b (ef46==0, the only witnessed continuation)
 _PK_SUB_D3_D2 = (4, 1)                  # sub.w d3,d2
@@ -2271,13 +2306,14 @@ _PK_BMI_RESULT_TAKEN, _PK_BMI_RESULT_NOTTAKEN = (10, 1), (8, 1)     # bmi.b $bc2
 _PK_BNE_RESULT_TAKEN, _PK_BNE_RESULT_NOTTAKEN = (10, 1), (8, 1)     # bne.b $bc4e
 _PK_STORE_F3D4 = (12, 1)                # move.w d2,RESULT_WORD
 _PK_TST_D3 = (4, 1)                     # tst.w d3
-_PK_BEQ_D3_NOTTAKEN = (8, 1)            # beq.b not taken (d3!=0, the effect chain)
+_PK_BEQ_D3_TAKEN, _PK_BEQ_D3_NOTTAKEN = (10, 1), (8, 1)             # beq.b $bc44 (d3==0: found-bare vs the effect chain)
 
 _PK_EFFECT_RESTORE_A0A2 = (36, 1)       # movem.l (a7)+,a0-a2
 _PK_EFFECT_PEEK_D2D3 = (28, 1)          # movem.l (a7),d2-d3 (peek, not pop)
 _PK_EFFECT_HALF = (12 + 8 + 4, 3)       # move.w size,d4; asr.w #1,d4; add.w d4,Dn
 _PK_EFFECT_MASK = (8, 1)                # andi.w #$fff0,d4
-_PK_EFFECT_MASK_BNE = (10, 1)           # bne.b taken (the only witnessed arm: the default-mask branch declines)
+_PK_EFFECT_MASK_BNE, _PK_EFFECT_MASK_BNE_NOTTAKEN = (10, 1), (8, 1)  # bne.b (mask nonzero vs the default arm)
+_PK_EFFECT_MASK_DEFAULT = (4, 1)        # moveq #$10,d4 (only when the mask collapsed to zero)
 _PK_EFFECT_MASK_SUBQ = (4, 1)           # subq.w #1,d4
 _PK_JSR_RANDOM = (20, 1)                # jsr $14a3c.l (014A3C's own cost added separately, via _NR_COST)
 _PK_TST_DRAW = (4, 1)                   # tst.w d0
@@ -2378,8 +2414,10 @@ def _pickup_award_cost(read, collected):
         return _add(_PA_HEAD, _PA_GROUP[collected['group']], _PA_COMMON, _PA_BONUS[collected['bonus']],
                    _PA_CUE[collected['cue']], _PA_CONSUME[collected['consumed']], _PA_TAIL)
     if collected['arm'] == 'unrecovered':
-        # code -4 and below: the caller must decline before ever reaching here.
-        raise UnsupportedCandidate(f"pickup award code {collected['code']} is not recovered")
+        # code -4 and below: 013264's own cascade to BIG_VALUE only -- the composition that calls this
+        # (pickup_check_plan) adds 013316's own cost separately, via _grid_inverse_debris_cost, once it
+        # knows whether the debris burst itself is witnessed for this occurrence.
+        return _add(_GI_CASCADE, _GI_AWARD, _GI_POP_A1)
     from .game import pickups
     sound_on = bool(read(pickups.SOUND_ON, 2))
     if collected['arm'] == 'special-2' and sound_on:
@@ -2534,16 +2572,29 @@ def pickup_check_plan(machine, registers):
                                      **a4_exit},
                           last_pc=PICKUP_CHECK_CLEAN_LAST_PC)
 
-    if arm in ('found-special', 'found-message'):
+    if arm in ('found-special-timer', 'found-message', 'found-code-unrecovered'):
         raise UnsupportedCandidate(f'pickup check {arm} arm not witnessed by a recording')
 
     collect_result = result['collect']
-    if collect_result['arm'] == 'unrecovered':
-        # A grid code of -4 or below: 013264 itself declines this (the continuation into 013316,
-        # not yet recovered), so the composition must decline it too rather than fall through.
-        raise UnsupportedCandidate(f"pickup check found a code {collect_result['code']} 013264 declines")
     c, i = _add(_PK_PUSH_D2, _PK_JSR_AWARD, _pickup_award_cost(read, collect_result), _PK_POP_D2, _PK_READ_AWARD,
-               _PK_TST_D4, _PK_BEQ_D4_TAKEN, _PK_TST_EF46, _PK_BEQ_EF46_TAKEN, _PK_SUB_D3_D2)
+               _PK_TST_D4)
+    cycles += c
+    instructions += i
+    if collect_result['arm'] == 'unrecovered':
+        c, i = _grid_inverse_debris_cost(result['inverse'])
+        cycles += c
+        instructions += i
+    if collect_result['d4'] == 0:
+        c, i = _PK_BEQ_D4_TAKEN
+    else:
+        # special-1's own extra step (00BBDE-00BBE2): SPECIAL_TIMER's own decrement already landed in
+        # result['stores'] (seeded into order at the top of this function); only its cost and the two
+        # branches belong here.  A negative result declines above (result['arm'] would be
+        # 'found-special-timer'), so reaching this point means bpl.b was taken.
+        c, i = _add(_PK_BEQ_D4_NOTTAKEN, _PK_SPECIAL_TIMER_SUB, _PK_BPL_TIMER_TAKEN)
+    cycles += c
+    instructions += i
+    c, i = _add(_PK_TST_EF46, _PK_BEQ_EF46_TAKEN, _PK_SUB_D3_D2)
     cycles += c
     instructions += i
     # a1 at this point is the SCAN's own jump-table entry address (set at 00BB84-00BB90), not the
@@ -2558,6 +2609,30 @@ def pickup_check_plan(machine, registers):
     # own award cue (SOUND_CUE=0x38) first, then this routine's own cue store (0x3C/0x4F) overwriting
     # it on the found-sound arm.  Re-applying it here would undo that overwrite (the bug the tree
     # divergence at fb408bc75597 frame 6840 traced to: FFFDF5 left 0x38 instead of 0x3C).
+
+    if collect_result['arm'] == 'unrecovered':
+        # A grid code of -4 or below: 013264's own cascade to BIG_VALUE (013314's own movea.l
+        # (a7)+,a1 already popped the scan_a1 slot above) falls straight into 013316's own debris
+        # burst (result['inverse'], already witnessed on its own merits through the direct 013264
+        # gate) before this activation ever reaches tst.w d4 -- one activation of the same jsr.  Its
+        # own transient frame (movem.l d2-d3/d7,-(a7), 12 bytes) lands at 013264's own entry sp
+        # (AWARD_SP = sp-52: the fixed 32+12+4+4-byte frame this composition always has by the jsr),
+        # reusing (and overwriting, exactly as the real stack does) the scan_a1 slot just pushed.
+        # d2/d3 survive unchanged from 00BA8E's own entry to this point (confirmed on every witnessed
+        # fixture), but d7 is the SCAN's own residual row counter (rows-1-row: the scan's own dbra,
+        # not restored until 013316's own tail pops this same frame back).
+        inverse = result['inverse']
+        award_sp = sp - 52
+        cascade_d3 = (registers['d3'] & 0xFFFF0000) | ((collect_result['code'] + 3) & 0xFFFF)
+        scan_d7 = (registers['d7'] & 0xFFFF0000) | ((result['rows'] - 1 - result['scan']['row']) & 0xFFFF)
+        _ram_span('pickup check code-unrecovered debris frame', award_sp - 12, 12)
+        _pk_push(order, award_sp, [registers['d2'], cascade_d3, scan_d7])
+        for particle in inverse['particles']:
+            _ram_span('pickup check code-unrecovered debris random-call frame', award_sp - 20, 8)
+            _pk_push(order, award_sp - 12, [0x0134B6])
+            _pk_push(order, award_sp - 16, [(particle['address'] + 4) & 0xFFFFFFFF])
+        # inverse['stores'] (the particle fills, the pool cursor) is already in order: game.pickups
+        # merges it into result['stores'] (seeded into order at the top of this function).
 
     if arm == 'found-sound':
         box_result = result['box_result']
@@ -2588,9 +2663,22 @@ def pickup_check_plan(machine, registers):
                           last_pc=PICKUP_CHECK_SOUND_LAST_PC)
 
     if arm == 'found-bare':
-        raise UnsupportedCandidate('pickup check found-bare (award zero) arm not witnessed by a recording')
-    if arm in ('found-jitter-x-default', 'found-jitter-y-default', 'found-jitter-y-negative'):
-        raise UnsupportedCandidate(f'pickup check {arm} arm not witnessed by a recording')
+        # box_result != 0 (bne taken, RESULT_WORD already stored) but the award itself is zero
+        # (beq.b $bc44 taken): a bare restore-and-return, no further calls.
+        c, i = _add(_PK_BMI_RESULT_NOTTAKEN, _PK_BNE_RESULT_TAKEN, _PK_STORE_F3D4, _PK_TST_D3, _PK_BEQ_D3_TAKEN,
+                   _PK_EFFECT_RESTORE_A0A2, _PK_EFFECT_RESTORE_D0D7, _PK_RTS)
+        cycles += c
+        instructions += i
+        for a, b in _bytes(pickups.RESULT_WORD & 0xFFFFFF, result['box_result'], 2):
+            order[a] = b
+        # tst.w d3 (d3=0) is the last flag-setter: N=0/Z=1/V=C=0; X survives from the sub.w d3,d2 that
+        # produced box_result (nothing between there and here touches it).
+        x_bit = _sub_sr(sr, result['d2_before_award'], result['d3'], 2) & 0x10
+        exit_sr = (_logic_sr(sr, result['d3'], 2) & ~0x10) | x_bit
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr,
+                                     **a4_exit},
+                          last_pc=PICKUP_CHECK_BARE_LAST_PC)
     if arm != 'found-effect':
         raise UnsupportedCandidate(f'pickup check unknown arm {arm}')
 
@@ -2600,7 +2688,9 @@ def pickup_check_plan(machine, registers):
     for a, b in _bytes(pickups.RESULT_WORD & 0xFFFFFF, result['box_result'], 2):
         order[a] = b
 
-    c, i = _add(_PK_EFFECT_RESTORE_A0A2, _PK_EFFECT_PEEK_D2D3, _PK_EFFECT_HALF, _PK_EFFECT_MASK, _PK_EFFECT_MASK_BNE,
+    mask_x_pieces = [_PK_EFFECT_MASK_BNE_NOTTAKEN, _PK_EFFECT_MASK_DEFAULT] if result['default_mask_x'] \
+        else [_PK_EFFECT_MASK_BNE]
+    c, i = _add(_PK_EFFECT_RESTORE_A0A2, _PK_EFFECT_PEEK_D2D3, _PK_EFFECT_HALF, _PK_EFFECT_MASK, *mask_x_pieces,
                _PK_EFFECT_MASK_SUBQ, _PK_JSR_RANDOM)
     cycles += c
     instructions += i
@@ -2620,15 +2710,20 @@ def pickup_check_plan(machine, registers):
     _pk_push(order, sp - 32, [0x00BC76])
     _pk_push(order, sp - 36, [registers['a0']])
 
-    c, i = _add(_PK_EFFECT_HALF, _PK_EFFECT_MASK, _PK_EFFECT_MASK_BNE, _PK_EFFECT_MASK_SUBQ, _PK_JSR_RANDOM)
+    mask_y_pieces = [_PK_EFFECT_MASK_BNE_NOTTAKEN, _PK_EFFECT_MASK_DEFAULT] if result['default_mask_y'] \
+        else [_PK_EFFECT_MASK_BNE]
+    c, i = _add(_PK_EFFECT_HALF, _PK_EFFECT_MASK, *mask_y_pieces, _PK_EFFECT_MASK_SUBQ, _PK_JSR_RANDOM)
     cycles += c
     instructions += i
     cycles, instructions = cycles + _NR_COST[0], instructions + _NR_COST[1]
     c, i = _PK_TST_DRAW
     cycles += c
     instructions += i
-    # The second draw's negative branch declines above (result['arm'] would be 'found-jitter-y-negative').
-    c, i = _add(_PK_BMI_DRAW_NOTTAKEN, _PK_DRAW_AND, _PK_DRAW_ADD, _PK_DRAW_BRA)
+    # The second draw's own negative branch (00BC9E) mirrors the first's: subtract instead of add.
+    if result['dy_negative']:
+        c, i = _add(_PK_BMI_DRAW_TAKEN, _PK_DRAW_AND, _PK_DRAW_SUB)
+    else:
+        c, i = _add(_PK_BMI_DRAW_NOTTAKEN, _PK_DRAW_AND, _PK_DRAW_ADD, _PK_DRAW_BRA)
     cycles += c
     instructions += i
     # jsr 014a3c (second draw): the identical two stack slots as the first call, overwritten again.
@@ -2639,8 +2734,6 @@ def pickup_check_plan(machine, registers):
     cycles += c
     instructions += i
     added = result['effect']
-    if added['arm'] == 'full':
-        raise UnsupportedCandidate('pickup check found-effect pool-full arm not witnessed by a recording')
     pool_cost = _effect_pool_add_cost(added)
     cycles += pool_cost[0]
     instructions += pool_cost[1]
@@ -2662,9 +2755,14 @@ def pickup_check_plan(machine, registers):
     c, i = _add(_PK_EFFECT_RESTORE_D0D7, _PK_LOAD_D2, _PK_RTS)
     cycles += c
     instructions += i
-    # move.w RESULT_WORD,d2 is the last N/Z/V/C setter (MOVE never touches X); X instead survives
-    # from 00932C's OWN last flag-setter, addq.w #1,POOL_COUNTER (the 'added' arm's own X/C).
-    x_bit = _add_sr(sr, added['counter_before'], 1, 2) & 0x10
+    # move.w RESULT_WORD,d2 is the last N/Z/V/C setter (MOVE never touches X).  X instead survives
+    # from whichever instruction last touched it: 00932C's OWN addq.w #1,POOL_COUNTER when a slot was
+    # found, or -- when the pool is full and that addq never runs -- the second draw's own add.w/sub.w
+    # (py_base +/- jitter_y) that produced py, the last X-affecting instruction before the jsr.
+    if added['arm'] == 'full':
+        x_bit = (_sub_sr if result['dy_negative'] else _add_sr)(sr, result['py_base'], result['jitter_y'], 2) & 0x10
+    else:
+        x_bit = _add_sr(sr, added['counter_before'], 1, 2) & 0x10
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers={'d2': (registers['d2'] & 0xFFFF0000) | result['box_result'],
                                  'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),

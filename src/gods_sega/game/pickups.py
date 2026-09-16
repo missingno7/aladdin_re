@@ -37,6 +37,7 @@ TIME_NOW, TIME_MARK = 0xFFF362, 0xFFF36C              # words: the bonus is an e
 SOUND_ON, SOUND_CUE = 0xFFEF14, 0xFFFDF4              # the cue word of the sound command block
 PICKUP_CUE = 0x38
 SPECIAL_VALUE = 0xFFF158                              # the -1 pickup's value
+SPECIAL_TIMER = 0xFFFFF156                            # word: the special-1 pickup's own decrement (00BA8E's own tail)
 BIG_VALUE = 0x2710
 
 
@@ -249,14 +250,43 @@ def pickup_check(read, d0, d1, d2):
 
     collected = collect(read, scan['after_code'])
     result['collect'] = collected
-    if collected['d4'] != 0:
-        return {**result, 'arm': 'found-special'}          # the special-1 timer/011540 continuation: unwitnessed
-    if read(MESSAGE_FLAG, 2) != 0:
-        return {**result, 'arm': 'found-message'}           # the digit-split tail: unwitnessed
+    # 013264's own stores (AWARD, a consumed slot, a cue) already landed via the real jsr, regardless
+    # of what this routine's own tail below does with the result -- apply them unconditionally, the
+    # way the ROM's own control flow already has by the time it reaches the tst.w d4 that follows.
     stores.update(collected['stores'])
     result['d2_before_award'] = d2_after_zone   # the sub.w d3,d2 left operand, for the boundary's own X/C
     d3 = collected['stores'].get(AWARD, (read(AWARD, 2), 2))[0]     # AWARD, just stored by collect()
+
+    if collected['arm'] == 'unrecovered':
+        # code -4 and below: 013264's own cascade falls straight into 013316 (grid_inverse_award)
+        # before EVER reaching 00BA8E's own tst.w d4 -- one activation of the same jsr.  d3 (BIG_VALUE)
+        # is already set above; only the sound-off debris burst is witnessed (013264's own gate proved
+        # it), so the sound-on and pool-exhausted arms still decline.
+        inverse = grid_inverse_award(read, scan['after_code'])
+        result['inverse'] = inverse
+        if inverse['arm'] != 'debris':
+            return {**result, 'arm': 'found-code-unrecovered', 'd3': d3}
+        stores.update(inverse['stores'])
+
+    if collected['d4'] != 0:
+        # special-1's own extra step (00BBDE-00BBE2): a shared timer word is decremented by the box's
+        # own d2 residue; only when that goes negative does the ROM fall into a further, unrecovered
+        # call (jsr 011540) instead of re-joining the common tail every other collect() result reaches.
+        timer = read(SPECIAL_TIMER, 2)
+        new_timer = (timer - d2_after_zone) & 0xFFFF
+        stores[SPECIAL_TIMER & 0xFFFFFF] = (new_timer, 2)
+        result['special_timer'] = new_timer
+        if _signed_word(new_timer) < 0:
+            return {**result, 'arm': 'found-special-timer', 'd3': d3}   # jsr 011540: unrecovered, unwitnessed
+
+    if read(MESSAGE_FLAG, 2) != 0:
+        return {**result, 'arm': 'found-message', 'd3': d3}           # the digit-split tail: unwitnessed
+
     box_result = (d2_after_zone - d3) & 0xFFFF
+    # bmi.b $bc24 (box_result<0), when NOT taken, falls straight into bne.b $bc4e (box_result!=0);
+    # when THAT is also not taken (box_result==0) execution falls through to the very next instruction
+    # in memory, which is $bc24 itself -- box_result<=0 is one arm, not two: the ROM's own fall-through
+    # reaches the sound-cue code either way.
     if _signed_word(box_result) <= 0:
         cue = ZONE_CUE_SOUND_OFF if read(CHECK_SOUND_ON, 2) == 0 else ZONE_CUE_SOUND_ON
         stores[CHECK_SOUND_CUE & 0xFFFFFF] = (cue, 2)
@@ -272,15 +302,16 @@ def pickup_check(read, d0, d1, d2):
     # is exactly the untouched arguments this function was called with.
     # D4 is reused: loaded with the size copy, halved (asr.w #1, the "half" used to offset the
     # position), and the SAME register then masked (andi.w #$fff0) and decremented for the jitter
-    # mask -- so the mask comes from the HALVED value, not the size copy itself.
+    # mask -- so the mask comes from the HALVED value, not the size copy itself.  When the mask
+    # collapses to zero (00BC66/00BC84's own andi.w result), the ROM does not use it: it reloads D4
+    # with a fixed 0x10 first (moveq #$10,d4) before the same subq.w #1,d4 -- a real, bounded default,
+    # not a decline (00BC6A/00BC90's own bne.b falling through instead of being taken).
     half_x = (_signed_word(size_x) >> 1) & 0xFFFF
     half_y = (_signed_word(size_y) >> 1) & 0xFFFF
-    if (half_x & 0xFFF0) == 0:
-        return {**result, 'arm': 'found-jitter-x-default', 'd3': d3}   # half_x<0x10's default mask: unwitnessed
-    if (half_y & 0xFFF0) == 0:
-        return {**result, 'arm': 'found-jitter-y-default', 'd3': d3}   # half_y<0x10's default mask: unwitnessed
-    mask_x = (half_x & 0xFFF0) - 1
-    mask_y = (half_y & 0xFFF0) - 1
+    mask_x = (half_x & 0xFFF0) - 1 if (half_x & 0xFFF0) else 0xF
+    mask_y = (half_y & 0xFFF0) - 1 if (half_y & 0xFFF0) else 0xF
+    default_mask_x = (half_x & 0xFFF0) == 0
+    default_mask_y = (half_y & 0xFFF0) == 0
     draw_x = next_random(read)
     stores.update(draw_x['stores'])
     dx, dx_negative = draw_x['value'], bool(draw_x['value'] & 0x8000)
@@ -295,11 +326,12 @@ def pickup_check(read, d0, d1, d2):
     draw_y = next_random(read_after_x)
     stores.update(draw_y['stores'])
     dy, dy_negative = draw_y['value'], bool(draw_y['value'] & 0x8000)
-    if dy_negative:
-        return {**result, 'arm': 'found-jitter-y-negative', 'd3': d3, 'draw_x': draw_x, 'px': px,
-                'dx_negative': dx_negative}   # the second draw's negative branch: unwitnessed
+    # The second draw's own negative branch (00BC9E) mirrors the first's exactly: subtract the jitter
+    # instead of adding it -- not a decline, the same shape dx_negative already models for X.
     jitter_y = dy & mask_y
-    py = ((d1 & 0xFFFF) + half_y + jitter_y) & 0xFFFF
+    py_base = ((d1 & 0xFFFF) + half_y) & 0xFFFF   # the add.w/sub.w's own left operand (X's own source
+                                                    # when the effect pool turns out full: no addq runs)
+    py = (py_base - jitter_y if dy_negative else py_base + jitter_y) & 0xFFFF
 
     pool_x = (px - 8 - read(CAMERA_X, 2)) & 0xFFFF
     pool_y = (py - 8 - read(CAMERA_Y, 2)) & 0xFFFF
@@ -307,8 +339,9 @@ def pickup_check(read, d0, d1, d2):
     result['effect'] = added
     stores.update(added['stores'])
     return {**result, 'arm': 'found-effect', 'd3': d3, 'box_result': box_result, 'stores': stores, 'd2': box_result,
-            'px': px, 'py': py, 'dx_negative': dx_negative, 'dy_negative': dy_negative,
-            'pool_x': pool_x, 'pool_y': pool_y, 'mask_y': mask_y}
+            'px': px, 'py': py, 'py_base': py_base, 'jitter_y': jitter_y, 'dx_negative': dx_negative,
+            'dy_negative': dy_negative, 'default_mask_x': default_mask_x, 'default_mask_y': default_mask_y,
+            'pool_x': pool_x, 'pool_y': pool_y, 'mask_x': mask_x, 'mask_y': mask_y}
 
 
 # --- 013316: the grid inverse and debris burst (continuation of 013264's code -4 and below) ---
