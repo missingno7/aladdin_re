@@ -93,6 +93,7 @@ class Tracer:
         self.steps, self.writes, self.write_counts, self.calls, self.stack = [], OrderedDict(), {}, [], []
         self.ccr_last = {name: None for name, _ in CCR}
         self.interrupts, self.last_pc, self.n = 0, None, 0
+        self.handler_depth = 0   # >0 while stepping an interrupt handler the machine entered mid-region
 
     def at_exit(self, stop_pc=None):
         if self.n == 0:
@@ -127,8 +128,16 @@ class Tracer:
         new_regs = m.registers()
         new_ram = ram_bytes(m) if self.track_ram else None
         cycles = new_info['m68k_cycles'] - info['m68k_cycles']
+        # An interrupt accepted at this instruction boundary pre-empts the
+        # instruction at ``pc``: the engine runs the exception entry and the
+        # handler's first instruction as this step (``text`` names the
+        # pre-empted instruction, which executes again after the RTE).  That
+        # step and the ones that follow, up to and including the RTE, are the
+        # handler's, not the region's.
         if new_info['vblanks'] != info['vblanks']:
             self.interrupts += 1
+            self.handler_depth += 1
+        interrupt = self.handler_depth > 0
         changed = {k: (regs[k], new_regs[k]) for k in REGS if regs[k] != new_regs[k] and k != 'pc'}
         step_writes = []
         if self.track_ram and new_ram != ram:
@@ -141,10 +150,14 @@ class Tracer:
                             self.writes[addr] = new_ram[i]
                             self.write_counts[addr] = self.write_counts.get(addr, 0) + 1
         mnemonic = text.split(' ')[0].split('.')[0]
+        if mnemonic == 'rte' and self.handler_depth:
+            self.handler_depth -= 1
         taken = None
         if mnemonic in _BRANCHES or mnemonic.startswith('db'):
             taken = new_regs['pc'] != pc + size
-        if mnemonic in ('bsr', 'jsr'):
+        if interrupt:
+            pass  # the handler's own calls and returns are not the region's
+        elif mnemonic in ('bsr', 'jsr'):
             self.calls.append({'site': pc, 'callee': new_regs['pc'], 'return_slot': new_regs['a7'],
                                'return_pc': pc + size, 'depth': len(self.stack), 'step': self.n})
             self.stack.append(pc + size)
@@ -158,7 +171,7 @@ class Tracer:
                     self.ccr_last[name] = self.n
         record = {'n': self.n, 'pc': pc, 'text': text, 'cycles': cycles, 'taken': taken,
                   'changed': {k: v[1] for k, v in changed.items()},
-                  'writes': step_writes, 'sr': new_regs['sr'] & 0x1F}
+                  'writes': step_writes, 'sr': new_regs['sr'] & 0x1F, 'interrupt': interrupt}
         if self.detail:
             self.steps.append(record)
         self.last_pc = pc
@@ -175,6 +188,7 @@ class Tracer:
             'cycles': exit_info['m68k_cycles'] - self.entry_info['m68k_cycles'],
             'master_ticks': exit_info['tick'] - self.entry_info['tick'],
             'interrupts_during_trace': self.interrupts,
+            'interrupt_steps': sum(1 for step in self.steps if step['interrupt']),
             'stack_delta': exit_regs['a7'] - self.entry_regs['a7'],
             'caller_return_slot_at_entry': self.caller_return,
             'entry_registers': self.entry_regs,
@@ -203,6 +217,39 @@ def trace(state, *, game, entry=None, stop_pc=None, max_instructions=20000, rom=
         else:
             raise RuntimeError('trace exceeded instruction cap before reaching its stop')
         return tracer.facts()
+
+
+def region_only(facts):
+    """The facts of the region alone when an interrupt handler ran inside the trace.
+
+    The handler's steps (marked ``interrupt``) are dropped and the totals
+    the plan check compares are recomputed from the region's own steps:
+    instructions, cycles, the final RAM writes and their counts, the last
+    PC and where each flag last changed.  The handler restores every
+    register and the status word before the pre-empted instruction runs
+    again, so the register and CCR facts at the exit are the region's; its
+    RAM writes (counters, the input words, the sound block) are its own and
+    are not the region's to plan.  ``master_ticks`` keeps the wall time.
+    """
+    if not facts.get('interrupt_steps'):
+        return facts
+    steps = [step for step in facts['steps'] if not step.get('interrupt')]
+    writes, counts = OrderedDict(), {}
+    for step in steps:
+        for address, value in step['writes']:
+            writes[address] = value
+            counts[address] = counts.get(address, 0) + 1
+    ccr_last = {name: None for name, _ in CCR}
+    previous = facts['entry_registers']['sr']
+    for step in steps:
+        for name, bit in CCR:
+            if (previous ^ step['sr']) & bit:
+                ccr_last[name] = step['n']
+        previous = step['sr']
+    return {**facts, 'steps': steps, 'instructions': len(steps), 'cycles': sum(step['cycles'] for step in steps),
+            'ram_writes_final': writes, 'ram_write_counts': counts, 'ccr_last_changed_step': ccr_last,
+            'last_pc': steps[-1]['pc'] if steps else facts['last_pc'], 'interrupt_steps': 0,
+            'interrupts_set_aside': facts['interrupts_during_trace']}
 
 
 def registers_at(facts, step_index):
@@ -279,17 +326,23 @@ def path_signature(facts):
     and the record/global writes
     outside the activation's stack window and outside native segments (empty
     when RAM was not tracked).  Changed registers and writes are value-blind,
-    so they are labels rather than identity.
+    so they are labels rather than identity.  An interrupt handler the
+    machine entered mid-region is not the region's path: its steps are left
+    out of the identity and the writes facet (``interrupted`` says it
+    happened), so occurrences differ by their own arms, not by where a
+    VBlank landed; ``instructions`` and ``cycles`` still include it.
     """
     segments = split_at_native(facts)
     digest = hashlib.sha1()
     writes = set()
     record = facts['entry_registers']['a1'] & 0xFFFFFF
-    sp = facts['entry_registers']['a7']
+    sp = facts['entry_registers']['a7'] & 0xFFFFFF
     for segment in segments:
         if segment['kind'] != 'python':
             continue
         for step in facts['steps'][segment['first_step']:segment['last_step'] + 1]:
+            if step.get('interrupt'):
+                continue
             digest.update(step['pc'].to_bytes(4, 'big'))
             for address, _ in step['writes']:
                 if sp - STACK_WINDOW[0] <= address <= sp + STACK_WINDOW[1]:
@@ -303,7 +356,8 @@ def path_signature(facts):
     return {'exit': '%06X' % facts['exit_pc'], 'path': digest.hexdigest()[:16], 'calls': calls,
             'changed': sorted(k for k in facts['changed_registers'] if k not in ('pc', 'sr')),
             'instructions': facts['instructions'], 'cycles': facts['cycles'], 'ccr': ccr,
-            'natives': natives, 'writes': sorted(writes)}
+            'natives': natives, 'writes': sorted(writes),
+            'interrupted': bool(facts.get('interrupts_during_trace'))}
 
 
 def signature_key(signature):
@@ -402,6 +456,8 @@ def report(facts, *, path=True):
         lines.append('path:')
         for s in facts['steps']:
             flag = '' if s['taken'] is None else (' [taken]' if s['taken'] else ' [not taken]')
+            if s.get('interrupt'):
+                flag += ' [interrupt handler]'
             ch = ' '.join('%s=%X' % (k, v) for k, v in s['changed'].items() if k != 'sr')
             w = ' '.join('%06X=%02X' % (a, v) for a, v in s['writes'])
             lines.append(('  %3d %06X %-34s %3dcy ccr=%02X%s %s %s' % (

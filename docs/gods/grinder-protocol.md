@@ -88,7 +88,13 @@ exit CCR (`<PC>-entry-p<N>[-ccr<XX>].state` + `.json`).  Run it on the
 longest history; if another recording reaches the routine in situations the
 first does not, run it there too into a separate directory.  `cut > 0` means
 an occurrence ran past the frame deadline: those states are classified
-offline and are fine as fixtures, but note them.
+offline and are fine as fixtures, but note them.  A VBlank that lands
+inside an activation does not make a new class: the tracer marks the
+handler's steps (`[interrupt handler]` in `facts --path`) and leaves them
+out of the path identity; `check` and the tests compare the plan against
+the region's own facts (`pathfacts.region_only`).  Such states are never
+planned by the candidate (the scheduler refuses a span with an interrupt
+due, a `scheduler admission` fallback), so they cost nothing to keep.
 
 ## 4. Facts of every path
 

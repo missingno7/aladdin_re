@@ -134,6 +134,14 @@ def command_check(args):
     return worst
 
 
+def _region(facts):
+    """An interrupt handler the machine entered mid-region is set aside: the plan is the region's alone."""
+    if facts.get('interrupt_steps'):
+        print('note: %d interrupt(s) ran inside the trace (%d handler instructions set aside; the candidate '
+              'never plans such a state, the scheduler refuses it)' % (facts['interrupts_during_trace'], facts['interrupt_steps']))
+    return pathfacts.region_only(facts)
+
+
 def _compare(label, plan, facts, regs):
     problems = pathfacts.check_plan(plan, facts, regs)
     notes = [p for p in problems if p.startswith('note')]
@@ -171,7 +179,7 @@ def _check_state(state, args):
     stop = args.stop
     if stop is None and plan is not None and plan is not result:
         stop = plan.registers.get('pc')
-    facts = pathfacts.trace(state, game=args.game, stop_pc=stop, max_instructions=args.max)
+    facts = _region(pathfacts.trace(state, game=args.game, stop_pc=stop, max_instructions=args.max))
     if declined is not None:
         print('DECLINED: %s' % declined)
         print('original facts for the declined state:')
@@ -192,7 +200,8 @@ def _check_state(state, args):
                 problems.append('resume a7: original %08X vs seam stack basis %08X' % (returned['a7'], seam.stack_basis))
             suffix = seam.suffix(m, returned)
         if not problems:
-            resumed_facts = pathfacts.trace(resumed, game=args.game, stop_pc=suffix.registers.get('pc'), max_instructions=args.max)
+            resumed_facts = _region(pathfacts.trace(resumed, game=args.game, stop_pc=suffix.registers.get('pc'),
+                                                    max_instructions=args.max))
             problems = _compare('suffix ', suffix, resumed_facts, returned)
     if problems:
         print('MISMATCH:')

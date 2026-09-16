@@ -89,9 +89,9 @@ def test_plan_reproduces_every_fact_of_the_original_on_each_retained_path(fixtur
     with Machine(GODS.read_rom()) as machine:
         machine.restore(state)
         plan = boundary.static_emit_plan(machine, machine.registers())
-    facts = pathfacts.trace(state, game=GODS)
-    if facts['interrupts_during_trace']:
-        pytest.skip('an interrupt pre-empted the traced activation: not this planner\'s arm')
+    # A VBlank that pre-empts the activation is set aside: the plan is the region's alone, and the
+    # candidate never plans such a state (the scheduler refuses a span with an interrupt due).
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS))
     problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
     assert problems == [], problems
     assert facts['exit_pc'] == plan.registers['pc']
