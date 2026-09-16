@@ -2,12 +2,17 @@
 
 No frame at all -- D4/D5/A0/A1/A2 are live scratch the routine never
 saves.  'paint' (inactive, or an active object whose grid cell is not 1)
-and 'spawn' (active, grid cell 1, whether or not the pool has a free
-slot) are recovered; 'trigger' (the pool scan's own rare gate, keyed by a
-byte in a parallel table and a counter) calls an unrecovered routine and
-is declined even though witnessed.  Three tiers as for the other leaves;
-the evidence tiers skip when the local census or reference artifacts are
-absent.
+is recovered; 'spawn' (active, grid cell 1, whether or not the pool has a
+free slot) is recovered too, including its own call into the
+already-recovered proximity table (00F828, game.hazard.proximity_search/
+proximity_add/proximity_trigger) when a parallel-table byte matches
+TRIGGER_TYPE and the trigger counter has reached 2 -- the SAME pool fill
+runs afterward regardless of which of 00F828's own outcomes that call
+reaches.  Only a type match with the counter still under 2 (real code,
+never witnessed), a proximity search selector outside 0/1/2, or the
+proximity table itself full still decline as 'trigger'.  Three tiers as
+for the other leaves; the evidence tiers skip when the local census or
+reference artifacts are absent.
 """
 import json
 from pathlib import Path
@@ -83,13 +88,35 @@ def test_a_full_pool_still_clears_the_pending_flag():
     assert hazard.POOL_BASE not in result['stores']
 
 
-def test_the_trigger_arm_is_declined():
+def _empty_proximity_table(values):
+    for index in range(hazard.PROXIMITY_COUNT):
+        base = (hazard.PROXIMITY_TABLE + hazard.PROXIMITY_STRIDE * index) & 0xFFFFFF
+        values[(base, 2)] = 0xFFFF
+        values[(base + 2, 2)] = 0
+        values[(base + 4, 2)] = 0xFFFF
+    return values
+
+
+def test_a_type_match_with_the_counter_still_low_is_the_declined_trigger_gate():
     values = _world(cell_value=1)
     cell, _ = hazard._cell_address(_reader(values), 0x100, 0x80)
     values[(cell + hazard.TYPE_TABLE_OFFSET) & 0xFFFFFF, 1] = hazard.TRIGGER_TYPE
-    values[(hazard.TRIGGER_COUNTER, 2)] = 2
+    values[(hazard.TRIGGER_COUNTER, 2)] = 1                     # under 2: the call never happens
     result = hazard.hazard_tick(_reader(values), OBJECT, PENDING, 0x100, 0x80)
-    assert result['arm'] == 'trigger'
+    assert result['arm'] == 'trigger' and result['reason'] == 'gate-unwitnessed'
+
+
+def test_a_type_match_with_the_counter_at_2_composes_the_proximity_table_add():
+    values = _world(cell_value=1)
+    values[(hazard.POOL_BASE + 3 * hazard.POOL_STRIDE, 2)] = 0xFFFF   # the fourth pool entry is free
+    cell, _ = hazard._cell_address(_reader(values), 0x100, 0x80)
+    values[(cell + hazard.TYPE_TABLE_OFFSET) & 0xFFFFFF, 1] = hazard.TRIGGER_TYPE
+    values[(hazard.TRIGGER_COUNTER, 2)] = 2
+    _empty_proximity_table(values)
+    result = hazard.hazard_tick(_reader(values), OBJECT, PENDING, 0x100, 0x80)
+    assert result['arm'] == 'spawn' and result['proximity']['kind'] == 'added'
+    assert result['slot'] == hazard.POOL_BASE + 3 * hazard.POOL_STRIDE
+    assert (hazard.PROXIMITY_TABLE & 0xFFFFFF) in result['stores']
 
 
 def test_paint_is_clamped_to_the_tile_array_bounds():

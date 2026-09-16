@@ -79,11 +79,31 @@ def _paint(read, a3, d0, d1):
     return result
 
 
-def _spawn(read, cell, row, a3, d0, d1):
-    type_byte = read((cell + TYPE_TABLE_OFFSET) & 0xFFFFFF, 1)
+def _spawn(read, a1, cell, row, a3, d0, d1):
+    # 0140BC-0140CA: a type match against a parallel table (0x2000 before the grid cell) AND the
+    # trigger counter reaching 2 gate a call into the proximity table (00F828, game.hazard.
+    # proximity_search/proximity_add/proximity_trigger, all recovered on their own merits) BEFORE
+    # this SAME pool fill -- a type mismatch, or a match with the counter still under 2, skips the
+    # call outright and falls straight into the fill (0140D2 onward, common to every arm here).
+    type_match = read((cell + TYPE_TABLE_OFFSET) & 0xFFFFFF, 1) == TRIGGER_TYPE
     counter = _signed_word(read(TRIGGER_COUNTER, 2))
-    if type_byte == TRIGGER_TYPE and counter >= 2:
-        return {'arm': 'trigger', 'stores': {}}
+    proximity = None
+    if type_match:
+        if counter < 2:
+            return {'arm': 'trigger', 'reason': 'gate-unwitnessed', 'stores': {}}
+        search = proximity_search(read, cell)
+        if search['arm'] == 'trigger':
+            entry_base = (PROXIMITY_TABLE + PROXIMITY_STRIDE * search['index']) & 0xFFFFFFFF
+            sub = proximity_trigger(read, a1, entry_base)
+            if sub['arm'] == 'unrecovered':
+                return {'arm': 'trigger', 'reason': 'proximity-selector-unwitnessed', 'stores': {},
+                        'selector': sub['selector']}
+            proximity = {'kind': 'trigger', 'search': search, 'result': sub}
+        else:
+            added = proximity_add(read, search['offset'], search['d4'], search['d5'])
+            if added['arm'] == 'pool-full':
+                return {'arm': 'trigger', 'reason': 'proximity-pool-full', 'stores': {}}
+            proximity = {'kind': 'added', 'search': search, 'result': added}
     slot = None
     for index in range(POOL_COUNT):
         entry = POOL_BASE + POOL_STRIDE * index
@@ -91,7 +111,9 @@ def _spawn(read, cell, row, a3, d0, d1):
             slot = entry
             break
     stores = {SOUND_COMMAND & 0xFFFFFF: (SOUND_REQUEST, 2), a3 & 0xFFFFFF: (0, 2)}
-    result = {'arm': 'spawn', 'slot': slot, 'stores': stores}
+    if proximity is not None:
+        stores.update(proximity['result']['stores'])
+    result = {'arm': 'spawn', 'slot': slot, 'stores': stores, 'proximity': proximity}
     if slot is not None:
         obj_x = (d0 + read(OBJECT_X, 2)) & 0xFFFF
         obj_y = (d1 + read(OBJECT_Y, 2)) & 0xFFFF
@@ -137,18 +159,24 @@ def effect_pool_add(read, d0, d1, d2, d3):
 def hazard_tick(read, a1, a3, d0, d1):
     """What ``014084`` does for object ``a1``, the secondary record ``a3`` and position ``(d0, d1)``.
 
-    Returns the arm (``'paint'``, ``'spawn'`` or ``'trigger'`` -- the last
-    calls an unrecovered routine and is declined) and the durable stores.
-    ``'spawn'`` also reports the pool slot filled, or ``None`` if the pool
-    was full (the caller's own pending flag at A3 is still cleared either
-    way).
+    Returns the arm (``'paint'`` or ``'spawn'``) and the durable stores.
+    ``'spawn'`` also reports the pool slot filled (``None`` if the pool was
+    full; the caller's own pending flag at A3 is still cleared either way)
+    and, when the parallel-table type matched and the trigger counter had
+    reached 2, a ``'proximity'`` sub-result (the 00F828 call this same
+    activation makes before the fill: ``'added'`` or ``'trigger'``, both
+    recovered on their own merits).  ``'trigger'`` is a decline: the type
+    matched but the counter had not yet reached 2 (real code, unwitnessed),
+    the proximity search's own found entry used a selector outside 0/1/2,
+    or the proximity table itself was full -- none witnessed by any
+    recording.
     """
     if read(a1 + ACTIVE_FLAG, 1) == 0:
         return _paint(read, a3, d0, d1)
     cell, row = _cell_address(read, d0, d1)
     if read(cell & 0xFFFFFF, 1) != SOLID_CELL:
         return _paint(read, a3, d0, d1)
-    return _spawn(read, cell, row, a3, d0, d1)
+    return _spawn(read, a1, cell, row, a3, d0, d1)
 
 
 # --- 00F828/00F86A: the proximity table (014084's own 'trigger' callee) -----
@@ -206,6 +234,38 @@ def proximity_search(read, a1):
                    'index': index}
         positions.append('stale')
     return {'arm': 'not-found', 'offset': offset, 'd4': d4, 'd5': d5, 'positions': positions, 'index': None}
+
+
+TRIGGER_SELECTOR = 0xFFFFF1FC         # word: 0/1/2 selects which of conditions.py's own TRACKED slots
+TRIGGER_BONUS_ID = 0xA                # that slot's active id, when it is this, adds a bonus decrement
+TRIGGER_BONUS = 0x32
+TRIGGER_FLOOR = -0xC8                 # 0xff38 signed: a decremented timer below this clears to 0 instead
+
+
+def proximity_trigger(read, a2, entry_base):
+    """00F8A2: the matching, still-fresh entry's own continuation (found by ``proximity_search``,
+    the 'trigger' arm) -- a caller-record decrement of the SAME timer word ``proximity_search`` tested
+    for negativity, gated by which of conditions.py's own TRACKED ids is currently selected
+    (``TRIGGER_SELECTOR``).  All three checks execute regardless of which one matches (the ROM's own
+    three independent cmpi/bne pairs are not mutually exclusive branches, just three redundant tests
+    of the same word), so the cost is the same whichever of 0/1/2 is selected; a selector outside that
+    range leaves the ROM's own d5 uninitialised and is declined as unwitnessed.
+    """
+    from .conditions import TRACKED
+    selector = read(TRIGGER_SELECTOR, 2)
+    if selector not in (0, 1, 2):
+        return {'arm': 'unrecovered', 'selector': selector}
+    active = read(TRACKED[selector] & 0xFFFFFF, 2)
+    base_decrement = read((a2 + 8) & 0xFFFFFF, 2)
+    bonus = active == TRIGGER_BONUS_ID
+    decrement = (base_decrement + TRIGGER_BONUS) & 0xFFFF if bonus else base_decrement
+    timer_address = (entry_base + 4) & 0xFFFFFF
+    new_timer = (read(timer_address, 2) - decrement) & 0xFFFF
+    cleared = _signed_word(new_timer) < TRIGGER_FLOOR
+    final = 0 if cleared else new_timer
+    return {'arm': 'trigger-decrement', 'selector': selector, 'active': active, 'bonus': bonus,
+            'decrement': decrement, 'cleared': cleared, 'final': final,
+            'stores': {timer_address: (final, 2)}}
 
 
 def proximity_add(read, offset, d4, d5):

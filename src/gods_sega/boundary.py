@@ -1427,10 +1427,14 @@ _HZ_PAINT_HEAD_ODD, _HZ_PAINT_HEAD_EVEN = (12 + 4 + 8 + 10, 4), (12 + 4 + 8 + 8,
 _HZ_PAINT_WRITE_ODD = (12 * 4, 4)          # move.b d5,$30(a0)/$60(a0)/$31(a0)/$61(a0): all displaced
 _HZ_PAINT_WRITE_EVEN = (8 + 12 + 12 + 12, 4)   # move.b d5,(a0) is bare -- 8cy, not 12
 _HZ_RTS = (16, 1)
+_HZ_JSR_PROXIMITY = (20, 1)              # jsr $f828.l (00F828's own cost added separately, via _proximity_resolve)
 
 
 def hazard_tick_plan(machine, registers):
-    """014084: the grid-gated pool spawn, or the tile-array paint; the 'trigger' arm (calls 00F828) is declined."""
+    """014084: the grid-gated pool spawn (including its own call into the already-recovered proximity
+    table, 00F828) or the tile-array paint; only the type-match-but-counter-low gate, a proximity
+    search selector outside 0/1/2, and the proximity table's own pool-full arm still decline as
+    'trigger', unwitnessed by any recording."""
     from .game import hazard
     if registers['pc'] != HAZARD_TICK_ENTRY:
         raise UnsupportedCandidate('hazard tick planner needs the machine parked at 014084')
@@ -1443,15 +1447,55 @@ def hazard_tick_plan(machine, registers):
     result = hazard.hazard_tick(read, a1, a3, d0, d1)
     arm = result['arm']
     if arm == 'trigger':
-        raise UnsupportedCandidate('hazard tick trigger arm calls unrecovered 00F828')
+        raise UnsupportedCandidate(f"hazard tick trigger arm {result.get('reason', 'unwitnessed')}")
     high = lambda name: registers[name] & 0xFFFF0000
     if arm == 'spawn':
         _spans_disjoint([('hazard pool entry', hazard.POOL_BASE & 0xFFFFFF, hazard.POOL_STRIDE * hazard.POOL_COUNT),
                          ('hazard pending flag', a3, 2)])
-        cycles = (_HZ_HEAD_ACTIVE[0] + _HZ_GRID_SETUP[0] + _HZ_GRID_MATCH[0] + _HZ_SOUND_WRITE[0]
-                  + _HZ_TYPE_MISMATCH[0] + _HZ_POOL_SETUP[0])
-        instructions = (_HZ_HEAD_ACTIVE[1] + _HZ_GRID_SETUP[1] + _HZ_GRID_MATCH[1] + _HZ_SOUND_WRITE[1]
-                        + _HZ_TYPE_MISMATCH[1] + _HZ_POOL_SETUP[1])
+        proximity = result.get('proximity')
+        proximity_writes = ()
+        proximity_a0 = proximity_d6 = None
+        if proximity is None:
+            # A type mismatch (the parallel table byte isn't TRIGGER_TYPE): 00F828 is never called,
+            # regardless of the trigger counter (the ROM's own bne skips both the counter test and
+            # the call at once).
+            cycles = (_HZ_HEAD_ACTIVE[0] + _HZ_GRID_SETUP[0] + _HZ_GRID_MATCH[0] + _HZ_SOUND_WRITE[0]
+                      + _HZ_TYPE_MISMATCH[0] + _HZ_POOL_SETUP[0])
+            instructions = (_HZ_HEAD_ACTIVE[1] + _HZ_GRID_SETUP[1] + _HZ_GRID_MATCH[1] + _HZ_SOUND_WRITE[1]
+                            + _HZ_TYPE_MISMATCH[1] + _HZ_POOL_SETUP[1])
+        else:
+            # A type match with the trigger counter already at 2: 0140CC's own jsr into the
+            # already-recovered proximity table (game.hazard.proximity_search/add/trigger), landing
+            # back here (0140D2) either way -- the SAME shared pool fill runs next regardless of
+            # which of 00F828's own outcomes this call reached.
+            cycles = (_HZ_HEAD_ACTIVE[0] + _HZ_GRID_SETUP[0] + _HZ_GRID_MATCH[0] + _HZ_SOUND_WRITE[0]
+                      + _HZ_TYPE_MATCH[0] + _HZ_COUNTER_HIGH[0] + _HZ_JSR_PROXIMITY[0])
+            instructions = (_HZ_HEAD_ACTIVE[1] + _HZ_GRID_SETUP[1] + _HZ_GRID_MATCH[1] + _HZ_SOUND_WRITE[1]
+                            + _HZ_TYPE_MATCH[1] + _HZ_COUNTER_HIGH[1] + _HZ_JSR_PROXIMITY[1])
+            cell, _row = hazard._cell_address(read, d0, d1)
+            c, i, prox_writes, prox_kind, prox_search, prox_resolved = _proximity_resolve(
+                read, (sp - 4) & 0xFFFFFF, cell, registers['a1'] & 0xFFFFFFFF)
+            cycles += c
+            instructions += i
+            # 0140CC's own return address, pushed by the jsr itself, one level above 00F828's own
+            # internal frame (_proximity_resolve's own writes are relative to THAT, sp-4 here).
+            proximity_writes = list(_bytes((sp - 4) & 0xFFFFFF, 0x0140D2, 4)) + prox_writes
+            # 00F828/00F86A's own exit leaves A0 at the table entry it last touched (the matched
+            # entry's own address for 'trigger', the newly-added free slot's own +4 for 'added') --
+            # neither this routine's own tail (0140D2 onward: A1, not A0) nor the jsr itself touches
+            # A0 again, so it survives all the way to hazard_tick's own exit.
+            if prox_kind == 'trigger':
+                proximity_a0 = (hazard.PROXIMITY_TABLE + hazard.PROXIMITY_STRIDE * prox_search['index']) & 0xFFFFFFFF
+                # moveq #$27,d6 (00F888, unconditional) then one dbra per examined-but-mismatched
+                # position before the match ends the search early -- never reaches 0xFFFF here.
+                proximity_d6 = (0x27 - (len(prox_search['positions']) - 1)) & 0xFFFF
+            else:
+                proximity_a0 = (hazard.PROXIMITY_TABLE
+                                + hazard.PROXIMITY_STRIDE * prox_resolved['index'] + 4) & 0xFFFFFFFF
+                # The 'not-found' search always runs all 40 iterations (dbra expires): d6 = -1.
+                proximity_d6 = 0xFFFF
+            cycles += _HZ_POOL_SETUP[0]
+            instructions += _HZ_POOL_SETUP[1]
         y_pre_addq = (d1 + read(hazard.OBJECT_Y, 2)) & 0xFFFF
         if result['slot'] is not None:
             tries = (result['slot'] - hazard.POOL_BASE) // hazard.POOL_STRIDE
@@ -1464,11 +1508,21 @@ def hazard_tick_plan(machine, registers):
             x_bit = _add_sr(sr, y_pre_addq, 8, 2) & 0x10
         exit_sr = (0x04 & ~0x10) | x_bit          # clr.w (a3) is the last flag-setter: N=0,Z=1,V=C=0 always
         # D4's upper word is gone here regardless of arm: moveq #$13,d4 (the pool loop's own
-        # counter) clears it, and nothing after ever restores the caller's own upper half.
-        exit_registers = {'d4': result['d4'], 'd5': high('d5') | result['d5'],
+        # counter) clears it, and nothing after ever restores the caller's own upper half.  D5's own
+        # upper half survives from entry UNLESS the proximity call ran first: 00F86A's own move.l
+        # d4,d5 sets the WHOLE register from the grid-cell key (always upper 0 by construction, the
+        # same reason search['offset']'s upper half is always 0), wiping any caller upper half.
+        d5_high = 0 if proximity is not None else high('d5')
+        exit_registers = {'d4': result['d4'], 'd5': d5_high | result['d5'],
                           'a1': result['a1'], 'a2': registers['a1'],
                           'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
-        writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+        if proximity_a0 is not None:
+            exit_registers['a0'] = proximity_a0
+            # moveq #$27,d6 sign-extends the whole register: no entry-value preservation, the same
+            # rule the standalone 00F828 gate's own exit already applies.
+            exit_registers['d6'] = proximity_d6
+        writes = tuple(proximity_writes) + tuple(
+            pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
         return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
                           last_pc=HAZARD_TICK_SPAWN_LAST_PC)
     # 'paint': reached whether inactive, or active with a grid mismatch.
@@ -1825,6 +1879,7 @@ def evaluator_plan(machine, registers):
 # per-position shapes (miss/close/stale/trigger), the free-slot scan's two
 # (free/occupied), and the add body (a redundant recompute of the same key).
 PROXIMITY_ENTRY, PROXIMITY_ADD_LAST_PC = 0x00F828, 0x00F868
+PROXIMITY_TRIGGER_LAST_PC = 0x00F8E4
 _PX_BSR = (18, 1)                       # bsr.w $f86a
 _PX_HASH_HEAD = (4 + 16 + 4 + 14 + 8 + 16 + 14 + 12 + 4, 9)     # 00F86A's own head through moveq #$27,d6
 _PX_MISS_MID, _PX_MISS_LAST = (8 + 10 + 4 + 10, 4), (8 + 10 + 4 + 14, 4)
@@ -1840,20 +1895,38 @@ _PX_ADD_TIMER = (12, 1)                 # move.w #$ffff,(a0)
 _PX_ADD_COUNTER = (16, 1)               # addq.w #1,PROXIMITY_COUNTER -- the last flag-setter
 _PX_ADD_FLAG = (16, 1)                  # st.b PROXIMITY_FLAG
 _PX_ADD_RTS = (16, 1)
+# 00F8A2 onward, the search's own 'trigger' continuation (game/hazard.py: proximity_trigger): the
+# matched entry's own tst.w/bmi (bmi TAKEN this time, jumping away instead of falling into addq/dbra)
+# replaces the 'stale' shape's own tail.
+_PX_TRIGGER_FOUND = (8 + 8 + 12 + 8 + 12 + 10, 6)   # cmp.w(a0),d4; bne nottaken; cmp.w 2(a0),d5; bne nottaken; tst.w 4(a0); bmi taken
+_PX_TRIGGER_HEAD = (12, 1)              # move.w 8(a2),d4
+# The three (tst-or-cmpi, bne, [store]) checks always run all three regardless of which one matches
+# (the ROM's own three independent tests, not a mutually-exclusive dispatch): their total cost is the
+# same whichever of 0/1/2 TRIGGER_SELECTOR holds, so one constant covers every witnessed selector.
+_PX_TRIGGER_SELECTOR = (12 + 8 + 12 + 16 + 10 + 16 + 10, 7)
+_PX_TRIGGER_CMP_D5 = (8, 1)             # cmpi.w #$a,d5
+_PX_TRIGGER_BONUS_TAKEN, _PX_TRIGGER_BONUS_NOTTAKEN = (10, 1), (8, 1)   # bne.b $f8d2 (taken: no bonus)
+_PX_TRIGGER_ADDI = (8, 1)               # addi.w #$32,d4 (bonus only)
+_PX_TRIGGER_SUB = (16, 1)               # sub.w d4,4(a0)
+_PX_TRIGGER_CMP_FLOOR = (16, 1)         # cmpi.w #$ff38,4(a0)
+_PX_TRIGGER_BGE_TAKEN, _PX_TRIGGER_BGE_NOTTAKEN = (10, 1), (8, 1)       # bge.b $f8e2 (taken: not cleared)
+_PX_TRIGGER_CLR = (16, 1)               # clr.w 4(a0) (cleared only)
+_PX_TRIGGER_ADDQ_A7 = (4, 1)            # addq.w #4,a7 -- the double return's own extra pop
+_PX_TRIGGER_RTS = (16, 1)
 
 
-def proximity_plan(machine, registers):
-    """00F828: the proximity table search-and-add; 'trigger' (00F8A2 onward) and 'pool-full' decline."""
+def _proximity_resolve(read, sp, a1, a2):
+    """Everything 00F828 does once entered -- the internal bsr into 00F86A, the 40-entry search, and
+    either the matched entry's own continuation at 00F8A2 or the free-slot add -- relative to 00F828's
+    OWN entry sp (``sp``, the value of a7 the instant its first instruction runs): a plain jsr from
+    014084 and a direct gate at 00F828 itself look identical from here on.  Returns (cycles,
+    instructions, writes, kind, search, resolved); kind is 'trigger' or 'added' -- 'pool-full' raises
+    here, the one sub-arm no recording has reached through either caller.  ``a2`` is 00F8A2's own
+    caller-record pointer (the standalone gate's own entry a2; hazard_tick's own a1, since it copies
+    a1 into a2 at its own head before ever reaching this call).
+    """
     from .game import hazard
-    if registers['pc'] != PROXIMITY_ENTRY:
-        raise UnsupportedCandidate('proximity planner needs the machine parked at 00F828')
-    sp32, sr = registers['a7'], registers['sr']
-    sp = sp32 & 0xFFFFFF
-    a1 = registers['a1'] & 0xFFFFFFFF
-    read = _reader(machine)
     search = hazard.proximity_search(read, a1)
-    if search['arm'] == 'trigger':
-        raise UnsupportedCandidate('proximity trigger arm (00F8A2) is not recovered (left for the supervisor)')
     cycles, instructions = _PX_BSR
     c, i = _PX_HASH_HEAD
     cycles += c
@@ -1861,6 +1934,55 @@ def proximity_plan(machine, registers):
     positions = search['positions']
     costs = {'miss': (_PX_MISS_MID, _PX_MISS_LAST), 'close': (_PX_CLOSE_MID, _PX_CLOSE_LAST),
             'stale': (_PX_STALE_MID, _PX_STALE_LAST)}
+    # The internal bsr.w $f86a's own return address, pushed once and never popped by anything else on
+    # the 'added' path (dead stack scratch by the time 00F828 itself returns) but overwritten by the
+    # trigger continuation's own movem-equivalent word stores on that path -- a real write either way.
+    writes = list(_bytes((sp - 4) & 0xFFFFFF, 0x00F82C, 4))
+
+    if search['arm'] == 'trigger':
+        # 00F8A2 onward: the matched entry's own continuation, returning past BOTH this activation's
+        # own frame and 00F828's (a deliberate double return, docs/gods/STATUS.md); every position
+        # before the match costs the same as 'stale' (matched neither the key nor an earlier one, or
+        # matched the key but was still stale) -- MID never LAST, since the match itself ends the
+        # search early rather than the loop's own dbra expiring.
+        for kind in positions[:-1]:
+            c, i = costs[kind][0]
+            cycles += c
+            instructions += i
+        c, i = _PX_TRIGGER_FOUND
+        cycles += c
+        instructions += i
+        entry_base = (hazard.PROXIMITY_TABLE + hazard.PROXIMITY_STRIDE * search['index']) & 0xFFFFFFFF
+        trigger = hazard.proximity_trigger(read, a2, entry_base)
+        if trigger['arm'] == 'unrecovered':
+            raise UnsupportedCandidate(
+                f"proximity trigger selector {trigger['selector']} not witnessed by a recording")
+        c, i = _add(_PX_TRIGGER_HEAD, _PX_TRIGGER_SELECTOR, _PX_TRIGGER_CMP_D5)
+        cycles += c
+        instructions += i
+        c, i = _PX_TRIGGER_BONUS_NOTTAKEN if trigger['bonus'] else _PX_TRIGGER_BONUS_TAKEN
+        cycles += c
+        instructions += i
+        if trigger['bonus']:
+            c, i = _PX_TRIGGER_ADDI
+            cycles += c
+            instructions += i
+        c, i = _add(_PX_TRIGGER_SUB, _PX_TRIGGER_CMP_FLOOR)
+        cycles += c
+        instructions += i
+        c, i = _PX_TRIGGER_BGE_NOTTAKEN if trigger['cleared'] else _PX_TRIGGER_BGE_TAKEN
+        cycles += c
+        instructions += i
+        if trigger['cleared']:
+            c, i = _PX_TRIGGER_CLR
+            cycles += c
+            instructions += i
+        c, i = _add(_PX_TRIGGER_ADDQ_A7, _PX_TRIGGER_RTS)
+        cycles += c
+        instructions += i
+        writes.extend(pair for address, (value, size) in trigger['stores'].items() for pair in _bytes(address, value, size))
+        return cycles, instructions, writes, 'trigger', search, trigger
+
     for index, kind in enumerate(positions):
         mid, last = costs[kind]
         c, i = last if index == len(positions) - 1 else mid
@@ -1886,6 +2008,57 @@ def proximity_plan(machine, registers):
     for c, i in (_PX_ADD_KEY, _PX_ADD_WRITE, _PX_ADD_TIMER, _PX_ADD_COUNTER, _PX_ADD_FLAG, _PX_ADD_RTS):
         cycles += c
         instructions += i
+    writes.extend(pair for address, (value, size) in added['stores'].items() for pair in _bytes(address, value, size))
+    return cycles, instructions, writes, 'added', search, added
+
+
+def proximity_plan(machine, registers):
+    """00F828: the proximity table search-and-add, including its own 'trigger' continuation
+    (00F8A2 onward, game.hazard.proximity_trigger); only 'pool-full' still declines, unwitnessed."""
+    from .game import hazard
+    if registers['pc'] != PROXIMITY_ENTRY:
+        raise UnsupportedCandidate('proximity planner needs the machine parked at 00F828')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a1 = registers['a1'] & 0xFFFFFFFF
+    a2 = registers['a2'] & 0xFFFFFFFF
+    read = _reader(machine)
+    cycles, instructions, writes, kind, search, resolved = _proximity_resolve(read, sp, a1, a2)
+
+    if kind == 'trigger':
+        trigger = resolved
+        entry_base = (hazard.PROXIMITY_TABLE + hazard.PROXIMITY_STRIDE * search['index']) & 0xFFFFFFFF
+        # cmpi.w #$ff38,4(a0) is the last N/Z/V/C setter (CMP, X unaffected); ADDQ to An and RTS
+        # never touch flags at all, so X survives from the search's OWN head instead -- the last
+        # X-affecting instruction on every path into this arm is 00F86A's own lsr.l #3,d5 (the key's
+        # own row half), unconditional and before any branch, so it does not depend on the arm at all.
+        timer_before = read((entry_base + 4) & 0xFFFFFF, 2)
+        pre_shift_d5 = (a1 - hazard.GRID_TABLE) & 0x00FFFF80
+        x_bit = 0x10 if (pre_shift_d5 >> 2) & 1 else 0
+        floor_word = hazard.TRIGGER_FLOOR & 0xFFFF
+        if trigger['cleared']:
+            # clr.w 4(a0) is the LAST flag-setter when the decrement clears: N=0/Z=1/V=0/C=0 always
+            # (CLR never depends on the value it clears), X unaffected.
+            exit_sr = 0x04 | x_bit
+        else:
+            exit_sr = (_cmp_sr(sr, timer_before, floor_word, 2) & ~0x10) | x_bit
+        d6_final = (0x27 - (len(search['positions']) - 1)) & 0xFFFF
+        # move.l a1,d4 then subi.l #$ffff885e,d4 (00F86A's own head, unconditional) sets d4 to the
+        # key's own long OFFSET, not the caller's own d4 -- and since a1 and GRID_TABLE share the same
+        # 0xFFFFxxxx convention, that subtraction's own upper half is always 0 by construction (the
+        # same reason search['offset']'s upper half is always 0), not a per-fixture coincidence; only
+        # 00F8A2's own word move (00F8A6-C4) and this arm's own decrement ever touch the low half again.
+        exit_registers = {'d4': (search['offset'] & 0xFFFF0000) | trigger['decrement'],
+                          'd5': (search['d5'] & 0xFFFF0000) | trigger['active'],
+                          # moveq #$27,d6 (00F888, unconditional) sign-extends into the WHOLE register,
+                          # wiping any upper half the caller left: no entry-value preservation here.
+                          'd6': d6_final,
+                          'a0': entry_base, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                          'pc': _return(machine, sp), 'sr': exit_sr}
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(writes),
+                          registers=exit_registers, last_pc=PROXIMITY_TRIGGER_LAST_PC)
+
+    added = resolved
     slot_base = (hazard.PROXIMITY_TABLE + hazard.PROXIMITY_STRIDE * added['index']) & 0xFFFFFFFF
     counter_before = added['counter_before']
     exit_sr = _add_sr(sr, counter_before, 1, 2)
@@ -1895,10 +2068,6 @@ def proximity_plan(machine, registers):
                       'd6': (registers['d6'] & 0xFFFF0000) | 0xFFFF,
                       'a0': (slot_base + 4) & 0xFFFFFFFF, 'a7': (sp32 + 4) & 0xFFFFFFFF,
                       'pc': _return(machine, sp), 'sr': exit_sr}
-    # The internal bsr.w $f86a's own return address, pushed once and never popped by anything else:
-    # it's dead stack scratch (a7 is back above it by the time this routine returns) but a real write.
-    writes = list(_bytes((sp - 4) & 0xFFFFFF, 0x00F82C, 4))
-    writes.extend(pair for address, (value, size) in added['stores'].items() for pair in _bytes(address, value, size))
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(writes), registers=exit_registers,
                       last_pc=PROXIMITY_ADD_LAST_PC)
 

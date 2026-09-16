@@ -2,11 +2,16 @@
 
 00F828 unconditionally calls 00F86A first (the 40-entry search); the
 boundary owns the whole call, 00F86A is not a separate gate.  A matching,
-still-negative-timer entry (the 'trigger' arm) falls into 00F8A2 and
-returns past both stack frames at once -- real ROM code, declined.
-Otherwise 00F828's own scan adds a fresh entry into the first free slot
-('added'), or declines ('pool-full') if none of the 40 is free -- real
-code too, but unwitnessed.  Three tiers as for the other regions.
+still-negative-timer entry (the 'trigger' arm) falls into 00F8A2 -- a
+caller-record decrement of the SAME timer word, gated by which of
+conditions.py's own TRACKED ids is currently selected -- and returns past
+both stack frames at once (a deliberate double return, not a bug); 17
+September: recovered (`game.hazard.proximity_trigger`), a bounded leaf
+composed into `proximity_plan`, once real fixtures turned up (25 of them)
+in a full re-census.  Otherwise 00F828's own scan adds a fresh entry into
+the first free slot ('added'), or declines ('pool-full') if none of the
+40 is free -- real code too, but unwitnessed.  Three tiers as for the
+other regions.
 """
 import json
 from pathlib import Path
@@ -56,7 +61,7 @@ def test_an_empty_table_is_not_found_and_adds_into_the_first_slot():
     assert added['stores'][base + 4] == (0xFFFF, 2)
 
 
-def test_a_matching_entry_with_a_negative_timer_is_the_declined_trigger_arm():
+def test_a_matching_entry_with_a_negative_timer_is_the_trigger_arm():
     a1 = GRID_TABLE + 0x100
     values = _empty_table()
     offset, d4, d5 = hazard._proximity_key(a1)
@@ -66,6 +71,31 @@ def test_a_matching_entry_with_a_negative_timer_is_the_declined_trigger_arm():
     values[(base + 4, 2)] = 0x8000                  # negative: a fresh, unconsumed entry
     search = hazard.proximity_search(_reader(values), a1)
     assert search['arm'] == 'trigger' and search['index'] == 0
+
+
+def test_proximity_trigger_bonus_and_floor_clamp():
+    entry_base = hazard.PROXIMITY_TABLE
+    timer_address = (entry_base + 4) & 0xFFFFFF
+    a2 = 0xFFFFF1F8
+    values = _empty_table()
+    values[(hazard.TRIGGER_SELECTOR & 0xFFFFFF, 2)] = 0        # selects TRACKED[0]
+    values[(0xFFEF8C, 2)] = hazard.TRIGGER_BONUS_ID             # active id 0xA: the bonus applies
+    values[(timer_address, 2)] = 0xFFF0                          # the matched entry's own timer (-16)
+    values[((a2 + 8) & 0xFFFFFF, 2)] = 5                         # a2+8: the caller record's own base decrement
+    result = hazard.proximity_trigger(_reader(values), a2=a2, entry_base=entry_base)
+    assert result['arm'] == 'trigger-decrement' and result['bonus'] and result['decrement'] == 5 + 0x32
+    assert result['cleared'] is False
+    assert result['stores'][timer_address] == (result['final'], 2)
+
+    # A decrement that pushes the timer below the floor clears it to 0 instead of wrapping negative.
+    values[(timer_address, 2)] = 0xFF00 & 0xFFFF     # -256: 55 more brings it well past the -200 floor
+    result = hazard.proximity_trigger(_reader(values), a2=a2, entry_base=entry_base)
+    assert result['cleared'] and result['final'] == 0
+
+    # A selector outside 0/1/2 leaves the ROM's own d5 uninitialised: declined, not guessed.
+    values[(hazard.TRIGGER_SELECTOR & 0xFFFFFF, 2)] = 3
+    result = hazard.proximity_trigger(_reader(values), a2=a2, entry_base=entry_base)
+    assert result['arm'] == 'unrecovered'
 
 
 def test_a_matching_entry_with_a_non_negative_timer_is_stale_and_the_search_continues():
@@ -94,20 +124,17 @@ def test_a_full_table_is_pool_full():
 
 @needs_census
 @pytest.mark.parametrize('fixture', FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
-def test_plan_reproduces_the_added_arm_and_declines_trigger_and_pool_full(fixture):
+def test_plan_reproduces_every_fact_of_the_original_or_declines_an_unwitnessed_arm(fixture):
     state = fixture.read_bytes()
     meta = json.loads(fixture.with_suffix('.json').read_text(encoding='utf-8'))
     assert meta['entry'] == boundary.PROXIMITY_ENTRY
     with Machine(GODS.read_rom()) as machine:
         machine.restore(state)
         registers = machine.registers()
-        read = boundary._reader(machine)
-        search = hazard.proximity_search(read, registers['a1'] & 0xFFFFFFFF)
-        if search['arm'] == 'trigger':
-            with pytest.raises(boundary.UnsupportedCandidate):
-                boundary.proximity_plan(machine, registers)
+        try:
+            plan = boundary.proximity_plan(machine, registers)
+        except boundary.UnsupportedCandidate:
             return
-        plan = boundary.proximity_plan(machine, registers)
     facts = pathfacts.trace(state, game=GODS)
     problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
     assert problems == [], problems
