@@ -3,13 +3,16 @@
 The dominant two arms ('idle': the control byte is zero; 'waiting': the
 countdown has not reached zero) are a plain leaf, no frame, no calls.
 Reaching zero reloads the countdown and a frequency word unconditionally,
-then either calls the unrecovered 0091BC pool ('trigger-deep', declined)
-or runs a direction-mirrored screen window test and, inside it, a bounded
-pool scan+fill shaped like hazard.py's own ('trigger-reject': outside the
-window; 'trigger-spawn': inside it, a free slot filled).  The pool
-exhausted ('trigger-pool-full') is real ROM code but unwitnessed, so it is
-declined too.  Three tiers as for the other leaves; the evidence tiers
-skip when the local census or reference artifacts are absent.
+then either takes the record's own position and a rate-derived budget
+into the already-recovered projectile launch (game/projectiles.py,
+'trigger-deep-launch'; 'trigger-deep-pool-full' if that pool is
+exhausted, unwitnessed) or runs a direction-mirrored screen window test
+and, inside it, a bounded pool scan+fill shaped like hazard.py's own
+('trigger-reject': outside the window; 'trigger-spawn': inside it, a
+free slot filled).  The pool exhausted ('trigger-pool-full') is real ROM
+code but unwitnessed, so it is declined too.  Three tiers as for the
+other leaves; the evidence tiers skip when the local census or reference
+artifacts are absent.
 """
 import json
 from pathlib import Path
@@ -65,11 +68,26 @@ def test_the_countdown_reaching_zero_reloads_it_and_computes_the_frequency_uncon
     assert result['stores'][(COUNTDOWN + timers.COUNTDOWN) & 0xFFFFFF] == (32, 2)
 
 
-def test_the_deep_gate_declines_before_touching_the_window_or_the_pool():
-    result = timers.countdown_check(_reader(_trigger_values({(CONTROL + timers.TRIGGER_DEEP_GATE, 1): 1})),
-                                     CONTROL, COUNTDOWN)
-    assert result['arm'] == 'trigger-deep'
+def test_the_deep_gate_skips_the_window_and_launches_a_projectile():
+    from gods_sega.game import projectiles
+    values = _trigger_values({(CONTROL + timers.TRIGGER_DEEP_GATE, 1): 1, (projectiles.POOL_BASE & 0xFFFFFF, 4): 0xFFFFFFFF})
+    result = timers.countdown_check(_reader(values), CONTROL, COUNTDOWN)
+    assert result['arm'] == 'trigger-deep-launch'
     assert 'frequency' not in result and 'windowed' not in result
+    launch = result['launch']
+    assert launch['arm'] == 'launched'
+    # POSITION_X biased +0x10 (unlike BACK/FORWARD's own -8/+0x20), POSITION_Y untouched.
+    assert launch['walk'].x == 100 + 0x10 and launch['walk'].y == 50
+    assert launch['budget'] == (8 >> 1) + 2                     # ext.w; asr.w #1; addq.w #2 of the rate byte
+
+
+def test_the_deep_gate_declines_when_the_projectile_pool_is_full():
+    values = _trigger_values({(CONTROL + timers.TRIGGER_DEEP_GATE, 1): 1})
+    from gods_sega.game import projectiles
+    for tries in range(projectiles.POOL_COUNT):
+        values[(projectiles.POOL_BASE + projectiles.POOL_STRIDE * tries, 4)] = 0
+    result = timers.countdown_check(_reader(values), CONTROL, COUNTDOWN)
+    assert result['arm'] == 'trigger-deep-pool-full'
 
 
 def test_outside_the_screen_window_is_trigger_reject_with_no_pool_touch():
@@ -111,7 +129,7 @@ def test_plan_reproduces_every_witnessed_arm_and_declines_the_rest(fixture):
         registers = machine.registers()
         control, countdown = registers['a3'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
         result = timers.countdown_check(boundary._reader(machine), control, countdown)
-        if result['arm'] in ('trigger-deep', 'trigger-pool-full'):
+        if result['arm'] in ('trigger-deep-pool-full', 'trigger-pool-full'):
             with pytest.raises(boundary.UnsupportedCandidate, match='trigger'):
                 boundary.countdown_check_plan(machine, registers)
             return

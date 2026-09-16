@@ -55,5 +55,5 @@ def launch(read, x0, y0, budget, flag):
             stores[(record24 + AUX_FLAG) & 0xFFFFFF] = (flag & 1, 2)
             stores[LAUNCHED_FLAG & 0xFFFFFF] = (1, 2)
             return {'arm': 'launched', 'slot': record, 'tries': tries, 'walk': walk, 'after': after,
-                    'left': left, 'steps': steps, 'target': (x1, y1), 'stores': stores}
+                    'left': left, 'steps': steps, 'budget': budget, 'target': (x1, y1), 'stores': stores}
     return {'arm': 'pool-full', 'tries': POOL_COUNT, 'target': (x1, y1), 'stores': stores}

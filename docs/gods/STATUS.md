@@ -153,9 +153,9 @@ ids, never to `main`:
 | **`00FE08` animation step**: the plan reproduces every fact of the original on all 43 retained fixtures over four recordings -- the 'idle' arm and, since 17 Sep, the 'moving' arm's own call into the already-recovered walker resume `00FFF0` (`moving-continue`: the walk has not finished this call; `moving-complete`: it has, with more than one waypoint left, the next one loaded and the slot reset to -1); `moving-coldstart` (the walk finishes with at most one waypoint left, falling into a per-object-type waypoint dispatch `00FEC0`/`00FF54`) is declined -- censused fresh over all eight recordings, unwitnessed on every one -- along with a zero budget and a record whose continuation is not one of the walker's own bodies | `factcheck check` on every fixture | `tests/games/gods/test_animation.py` |
 | `animation-step` reproduces the original on `fb408bc7…`: **PASS, 34,904 frames, 30,043 hits, 39 fallbacks, all exact adapter refusals (0 unsupported domain)**; `camera-sprites` (twenty-four gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,047,974 hits, 6,586 fallbacks (00FE08's own fallbacks-by-gate 321 → 118, all now exact adapter refusals, 0 unsupported domain at this gate)** | `history-verify fb408bc75597 --candidate animation-step`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-animation-step2-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17a` |
 | the animation step's negative control diverges at frame 2,260, the tree's first entry into the 'moving' arm | `--candidate animation-step-mutant-result` | `artifacts/gods/verify-animation-step2-mutant` |
-| **`010332` countdown check**: the plan reproduces every fact of the original on 38 of the 43 retained fixtures over four recordings ('idle'/'waiting', and the 'trigger' arm's own 'trigger-reject'/'trigger-spawn' sub-arms -- the countdown reload and frequency word, a direction-mirrored screen window test and a bounded pool scan+fill); the 'trigger-deep' sub-arm (a further A3 gate byte, calling unrecovered `0091BC`) and 'trigger-pool-full' (the same bounded pool exhausted, unwitnessed) are declined | `factcheck check` on every fixture | `tests/games/gods/test_timers.py` |
-| `countdown-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,273 hits, 33 fallbacks (all scheduler admission)**; `camera-sprites` (all fourteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,019,144 hits, 11,195 fallbacks (7,040 scheduler admission, 3,728 seam deadline, 426 unsupported domain across two declined-call regions, 1 gate-without-planner foreign-return edge, tree still bit-exact)** | `history-verify f0ac19738f19 --candidate countdown-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-countdown-check2-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16p` |
-| the countdown check's negative control diverges at frame 469 | `--candidate countdown-check-mutant-result` | `artifacts/gods/verify-countdown-check2-mutant` |
+| **`010332` countdown check**: the plan reproduces every fact of the original on all 64 retained fixtures over four recordings ('idle'/'waiting', the 'trigger' arm's own 'trigger-reject'/'trigger-spawn' sub-arms, and, since 17 Sep, 'trigger-deep-launch' -- the record's own position and a rate-derived budget straight into the already-recovered projectile launch `0091BC`); 'trigger-deep-pool-full' and 'trigger-pool-full' (both the same shape of bounded pool exhausted, unwitnessed) are declined | `factcheck check` on every fixture | `tests/games/gods/test_timers.py` |
+| `countdown-check` reproduces the original on `f40d7bcc9dda…` (the history that witnesses 'trigger-deep-launch'): **PASS, 17,620 frames, 3,277 hits, 33 fallbacks, all exact adapter refusals (0 unsupported domain)**; `camera-sprites` (twenty-six gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,049,180 hits, 6,589 fallbacks, tree bit-exact -- the `countdown check trigger arm calls unrecovered 0091BC` fallback reason is gone** | `history-verify f40d7bcc9dda --candidate countdown-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-countdown-check3-f40d7bcc9dda`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17d` |
+| the countdown check's negative control diverges at frame 2,696 (on `f40d7bcc9dda…`) | `--candidate countdown-check-mutant-result` | `artifacts/gods/verify-countdown-check3-mutant` |
 | **`010A14` collision gate**: the plan reproduces every fact of the original on all 20 retained fixtures over the two recordings that reach this entry ('held', 'gated', and now the 'collision' arm's own 'collision-clear'/'collision-held' sub-arms: `010CBC`'s arithmetic inline, a near/mid/far grid test); the 'collision-deep' sub-arm (a further A3 gate byte, an unbounded grid search) and the phase>7 arm ('over', real ROM code but unwitnessed on either recording) are declined | `factcheck check` on every fixture | `tests/games/gods/test_movement.py` |
 | `collision-gate` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 1,426 hits, 14 fallbacks (all scheduler admission)**; `camera-sprites` (all fourteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,019,144 hits, 11,195 fallbacks (7,040 scheduler admission, 3,728 seam deadline, 426 unsupported domain across two declined-call regions, 1 gate-without-planner foreign-return edge, tree still bit-exact)** | `history-verify f0ac19738f19 --candidate collision-gate`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-collision-gate2-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16p` |
 | the collision gate's negative control diverges at frame 469 | `--candidate collision-gate-mutant-result` | `artifacts/gods/verify-collision-gate2-mutant` |
@@ -247,16 +247,20 @@ list, the tile index looked up by type id in a work-RAM table pointer
 (`SOLID_TILE_TABLE`) -- a found entry with the tile index's sign bit set
 means the tiles are uploaded fresh by an inline VDP block instead, an arm
 no recording enters); the animation step (`game/animation.py`: the
-'idle' arm only -- the shared frame-budget word `FRAME_BUDGET` refreshed
-from the definition's own field, on both arms; the common 'moving' arm
-calls the unrecovered Bresenham-walker coroutine at `00FFF0`
-(`docs/gods/blockers/2026-09-16-0091BC.md`) and is declined); the
+'idle' arm and, since 17 Sep, the 'moving' arm's own call into the
+already-recovered walker resume `00FFF0` (`'moving-continue'`/
+`'moving-complete'`); `'moving-coldstart'` (a finished walk with at most
+one waypoint left, falling into a per-object-type waypoint dispatch
+`00FEC0`/`00FF54`) declined, unwitnessed on all eight recordings); the
 countdown check (`game/timers.py`: a caller-supplied
 control byte and countdown record, 'idle' and 'waiting' recovered; a
 residue of zero reloads the countdown and a frequency word
-unconditionally, then either the unrecovered `0091BC` pool (`'trigger-deep'`,
-declined) or a direction-mirrored screen window test (`01158C`/`0115D4`'s
-own shape) and, inside it, a bounded 20-entry pool scan+fill shaped like
+unconditionally, then either the record's own position and a
+rate-derived budget straight into the already-recovered projectile
+launch `0091BC` (`'trigger-deep-launch'`, recovered 17 Sep;
+`'trigger-deep-pool-full'` declined, unwitnessed) or a direction-mirrored
+screen window test (`01158C`/`0115D4`'s own shape) and, inside it, a
+bounded 20-entry pool scan+fill shaped like
 `hazard.py`'s own (`'trigger-reject'`/`'trigger-spawn'`, both recovered;
 `'trigger-pool-full'` declined as unwitnessed)); the collision gate
 (`game/movement.py`: a phase counter and a +-4 residue test over a
@@ -338,18 +342,21 @@ cold start (`walker.run(walker.start(...), budget, 'projectile')`; the
 `move.w #$ffff,d0` versus `moveq` residue difference between the '+x'
 and '-x' quadrants modelled directly).  40 fixtures over four recordings
 MATCH; `fb408bc75597…`: PASS, 50/50 hits, 0 fallbacks; the tree stays
-bit-exact at twenty-five gates.  Composing `010332`'s own `'trigger-deep'`
-arm over it is *not* done: that arm's own tail (`0103AA`-`0103C8`, one
-instruction past `COUNTDOWN_CHECK_LAST_PC`) is now identified by a fresh
-disassembly (the record's own position `+0x10` in x, a budget
-`(rate>>1)+2`, a full 15-register frame, `D6=1` fixed, `jsr 0091BC`, full
-restore) and accounts for the 9 `f40d7bcc9dda…` occurrences and the
-tree's own 8 remaining `countdown check trigger arm calls unrecovered
-0091BC` declines — a real next bite (simpler than `animation-step`'s own
-composition, since every register is restored afterward).  A second
-caller (`009D16` on `fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…`,
-accounting for the bulk of the 50+1+1 occurrences on those three) is
-still not `010332`'s own code and remains unidentified.  (3) DONE
+bit-exact at twenty-five (now twenty-six) gates.  `010332`'s own
+`'trigger-deep'` arm is composed too, same day: its own tail
+(`0103AA`-`0103C8`, one instruction past `COUNTDOWN_CHECK_LAST_PC`,
+identified by a fresh disassembly) -- the record's own position `+0x10`
+in x, a budget `(rate>>1)+2`, a full 15-register frame, `D6=1` fixed,
+`jsr 0091BC`, full restore -- now calls straight into the already-recovered
+launch as `'trigger-deep-launch'`; a fresh full-history census of `010332`
+on `f40d7bcc9dda…` (the original census's window had missed it) retained
+5 fixtures (8 real occurrences), all MATCH, and the tree's own
+`countdown check trigger arm calls unrecovered 0091BC` fallback reason is
+gone.  A second caller (`009D16` on
+`fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…`, accounting for the bulk
+of the 50+1+1 `0091BC` occurrences on those three) is still not
+`010332`'s own code and remains unidentified -- the one open question
+left in `docs/gods/blockers/2026-09-16-0091BC.md`.  (3) DONE
 (the resume half), 17 Sep — `0093D2` (the projectile copy's own resume,
 called by the driver `009210`) recovered as its own candidate
 `projectile-resume`: a byte-for-byte duplicate of `00FFF0`'s own body at
@@ -379,7 +386,7 @@ a grinder's to invent:
 | `010A14` | 10 | recovered as `collision-gate` (the 'held'/'gated' arms and, since 16 Sep, the 'collision' arm's own 'collision-clear'/'collision-held' sub-arms via `010CBC`, now also recovered; 'collision-deep' and phase>7 declined as unwitnessed) |
 | `00BCCE` | 28 (15 real: 13 were the same VBlank-in-interrupt-handler misattribution `00FDB8`'s screening hit) | recovered as `zone-check`: fully witnessed, no declines |
 | `00470C` | 30 (re-censused, current tracer) | a genuine per-type dispatch: `move.w d5,d0; add.w d0,d0; add.w d0,d0; movea.l $4718(pc,d0.w),a5; jmp (a5)` into a ROM jump table at `004718` (disassembles as `ori.b` data -- it is a table of handler addresses, not code) with at least a dozen distinct handler bodies; the census's 30 small (6-15 instruction) classes are those handlers' own bodies, not variants of one shape.  Leave for the supervisor: not a leaf, needs an object/kind convention |
-| `010332` | 7 | recovered as `countdown-check` (the 'idle'/'waiting' arms and, since 16 Sep, the 'trigger' arm's own 'trigger-reject'/'trigger-spawn' sub-arms via `01158C`/`0115D4`, now also recovered; 'trigger-deep' (calls unrecovered `0091BC`) and 'trigger-pool-full' declined as unwitnessed) |
+| `010332` | 7 | recovered as `countdown-check` (the 'idle'/'waiting' arms, the 'trigger' arm's own 'trigger-reject'/'trigger-spawn' sub-arms via `01158C`/`0115D4`, and, since 17 Sep, 'trigger-deep-launch' via the already-recovered `0091BC`; only 'trigger-deep-pool-full' and 'trigger-pool-full' stay declined, unwitnessed) |
 | `014084` | 32 retained + 25 more overflowed | recovered as `hazard-tick`: two disjoint bodies behind one early `tst.b $48(a1); beq`, as screened; both turned out to be plain leaves (the pool scan bounded like `0018C8`'s cache scan, the tile-array write clamped to bounds) once the sign-extension of each individual `adda.w` (not a single combined offset) was modelled correctly |
 | `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | recovered as `particle-emit`: **not** a per-type dispatch after all -- disassembly through `0012F4` is exactly `0018C8`'s own shape (camera subtraction, the same two screen-margin tests, a descriptor lookup at `066794`, the four-word sprite record, the inline VDP upload `0012F4`+).  Re-censused with the current tracer: 5-13 real path classes per recording, not 32+17 -- the earlier count was inflated the same way `00FDB8`'s was before its own fix |
 | `00FDB8` | 16 (4 real: 13 were VBlank variants) | recovered — see the solids below |
@@ -594,10 +601,11 @@ retained fixtures' own return addresses: on `f40d7bcc9dda…` it is
 `010332`'s own `'trigger-deep'` tail, one instruction past the current
 `COUNTDOWN_CHECK_LAST_PC` (`0103AA`-`0103C8`: the record's own position
 `+0x10` in x, a budget `(rate>>1)+2` from the rate byte, a full
-15-register frame, `D6=1` fixed, `jsr 0091BC`, full restore) — not yet
-composed into `countdown_check_plan` (every register is restored
-afterward, so this composition is simpler than `animation-step`'s: a
-real next bite); on `fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…` the
+15-register frame, `D6=1` fixed, `jsr 0091BC`, full restore) — composed
+into `countdown_check_plan` the same session (`'trigger-deep-launch'`;
+every register but D3/D4 is restored afterward, so the composition
+needed no register residue threading at all); on
+`fb408bc75597…`/`4492103be245…`/`7251bbd0ecf7…` the
 return address (`009D16`) is not inside `010332`'s own code at all — a
 second, still undisassembled caller remains open.
 

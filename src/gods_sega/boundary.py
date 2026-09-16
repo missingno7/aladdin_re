@@ -834,6 +834,7 @@ def animation_step_plan(machine, registers):
 # dbra shape as hazard.py's own pool -- but no recording exhausts it, so
 # it is declined as unwitnessed.
 COUNTDOWN_CHECK_ENTRY, COUNTDOWN_CHECK_LAST_PC = 0x010332, 0x010386
+COUNTDOWN_CHECK_DEEP_LAST_PC = 0x0103C8          # the deep gate's own tail rts (past COUNTDOWN_CHECK_LAST_PC)
 _CC_IDLE_COST = (38, 3)                # tst.b not zero-taken? no: tst.b; beq taken; rts
 _CC_WAITING_COST = (62, 5)             # tst.b; beq not taken; subq.w; bne taken; rts
 _CC_TRIGGER_HEAD = (12 + 8 + 16 + 8, 4)          # tst.b; beq not taken; subq.w; bne not taken (falls into trigger)
@@ -856,6 +857,33 @@ _CC_POOL_STORE = (8 + 8 + 16 + 12, 4)            # move.w d0,(a0)+; move.w d1,(a
 _CC_POOL_EXIT_BRA = (10, 1)                      # bra.b $115d0 (the found path's own; a reject already took its branch)
 _CC_POP_A0, _CC_RTS_INNER = (12, 1), (16, 1)     # movea.l (a7)+,a0; rts (01158C/0115D4's own)
 _CC_POP_D0D1, _CC_RTS_OUTER = (28, 1), (16, 1)   # movem.l (a7)+,d0-d1; rts (010332's own)
+_CC_DEEP_TAKEN = (10, 1)                         # bne.b $103a0 taken (the deep gate itself)
+_CC_DEEP_POSITION = (8 + 12 + 8, 3)              # move.w (a5),d0; move.w 2(a5),d1; addi.w #$10,d0
+_CC_DEEP_BUDGET = (12 + 4 + 8 + 4, 4)            # move.b $13(a3),d4; ext.w; asr.w #1; addq.w #2
+_CC_DEEP_FRAME = (120, 1)                        # movem.l d0-d7/a0-a5,-(a7)
+_CC_DEEP_FLAG = (4, 1)                           # moveq #$1,d6
+_CC_DEEP_CALL = (20, 1)                          # jsr $91bc.l
+_CC_DEEP_RESTORE = (124, 1)                      # movem.l (a7)+,d0-d7/a0-a5
+_CC_DEEP_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5')
+_CC_DEEP_INTERNAL_RETURN = 0x0103C0              # the jsr $91bc's own return address
+_CC_DEEP_LAUNCH_RETURN = 0x0091F0                # 0091BC's own internal bsr $93e4's own return address
+
+
+def _cc_deep_writes(sp, registers, x0, y0, budget_full, reload, launch):
+    """The deep gate's own two nested frames (the outer d0-d1 push already accounted for by the caller),
+    0091BC's own internal call return, and the launch's own durable stores.  D3 already holds the
+    reload value by this point (the shared head's own moveq/sub.b/ext.w/add.w/add.w, common to every
+    'trigger' arm); D4 holds the budget (a byte move only, so its own upper word survives from entry)."""
+    inner_sp = sp - 8                                                    # below the outer d0-d1 frame
+    frame_values = dict(registers)
+    frame_values['d0'], frame_values['d1'], frame_values['d3'], frame_values['d4'] = x0, y0, reload, budget_full
+    frame = tuple(pair for index, name in enumerate(_CC_DEEP_FRAME_REGISTERS)
+                 for pair in _bytes(inner_sp - len(_CC_DEEP_FRAME_REGISTERS) * 4 + 4 * index, frame_values[name] & 0xFFFFFFFF, 4))
+    call_sp = inner_sp - len(_CC_DEEP_FRAME_REGISTERS) * 4
+    jsr_return = _bytes(call_sp - 4, _CC_DEEP_INTERNAL_RETURN, 4)
+    launch_return = _bytes(call_sp - 8, _CC_DEEP_LAUNCH_RETURN, 4)
+    stores_writes = tuple(pair for address, (value, size) in launch['stores'].items() for pair in _bytes(address, value, size))
+    return frame + jsr_return + launch_return + stores_writes
 
 
 def _cc_frame_writes(sp, registers):
@@ -889,6 +917,42 @@ def _cc_window_cost_and_ccr(sr, result, variant):
     return cycles, instructions, None
 
 
+def _countdown_check_deep_plan(machine, registers, result, sp32, sp, sr):
+    """The 'trigger-deep-launch' arm: the record's own position and a rate-derived budget straight into
+    the already-recovered projectile launch, inside two nested save/restore frames that leave every
+    register at its entry value -- only the launch's own RAM effects and CCR residue survive."""
+    launch = result['launch']
+    walk, after, budget = launch['walk'], launch['after'], launch['budget']
+    steps, counter_before_subq = _walk_steps(walk, budget, 'projectile')
+    toward, slope = walk.phase
+    setup_cost = _add(_PL_OUTER[toward], _PL_XSETUP[toward], _PL_YSIGN[(toward, walk.y_sign == 0xFFFF)],
+                      _PL_SLOPE_TEST[slope], _PL_PRELOOP)
+    call_cost = _add(setup_cost, *(_WR_STEP[step] for step in steps), _WR_TAIL)
+    launch_cost = _add(_PL_HEAD, *([_PL_SKIP] * launch['tries']), _PL_FOUND, _PL_STORE_AND_CALL, call_cost, _PL_TAIL)
+    head_cost = (_CC_TRIGGER_HEAD[0] + _CC_PUSH[0] + _CC_RELOAD[0] + _CC_DEEP_TEST[0] + _CC_DEEP_TAKEN[0]
+                + _CC_DEEP_POSITION[0] + _CC_DEEP_BUDGET[0] + _CC_DEEP_FRAME[0] + _CC_DEEP_FLAG[0] + _CC_DEEP_CALL[0],
+                 _CC_TRIGGER_HEAD[1] + _CC_PUSH[1] + _CC_RELOAD[1] + _CC_DEEP_TEST[1] + _CC_DEEP_TAKEN[1]
+                + _CC_DEEP_POSITION[1] + _CC_DEEP_BUDGET[1] + _CC_DEEP_FRAME[1] + _CC_DEEP_FLAG[1] + _CC_DEEP_CALL[1])
+    cost = _add(head_cost, launch_cost, _CC_DEEP_RESTORE, _CC_POP_D0D1, _CC_RTS_OUTER)
+    reload = result['reload']
+    budget_full = (registers['d4'] & 0xFFFF0000) | budget      # move.b only: D4's own upper word survives from entry
+    # walk.x/walk.y are the launch's own (x0, y0) argument, exactly what D0/D1 held at the inner frame's
+    # own push (before any step ran); D2/D5/D6/D7/A0-A2/A4 in that frame are this activation's own entry
+    # value, untouched by anything before the push; D3 already holds the reload (the shared head's own
+    # moveq #$10,d3 resets the whole register, so no upper word survives); the outer D0-D1 frame (pushed
+    # before either was touched) restores those two to their true entry values on the way out.
+    reload_writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    writes = reload_writes + _cc_frame_writes(sp, registers) + _cc_deep_writes(sp, registers, walk.x, walk.y, budget_full, reload, launch)
+    # Only D3 (the reload) and D4 (the budget) differ from entry once both frames unwind; movem/rts never
+    # touch flags, so the exit CCR is exactly what 0091BC's own tail leaves: N=Z=V=C=0
+    # (move.w #1,$f386.w), X its residue.
+    x = 0x10 if counter_before_subq == 0 else 0
+    exit_registers = {'d3': reload, 'd4': budget_full, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                      'pc': _return(machine, sp), 'sr': (sr & ~0x1F) | x}
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                      last_pc=COUNTDOWN_CHECK_DEEP_LAST_PC)
+
+
 def countdown_check_plan(machine, registers):
     """010332: the countdown reload/reset, the direction-mirrored screen window test and pool fill."""
     from .game import timers
@@ -899,8 +963,8 @@ def countdown_check_plan(machine, registers):
     control, countdown = registers['a3'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
     result = timers.countdown_check(_reader(machine), control, countdown)
     arm = result['arm']
-    if arm == 'trigger-deep':
-        raise UnsupportedCandidate('countdown check trigger arm calls unrecovered 0091BC')
+    if arm == 'trigger-deep-pool-full':
+        raise UnsupportedCandidate('countdown check trigger-deep arm: projectile pool exhausted, not witnessed')
     if arm == 'trigger-pool-full':
         raise UnsupportedCandidate('countdown check trigger arm: spawn pool exhausted, not witnessed')
     if arm == 'idle':
@@ -917,6 +981,8 @@ def countdown_check_plan(machine, registers):
         return AtomicPlan(cycles=_CC_WAITING_COST[0], instructions=_CC_WAITING_COST[1], writes=writes,
                           registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
                           last_pc=COUNTDOWN_CHECK_LAST_PC)
+    if arm == 'trigger-deep-launch':
+        return _countdown_check_deep_plan(machine, registers, result, sp32, sp, sr)
     # 'trigger-reject' or 'trigger-spawn': both run the full head, the window test, and (spawn only) the pool scan.
     variant = result['variant']
     back = variant is timers.BACK

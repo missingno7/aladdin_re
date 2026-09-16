@@ -12,9 +12,12 @@ Reaching zero reloads the countdown from a rate byte in A3 (``(0x10 -
 rate) * 4``) and computes a reload frequency word from the same byte
 (``(rate >> 2 + 4)``, scaled by a work-RAM word and mirrored to a global,
 ``TRIGGER_FREQUENCY``) regardless of what follows.  A further A3 byte
-(``TRIGGER_DEEP_GATE``) then either calls an unrecovered pool routine
-(``0091BC``, itself calling a further unrecovered routine) -- declined
-(``'trigger-deep'``) -- or runs a screen-relative window test on the
+(``TRIGGER_DEEP_GATE``) then either takes the record's own position
+(biased ``+0x10`` in X only) and a budget from the same rate byte
+(``(rate >> 1) + 2``, an *arithmetic* shift) into the already-recovered
+projectile launch (``game/projectiles.py: launch``, a fixed flag of 1 --
+``'trigger-deep-launch'``, or ``'trigger-deep-pool-full'`` if the pool is
+exhausted, unwitnessed) -- or runs a screen-relative window test on the
 record's own position (offset -8 in X for one direction, +0x20 in the
 other; the Y window shared) and, inside it, scans a bounded 20-entry pool
 at ``SPAWN_POOL_BASE`` (the same screen-relative globals CAMERA_X/CAMERA_Y
@@ -27,7 +30,9 @@ same bounded shape ``01158C``/``0115D4`` share with ``hazard.py``'s pool),
 but no recording exhausts it, so it is declined as unwitnessed.
 
 Pure functions of ``read(address, size)`` (work RAM and ROM); no cycles,
-CCR, stack or registers.
+CCR, stack or registers -- except for calling into ``game/projectiles.py``'s
+own pure launch function, the shape ``00BA8E``'s composition over its own
+callees proved.
 """
 from __future__ import annotations
 
@@ -45,6 +50,8 @@ _WINDOW_Y = (-4, 0xC0)                                            # screen_y in 
 # 0115D4 (direction word nonzero): position biased +0x20 in X, screen_x in [-8, 0x138].
 BACK = {'bias': -8, 'x_window': (8, 0x148), 'marker': 0, 'resume': 0x010382}
 FORWARD = {'bias': 0x20, 'x_window': (-8, 0x138), 'marker': 3, 'resume': 0x01039A}
+DEEP_BIAS_X = 0x10               # the deep gate's own position bias (unlike BACK/FORWARD, applied to X only)
+DEEP_FLAG = 1                    # moveq #$1,d6: the deep gate's own launch flag, fixed (not caller-derived)
 
 
 def _signed_byte(value):
@@ -105,14 +112,16 @@ def _spawn(read, record, variant, frequency):
 def countdown_check(read, control, countdown):
     """What ``010332`` does for one call with control struct ``control`` (A3) and record ``countdown`` (A5).
 
-    Returns the arm (``'idle'``, ``'waiting'``, ``'trigger-deep'``
-    (declined), ``'trigger-reject'``, ``'trigger-spawn'`` or
-    ``'trigger-pool-full'`` (declined)), the countdown's value before and
-    after (``'idle'`` leaves it untouched: ``before == after``), and the
-    durable stores.  The trigger arms also report ``reload`` (the
-    countdown's new value), and, once past the deep gate, ``frequency``,
-    ``variant`` (``BACK``/``FORWARD``, carrying the resume PC the boundary
-    needs) and the window/pool detail ``_spawn`` returns.
+    Returns the arm (``'idle'``, ``'waiting'``, ``'trigger-deep-launch'``,
+    ``'trigger-deep-pool-full'`` (declined), ``'trigger-reject'``,
+    ``'trigger-spawn'`` or ``'trigger-pool-full'`` (declined)), the
+    countdown's value before and after (``'idle'`` leaves it untouched:
+    ``before == after``), and the durable stores.  The trigger arms also
+    report ``reload`` (the countdown's new value); the deep arms report
+    ``launch`` (``game/projectiles.py: launch``'s own result); the window
+    arms report ``frequency``, ``variant`` (``BACK``/``FORWARD``, carrying
+    the resume PC the boundary needs) and the window/pool detail ``_spawn``
+    returns.
     """
     if read(control + RATE_ENABLE, 1) == 0:
         return {'arm': 'idle', 'before': None, 'after': None, 'stores': {}}
@@ -125,7 +134,18 @@ def countdown_check(read, control, countdown):
     stores = {(countdown + COUNTDOWN) & 0xFFFFFF: (reload, 2)}
     result = {'before': before, 'after': after, 'reload': reload, 'stores': stores}
     if read(control + TRIGGER_DEEP_GATE, 1) != 0:
-        result['arm'] = 'trigger-deep'
+        from . import projectiles
+        x0 = (read(countdown + POSITION_X, 2) + DEEP_BIAS_X) & 0xFFFF
+        y0 = read(countdown + POSITION_Y, 2)
+        rate = _signed_byte(read(control + RATE_ENABLE, 1))
+        budget = ((rate >> 1) + 2) & 0xFFFF                 # ext.w; asr.w #1; addq.w #2 (arithmetic shift)
+        launch = projectiles.launch(read, x0, y0, budget, DEEP_FLAG)
+        result['launch'] = launch
+        stores.update(launch['stores'])
+        if launch['arm'] == 'pool-full':
+            result['arm'] = 'trigger-deep-pool-full'
+        else:
+            result['arm'] = 'trigger-deep-launch'
         return result
     variant = FORWARD if read(countdown + DIRECTION, 2) != 0 else BACK
     frequency, frequency_upper = _frequency(read, control)
