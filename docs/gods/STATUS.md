@@ -20,17 +20,19 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with fifteen gates armed, the camera follow step `002806`, the
+  original with seventeen gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
   step `00FE08`, the countdown check `010332`, the collision gate `010A14`,
   the zone check `00BCCE`, the particle drawer's own emitter `00126A`, the
-  hazard tick `014084` and the trigger conditions `00470C`; `camera`,
-  `sprites`, `sprites-static`, `conditions`,
+  hazard tick `014084`, the trigger conditions `00470C`, the score
+  conversion `00364C` and the trigger evaluator's non-firing arm `00462C`;
+  `camera`, `sprites`, `sprites-static`, `conditions`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
-  `particle-emit` and `hazard-tick` arm each alone.
+  `particle-emit`, `hazard-tick`, `score-convert` and `evaluator` arm each
+  alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -345,11 +347,23 @@ record fired, shows its message (`0046A4`–`0046B4`, through `007986` /
 predicate kinds (0–3, 5–12, 15, 16) over the current markers `FFF22E`, the
 tracked ids `FFEF8C`/`FFF01E`/`FFF0B0`, the status words `FF502A`, the two
 progress words `FFEF3E`/`FFF1CC`, the elapsed seconds `FFF2AA`/`FFEEC0`
-and the flagged entries `FF62F6`; kinds 4 (unwitnessed), 13 and 14 (the
-score, through `00364C`) are declined.  Next in this subsystem: `00364C`
-(the score conversion) to admit kinds 13/14, then the evaluator `00462C`
-as a composition of three recovered predicate calls (its action arm is a
-second dispatcher, the fifteen handlers each their own leaf or seam).
+and the flagged entries `FF62F6`; kinds 4, 13 and 14 stay declined -- not
+because `00364C` is unrecovered (it now is) but because no recording ever
+calls `00470C` with kind 13 or 14 at all (checked against every condition
+census directory: no kind-13/14 fixture exists anywhere), so the (kind,
+arm) pair has no fact to admit.  `00364C` (the score conversion the two
+score kinds would call) is recovered on its own merits: a RAM-only leaf
+witnessed directly from its other two callers, the score-update sites
+`0035B2`/`003604` (`game/score.py`, candidate `score-convert`).  The
+evaluator `00462C` is recovered on its non-firing arm: a composition of
+three calls into the already-recovered `00470C` (the boundary owns the
+whole call, the shape `0049DA` calling `001164` proved), ANDing the three
+slots (`game/triggers.py`, candidate `evaluator`); its firing arm (message,
+then the action dispatch table at `0046D0`, fifteen handlers) is a second
+dispatcher, declined and left for the supervisor.  The disabled arm
+(`FFEF38` nonzero, skipping evaluation entirely) is real ROM code no
+recording has ever entered: declined too.  Next in this subsystem: the
+action dispatch table's fifteen handlers, each its own leaf or seam.
 
 Deferred, not first candidates: `003BEC` (the tile-pair VDP writer inside
 the map streaming interpreter `003158`/`003480`, which does not return

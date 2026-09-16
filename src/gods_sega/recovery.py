@@ -13,12 +13,12 @@ from dataclasses import dataclass, field
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
-                       FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY, PARTICLE_EMIT_ENTRY,
-                       SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY,
+                       EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY, PARTICLE_EMIT_ENTRY,
+                       SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY,
                        TABLE_RESET_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
-                       collision_gate_plan, countdown_check_plan, draw_solid_plan, footprint_stamp_plan,
-                       condition_plan, grid_cell_plan, hazard_tick_plan, particle_emit_plan, spawn_queue_plan,
-                       sprite_emit_plan, static_emit_plan, table_reset_plan, zone_check_plan)
+                       collision_gate_plan, countdown_check_plan, draw_solid_plan, evaluator_plan, footprint_stamp_plan,
+                       condition_plan, grid_cell_plan, hazard_tick_plan, particle_emit_plan, score_convert_plan,
+                       spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan, zone_check_plan)
 
 
 def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
@@ -65,6 +65,8 @@ PLANNERS = {
     'particle-emit': {PARTICLE_EMIT_ENTRY: particle_emit_plan},
     'hazard-tick': {HAZARD_TICK_ENTRY: hazard_tick_plan},
     'conditions': {CONDITION_ENTRY: condition_plan},
+    'score-convert': {SCORE_CONVERT_ENTRY: score_convert_plan},
+    'evaluator': {EVALUATOR_ENTRY: evaluator_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -72,7 +74,8 @@ PLANNERS = {
                        ANIMATION_STEP_ENTRY: animation_step_plan, COUNTDOWN_CHECK_ENTRY: countdown_check_plan,
                        COLLISION_GATE_ENTRY: collision_gate_plan, ZONE_CHECK_ENTRY: zone_check_plan,
                        PARTICLE_EMIT_ENTRY: particle_emit_plan, HAZARD_TICK_ENTRY: hazard_tick_plan,
-                       CONDITION_ENTRY: condition_plan},
+                       CONDITION_ENTRY: condition_plan, SCORE_CONVERT_ENTRY: score_convert_plan,
+                       EVALUATOR_ENTRY: evaluator_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -95,7 +98,9 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # generic "flip the last write" mutation would only corrupt already-dead stack space.
              'zone-check-mutant-result': ('zone-check', _mutate_register),
              'particle-emit-mutant-result': ('particle-emit', _mutate_result),
-             'hazard-tick-mutant-result': ('hazard-tick', _mutate_result)}
+             'hazard-tick-mutant-result': ('hazard-tick', _mutate_result),
+             'score-convert-mutant-result': ('score-convert', _mutate_result),
+             'evaluator-mutant-outcome': ('evaluator', _mutate_outcome)}
 
 
 @dataclass

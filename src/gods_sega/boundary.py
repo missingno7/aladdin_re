@@ -1382,27 +1382,23 @@ def _add(*costs):
     return sum(c[0] for c in costs), sum(c[1] for c in costs)
 
 
-def condition_plan(machine, registers):
-    """00470C: one trigger predicate by kind; unwitnessed kinds and compare positions are declined."""
+def _condition_call(read, sr, d0_in, kind, argument, slot):
+    """The exact effects of one call into 00470C (head dispatch through rts): cost, stores, the register
+    residue the predicate itself leaves (not A7/PC -- a caller's own bsr/rts, or an internal one a
+    composing region owns, pops those) and the exit SR.  Shared by ``condition_plan`` (the machine
+    parked at 00470C) and a composing region that calls 00470C internally, the way ``spawn_queue_plan``
+    reuses ``_static_emit_cost`` for its own calls into 001164.  Raises ``UnsupportedCandidate`` for an
+    unrecovered kind or an unwitnessed compare position/arm -- identically for either caller.
+    """
     from .game import conditions
-    if registers['pc'] != CONDITION_ENTRY:
-        raise UnsupportedCandidate('condition planner needs the machine parked at 00470C')
-    sp32, sr = registers['a7'], registers['sr']
-    sp = sp32 & 0xFFFFFF
-    kind, argument, slot = registers['d5'] & 0xFFFF, registers['d6'] & 0xFFFF, registers['a3']
-    if (sp | slot) & 1:
-        raise UnsupportedCandidate('unaligned stack or result slot')
-    read = _reader(machine)
     result = conditions.evaluate(read, kind, argument, slot)
     arm = result['arm']
     if arm == 'unrecovered':
         raise UnsupportedCandidate(f'condition kind {kind} not recovered')
-    _spans_disjoint([('condition frame', sp, 4), ('condition slot', slot & 0xFFFFFF, 2)])
     # The dispatcher's residue: D0 = 4 * kind (word, the upper half kept), A5 = the predicate's address;
     # add.w d0,d0 is the last flag-setter when the predicate sets none (kind 0).
     doubled = (2 * kind) & 0xFFFF
-    exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | ((4 * kind) & 0xFFFF), 'a5': result['handler'],
-                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    extra = {'d0': (d0_in & 0xFFFF0000) | ((4 * kind) & 0xFFFF), 'a5': result['handler']}
     head_sr = _add_sr(sr, doubled, doubled, 2)
     cost = _add(_CD_HEAD, _CD_RTS)
     holds = arm == 'true'
@@ -1428,8 +1424,8 @@ def condition_plan(machine, registers):
     elif kind in (5, 6):
         entry = result['entry']
         exit_sr = _logic_sr(head_sr, read(entry & 0xFFFFFF, 2), 2)
-        exit_registers.update(d0=(registers['d0'] & 0xFFFF0000) | (((argument - 1) & 0xFFFF) * 4 & 0xFFFF),
-                              a4=conditions.STATUS_WORDS)   # the index rides in the addressing mode, a4 is the base
+        extra.update(d0=(d0_in & 0xFFFF0000) | (((argument - 1) & 0xFFFF) * 4 & 0xFFFF),
+                     a4=conditions.STATUS_WORDS)   # the index rides in the addressing mode, a4 is the base
         cost = _add(cost, _CD_STATUS, _CD_BRANCH_TAKEN if holds else _CD_BRANCH_NOT)
     elif kind in (7, 8, 15, 16):
         word = read(conditions.PROGRESS_A if kind in (7, 8) else conditions.PROGRESS_B, 2)
@@ -1441,22 +1437,206 @@ def condition_plan(machine, registers):
         d0 = ((result['remainder'] & 0xFFFF) << 16) | quotient
         add_sr = _add_sr(head_sr, (4 * argument) & 0xFFFF, argument, 2)
         exit_sr = _cmp_sr(add_sr, scaled, quotient, 2)
-        exit_registers.update(d0=d0, d1=(registers['d1'] & 0xFFFF0000) | argument,
-                              d6=(registers['d6'] & 0xFFFF0000) | scaled)
+        extra.update(d0=d0, d1=argument, d6=scaled)     # 9/10 overwrite d0 fully; d1/d6 keep their own upper half in the caller
         cost = _add(cost, _CD_ELAPSED, _CD_BRANCH_TAKEN if holds else _CD_BRANCH_NOT)
     else:                                                             # 11, 12
         entry, quadrupled = result['entry'], result['scaled']
         flag = read((entry + conditions.FLAGGED_FLAG_BYTE) & 0xFFFFFF, 1) & 1
         add_sr = _add_sr(head_sr, (2 * argument) & 0xFFFF, (2 * argument) & 0xFFFF, 2)
         exit_sr = (add_sr & ~0x04) | (0x00 if flag else 0x04)        # btst: Z only
-        exit_registers.update(d6=(registers['d6'] & 0xFFFF0000) | quadrupled, a4=entry)
+        extra.update(d6=quadrupled, a4=entry)            # d6 keeps its own upper half in the caller
         cost = _add(cost, _CD_FLAGGED, _CD_BRANCH_TAKEN if holds else _CD_BRANCH_NOT)
     if kind not in (0, 1, 2, 3, 4) and (kind, holds) not in CONDITION_WITNESSED:
         raise UnsupportedCandidate(f'condition kind {kind} arm not witnessed by a recording')
     if arm == 'false':
         exit_sr = _logic_sr(exit_sr, 0, 2)                            # clr.w (a3): Z set, N/V/C clear, X kept
         cost = _add(cost, _CD_CLEAR)
-    exit_registers['sr'] = exit_sr
-    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
-    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
-                      last_pc=_CONDITION_LAST_PCS[kind])
+    extra['sr'] = exit_sr
+    return {'cost': cost, 'extra': extra, 'stores': result['stores'], 'holds': holds,
+           'last_pc': _CONDITION_LAST_PCS[kind]}
+
+
+def condition_plan(machine, registers):
+    """00470C: one trigger predicate by kind; unwitnessed kinds and compare positions are declined."""
+    if registers['pc'] != CONDITION_ENTRY:
+        raise UnsupportedCandidate('condition planner needs the machine parked at 00470C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    kind, argument, slot = registers['d5'] & 0xFFFF, registers['d6'] & 0xFFFF, registers['a3']
+    if (sp | slot) & 1:
+        raise UnsupportedCandidate('unaligned stack or result slot')
+    _spans_disjoint([('condition frame', sp, 4), ('condition slot', slot & 0xFFFFFF, 2)])
+    effects = _condition_call(_reader(machine), sr, registers['d0'], kind, argument, slot)
+    extra = effects['extra']
+    if 'd1' in extra:
+        extra['d1'] = (registers['d1'] & 0xFFFF0000) | (extra['d1'] & 0xFFFF)
+    if 'd6' in extra:
+        extra['d6'] = (registers['d6'] & 0xFFFF0000) | (extra['d6'] & 0xFFFF)
+    exit_registers = {**extra, 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    writes = tuple(pair for address, (value, size) in effects['stores'].items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=effects['cost'][0], instructions=effects['cost'][1], writes=writes,
+                      registers=exit_registers, last_pc=effects['last_pc'])
+
+
+# --- 00364C: the score conversion (game/score.py) -------------------------
+#
+# Called from the score-update sites (0035B2, 003604) and, unwitnessed, from
+# the trigger conditions' score kinds through 004C4E's tail jump. Cost from
+# the tracer (artifacts/gods/evidence/census-00364C*): the per-digit head
+# (divs.w #$a,d6; move.l d6,d7; swap d7) is constant, the internal call chain
+# (abcd/clr.w through to d3, then the movem/flag/addq/rts tail) depends only
+# on which of d0..d3 the digit enters at.  Only 1-3 digit values (0-999) are
+# witnessed; a fourth division is real ROM code no recording enters.
+SCORE_CONVERT_ENTRY = 0x00364C
+SCORE_CONVERT_LAST_PC = 0x0036C4                # the outer rts once the quotient is zero
+_SC_INITIAL_LOAD = (28, 1)                      # movem.w (a0)+,d0-d3: once, at the very start
+_SC_HEAD = (162 + 4 + 4, 3)                     # divs.w #$a,d6; move.l d6,d7; swap d7
+_SC_SHIFT = (14, 1)                             # lsl.w #4,d7: the pair's second (odd) digit only
+_SC_BSR = (18, 1)                               # bsr.b to the internal chain
+# abcd.b/clr.w from the entry register through d3, plus the chain's own
+# common tail (movem.w d0-d3,-(a0); move.w #$1,$f1ce.w; addq.w #$8,a0; rts).
+_SC_TAIL = (24 + 16 + 4 + 16, 4)
+_SC_CHAIN = {0: (6 + 4 + 6 + 4 + 6 + 4 + 6, 7), 1: (6 + 4 + 6 + 4 + 6, 5), 2: (6 + 4 + 6, 3), 3: (6, 1)}
+_SC_EXT = (4, 1)                                # ext.l d6
+_SC_BEQ_TAKEN, _SC_BEQ_NOT = (10, 1), (8, 1)     # beq.b $36c4
+_SC_FLAG_WORD = 0xFFF1CE                        # move.w #$1,$f1ce.w: every internal call, unconditional
+# The internal bsr's own return address (right after the bsr in the ROM, one per digit slot); only the
+# LAST slot's push survives in final RAM -- each later slot's internal bsr overwrites the same stack slot.
+_SC_RETURN_PC = {0: 0x00365A, 1: 0x00366A, 2: 0x003678, 3: 0x003688,
+                 4: 0x003696, 5: 0x0036A6, 6: 0x0036B4, 7: 0x0036C4}
+
+
+def _sign_extend_word(value):
+    value &= 0xFFFF
+    return value - 0x10000 if value & 0x8000 else value
+
+
+def score_convert_plan(machine, registers):
+    """00364C: the score digit conversion, admitted for the witnessed 1-3 digit (0-999) values only."""
+    from .game import score
+    if registers['pc'] != SCORE_CONVERT_ENTRY:
+        raise UnsupportedCandidate('score convert planner needs the machine parked at 00364C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    base32 = registers['a0'] & 0xFFFFFFFF
+    base = base32 & 0xFFFFFF
+    _ram_span('score convert buffer', base, 2 * score.WORD_COUNT)
+    value = registers['d6'] & 0xFFFFFFFF
+    if value & 0x80000000:
+        raise UnsupportedCandidate('score convert value is negative: not witnessed')
+    read = _reader(machine)
+    result = score.convert_score(read, value, base, bool(sr & 0x10))
+    if result['digits'] is None:
+        raise UnsupportedCandidate('score convert value needs an unwitnessed digit count (0-999 only)')
+    digits = result['digits']
+    cycles, instructions = _SC_INITIAL_LOAD
+    for slot in range(digits):
+        register, shifted = slot // 2, slot % 2 == 1
+        for part in (_SC_HEAD, _SC_SHIFT if shifted else (0, 0), _SC_BSR, _SC_CHAIN[register], _SC_TAIL, _SC_EXT,
+                     _SC_BEQ_TAKEN if slot == digits - 1 else _SC_BEQ_NOT):
+            cycles += part[0]
+            instructions += part[1]
+    cycles += 16                                    # the outer rts (0036C4)
+    instructions += 1
+    exit_registers = {'d6': 0, 'd7': 0, 'a0': (base32 + 2 * score.WORD_COUNT) & 0xFFFFFFFF,
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+                      'sr': (sr & ~0x1F) | 0x04 | (0x10 if result['x'] else 0)}
+    for index, name in enumerate(('d0', 'd1', 'd2', 'd3')):
+        upper = _sign_extend_word(result['original'][index]) & 0xFFFFFF00 & 0xFFFFFFFF
+        exit_registers[name] = (upper | (result['words'][index] & 0xFF)) & 0xFFFFFFFF
+    # The digit stores are ordered last: they are the routine's durable, later-read effect (the packed
+    # score display, and what the trigger conditions' score kinds will compare), unlike the flag word
+    # and the internal bsr's own dead stack scratch above -- _mutate_result flips the last write.
+    writes = list(_bytes(_SC_FLAG_WORD, 0x0001, 2))                        # every internal call: move.w #$1,$f1ce.w
+    writes.extend(_bytes((sp - 4) & 0xFFFFFF, _SC_RETURN_PC[digits - 1], 4))  # the last internal bsr's push
+    writes.extend(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(writes), registers=exit_registers,
+                      last_pc=SCORE_CONVERT_LAST_PC)
+
+
+# --- 00462C: the trigger evaluator (game/triggers.py) -----------------------
+#
+# A composition of three internal calls into the already-recovered 00470C,
+# the shape 0049DA's calls into 001164 proved: the boundary owns the whole
+# call, 00470C is not a separate gate at this call site.  Only the
+# non-firing arm is admitted; the firing arm (004688 onward: the message,
+# the per-action dispatch table) is a second dispatcher, left for the
+# supervisor.  The disabled arm (FFEF38 nonzero, no calls at all) is real
+# ROM code no recording has ever entered: declined too.  Cost from the
+# tracer (artifacts/gods/evidence/census-00462C*): the head through the
+# first pair's own setup, the per-call bsr overhead, the two between-call
+# setups, the AND tail and the outer rts.
+EVALUATOR_ENTRY, EVALUATOR_LAST_PC = 0x00462C, 0x004688
+_TE_HEAD = (12 + 8 + 4 + 12 + 8 + 44 + 6 + 24 + 16 + 8 + 12 + 8, 12)
+# tst.w EF38; bne.b (not taken); movea.l a0,a2; move.w 2(a0),d0; lea.l TRIGGER_TABLE,a1; muls.w #$18,d0;
+# adda.l d0,a1; move.l #-1,SLOT_BASE; move.w #-1,SLOT_BASE+4; move.w (a1),d5; move.w 2(a1),d6; lea.l SLOT_BASE,a3
+_TE_BSR = (18, 1)                       # bsr.w $470c
+_TE_SETUP = (12 + 12 + 4, 3)            # move.w n(a1),d5; move.w n+2(a1),d6; addq.w #2,a3 -- between calls only
+_TE_TAIL = (12 + 12 + 12 + 8, 4)        # move.w SLOT_BASE,d0; and.w +2,d0; and.w +4,d0; bmi.b (not taken)
+_TE_OUTER_RTS = (16, 1)
+_TE_RETURN_PC = (0x00465E, 0x00466C, 0x00467A)   # the internal bsr's own return address, one per pair
+
+
+def evaluator_plan(machine, registers):
+    """00462C: the trigger evaluator's non-firing arm, three composed calls into 00470C."""
+    from .game import triggers
+    if registers['pc'] != EVALUATOR_ENTRY:
+        raise UnsupportedCandidate('trigger evaluator planner needs the machine parked at 00462C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a0 = registers['a0'] & 0xFFFFFFFF
+    read = _reader(machine)
+    disable_flag = read(triggers.DISABLE_FLAG & 0xFFFFFF, 2)
+    if disable_flag & 0xFFFF:
+        raise UnsupportedCandidate('trigger evaluator disabled arm not witnessed by a recording')
+    index = read((a0 + 2) & 0xFFFFFF, 2)
+    result = triggers.evaluate_record(read, index, disable_flag)
+    if result['arm'] == 'unrecovered':
+        raise UnsupportedCandidate('trigger evaluator: a condition kind in this record is not recovered')
+    if result['arm'] == 'firing':
+        raise UnsupportedCandidate('trigger evaluator firing arm is not recovered (left for the supervisor)')
+    entry = result['entry']
+    _spans_disjoint([('trigger frame', sp, 4), ('trigger record', entry & 0xFFFFFF, triggers.TRIGGER_STRIDE)])
+    cycles, instructions = _TE_HEAD
+    # muls.w #$18,d0 (the head's own index-to-entry-offset multiply) leaves the full 32-bit signed
+    # product in d0 before the first internal call -- the caller's own entering d0 is gone by then.
+    index_signed = index - 0x10000 if index & 0x8000 else index
+    regs = {'d0': (index_signed * triggers.TRIGGER_STRIDE) & 0xFFFFFFFF, 'd1': registers['d1'],
+           'd5': registers['d5'], 'd6': registers['d6'], 'a4': registers['a4'], 'a5': registers['a5']}
+    call_sr = sr
+    slot_values = []
+    for pair_index, call in enumerate(result['calls']):
+        kind, argument, slot = call['kind'], call['argument'], call['slot']
+        regs['d5'] = (regs['d5'] & 0xFFFF0000) | (kind & 0xFFFF)
+        regs['d6'] = (regs['d6'] & 0xFFFF0000) | (argument & 0xFFFF)
+        effects = _condition_call(read, call_sr, regs['d0'], kind, argument, slot)
+        extra = dict(effects['extra'])
+        if 'd1' in extra:
+            extra['d1'] = (regs['d1'] & 0xFFFF0000) | (extra['d1'] & 0xFFFF)
+        if 'd6' in extra:
+            extra['d6'] = (regs['d6'] & 0xFFFF0000) | (extra['d6'] & 0xFFFF)
+        call_sr = extra.pop('sr')
+        regs.update(extra)
+        cycles += _TE_BSR[0] + effects['cost'][0]
+        instructions += _TE_BSR[1] + effects['cost'][1]
+        slot_values.append(call['result']['arm'] != 'false')
+        if pair_index < len(result['calls']) - 1:
+            cycles += _TE_SETUP[0]
+            instructions += _TE_SETUP[1]
+    cycles += _TE_TAIL[0] + _TE_OUTER_RTS[0]
+    instructions += _TE_TAIL[1] + _TE_OUTER_RTS[1]
+    final = 0xFFFF if all(slot_values) else 0x0000
+    exit_sr = _logic_sr(call_sr, final, 2)
+    exit_registers = {'d0': (regs['d0'] & 0xFFFF0000) | final, 'a2': a0,
+                      'a1': (triggers.TRIGGER_TABLE + triggers.TRIGGER_STRIDE * index) & 0xFFFFFFFF,
+                      'a3': (triggers.SLOT_BASE + 4) & 0xFFFFFFFF, 'a4': regs['a4'], 'a5': regs['a5'],
+                      'd1': regs.get('d1', registers['d1']), 'd5': regs['d5'], 'd6': regs['d6'],
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+    writes = list(_bytes(triggers.SLOT_BASE & 0xFFFFFF, 0xFFFFFFFF, 4))
+    writes.extend(_bytes((triggers.SLOT_BASE + 4) & 0xFFFFFF, 0xFFFF, 2))
+    for call in result['calls']:
+        writes.extend(pair for address, (value, size) in call['result']['stores'].items()
+                      for pair in _bytes(address, value, size))
+    writes.extend(_bytes((sp - 4) & 0xFFFFFF, _TE_RETURN_PC[len(result['calls']) - 1], 4))
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(writes), registers=exit_registers,
+                      last_pc=EVALUATOR_LAST_PC)
