@@ -125,3 +125,81 @@ def hazard_tick(read, a1, a3, d0, d1):
     if read(cell & 0xFFFFFF, 1) != SOLID_CELL:
         return _paint(read, a3, d0, d1)
     return _spawn(read, cell, row, a3, d0, d1)
+
+
+# --- 00F828/00F86A: the proximity table (014084's own 'trigger' callee) -----
+#
+# A 40-entry table at ``PROXIMITY_TABLE``, keyed by the same grid-table
+# offset ``0063FA``/``00FDB8``/``010CBC`` all derive from a world position
+# (here reversed out of a grid *address*, A1, rather than computed from a
+# position directly): ``00F86A`` searches it for an entry whose key matches
+# and whose timer word is negative (a fresh, unconsumed entry); if it finds
+# one it falls into a further caller-record dispatch and a timer decrement
+# at ``00F8A2`` and returns past *both* stack frames at once (a deliberate
+# double-return, not a bug) -- real ROM code, declined here as the
+# ``'trigger'`` arm.  If no such entry exists, ``00F828`` itself (which
+# called ``00F86A`` first) scans the same table again for a free slot
+# (a negative key word) and adds one; a table with no free slot at all
+# (``'pool-full'``) is real code too, but no recording has ever exercised
+# it, so it stays declined alongside ``'trigger'``.
+PROXIMITY_TABLE, PROXIMITY_COUNT, PROXIMITY_STRIDE = 0xFFFF0C70, 40, 6
+PROXIMITY_COUNTER = 0xFFFFF1FA                     # word: how many entries have ever been added
+PROXIMITY_FLAG = 0xFFFFEED7                        # byte: set (0xFF) whenever an entry is added
+
+
+def _proximity_key(a1):
+    """Both 00F828 and 00F86A derive the same (d4, d5) key from a grid-cell address (A1):
+    the offset from ``GRID_TABLE``, split back into its column (d4, word) and row (d5, long)
+    components -- the inverse of the ``column``/``row`` arithmetic ``grid.py`` computes forward.
+    """
+    offset = (a1 - GRID_TABLE) & 0xFFFFFFFF
+    d5_full = (offset & 0x00FFFF80) >> 3                    # lsr.l #3: a long shift, the full 32-bit result
+    d4 = ((offset & 0x7F) << 5) & 0xFFFF                     # lsl.w #5: a word shift
+    return offset, d4, d5_full
+
+
+def proximity_search(read, a1):
+    """00F86A: the 40-entry search.  ``positions`` is one of 'miss'/'close'/'stale'/'trigger'
+    per entry examined, in order; 'trigger' (a matching, still-negative-timer entry) stops the
+    search early and is declined by the boundary.  Otherwise every entry is examined ('miss': the
+    key's first word differs; 'close': it matches but the second word does not; 'stale': both
+    match but the timer is not negative, i.e. already consumed) and the arm is ``'not-found'``.
+    """
+    offset, d4, d5 = _proximity_key(a1)
+    d5_word = d5 & 0xFFFF
+    positions = []
+    for index in range(PROXIMITY_COUNT):
+        base = (PROXIMITY_TABLE + PROXIMITY_STRIDE * index) & 0xFFFFFF
+        if read(base, 2) != d4:
+            positions.append('miss')
+            continue
+        if read(base + 2, 2) != d5_word:
+            positions.append('close')
+            continue
+        if read(base + 4, 2) & 0x8000:
+            positions.append('trigger')
+            return {'arm': 'trigger', 'offset': offset, 'd4': d4, 'd5': d5, 'positions': positions,
+                   'index': index}
+        positions.append('stale')
+    return {'arm': 'not-found', 'offset': offset, 'd4': d4, 'd5': d5, 'positions': positions, 'index': None}
+
+
+def proximity_add(read, offset, d4, d5):
+    """00F828's own scan (after 00F86A finds nothing): the first free slot (key word negative),
+    filled with (d4, d5, -1) -- a fresh, unconsumed entry -- or 'pool-full' if none of the 40 is
+    free (real ROM code, unwitnessed).  The key is recomputed from ``offset`` exactly as the ROM's
+    own redundant second computation does (word ops on d4, long ops on d5, matching ``_proximity_key``).
+    """
+    positions = []
+    for index in range(PROXIMITY_COUNT):
+        base = (PROXIMITY_TABLE + PROXIMITY_STRIDE * index) & 0xFFFFFF
+        if read(base, 2) & 0x8000:
+            positions.append('free')
+            counter_before = read(PROXIMITY_COUNTER & 0xFFFFFF, 2)
+            stores = {base: (d4, 2), base + 2: (d5 & 0xFFFF, 2), base + 4: (0xFFFF, 2),
+                     PROXIMITY_COUNTER & 0xFFFFFF: ((counter_before + 1) & 0xFFFF, 2),
+                     PROXIMITY_FLAG & 0xFFFFFF: (0xFF, 1)}
+            return {'arm': 'added', 'index': index, 'positions': positions, 'stores': stores,
+                    'counter_before': counter_before}
+        positions.append('occupied')
+    return {'arm': 'pool-full', 'positions': positions}

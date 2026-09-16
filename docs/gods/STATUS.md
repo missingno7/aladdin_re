@@ -20,19 +20,20 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with seventeen gates armed, the camera follow step `002806`, the
+  original with eighteen gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
   step `00FE08`, the countdown check `010332`, the collision gate `010A14`,
   the zone check `00BCCE`, the particle drawer's own emitter `00126A`, the
   hazard tick `014084`, the trigger conditions `00470C`, the score
-  conversion `00364C` and the trigger evaluator's non-firing arm `00462C`;
-  `camera`, `sprites`, `sprites-static`, `conditions`,
+  conversion `00364C`, the trigger evaluator's non-firing arm `00462C` and
+  the proximity table search-and-add `00F828`/`00F86A`; `camera`,
+  `sprites`, `sprites-static`, `conditions`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
-  `particle-emit`, `hazard-tick`, `score-convert` and `evaluator` arm each
-  alone.
+  `particle-emit`, `hazard-tick`, `score-convert`, `evaluator` and
+  `proximity` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -102,7 +103,7 @@ ids, never to `main`:
 | **`00126A` particle drawer's own emitter**: `0018C8`'s own seam shape reproduced with this routine's addresses -- no per-frame cache, so every on-screen call uploads; the plan reproduces every fact of the original on all 58 retained fixtures over four recordings (off-screen x/y, flip and no-flip uploads) | `factcheck check` on every fixture | `tests/games/gods/test_particles.py` |
 | `particle-emit` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 7,330 hits (3,314 seams entered, 3,026 completed), 335 fallbacks (53 scheduler admission, 282 seam deadline)**; `camera-sprites` (all thirteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 955,464 hits, 105,964 seams entered, 101,583 completed, 11,118 fallbacks (6,498 scheduler admission, 3,728 seam deadline, 891 unsupported domain, 1 gate-without-planner -- a foreign-return edge the shared seam runner already falls back on safely, tree still bit-exact)** | `history-verify f0ac19738f19 --candidate particle-emit`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-particle-emit-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16m` |
 | the particle emitter's negative control diverges at frame 469 | `--candidate particle-emit-mutant-result` | `artifacts/gods/verify-particle-emit-mutant` |
-| **`014084` hazard tick**: two disjoint bodies behind one early branch -- 'paint' (inactive, or an active object whose grid cell isn't 1: a tile-array write clamped to bounds) and 'spawn' (grid cell 1: a sound request, then a bounded 20-entry pool scan and fill, whether or not a slot was free); the plan reproduces every fact of the original on all 113 retained fixtures over four recordings; the 'trigger' arm (rare, gated by a parallel table byte and a counter, calling unrecovered `00F828`) is declined | `factcheck check` on every fixture | `tests/games/gods/test_hazard.py` |
+| **`014084` hazard tick**: two disjoint bodies behind one early branch -- 'paint' (inactive, or an active object whose grid cell isn't 1: a tile-array write clamped to bounds) and 'spawn' (grid cell 1: a sound request, then a bounded 20-entry pool scan and fill, whether or not a slot was free); the plan reproduces every fact of the original on all 113 retained fixtures over four recordings; the 'trigger' arm (rare, gated by a parallel table byte and a counter, calling `00F828` -- now recovered on its own, `proximity`, but not yet composed into `hazard_tick_plan`) is declined | `factcheck check` on every fixture | `tests/games/gods/test_hazard.py` |
 | `hazard-tick` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 26,075 hits, 218 fallbacks (185 scheduler admission, 33 unsupported domain)**; `camera-sprites` (all fourteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,018,584 hits, 11,755 fallbacks (7,038 scheduler admission, 3,728 seam deadline, 988 unsupported domain, 1 gate-without-planner foreign-return edge, tree still bit-exact)** | `history-verify fb408bc75597 --candidate hazard-tick`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-hazard-tick-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16n` |
 | the hazard tick's negative control diverges at frame 2,628 (the first frame the region is exercised on `fb408bc75597…`) | `--candidate hazard-tick-mutant-result` | `artifacts/gods/verify-hazard-tick-mutant` |
 | **`00470C` trigger conditions** (the first Gods dispatcher): the plan reproduces every fact of the original on all 129 retained fixtures over five census directories (fourteen kinds, every witnessed compare position) | `factcheck check` on every fixture | `tests/games/gods/test_conditions.py` |
@@ -185,8 +186,8 @@ caller passes the descriptor byte offset directly, no id-to-offset table
 the hazard tick (`game/hazard.py`: two disjoint bodies behind one early
 branch, no save/restore frame at all -- 'paint' clamps a tile-array write
 to bounds, 'spawn' requests a sound and fills a bounded 20-entry pool;
-'trigger', the pool scan's own rare gate, calls unrecovered `00F828` and
-is declined).  The
+'trigger', the pool scan's own rare gate, calls `00F828` (recovered
+separately, `proximity`, but not yet composed here) and is declined).  The
 emitter's remaining siblings (`001256`/`001260`, `001312`) share
 its descriptor layout and list conventions but are not recovered.  There
 is no object-table convention, no semantic map, no native runtime, no
@@ -251,7 +252,9 @@ routine is now recovered (`solid-draw`).
 
 Re-screened 16 Sep alongside `010CBC` (which turned out trivial and is now
 recovered, folded into `collision-gate`): `00F828`/`00F86A` (the hazard
-tick's own `'trigger'` callee) is not the same shape.  `00F828` unconditionally
+tick's own `'trigger'` callee, recovered 16 Sep as `proximity` -- its own
+'not-found'+'added' arm only, the 'trigger' arm at `00F8A2` declined) is
+not the same shape as `010CBC`.  `00F828` unconditionally
 calls `00F86A` first, which searches a 40-entry table at `FFFF0C70` for an
 existing matching entry (by two coordinate words) and, on a match, decrements
 a timer field and returns past *both* stack frames at once (`addq.w #4,a7`

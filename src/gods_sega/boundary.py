@@ -1640,3 +1640,90 @@ def evaluator_plan(machine, registers):
     writes.extend(_bytes((sp - 4) & 0xFFFFFF, _TE_RETURN_PC[len(result['calls']) - 1], 4))
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(writes), registers=exit_registers,
                       last_pc=EVALUATOR_LAST_PC)
+
+
+# --- 00F828: the proximity table search-and-add (game/hazard.py: proximity_search/proximity_add) ---
+#
+# Owns its own internal call into 00F86A the way 0049DA owns its calls into
+# 001164: no separate gate for 00F86A, the whole activation planned as one.
+# Cost from the tracer (artifacts/gods/evidence/census-00F828*): the head
+# (both the search's own hash and the outer routine's), the search's four
+# per-position shapes (miss/close/stale/trigger), the free-slot scan's two
+# (free/occupied), and the add body (a redundant recompute of the same key).
+PROXIMITY_ENTRY, PROXIMITY_ADD_LAST_PC = 0x00F828, 0x00F868
+_PX_BSR = (18, 1)                       # bsr.w $f86a
+_PX_HASH_HEAD = (4 + 16 + 4 + 14 + 8 + 16 + 14 + 12 + 4, 9)     # 00F86A's own head through moveq #$27,d6
+_PX_MISS_MID, _PX_MISS_LAST = (8 + 10 + 4 + 10, 4), (8 + 10 + 4 + 14, 4)
+_PX_CLOSE_MID, _PX_CLOSE_LAST = (8 + 8 + 12 + 10 + 4 + 10, 6), (8 + 8 + 12 + 10 + 4 + 14, 6)
+_PX_STALE_MID, _PX_STALE_LAST = (8 + 8 + 12 + 8 + 12 + 8 + 4 + 10, 8), (8 + 8 + 12 + 8 + 12 + 8 + 4 + 14, 8)
+_PX_SEARCH_RTS = (16, 1)                # 00F8A0: rts, once the search exhausts all 40 unmatched
+_PX_OWN_HEAD = (12 + 4, 2)              # 00F82C: lea.l PROXIMITY_TABLE,a0; moveq #$27,d4
+_PX_FREE = (8 + 10, 2)                  # tst.w (a0); bmi.b (taken)
+_PX_OCC_MID, _PX_OCC_LAST = (8 + 8 + 4 + 10, 4), (8 + 8 + 4 + 14, 4)
+_PX_ADD_KEY = (4 + 16 + 4 + 14 + 8 + 16 + 14, 7)      # the redundant key recompute: move.l a1,d4 .. lsr.l #3,d5
+_PX_ADD_WRITE = (8 + 8, 2)              # move.w d4,(a0)+; move.w d5,(a0)+
+_PX_ADD_TIMER = (12, 1)                 # move.w #$ffff,(a0)
+_PX_ADD_COUNTER = (16, 1)               # addq.w #1,PROXIMITY_COUNTER -- the last flag-setter
+_PX_ADD_FLAG = (16, 1)                  # st.b PROXIMITY_FLAG
+_PX_ADD_RTS = (16, 1)
+
+
+def proximity_plan(machine, registers):
+    """00F828: the proximity table search-and-add; 'trigger' (00F8A2 onward) and 'pool-full' decline."""
+    from .game import hazard
+    if registers['pc'] != PROXIMITY_ENTRY:
+        raise UnsupportedCandidate('proximity planner needs the machine parked at 00F828')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a1 = registers['a1'] & 0xFFFFFFFF
+    read = _reader(machine)
+    search = hazard.proximity_search(read, a1)
+    if search['arm'] == 'trigger':
+        raise UnsupportedCandidate('proximity trigger arm (00F8A2) is not recovered (left for the supervisor)')
+    cycles, instructions = _PX_BSR
+    c, i = _PX_HASH_HEAD
+    cycles += c
+    instructions += i
+    positions = search['positions']
+    costs = {'miss': (_PX_MISS_MID, _PX_MISS_LAST), 'close': (_PX_CLOSE_MID, _PX_CLOSE_LAST),
+            'stale': (_PX_STALE_MID, _PX_STALE_LAST)}
+    for index, kind in enumerate(positions):
+        mid, last = costs[kind]
+        c, i = last if index == len(positions) - 1 else mid
+        cycles += c
+        instructions += i
+    c, i = _PX_SEARCH_RTS
+    cycles += c
+    instructions += i
+    c, i = _PX_OWN_HEAD
+    cycles += c
+    instructions += i
+    added = hazard.proximity_add(read, search['offset'], search['d4'], search['d5'])
+    add_positions = added['positions']
+    for index, kind in enumerate(add_positions):
+        if kind == 'free':
+            c, i = _PX_FREE
+        else:
+            c, i = _PX_OCC_LAST if index == len(add_positions) - 1 else _PX_OCC_MID
+        cycles += c
+        instructions += i
+    if added['arm'] == 'pool-full':
+        raise UnsupportedCandidate('proximity pool-full arm is not witnessed by a recording')
+    for c, i in (_PX_ADD_KEY, _PX_ADD_WRITE, _PX_ADD_TIMER, _PX_ADD_COUNTER, _PX_ADD_FLAG, _PX_ADD_RTS):
+        cycles += c
+        instructions += i
+    slot_base = (hazard.PROXIMITY_TABLE + hazard.PROXIMITY_STRIDE * added['index']) & 0xFFFFFFFF
+    counter_before = added['counter_before']
+    exit_sr = _add_sr(sr, counter_before, 1, 2)
+    # d4's word ops (andi.w/lsl.w) preserve whatever upper half the long subtract left; d5 is all
+    # long ops (andi.l/lsr.l), so its exit value is the full 32-bit result, no upper half to keep.
+    exit_registers = {'d4': (search['offset'] & 0xFFFF0000) | search['d4'], 'd5': search['d5'] & 0xFFFFFFFF,
+                      'd6': (registers['d6'] & 0xFFFF0000) | 0xFFFF,
+                      'a0': (slot_base + 4) & 0xFFFFFFFF, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                      'pc': _return(machine, sp), 'sr': exit_sr}
+    # The internal bsr.w $f86a's own return address, pushed once and never popped by anything else:
+    # it's dead stack scratch (a7 is back above it by the time this routine returns) but a real write.
+    writes = list(_bytes((sp - 4) & 0xFFFFFF, 0x00F82C, 4))
+    writes.extend(pair for address, (value, size) in added['stores'].items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(writes), registers=exit_registers,
+                      last_pc=PROXIMITY_ADD_LAST_PC)
