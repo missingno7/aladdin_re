@@ -331,6 +331,42 @@ def static_emit_plan(machine, registers):
                       last_pc=STATIC_EMIT_LAST_PC)
 
 
+# --- 004150: the work-table reset (game/tables.py: reset_table) --------------
+#
+# Cost from the tracer (artifacts/gods/evidence/census-004150*): fully
+# unrolled, so cost is constant per arm (no data-dependent loop count).
+TABLE_RESET_ENTRY, TABLE_RESET_LAST_PC = 0x004150, 0x0041EE
+TABLE_RESET_FRAME = 56                              # movem.l d0-d7/a0-a5,-(a7)
+_TR_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5')
+_TR_ZERO_COST = (3806, 38)       # tst.w RESET_FLAG negative: bmi taken straight into the fill bursts
+_TR_POISON_COST = (3940, 40)     # not negative: the extra reload and clr.w $ef5c.w before the same bursts
+
+
+def _table_reset_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(_TR_FRAME_REGISTERS)
+                 for pair in _bytes(sp - TABLE_RESET_FRAME + 4 * index, registers[name], 4))
+
+
+def table_reset_plan(machine, registers):
+    """004150: an unconditional table fill, one of two constant fill bytes."""
+    from .game import tables
+    if registers['pc'] != TABLE_RESET_ENTRY:
+        raise UnsupportedCandidate('table reset planner needs the machine parked at 004150')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read_word = lambda address: int.from_bytes(machine.peek_ram(address & 0xFFFF, 2), 'big')
+    result = tables.reset_table(read_word)
+    cost = _TR_POISON_COST if result['poisoned'] else _TR_ZERO_COST
+    # tst.w (the zero-fill arm) or clr.w $ef5c.w (the poison-fill arm) is the last flag-setter; X is retained
+    # unchanged from entry by every instruction on either path (movem/lea/tst/bmi/clr do not touch X).
+    exit_value = read_word(tables.RESET_FLAG) if not result['poisoned'] else 0
+    exit_sr = _logic_sr(sr, exit_value, 2)
+    writes = _table_reset_frame_writes(sp, registers) + tuple(result['stores'].items())
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                      registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=TABLE_RESET_LAST_PC)
+
+
 def sprite_emit_suffix(machine, registers):
     """00198C after the upload: the frame back into the registers, the RTS; the CCR is the machine's."""
     if registers['pc'] != SPRITE_EMIT_RESUME:
