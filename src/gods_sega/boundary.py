@@ -2518,3 +2518,95 @@ def pickup_check_plan(machine, registers):
                                  'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
                                  'sr': (_logic_sr(sr, result['box_result'], 2) & ~0x10) | x_bit, **a4_exit},
                       last_pc=PICKUP_CHECK_EFFECT_LAST_PC)
+
+
+# --- 010CD2: the pickup probe (game/pickups.py: pickup_probe) ---------------
+#
+# A caller-supplied record's own camera-relative call into the already-recovered pickup check: owns
+# the call the way 00BA8E owns its own callees, composed by calling pickup_check_plan itself with a
+# synthetic register file for the point 00BA8E is entered (the shape 0049DA-calls-001164 proved, one
+# level deeper).  pickup_check_plan's own internal exit "pc" is meaningless here (nothing was really
+# pushed for it to read back: this composition never executes the real bsr), so it is discarded --
+# every OTHER fact it computes (cycles, instructions, writes, and every register except pc/a7) does
+# not depend on that read and is exact.
+PICKUP_PROBE_ENTRY, PICKUP_PROBE_LAST_PC = 0x010CD2, 0x010CF6
+PICKUP_PROBE_BSR_RETURN = 0x010CE6
+_PP_PUSH = (32, 1)               # movem.l d0-d2,-(a7)
+_PP_ADD_X = (12, 1)              # add.w F3EE,d0
+_PP_ADD_Y = (12, 1)              # add.w F3F0,d1
+_PP_READ_D2 = (12, 1)            # move.w 8(a5),d2
+_PP_BSR = (18, 1)                # bsr.w $ba8e (00BA8E's own cost comes from the composed sub-plan)
+_PP_WRITEBACK = (12, 1)          # move.w d2,8(a5)
+_PP_BPL_TAKEN, _PP_BPL_NOTTAKEN = (10, 1), (8, 1)     # byte branch: taken skips the -1 store
+_PP_STORE_NEGATIVE = (16, 1)     # move.w #$ffff,4(a5)
+_PP_TAIL = (36 + 16, 2)          # movem.l (a7)+,d0-d2; rts
+
+
+def pickup_probe_plan(machine, registers):
+    """010CD2: a caller-supplied record's own probe into the already-recovered pickup check."""
+    from .game import pickups
+    if registers['pc'] != PICKUP_PROBE_ENTRY:
+        raise UnsupportedCandidate('pickup probe planner needs the machine parked at 010CD2')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    a5 = registers['a5'] & 0xFFFFFFFF
+    _ram_span('pickup probe record', a5 & 0xFFFFFF, 10)
+    record_d2 = read((a5 + 8) & 0xFFFFFF, 2)
+    d0_entry, d1_entry = registers['d0'], registers['d1']
+    camera_x = read(pickups.CAMERA_X & 0xFFFFFF, 2)
+    camera_y = read(pickups.CAMERA_Y & 0xFFFFFF, 2)
+    x_full = (d0_entry & 0xFFFF0000) | ((d0_entry + camera_x) & 0xFFFF)
+    y_full = (d1_entry & 0xFFFF0000) | ((d1_entry + camera_y) & 0xFFFF)
+    # add.w F3F0,d1 is the last flag-setter before the call: X for whatever 00BA8E's own first
+    # flag-setter (inside the composed sub-plan) does not itself override before this routine's own
+    # next flag-setting instruction (move.w d2,8(a5) is a MOVE: N/Z/V/C only, X unaffected either).
+    x_bit = _add_sr(sr, d1_entry & 0xFFFF, camera_y, 2) & 0x10
+
+    _ram_span('pickup probe frame', sp - 12, 12)
+    order = {}
+    _pk_push(order, sp, [registers['d0'], registers['d1'], registers['d2']])
+    _pk_push(order, sp - 12, [PICKUP_PROBE_BSR_RETURN])
+
+    virtual = dict(registers)
+    virtual.update(pc=PICKUP_CHECK_ENTRY, a7=(sp - 16) & 0xFFFFFFFF, d0=x_full, d1=y_full,
+                   d2=(registers['d2'] & 0xFFFF0000) | (record_d2 & 0xFFFF), sr=(sr & ~0x10) | x_bit)
+    inner = pickup_check_plan(machine, virtual)
+
+    for address, value in inner.writes:
+        order[address] = value
+    result_d2 = pickups._signed_word(inner.registers.get('d2', virtual['d2']))
+
+    cycles = (_PP_PUSH[0] + _PP_ADD_X[0] + _PP_ADD_Y[0] + _PP_READ_D2[0] + _PP_BSR[0] + inner.cycles
+             + _PP_WRITEBACK[0])
+    instructions = (_PP_PUSH[1] + _PP_ADD_X[1] + _PP_ADD_Y[1] + _PP_READ_D2[1] + _PP_BSR[1] + inner.instructions
+                    + _PP_WRITEBACK[1])
+    for a, b in _bytes((a5 + 8) & 0xFFFFFF, result_d2, 2):
+        order[a] = b
+    if result_d2 < 0:
+        c, i = _PP_BPL_NOTTAKEN
+        cycles += c
+        instructions += i
+        c, i = _PP_STORE_NEGATIVE
+        cycles += c
+        instructions += i
+        for a, b in _bytes((a5 + 4) & 0xFFFFFF, 0xFFFF, 2):
+            order[a] = b
+    else:
+        c, i = _PP_BPL_TAKEN
+        cycles += c
+        instructions += i
+    c, i = _PP_TAIL
+    cycles += c
+    instructions += i
+
+    exit_sr = _logic_sr(inner.registers.get('sr', virtual['sr']), result_d2, 2)
+    exit_registers = {'d0': registers['d0'], 'd1': registers['d1'], 'd2': registers['d2'],
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+    for name in ('a0', 'a1', 'a2', 'a3', 'a4', 'a6', 'd3', 'd4', 'd5', 'd6', 'd7'):
+        if name in inner.registers:
+            exit_registers[name] = inner.registers[name]
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=PICKUP_PROBE_LAST_PC)

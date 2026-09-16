@@ -23,10 +23,12 @@ EVIDENCE = Path('artifacts/gods/evidence/main')
 RANDOM_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-014A3C/014A3C-*-p*.state'))
 POOL_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00932C/00932C-*-p*.state'))
 CHECK_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00BA8E-fresh*/00BA8E-*-p*.state'))
+PROBE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-010CD2/010CD2-*-p*.state'))
 REFERENCE_FIXTURES = sorted(Path('artifacts/gods/evidence/census-00BA8E-fresh-f0ac19738f19').glob('00BA8E-*-p*.state'))
 needs_random_census = pytest.mark.skipif(not RANDOM_FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 014A3C')
 needs_pool_census = pytest.mark.skipif(not POOL_FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 00932C')
 needs_check_census = pytest.mark.skipif(not CHECK_FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 00BA8E')
+needs_probe_census = pytest.mark.skipif(not PROBE_FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 010CD2')
 needs_reference = pytest.mark.skipif(not (EVIDENCE / 'reference.json').exists() or not REFERENCE_FIXTURES
                                      or not GODS.history_path().is_dir(), reason='no local Gods reference evidence')
 
@@ -201,15 +203,51 @@ def test_grid_inverse_award_declines_sound_on_and_the_rate_limit():
     assert pickups.grid_inverse_award(_reader(limited), pickups.PICKUP_GRID & 0xFFFFFFFF)['arm'] == 'debris-limited'
 
 
+# --- 010CD2: the pickup probe (game/pickups.py: pickup_probe) ---------------
+#
+# A caller-supplied record's own camera-relative call into the already-recovered pickup check; the
+# 15 September blocker's own reading of this address range (0091BC, 01158C/0115D4, the 010D7C literal
+# test) turned out to belong to a SEPARATE, adjacent routine (010CF8 onward, not called from here):
+# a fresh census shows 010CD2's own body (010CD2-010CF6) calls only 00BA8E, on every one of 32 real
+# path classes over 1,721 occurrences.
+
+def test_pickup_probe_adds_the_camera_and_calls_the_pickup_check_with_the_records_own_d2():
+    world = {(pickups.CAMERA_X & 0xFFFFFF, 2): 5, (pickups.CAMERA_Y & 0xFFFFFF, 2): 7,
+            (zones.HOLD_FLAG & 0xFFFFFF, 2): 0x8000}   # 'held': the check's own d2 passes through
+    result = pickups.pickup_probe(_reader(world), 100, 200, 3)
+    assert (result['x'], result['y']) == (105, 207)
+    assert result['check']['arm'] == 'clean' and not result['negative']
+
+
+@needs_probe_census
+@pytest.mark.parametrize('fixture', PROBE_FIXTURES, ids=lambda p: p.stem)
+def test_pickup_probe_plan_reproduces_every_fact_of_the_original_or_declines_an_unwitnessed_arm(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.pickup_probe_plan(machine, registers)
+        except boundary.UnsupportedCandidate:
+            return
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
 def test_candidate_names_are_explicit():
     assert recovery.Candidate('next-random').gate_pcs == (boundary.NEXT_RANDOM_ENTRY,)
     assert recovery.Candidate('effect-pool-add').gate_pcs == (boundary.EFFECT_POOL_ADD_ENTRY,)
     assert recovery.Candidate('pickup-check').gate_pcs == (boundary.PICKUP_CHECK_ENTRY,)
-    for entry in (boundary.NEXT_RANDOM_ENTRY, boundary.EFFECT_POOL_ADD_ENTRY, boundary.PICKUP_CHECK_ENTRY):
+    assert recovery.Candidate('pickup-probe').gate_pcs == (boundary.PICKUP_PROBE_ENTRY,)
+    for entry in (boundary.NEXT_RANDOM_ENTRY, boundary.EFFECT_POOL_ADD_ENTRY, boundary.PICKUP_CHECK_ENTRY,
+                 boundary.PICKUP_PROBE_ENTRY):
         assert entry in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('next-random-mutant-result').mutation is recovery._mutate_register
     assert recovery.Candidate('effect-pool-add-mutant-result').mutation is recovery._mutate_result
     assert recovery.Candidate('pickup-check-mutant-result').mutation is recovery._mutate_result
+    assert recovery.Candidate('pickup-probe-mutant-result').mutation is recovery._mutate_outcome
 
 
 @needs_reference

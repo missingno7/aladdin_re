@@ -416,3 +416,17 @@ def grid_inverse_award(read, after_code):
                     'particles': particles}
     stores[RANDOM_CURSOR & 0xFFFFFF] = (live_cursor, 2)
     return {'arm': 'debris', 'x': x, 'y': y, 'stores': stores, 'd4': 0, 'particles': particles}
+
+
+# --- 010CD2: the pickup probe (a caller-supplied record's own camera-relative call) ---
+#
+# Adds the camera to (D0,D1), calls the already-recovered pickup_check with the record's own D2 (at
+# A5+8), writes the result back to A5+8, and marks A5+4 (-1) when it came back negative.  The camera
+# add here and pickup_check's own subtract of the same words cancel exactly (mod 0x10000): the net
+# position pickup_check computes from is D0/D1 exactly as passed in here.
+def pickup_probe(read, d0, d1, record_d2):
+    """010CD2: a caller-supplied record's own probe into the pickup check."""
+    x = (d0 + read(CAMERA_X, 2)) & 0xFFFF
+    y = (d1 + read(CAMERA_Y, 2)) & 0xFFFF
+    check = pickup_check(read, x, y, record_d2)
+    return {'x': x, 'y': y, 'check': check, 'negative': _signed_word(check['d2']) < 0}

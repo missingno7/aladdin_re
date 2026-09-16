@@ -35,7 +35,7 @@ productive, and what evidence would justify the native phase.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with twenty-two gates armed, the camera follow step `002806`, the
+  original with twenty-three gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -44,12 +44,13 @@ productive, and what evidence would justify the native phase.
   hazard tick `014084`, the trigger conditions `00470C`, the score
   conversion `00364C`, the trigger evaluator's non-firing arm `00462C`, the
   proximity table search-and-add `00F828`/`00F86A`, the pickup award
-  `013264`, the next-random draw `014A3C`, the effect pool add `00932C` and
-  the pickup check `00BA8E`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
+  `013264`, the next-random draw `014A3C`, the effect pool add `00932C`, the
+  pickup check `00BA8E` and the pickup probe `010CD2`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
   `particle-emit`, `hazard-tick`, `score-convert`, `evaluator`,
-  `proximity`, `next-random`, `effect-pool-add` and `pickup-check` arm each alone.
+  `proximity`, `next-random`, `effect-pool-add`, `pickup-check` and
+  `pickup-probe` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -142,7 +143,10 @@ ids, never to `main`:
 | **`00BA8E` pickup check**: a composition over the already-recovered zone check, pickup award, next-random and effect-pool-add; the plan reproduces every fact on 155 retained fixtures over four recordings (the clean arm's own near/far/none/bail sub-arms per axis, the array-append side effect, found-sound, found-effect); found-special, found-message, the award-zero bare exit, either jitter's default-mask branch, the second jitter's negative branch and the pool-full arm within this composition decline as unwitnessed | `factcheck check` on every fixture | `tests/games/gods/test_pickup_check.py` |
 | `pickup-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 4,260 hits, 91 fallbacks (34 scheduler admission, 12 declined −4 continuations across both gates, 15 award-zero, 41 second-jitter-negative)**; `camera-sprites` (all twenty-two gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,041,739 hits, 13,151 fallbacks (7,939 scheduler admission, 3,728 seam deadline, 1,483 declined arms, 1 gate-without-planner foreign-return edge, tree bit-exact)** | `history-verify f0ac19738f19 --candidate pickup-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-pickup-check-f0ac1973b`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16v` |
 | the pickup check's negative control diverges at the first found award | `--candidate pickup-check-mutant-result` | `artifacts/gods/verify-pickup-check-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 55 s | 1,524 tests | — |
+| **`010CD2` pickup probe**: a caller-supplied record's own camera-relative call into the already-recovered pickup check, composed by calling `pickup_check_plan` itself with a synthetic register file for the point `00BA8E` is entered (one level deeper than the `0049DA`-calls-`001164` shape); the plan reproduces every fact on all 32 retained fixtures | `factcheck check` on every fixture | `tests/games/gods/test_pickup_check.py` |
+| `pickup-probe` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,248 hits, 58 fallbacks (23 scheduler admission, 35 unsupported domain: pickup check found-jitter-y-negative arm not witnessed)**; `camera-sprites` (all twenty-three gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,041,708 hits, 13,293 fallbacks, tree bit-exact** | `history-verify f0ac19738f19 --candidate pickup-probe`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-pickup-probe-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16x` |
+| the pickup probe's negative control (result-byte and register mutants either crash the 68000 on an unrecovered coroutine's own record read, or are blind on a scratch register) diverges at frame 469 by dropping all writes instead | `--candidate pickup-probe-mutant-result` | `artifacts/gods/verify-pickup-probe-mutant3` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 55 s | 1,558 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -285,11 +289,13 @@ needs one only when the callee has a direct call site elsewhere too.
 
 Screened and set aside earlier, not first candidates: `013362` (600
 calls, 3–1,047 instructions -- an interpreter or unbounded loop, not a
-leaf), `00052E` (600 calls, 434–9,152 instructions -- likewise), `010CD2`
-(412 calls, 125–277 instructions -- calls the now-recovered `00BA8E` and
-the unrecovered `0091BC`; still open).  `00BA8E` itself, screened the
-same way (412 calls, 116–268 instructions), is now recovered
-(`pickup-check`).
+leaf), `00052E` (600 calls, 434–9,152 instructions -- likewise).  `00BA8E`
+itself, screened the same way (412 calls, 116–268 instructions), is now
+recovered (`pickup-check`); a fresh census of `010CD2` (412 calls, 125–277
+instructions) proved it is a thin caller-supplied-record composition over
+`00BA8E` alone, on every witnessed path -- the original blocker's reading
+that it also called the unrecovered `0091BC` was a misattribution (see the
+correction below); `010CD2` is now recovered too (`pickup-probe`).
 `00FC8E` was screened aside on the same "inherits `00FDB8`'s per-object-type
 diversity" worry; it did not hold (see the third correction below) and the
 routine is now recovered (`solid-draw`).
@@ -314,20 +320,25 @@ sound (`FFFDEA`-style RAM write), then a bounded neighbourhood scan whose
 RAM-only and admissible in principle but not carried through -- the arm
 that matters calls `013264`, which jumps through a ROM table at `12D04`
 indexed by an object-type value (a genuine per-type dispatch); `010CD2`
-calls `00BA8E` and, further in, the unrecovered `0091BC` on one path, and
-`01158C`/`0115D4` (already reproduced at `010332`'s own addresses, not
-called from here) on the others, plus a branch on a literal state value
-(`010D7C`: `cmpi.w #$3d,d2`) that smells like a per-state dispatch.
-Confirms the earlier assessment: these need the object-record convention
-(and, for `010D7C`, possibly a dispatch read) before either is a full
-candidate.  `00BA8E` itself is now recovered (16 Sep, `pickup-check`): the
-"per-type dispatch" the earlier note read at `013264`'s own table was
-resolved the same day (`docs/gods/blockers/2026-09-16-00BA8E.md`
-Resolution) -- a record table, not handlers -- which freed `00BA8E`'s own
-clean and found arms as an ordinary composition (the caller-supplied-record
-rule, not the object-record convention).  `010CD2` remains open: it calls
-`00BA8E` (now recovered) and, further in, the unrecovered `0091BC` on one
-path and a literal-value branch (`010D7C`) on others -- the next bite here.
+was originally read as also calling the unrecovered `0091BC` and a
+literal-state branch at `010D7C` (`cmpi.w #$3d,d2`).  `00BA8E` itself is
+now recovered (16 Sep, `pickup-check`): the "per-type dispatch" the
+earlier note read at `013264`'s own table was resolved the same day
+(`docs/gods/blockers/2026-09-16-00BA8E.md` Resolution) -- a record table,
+not handlers -- which freed `00BA8E`'s own clean and found arms as an
+ordinary composition (the caller-supplied-record rule, not the
+object-record convention).  A fresh census of `010CD2` itself (same day)
+found that reading was wrong: `010CD2` is a single thin composition --
+push the record, add the camera to (d0,d1), call `00BA8E` with the
+record's own word, write the result back, and on a negative result store
+a sentinel -- on every one of 412 witnessed calls across all recordings;
+`0091BC` and `010D7C` belong to a wholly separate adjacent routine
+(`010CF8` onward, `010A14`'s own `'trigger-deep'` callee) that `010CD2`
+never reaches.  `010CD2` is now recovered too (16 Sep, `pickup-probe`),
+composed the way `00BA8E` composes its own callees, one level deeper
+(calling `pickup_check_plan` itself with a synthetic register file for
+the point `00BA8E` is entered).  `0091BC` remains open, and is a
+different, harder shape: see "The coroutine engine" below.
 
 Two corrections to that screening, from the supervisor's iteration on
 `00FDB8`: (1) a caller-supplied record is not by itself a reason to defer
