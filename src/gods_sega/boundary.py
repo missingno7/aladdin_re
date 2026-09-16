@@ -1062,3 +1062,124 @@ def particle_emit_suffix(machine, registers):
     return AtomicPlan(cycles=_PE_RESTORE[0], instructions=_PE_RESTORE[1], writes=(), registers=restored,
                       last_pc=PARTICLE_EMIT_LAST_PC)
 
+
+# --- 014084: the hazard tick (game/hazard.py: hazard_tick) -------------------
+#
+# Cost from the tracer (artifacts/gods/evidence/census-014084-fresh): no
+# frame at all (D4/D5/A0/A1/A2 are live scratch, never saved).  The
+# 'trigger' arm (rare: 8 of 26,293 occurrences on the longest recording)
+# calls an unrecovered routine and is declined; 'paint' and 'spawn' (found
+# or the pool exhausted) are admitted.
+HAZARD_TICK_ENTRY = 0x014084
+HAZARD_TICK_PAINT_WRITE_LAST_PC, HAZARD_TICK_PAINT_SKIP_LAST_PC = 0x01415C, 0x01414A
+HAZARD_TICK_SPAWN_LAST_PC = 0x014106
+_HZ_HEAD_ACTIVE, _HZ_HEAD_INACTIVE = (12 + 12, 2), (12 + 10, 2)          # tst.b; beq.w not taken / taken
+_HZ_GRID_SETUP = (4 + 4 + 4 + 12 + 12 + 4 + 4 + 8 + 16 + 12 + 8 + 8 + 8, 13)
+_HZ_GRID_MISMATCH, _HZ_GRID_MATCH = (12 + 10, 2), (12 + 12, 2)           # cmpi.b; bne.w taken / not taken
+_HZ_SOUND_WRITE = (16, 1)
+_HZ_TYPE_MISMATCH, _HZ_TYPE_MATCH = (16 + 10, 2), (16 + 8, 2)            # cmpi.b d(a1); bne.b taken / not taken
+_HZ_COUNTER_LOW, _HZ_COUNTER_HIGH = (16 + 10, 2), (16 + 8, 2)            # cmpi.w abs; blt.b taken(skip) / not taken(trigger)
+_HZ_POOL_SETUP = (12 + 4, 2)                                             # lea; moveq #$13,d4
+_HZ_POOL_ITER = (8 + 8 + 8 + 10, 4)                                      # tst.w; bmi not taken; lea $c(a1),a1; dbra taken
+_HZ_POOL_EXHAUSTED_TAIL = (8 + 8 + 8 + 14 + 10, 5)                       # ... dbra not taken; bra.b $14104
+_HZ_POOL_FOUND = (8 + 10, 2)                                             # tst.w; bmi taken
+_HZ_FILL = (12 + 4 + 4 + 12 + 12 + 8 + 8 + 20 + 12 + 16, 10)
+_HZ_TAIL_SPAWN = (12 + 16, 2)                                            # clr.w (a3); rts
+_HZ_TILE_SETUP = (8 + 8 + 4 + 4 + 12 + 8 + 8 + 4 + 8 + 4 + 8, 11)
+_HZ_BOUNDS_LOW_FAIL, _HZ_BOUNDS_LOW_PASS = (6 + 10, 2), (6 + 8, 2)       # cmpa.l; blt.b taken / not taken
+_HZ_BOUNDS_HIGH_FAIL = (8 + 6 + 10, 3)                                   # lea; cmpa.l; bge.b taken
+_HZ_BOUNDS_HIGH_PASS = (8 + 6 + 8, 3)                                    # lea; cmpa.l; bge.b not taken
+_HZ_PAINT_HEAD_ODD, _HZ_PAINT_HEAD_EVEN = (12 + 4 + 8 + 10, 4), (12 + 4 + 8 + 8, 4)  # move.b; move.w; andi; bne
+_HZ_PAINT_WRITE_ODD = (12 * 4, 4)          # move.b d5,$30(a0)/$60(a0)/$31(a0)/$61(a0): all displaced
+_HZ_PAINT_WRITE_EVEN = (8 + 12 + 12 + 12, 4)   # move.b d5,(a0) is bare -- 8cy, not 12
+_HZ_RTS = (16, 1)
+
+
+def hazard_tick_plan(machine, registers):
+    """014084: the grid-gated pool spawn, or the tile-array paint; the 'trigger' arm (calls 00F828) is declined."""
+    from .game import hazard
+    if registers['pc'] != HAZARD_TICK_ENTRY:
+        raise UnsupportedCandidate('hazard tick planner needs the machine parked at 014084')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a1, a3 = registers['a1'] & 0xFFFFFF, registers['a3'] & 0xFFFFFF
+    d0, d1 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
+    read = _reader(machine)
+    active = read(a1 + hazard.ACTIVE_FLAG, 1) != 0
+    result = hazard.hazard_tick(read, a1, a3, d0, d1)
+    arm = result['arm']
+    if arm == 'trigger':
+        raise UnsupportedCandidate('hazard tick trigger arm calls unrecovered 00F828')
+    high = lambda name: registers[name] & 0xFFFF0000
+    if arm == 'spawn':
+        _spans_disjoint([('hazard pool entry', hazard.POOL_BASE & 0xFFFFFF, hazard.POOL_STRIDE * hazard.POOL_COUNT),
+                         ('hazard pending flag', a3, 2)])
+        cycles = (_HZ_HEAD_ACTIVE[0] + _HZ_GRID_SETUP[0] + _HZ_GRID_MATCH[0] + _HZ_SOUND_WRITE[0]
+                  + _HZ_TYPE_MISMATCH[0] + _HZ_POOL_SETUP[0])
+        instructions = (_HZ_HEAD_ACTIVE[1] + _HZ_GRID_SETUP[1] + _HZ_GRID_MATCH[1] + _HZ_SOUND_WRITE[1]
+                        + _HZ_TYPE_MISMATCH[1] + _HZ_POOL_SETUP[1])
+        y_pre_addq = (d1 + read(hazard.OBJECT_Y, 2)) & 0xFFFF
+        if result['slot'] is not None:
+            tries = (result['slot'] - hazard.POOL_BASE) // hazard.POOL_STRIDE
+            cycles += tries * _HZ_POOL_ITER[0] + _HZ_POOL_FOUND[0] + _HZ_FILL[0] + _HZ_TAIL_SPAWN[0]
+            instructions += tries * _HZ_POOL_ITER[1] + _HZ_POOL_FOUND[1] + _HZ_FILL[1] + _HZ_TAIL_SPAWN[1]
+            x_bit = _add_sr(sr, result['counter_before'], 1, 2) & 0x10
+        else:
+            cycles += (hazard.POOL_COUNT - 1) * _HZ_POOL_ITER[0] + _HZ_POOL_EXHAUSTED_TAIL[0] + _HZ_TAIL_SPAWN[0]
+            instructions += (hazard.POOL_COUNT - 1) * _HZ_POOL_ITER[1] + _HZ_POOL_EXHAUSTED_TAIL[1] + _HZ_TAIL_SPAWN[1]
+            x_bit = _add_sr(sr, y_pre_addq, 8, 2) & 0x10
+        exit_sr = (0x04 & ~0x10) | x_bit          # clr.w (a3) is the last flag-setter: N=0,Z=1,V=C=0 always
+        # D4's upper word is gone here regardless of arm: moveq #$13,d4 (the pool loop's own
+        # counter) clears it, and nothing after ever restores the caller's own upper half.
+        exit_registers = {'d4': result['d4'], 'd5': high('d5') | result['d5'],
+                          'a1': result['a1'], 'a2': registers['a1'],
+                          'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+        writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=HAZARD_TICK_SPAWN_LAST_PC)
+    # 'paint': reached whether inactive, or active with a grid mismatch.
+    head = _HZ_HEAD_ACTIVE if active else _HZ_HEAD_INACTIVE
+    cycles, instructions = head[0] + _HZ_TILE_SETUP[0], head[1] + _HZ_TILE_SETUP[1]
+    if active:
+        cycles += _HZ_GRID_SETUP[0] + _HZ_GRID_MISMATCH[0]
+        instructions += _HZ_GRID_SETUP[1] + _HZ_GRID_MISMATCH[1]
+    x_bit = _add_sr(sr, result['doubled1'], result['doubled1'], 2) & 0x10   # the tile-setup's own second doubling
+    # movea.l a1,a2 only runs on the active path (0x01408C); when inactive, A2 is never touched.
+    exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    if active:
+        exit_registers['a2'] = registers['a1']
+    if not result['painted']:
+        # Which bound failed determines the CMPA operands (and hence N/Z/V/C) and the cost.
+        if result['a0'] < hazard.TILE_LOW:
+            cycles += _HZ_BOUNDS_LOW_FAIL[0] + _HZ_RTS[0]
+            instructions += _HZ_BOUNDS_LOW_FAIL[1] + _HZ_RTS[1]
+            exit_sr = (_cmp_sr(sr, result['a0'], hazard.TILE_LOW, 4) & ~0x10) | x_bit
+            last_pc = HAZARD_TICK_PAINT_SKIP_LAST_PC
+        else:
+            cycles += _HZ_BOUNDS_LOW_PASS[0] + _HZ_BOUNDS_HIGH_FAIL[0] + _HZ_RTS[0]
+            instructions += _HZ_BOUNDS_LOW_PASS[1] + _HZ_BOUNDS_HIGH_FAIL[1] + _HZ_RTS[1]
+            exit_sr = (_cmp_sr(sr, result['a0'], hazard.TILE_HIGH, 4) & ~0x10) | x_bit
+            last_pc = HAZARD_TICK_PAINT_SKIP_LAST_PC
+        exit_registers.update(a0=result['a0'], a1=hazard.TILE_LOW if result['a0'] < hazard.TILE_LOW else hazard.TILE_HIGH,
+                              d4=high('d4') | result['x_shift'], d5=high('d5') | result['doubled2'], sr=exit_sr)
+        writes = ()
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=last_pc)
+    cycles += _HZ_BOUNDS_LOW_PASS[0] + _HZ_BOUNDS_HIGH_PASS[0]
+    instructions += _HZ_BOUNDS_LOW_PASS[1] + _HZ_BOUNDS_HIGH_PASS[1]
+    paint_head = _HZ_PAINT_HEAD_ODD if result['d4'] else _HZ_PAINT_HEAD_EVEN
+    paint_write = _HZ_PAINT_WRITE_ODD if result['d4'] else _HZ_PAINT_WRITE_EVEN
+    cycles += paint_head[0] + paint_write[0] + _HZ_RTS[0]
+    instructions += paint_head[1] + paint_write[1] + _HZ_RTS[1]
+    # The last flag-setter is the fourth move.b (a positive, nonzero byte unless the value itself is
+    # zero): N/Z/V/C from that byte; X is still the tile-setup's own second doubling.
+    exit_sr = (_logic_sr(sr, result['value'], 1) & ~0x10) | x_bit
+    exit_registers.update(a0=result['a0'], a1=hazard.TILE_HIGH, d4=high('d4') | result['d4'],
+                          d5=(high('d5') | (result['doubled2'] & 0xFF00) | result['value']) & 0xFFFFFFFF, sr=exit_sr)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # D1&4 not only picks the four offsets but also which of the two RTS instructions falls
+    # through to: the not-taken (even) tail shares 01414A with the bounds-skip exit above.
+    last_pc = HAZARD_TICK_PAINT_WRITE_LAST_PC if result['d4'] else HAZARD_TICK_PAINT_SKIP_LAST_PC
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=last_pc)
+

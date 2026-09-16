@@ -20,16 +20,16 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with thirteen gates armed, the camera follow step `002806`, the
+  original with fourteen gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
   step `00FE08`, the countdown check `010332`, the collision gate `010A14`,
-  the zone check `00BCCE` and the particle drawer's own emitter `00126A`;
-  `camera`, `sprites`, `sprites-static`, `table-reset`, `spawn-queue`,
-  `grid-cell`, `footprint`, `solid-draw`, `animation-step`,
-  `countdown-check`, `collision-gate`, `zone-check` and `particle-emit`
-  arm each alone.
+  the zone check `00BCCE`, the particle drawer's own emitter `00126A` and
+  the hazard tick `014084`; `camera`, `sprites`, `sprites-static`,
+  `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
+  `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
+  `particle-emit` and `hazard-tick` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -99,7 +99,10 @@ ids, never to `main`:
 | **`00126A` particle drawer's own emitter**: `0018C8`'s own seam shape reproduced with this routine's addresses -- no per-frame cache, so every on-screen call uploads; the plan reproduces every fact of the original on all 58 retained fixtures over four recordings (off-screen x/y, flip and no-flip uploads) | `factcheck check` on every fixture | `tests/games/gods/test_particles.py` |
 | `particle-emit` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 7,330 hits (3,314 seams entered, 3,026 completed), 335 fallbacks (53 scheduler admission, 282 seam deadline)**; `camera-sprites` (all thirteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 955,464 hits, 105,964 seams entered, 101,583 completed, 11,118 fallbacks (6,498 scheduler admission, 3,728 seam deadline, 891 unsupported domain, 1 gate-without-planner -- a foreign-return edge the shared seam runner already falls back on safely, tree still bit-exact)** | `history-verify f0ac19738f19 --candidate particle-emit`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-particle-emit-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16m` |
 | the particle emitter's negative control diverges at frame 469 | `--candidate particle-emit-mutant-result` | `artifacts/gods/verify-particle-emit-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 830 tests, none skipped | — |
+| **`014084` hazard tick**: two disjoint bodies behind one early branch -- 'paint' (inactive, or an active object whose grid cell isn't 1: a tile-array write clamped to bounds) and 'spawn' (grid cell 1: a sound request, then a bounded 20-entry pool scan and fill, whether or not a slot was free); the plan reproduces every fact of the original on all 113 retained fixtures over four recordings; the 'trigger' arm (rare, gated by a parallel table byte and a counter, calling unrecovered `00F828`) is declined | `factcheck check` on every fixture | `tests/games/gods/test_hazard.py` |
+| `hazard-tick` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 26,075 hits, 218 fallbacks (185 scheduler admission, 33 unsupported domain)**; `camera-sprites` (all fourteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,018,584 hits, 11,755 fallbacks (7,038 scheduler admission, 3,728 seam deadline, 988 unsupported domain, 1 gate-without-planner foreign-return edge, tree still bit-exact)** | `history-verify fb408bc75597 --candidate hazard-tick`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-hazard-tick-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16n` |
+| the hazard tick's negative control diverges at frame 2,628 (the first frame the region is exercised on `fb408bc75597…`) | `--candidate hazard-tick-mutant-result` | `artifacts/gods/verify-hazard-tick-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 950 tests, none skipped | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -119,7 +122,7 @@ entered.
 
 ## What is not recovered
 
-Everything else.  Thirteen routines are recovered: the camera follow step
+Everything else.  Fourteen routines are recovered: the camera follow step
 (`game/camera.py`, six words); the sprite emitter and its RAM-only sibling
 (`game/sprites.py`: the sprite list at `FFEBF6`–`FFEBFF`, the per-frame
 tile cache at `FFEE98`/`FFEEAA`, the dynamic-tile cursor `FFEE84`, the ROM
@@ -162,7 +165,12 @@ cooldown word and D2's own final value); and the particle drawer's own
 emitter (`game/sprites.py: emit_particle_sprite`, `00126A`: `0018C8`'s own
 seam shape with this routine's own descriptor-offset convention -- the
 caller passes the descriptor byte offset directly, no id-to-offset table
--- and no per-frame cache, so every on-screen call is a seam upload).  The
+-- and no per-frame cache, so every on-screen call is a seam upload); and
+the hazard tick (`game/hazard.py`: two disjoint bodies behind one early
+branch, no save/restore frame at all -- 'paint' clamps a tile-array write
+to bounds, 'spawn' requests a sound and fills a bounded 20-entry pool;
+'trigger', the pool scan's own rare gate, calls unrecovered `00F828` and
+is declined).  The
 emitter's remaining siblings (`001256`/`001260`, `001312`) share
 its descriptor layout and list conventions but are not recovered.  There
 is no object-table convention, no semantic map, no native runtime, no
@@ -204,7 +212,7 @@ a grinder's to invent:
 | `00BCCE` | 28 (15 real: 13 were the same VBlank-in-interrupt-handler misattribution `00FDB8`'s screening hit) | recovered as `zone-check`: fully witnessed, no declines |
 | `00470C` | 30 (re-censused, current tracer) | a genuine per-type dispatch: `move.w d5,d0; add.w d0,d0; add.w d0,d0; movea.l $4718(pc,d0.w),a5; jmp (a5)` into a ROM jump table at `004718` (disassembles as `ori.b` data -- it is a table of handler addresses, not code) with at least a dozen distinct handler bodies; the census's 30 small (6-15 instruction) classes are those handlers' own bodies, not variants of one shape.  Leave for the supervisor: not a leaf, needs an object/kind convention |
 | `010332` | 7 | recovered as `countdown-check` (the 'idle' and 'waiting' arms; 'trigger' calls unrecovered `01158C`/`0115D4`) |
-| `014084` | 32 retained + 25 more overflowed | two disjoint bodies behind one early `tst.b $48(a1); beq`: the active arm dereferences the level grid (`FF885E`, `0063FA`'s and `00FDB8`'s own table), rarely calls unrecovered `00F828`, then searches a bounded 20-entry pool at `FFF90E` (a `dbra`-counted scan, cost climbing steadily with scan depth -- matches the instruction counts 42..112) and fills an empty slot; the inactive arm (and a failed grid check) fall into a second body writing byte pairs into two fixed tile arrays (`FFBBDE`/`FFBBAA`) keyed by world position.  Plausibly two more RAM-mostly leaves (the pool scan bounded like `0018C8`'s cache scan, the tile-array write unconditional), but needs a full census and fact read of both bodies before treating it as one candidate -- not attempted this session |
+| `014084` | 32 retained + 25 more overflowed | recovered as `hazard-tick`: two disjoint bodies behind one early `tst.b $48(a1); beq`, as screened; both turned out to be plain leaves (the pool scan bounded like `0018C8`'s cache scan, the tile-array write clamped to bounds) once the sign-extension of each individual `adda.w` (not a single combined offset) was modelled correctly |
 | `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | recovered as `particle-emit`: **not** a per-type dispatch after all -- disassembly through `0012F4` is exactly `0018C8`'s own shape (camera subtraction, the same two screen-margin tests, a descriptor lookup at `066794`, the four-word sprite record, the inline VDP upload `0012F4`+).  Re-censused with the current tracer: 5-13 real path classes per recording, not 32+17 -- the earlier count was inflated the same way `00FDB8`'s was before its own fix |
 | `00FDB8` | 16 (4 real: 13 were VBlank variants) | recovered — see the solids below |
 
@@ -231,14 +239,16 @@ counts are the definition's bytes, and it went through the whole ladder as
 a plain leaf (`grinder-protocol.md` §"Candidate selection rules"); what
 needs a convention is a dispatch through a type byte into unrecovered
 handlers.  (2) Most of the "path classes" above were VBlank landing
-positions, which the tracer now sets aside (`00FDB8`: 16 → 4).  Re-screen
-`014084` with the current tracer before taking its class count at face
-value (`00FE08` and `010332` were re-screened and are now recovered, each
+positions, which the tracer now sets aside (`00FDB8`: 16 → 4)
+(`00FE08` and `010332` were re-screened and are now recovered, each
 as a dominant bounded arm plus a declined call into unrecovered code;
 `00470C` was re-screened and confirmed a genuine per-type dispatch, not a
 tracer artifact; `00126A` was read from the disassembly, then re-censused
 with the current tracer once its shape was confirmed, and recovered as
-`particle-emit` -- 5-13 real path classes, not 32+17).  (3)
+`particle-emit` -- 5-13 real path classes, not 32+17; `014084` kept a
+similar class count once re-censused (32 real classes, not fewer), but the
+diversity turned out to be the pool-scan depth and the tile-write bound
+outcome, not a dispatch -- recovered as `hazard-tick`).  (3)
 `00FC8E`'s own worry ("per-object-type diversity" like `00FDB8`'s pre-fix
 screening) also did not hold once censused with the current tracer: over
 107,519 tree frames the routine only ever takes the positive (tile-table)
