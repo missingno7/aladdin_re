@@ -243,6 +243,25 @@ candidates for later, once the object-record convention exists).
 diversity" worry; it did not hold (see the third correction below) and the
 routine is now recovered (`solid-draw`).
 
+Re-screened 16 Sep alongside `010CBC` (which turned out trivial and is now
+recovered, folded into `collision-gate`): `00F828`/`00F86A` (the hazard
+tick's own `'trigger'` callee) is not the same shape.  `00F828` unconditionally
+calls `00F86A` first, which searches a 40-entry table at `FFFF0C70` for an
+existing matching entry (by two coordinate words) and, on a match, decrements
+a timer field and returns past *both* stack frames at once (`addq.w #4,a7`
+before its own `rts`, discarding `00F828`'s own return address -- a deliberate
+double-return, not a bug); only on no match does control fall into `00F828`'s
+own pool-add step.  A real shape, not a tracer artifact, but a sharper edge
+than any leaf recovered so far and not attempted this session.  `00BA8E`/
+`010CD2` were also re-disassembled: `00BA8E` calls the already-recovered
+`00BCCE` (zone check) and requests a sound (`FFFDEA`-style RAM write) inside
+a several-hundred-instruction screen-margin/cooldown block; `010CD2` calls
+`00BA8E` and, further in, all three of `01158C`/`0115D4`/`0091BC` plus a
+branch on a literal state value (`010D7C`: `cmpi.w #$3d,d2`) that smells like
+a per-state dispatch.  Confirms the earlier assessment: these need the
+object-record convention (and, for `010D7C`, possibly a dispatch read)
+before either is a candidate; not re-attempted.
+
 Two corrections to that screening, from the supervisor's iteration on
 `00FDB8`: (1) a caller-supplied record is not by itself a reason to defer
 — the footprint stamp reads its definition through `A2` and its loop
