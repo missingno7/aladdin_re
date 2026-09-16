@@ -87,12 +87,12 @@ ids, never to `main`:
 | **`00FE08` animation step**: the plan reproduces every fact of the original on the 6 retained 'idle'-arm fixtures over four recordings; the 'moving' arm (common, not merely unwitnessed) is declined -- it calls the unrecovered coroutine/dispatch at `00FFF0` | `factcheck check` on every fixture | `tests/games/gods/test_animation.py` |
 | `animation-step` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 11,542 hits, 40 fallbacks (38 scheduler admission, 2 unsupported domain)**; `camera-sprites` (nine gates) on the tree of all eight recordings: **PASS, 107,519 frames, 788,232 hits, 6,274 fallbacks (5,609 scheduler admission, 344 seam deadline, 321 unsupported domain at `00FE08`)** | `history-verify f0ac19738f19 --candidate animation-step`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-animation-step-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16i` |
 | the animation step's negative control (the last write is the shared frame-budget word, not a pointer) diverges at frame 430 | `--candidate animation-step-mutant-result` | `artifacts/gods/verify-animation-step-mutant` |
-| **`010332` countdown check**: the plan reproduces every fact of the original on the 10 retained 'idle'/'waiting'-arm fixtures over four recordings; the 'trigger' arm (the countdown reaching zero) is declined -- it calls one of two unrecovered routines (`01158C`/`0115D4`) | `factcheck check` on every fixture | `tests/games/gods/test_timers.py` |
-| `countdown-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,238 hits, 68 fallbacks (33 scheduler admission, 35 unsupported domain)**; `camera-sprites` (all ten gates) on the tree of all eight recordings: **PASS, 107,519 frames, 801,195 hits, 6,610 fallbacks (5,713 scheduler admission, 344 seam deadline, 553 unsupported domain across `00FE08`/`010332`)** | `history-verify f0ac19738f19 --candidate countdown-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-countdown-check-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16j` |
-| the countdown check's negative control (a register, since the 'idle' arm stores nothing) diverges at frame 469 | `--candidate countdown-check-mutant-result` | `artifacts/gods/verify-countdown-check-mutant` |
-| **`010A14` collision gate**: the plan reproduces every fact of the original on the 20 retained fixtures over the two recordings that reach this entry; the 'collision' arm (a residue of zero, calling `010CBC`) and the phase>7 arm ('over', real ROM code but unwitnessed on either recording) are declined | `factcheck check` on every fixture | `tests/games/gods/test_movement.py` |
-| `collision-gate` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 1,347 hits, 93 fallbacks (13 scheduler admission, 80 unsupported domain)**; `camera-sprites` (eleven gates) on the tree of all eight recordings: **PASS, 107,519 frames, 806,765 hits, 6,983 fallbacks (5,748 scheduler admission, 344 seam deadline, 891 unsupported domain across three declined-call regions)** | `history-verify f0ac19738f19 --candidate collision-gate`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-collision-gate-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16k` |
-| the collision gate's negative control diverges at frame 469 | `--candidate collision-gate-mutant-result` | `artifacts/gods/verify-collision-gate-mutant` |
+| **`010332` countdown check**: the plan reproduces every fact of the original on 38 of the 43 retained fixtures over four recordings ('idle'/'waiting', and the 'trigger' arm's own 'trigger-reject'/'trigger-spawn' sub-arms -- the countdown reload and frequency word, a direction-mirrored screen window test and a bounded pool scan+fill); the 'trigger-deep' sub-arm (a further A3 gate byte, calling unrecovered `0091BC`) and 'trigger-pool-full' (the same bounded pool exhausted, unwitnessed) are declined | `factcheck check` on every fixture | `tests/games/gods/test_timers.py` |
+| `countdown-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,273 hits, 33 fallbacks (all scheduler admission)**; `camera-sprites` (all fourteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,019,144 hits, 11,195 fallbacks (7,040 scheduler admission, 3,728 seam deadline, 426 unsupported domain across two declined-call regions, 1 gate-without-planner foreign-return edge, tree still bit-exact)** | `history-verify f0ac19738f19 --candidate countdown-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-countdown-check2-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16p` |
+| the countdown check's negative control diverges at frame 469 | `--candidate countdown-check-mutant-result` | `artifacts/gods/verify-countdown-check2-mutant` |
+| **`010A14` collision gate**: the plan reproduces every fact of the original on all 20 retained fixtures over the two recordings that reach this entry ('held', 'gated', and now the 'collision' arm's own 'collision-clear'/'collision-held' sub-arms: `010CBC`'s arithmetic inline, a near/mid/far grid test); the 'collision-deep' sub-arm (a further A3 gate byte, an unbounded grid search) and the phase>7 arm ('over', real ROM code but unwitnessed on either recording) are declined | `factcheck check` on every fixture | `tests/games/gods/test_movement.py` |
+| `collision-gate` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 1,426 hits, 14 fallbacks (all scheduler admission)**; `camera-sprites` (all fourteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,019,144 hits, 11,195 fallbacks (7,040 scheduler admission, 3,728 seam deadline, 426 unsupported domain across two declined-call regions, 1 gate-without-planner foreign-return edge, tree still bit-exact)** | `history-verify f0ac19738f19 --candidate collision-gate`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-collision-gate2-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16p` |
+| the collision gate's negative control diverges at frame 469 | `--candidate collision-gate-mutant-result` | `artifacts/gods/verify-collision-gate2-mutant` |
 | **`00BCCE` zone check**: the plan reproduces every fact of the original on all 69 retained fixtures over four recordings (a box test around the player's own position, widened on two levels; fully witnessed, no declines) | `factcheck check` on every fixture | `tests/games/gods/test_zones.py` |
 | `zone-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 4,316 hits, 35 fallbacks (all scheduler admission)**; `camera-sprites` (all twelve gates) on the tree of all eight recordings: **PASS, 107,519 frames, 881,371 hits, 7,335 fallbacks (6,100 scheduler admission, 344 seam deadline, 891 unsupported domain)** | `history-verify f0ac19738f19 --candidate zone-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-zone-check-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16l` |
 | the zone check's negative control (a register: 'held'/'outside', the great majority, store nothing durable at all) diverges at frame 475 | `--candidate zone-check-mutant-result` | `artifacts/gods/verify-zone-check-mutant` |
@@ -152,12 +152,22 @@ no recording enters); the animation step (`game/animation.py`: the
 from the definition's own field, on both arms; the common 'moving' arm
 calls the unrecovered coroutine and per-type dispatch at `00FFF0` and is
 declined); the countdown check (`game/timers.py`: a caller-supplied
-control byte and countdown word, 'idle' and 'waiting' recovered, the
-'trigger' arm declined -- it calls one of two unrecovered routines); the
-collision gate (`game/movement.py`: a phase counter and a +-4 residue test
-over a caller-supplied state struct; 'held' and 'gated' recovered, the
-'collision' arm declined -- calls `010CBC` -- and the phase>7 arm declined
-as unwitnessed); and the zone check (`game/zones.py`: a box test around
+control byte and countdown record, 'idle' and 'waiting' recovered; a
+residue of zero reloads the countdown and a frequency word
+unconditionally, then either the unrecovered `0091BC` pool (`'trigger-deep'`,
+declined) or a direction-mirrored screen window test (`01158C`/`0115D4`'s
+own shape) and, inside it, a bounded 20-entry pool scan+fill shaped like
+`hazard.py`'s own (`'trigger-reject'`/`'trigger-spawn'`, both recovered;
+`'trigger-pool-full'` declined as unwitnessed)); the collision gate
+(`game/movement.py`: a phase counter and a +-4 residue test over a
+caller-supplied state struct; 'held' and 'gated' recovered; a residue of
+zero calls `010CBC` (`game/grid.py: grid_cell_at`, `0063FA`'s own
+arithmetic parameterised on D0/D1 -- no direct caller of its own, so no
+separate gate) and runs a near/mid/far grid test (`'collision-clear'`/
+`'collision-held'`, both recovered; a further gate byte in a second
+caller-supplied record routes to an unbounded grid search this module
+does not model, `'collision-deep'`, declined as unwitnessed) and the
+phase>7 arm declined as unwitnessed); and the zone check (`game/zones.py`: a box test around
 the player's own position (`0063FA`'s own `GRID_X`/`GRID_Y`), widened on
 two levels -- fully recovered, no declines, the routine's own eight-register
 save/restore frame makes the whole box arithmetic scratch except a
@@ -208,20 +218,21 @@ a grinder's to invent:
 | entry | path classes (full history) | why |
 |---|---|---|
 | `00FE08` | 19 | recovered as `animation-step` (the 'idle' arm; 'moving' calls unrecovered `00FFF0`) |
-| `010A14` | 10 | recovered as `collision-gate` (the 'held' and 'gated' arms; 'collision' calls unrecovered `010CBC`; phase>7 unwitnessed on either of the two recordings that reach this entry) |
+| `010A14` | 10 | recovered as `collision-gate` (the 'held'/'gated' arms and, since 16 Sep, the 'collision' arm's own 'collision-clear'/'collision-held' sub-arms via `010CBC`, now also recovered; 'collision-deep' and phase>7 declined as unwitnessed) |
 | `00BCCE` | 28 (15 real: 13 were the same VBlank-in-interrupt-handler misattribution `00FDB8`'s screening hit) | recovered as `zone-check`: fully witnessed, no declines |
 | `00470C` | 30 (re-censused, current tracer) | a genuine per-type dispatch: `move.w d5,d0; add.w d0,d0; add.w d0,d0; movea.l $4718(pc,d0.w),a5; jmp (a5)` into a ROM jump table at `004718` (disassembles as `ori.b` data -- it is a table of handler addresses, not code) with at least a dozen distinct handler bodies; the census's 30 small (6-15 instruction) classes are those handlers' own bodies, not variants of one shape.  Leave for the supervisor: not a leaf, needs an object/kind convention |
-| `010332` | 7 | recovered as `countdown-check` (the 'idle' and 'waiting' arms; 'trigger' calls unrecovered `01158C`/`0115D4`) |
+| `010332` | 7 | recovered as `countdown-check` (the 'idle'/'waiting' arms and, since 16 Sep, the 'trigger' arm's own 'trigger-reject'/'trigger-spawn' sub-arms via `01158C`/`0115D4`, now also recovered; 'trigger-deep' (calls unrecovered `0091BC`) and 'trigger-pool-full' declined as unwitnessed) |
 | `014084` | 32 retained + 25 more overflowed | recovered as `hazard-tick`: two disjoint bodies behind one early `tst.b $48(a1); beq`, as screened; both turned out to be plain leaves (the pool scan bounded like `0018C8`'s cache scan, the tile-array write clamped to bounds) once the sign-extension of each individual `adda.w` (not a single combined offset) was modelled correctly |
 | `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | recovered as `particle-emit`: **not** a per-type dispatch after all -- disassembly through `0012F4` is exactly `0018C8`'s own shape (camera subtraction, the same two screen-margin tests, a descriptor lookup at `066794`, the four-word sprite record, the inline VDP upload `0012F4`+).  Re-censused with the current tracer: 5-13 real path classes per recording, not 32+17 -- the earlier count was inflated the same way `00FDB8`'s was before its own fix |
 | `00FDB8` | 16 (4 real: 13 were VBlank variants) | recovered — see the solids below |
 
-`010CBC` is worth flagging on its own: it is exactly `0063FA`'s grid
-computation with X/Y taken from D0/D1 instead of the fixed words
-`FFF18C`/`FFF18E` -- a trivial leaf once some future candidate needs it
-as a callee (the `0049DA`-calls-`001164` shape), but not a candidate by
-itself (no direct caller was found in the census; it is only reached
-through `010A14`).
+`010CBC` (recovered 16 Sep as `game/grid.py: grid_cell_at`, used inline by
+`collision_gate_plan`): exactly `0063FA`'s grid computation with X/Y taken
+from D0/D1 instead of the fixed words `FFF18C`/`FFF18E`; still not a
+candidate by itself (no direct caller was found in the census; it is only
+reached through `010A14`), so it has no gate of its own -- the
+`0049DA`-calls-`001164` shape without the separate gate, since that shape
+needs one only when the callee has a direct call site elsewhere too.
 
 Screened and set aside earlier, not first candidates: `013362` (600
 calls, 3–1,047 instructions -- an interpreter or unbounded loop, not a

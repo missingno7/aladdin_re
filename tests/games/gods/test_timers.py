@@ -1,12 +1,15 @@
-"""The rate-gated countdown check (010332): a control byte and a countdown word, both caller-supplied.
+"""The rate-gated countdown check (010332): a control byte and a countdown record, both caller-supplied.
 
 The dominant two arms ('idle': the control byte is zero; 'waiting': the
-countdown has not reached zero) are a plain leaf, no frame, no calls.  The
-'trigger' arm (the countdown reaches zero) calls one of two unrecovered
-routines and is declined, even though it is witnessed -- the boundary
-cannot reproduce a call into code that is not itself recovered.  Three
-tiers as for the other leaves; the evidence tiers skip when the local
-census or reference artifacts are absent.
+countdown has not reached zero) are a plain leaf, no frame, no calls.
+Reaching zero reloads the countdown and a frequency word unconditionally,
+then either calls the unrecovered 0091BC pool ('trigger-deep', declined)
+or runs a direction-mirrored screen window test and, inside it, a bounded
+pool scan+fill shaped like hazard.py's own ('trigger-reject': outside the
+window; 'trigger-spawn': inside it, a free slot filled).  The pool
+exhausted ('trigger-pool-full') is real ROM code but unwitnessed, so it is
+declined too.  Three tiers as for the other leaves; the evidence tiers
+skip when the local census or reference artifacts are absent.
 """
 import json
 from pathlib import Path
@@ -47,15 +50,59 @@ def test_a_nonzero_control_decrements_the_countdown_while_it_stays_nonzero():
     assert result['stores'] == {COUNTDOWN + timers.COUNTDOWN: (0x1F, 2)}
 
 
-def test_the_countdown_reaching_zero_is_the_trigger_arm():
-    values = {(CONTROL + timers.RATE_ENABLE, 1): 1, (COUNTDOWN + timers.COUNTDOWN, 2): 1}
+def _trigger_values(overrides=None):
+    values = {(CONTROL + timers.RATE_ENABLE, 1): 8, (CONTROL + timers.TRIGGER_DEEP_GATE, 1): 0,
+              (COUNTDOWN + timers.COUNTDOWN, 2): 1, (COUNTDOWN + timers.DIRECTION, 2): 0,
+              (COUNTDOWN + timers.POSITION_X, 2): 100, (COUNTDOWN + timers.POSITION_Y, 2): 50,
+              (timers.CAMERA_X, 2): 0, (timers.CAMERA_Y, 2): 0, (timers.FREQUENCY_SCALE, 2): 0x1000}
+    values.update(overrides or {})
+    return values
+
+
+def test_the_countdown_reaching_zero_reloads_it_and_computes_the_frequency_unconditionally():
+    result = timers.countdown_check(_reader(_trigger_values()), CONTROL, COUNTDOWN)
+    assert result['after'] == 0 and result['reload'] == 32          # (0x10 - 8) * 4
+    assert result['stores'][(COUNTDOWN + timers.COUNTDOWN) & 0xFFFFFF] == (32, 2)
+
+
+def test_the_deep_gate_declines_before_touching_the_window_or_the_pool():
+    result = timers.countdown_check(_reader(_trigger_values({(CONTROL + timers.TRIGGER_DEEP_GATE, 1): 1})),
+                                     CONTROL, COUNTDOWN)
+    assert result['arm'] == 'trigger-deep'
+    assert 'frequency' not in result and 'windowed' not in result
+
+
+def test_outside_the_screen_window_is_trigger_reject_with_no_pool_touch():
+    # BACK (direction 0): Y in [-4, 0xC0); Y=300 is outside it.
+    result = timers.countdown_check(_reader(_trigger_values({(COUNTDOWN + timers.POSITION_Y, 2): 300})),
+                                     CONTROL, COUNTDOWN)
+    assert result['arm'] == 'trigger-reject' and result['windowed'] is False and result['slot'] is None
+    assert all(address not in result['stores'] for address in range(timers.SPAWN_POOL_BASE & 0xFFFFFF,
+                                                                      (timers.SPAWN_POOL_BASE + 8) & 0xFFFFFF))
+
+
+def test_inside_the_window_fills_the_first_free_pool_slot():
+    values = _trigger_values()
+    values[(timers.SPAWN_POOL_BASE + 6, 2)] = 0xFFFF   # slot 0's own marker word: negative means free
     result = timers.countdown_check(_reader(values), CONTROL, COUNTDOWN)
-    assert result['arm'] == 'trigger' and result['after'] == 0
+    assert result['arm'] == 'trigger-spawn' and result['windowed'] is True
+    assert result['slot'] == timers.SPAWN_POOL_BASE and result['tries'] == 0
+    slot = timers.SPAWN_POOL_BASE & 0xFFFFFF
+    assert result['stores'][slot] == (92, 2) and result['stores'][slot + 2] == (50, 2)      # position, bias -8 in X
+    assert result['stores'][slot + 4] == (0xFFFF, 2) and result['stores'][slot + 6] == (timers.BACK['marker'], 2)
+
+
+def test_a_full_pool_is_trigger_pool_full_unwitnessed():
+    values = _trigger_values()
+    for index in range(timers.SPAWN_POOL_COUNT):
+        values[(timers.SPAWN_POOL_BASE + timers.SPAWN_POOL_STRIDE * index + 6, 2)] = 0   # every slot occupied
+    result = timers.countdown_check(_reader(values), CONTROL, COUNTDOWN)
+    assert result['arm'] == 'trigger-pool-full' and result['windowed'] is True and result['slot'] is None
 
 
 @needs_census
 @pytest.mark.parametrize('fixture', FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
-def test_plan_reproduces_the_idle_and_waiting_arms_and_declines_the_trigger_one(fixture):
+def test_plan_reproduces_every_witnessed_arm_and_declines_the_rest(fixture):
     state = fixture.read_bytes()
     meta = json.loads(fixture.with_suffix('.json').read_text(encoding='utf-8'))
     assert meta['entry'] == boundary.COUNTDOWN_CHECK_ENTRY
@@ -63,13 +110,11 @@ def test_plan_reproduces_the_idle_and_waiting_arms_and_declines_the_trigger_one(
         machine.restore(state)
         registers = machine.registers()
         control, countdown = registers['a3'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
-        control_byte = machine.peek_ram(control & 0xFFFF, 0x14)[timers.RATE_ENABLE]
-        if control_byte != 0:
-            before = int.from_bytes(machine.peek_ram((countdown + timers.COUNTDOWN) & 0xFFFF, 2), 'big')
-            if (before - 1) & 0xFFFF == 0:
-                with pytest.raises(boundary.UnsupportedCandidate, match='trigger'):
-                    boundary.countdown_check_plan(machine, registers)
-                return
+        result = timers.countdown_check(boundary._reader(machine), control, countdown)
+        if result['arm'] in ('trigger-deep', 'trigger-pool-full'):
+            with pytest.raises(boundary.UnsupportedCandidate, match='trigger'):
+                boundary.countdown_check_plan(machine, registers)
+            return
         plan = boundary.countdown_check_plan(machine, registers)
     facts = pathfacts.region_only(pathfacts.trace(state, game=GODS))
     problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]

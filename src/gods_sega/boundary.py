@@ -737,16 +737,74 @@ def animation_step_plan(machine, registers):
 
 # --- 010332: the rate-gated countdown check (game/timers.py: countdown_check) --
 #
-# Cost from the tracer (artifacts/gods/evidence/census-010332): two tiny
-# straight-line arms, no frame, no calls; the 'trigger' arm (the countdown
-# reaching zero) calls one of two unrecovered routines and is declined.
+# Cost from the tracer (artifacts/gods/evidence/census-010332{,-7251bbd0ecf7,-f0ac19738f19,-f40d7bcc9dda}):
+# 'idle'/'waiting' are the original two-instruction-tail leaf; a residue of
+# zero reloads the countdown and the frequency word unconditionally, then
+# either calls the unrecovered 0091BC pool ('trigger-deep', declined) or
+# runs the near-identical 01158C/0115D4 window test and bounded pool scan
+# ('trigger-reject': outside the screen window, no pool touch;
+# 'trigger-spawn': inside it, a free slot found and filled).  The pool
+# exhausted ('trigger-pool-full') is real ROM code -- the same bounded
+# dbra shape as hazard.py's own pool -- but no recording exhausts it, so
+# it is declined as unwitnessed.
 COUNTDOWN_CHECK_ENTRY, COUNTDOWN_CHECK_LAST_PC = 0x010332, 0x010386
 _CC_IDLE_COST = (38, 3)                # tst.b not zero-taken? no: tst.b; beq taken; rts
 _CC_WAITING_COST = (62, 5)             # tst.b; beq not taken; subq.w; bne taken; rts
+_CC_TRIGGER_HEAD = (12 + 8 + 16 + 8, 4)          # tst.b; beq not taken; subq.w; bne not taken (falls into trigger)
+_CC_PUSH = (24, 1)                               # movem.l d0-d1,-(a7)
+_CC_RELOAD = (4 + 12 + 4 + 4 + 4 + 12, 6)        # moveq; sub.b; ext.w; add.w; add.w; move.w -> store
+_CC_DEEP_TEST, _CC_DEEP_NOT_TAKEN = (12, 1), (8, 1)   # tst.b $12(a3); bne not taken (proceeds)
+_CC_FREQUENCY = (12 + 4 + 10 + 4 + 62 + 4 + 4, 7)     # move.b; ext.w; asr.w#2; addq.w#4; mulu.w; swap; addq.w#1
+_CC_DIR_TEST = (12, 1)                           # tst.w $a(a5)
+_CC_DIR_BACK, _CC_DIR_FWD = (8, 1), (10, 1)      # bne not taken (BACK) / taken (FORWARD)
+_CC_NEG = (4, 1)                                 # BACK only: neg.w d3
+_CC_STORE_AND_LOAD = (12 + 8 + 12, 3)            # move.w d3,f1c2.w; move.w (a5),d0; move.w 2(a5),d1
+_CC_BIAS_BACK, _CC_BIAS_FWD = (4, 1), (8, 1)     # subq.w #8,d0 / addi.w #$20,d0
+_CC_CALL = (18, 1)                               # bsr.w $1158c / $115d4
+_CC_CALLEE_HEAD = (12 + 4 + 4 + 12 + 12, 5)      # move.l a0,-(a7); move.w d0,d2; move.w d1,d3; sub.w f3ee,d2; sub.w f3f0,d3
+_CC_WINDOW_TEST, _CC_WINDOW_PASS, _CC_WINDOW_REJECT = (8, 1), (8, 1), (10, 1)   # cmpi.w; branch not taken / taken
+_CC_POOL_SETUP = (8 + 4, 2)                      # lea.l $db74.w,a0; moveq #$13,d5
+_CC_POOL_ITER = (12 + 10 + 4 + 10, 4)            # a slot occupied: tst.w; bpl TAKEN (skip); addq.w #8,a0; dbra taken
+_CC_POOL_FOUND = (12 + 8, 2)                     # a free slot: tst.w; bpl NOT taken (falls into the stores)
+_CC_POOL_STORE = (8 + 8 + 16 + 12, 4)            # move.w d0,(a0)+; move.w d1,(a0)+; move.w f1c2,(a0)+; the marker store
+_CC_POOL_EXIT_BRA = (10, 1)                      # bra.b $115d0 (the found path's own; a reject already took its branch)
+_CC_POP_A0, _CC_RTS_INNER = (12, 1), (16, 1)     # movea.l (a7)+,a0; rts (01158C/0115D4's own)
+_CC_POP_D0D1, _CC_RTS_OUTER = (28, 1), (16, 1)   # movem.l (a7)+,d0-d1; rts (010332's own)
+
+
+def _cc_frame_writes(sp, registers):
+    """movem.l d0-d1,-(a7): D0 at sp-8, D1 at sp-4 (ascending register order at ascending addresses)."""
+    return _bytes((sp - 8) & 0xFFFFFF, registers['d0'] & 0xFFFFFFFF, 4) + \
+           _bytes((sp - 4) & 0xFFFFFF, registers['d1'] & 0xFFFFFFFF, 4)
+
+
+def _cc_call_writes(sp, resume_pc, a0_value):
+    """The bsr's own return address, then the callee's own move.l a0,-(a7): both durable stack residue."""
+    call_sp = sp - 8
+    return _bytes((call_sp - 4) & 0xFFFFFF, resume_pc, 4) + _bytes((call_sp - 8) & 0xFFFFFF, a0_value & 0xFFFFFFFF, 4)
+
+
+def _cc_window_cost_and_ccr(sr, result, variant):
+    # BACK (01158C) tests the X lower bound before the upper; FORWARD (0115D4) tests the upper bound first --
+    # the two routines are mirrors of each other in more than just the thresholds.
+    from .game import timers
+    x_lo, x_hi = variant['x_window']
+    x_lo_stage = (result['screen_x'], x_lo & 0xFFFF, result['screen_x'] < x_lo)
+    x_hi_stage = (result['screen_x'], x_hi & 0xFFFF, result['screen_x'] > x_hi)
+    x_stages = (x_hi_stage, x_lo_stage) if variant is timers.FORWARD else (x_lo_stage, x_hi_stage)
+    stages = ((result['screen_y'], 0xC0, result['screen_y'] >= 0xC0),
+              (result['screen_y'], 0xFFFC, result['screen_y'] < -4)) + x_stages
+    cycles, instructions = 0, 0
+    for left, right, taken in stages:
+        cycles, instructions = cycles + _CC_WINDOW_TEST[0], instructions + _CC_WINDOW_TEST[1]
+        if taken:
+            return cycles + _CC_WINDOW_REJECT[0], instructions + _CC_WINDOW_REJECT[1], _cmp_sr(sr, left, right, 2)
+        cycles, instructions = cycles + _CC_WINDOW_PASS[0], instructions + _CC_WINDOW_PASS[1]
+    return cycles, instructions, None
 
 
 def countdown_check_plan(machine, registers):
-    """010332: the countdown decrement; the 'trigger' arm (calls 01158C/0115D4) is declined."""
+    """010332: the countdown reload/reset, the direction-mirrored screen window test and pool fill."""
     from .game import timers
     if registers['pc'] != COUNTDOWN_CHECK_ENTRY:
         raise UnsupportedCandidate('countdown check planner needs the machine parked at 010332')
@@ -755,8 +813,10 @@ def countdown_check_plan(machine, registers):
     control, countdown = registers['a3'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
     result = timers.countdown_check(_reader(machine), control, countdown)
     arm = result['arm']
-    if arm == 'trigger':
-        raise UnsupportedCandidate('countdown check trigger arm calls unrecovered 01158C/0115D4')
+    if arm == 'trigger-deep':
+        raise UnsupportedCandidate('countdown check trigger arm calls unrecovered 0091BC')
+    if arm == 'trigger-pool-full':
+        raise UnsupportedCandidate('countdown check trigger arm: spawn pool exhausted, not witnessed')
     if arm == 'idle':
         # The control byte itself is the last (and only) flag-setter: tst.b $13(a3).
         control_byte = machine.peek_ram((control + timers.RATE_ENABLE) & 0xFFFF, 1)[0]
@@ -764,12 +824,54 @@ def countdown_check_plan(machine, registers):
         return AtomicPlan(cycles=_CC_IDLE_COST[0], instructions=_CC_IDLE_COST[1], writes=(),
                           registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
                           last_pc=COUNTDOWN_CHECK_LAST_PC)
-    # 'waiting': the last flag-setter is subq.w #1,$c(a5), which also sets X (unlike a plain CMP).
-    exit_sr = _sub_sr(sr, result['before'], 1, 2)
+    if arm == 'waiting':
+        # The last flag-setter is subq.w #1,$c(a5), which also sets X (unlike a plain CMP).
+        exit_sr = _sub_sr(sr, result['before'], 1, 2)
+        writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+        return AtomicPlan(cycles=_CC_WAITING_COST[0], instructions=_CC_WAITING_COST[1], writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=COUNTDOWN_CHECK_LAST_PC)
+    # 'trigger-reject' or 'trigger-spawn': both run the full head, the window test, and (spawn only) the pool scan.
+    variant = result['variant']
+    back = variant is timers.BACK
+    cycles, instructions = _CC_TRIGGER_HEAD[0] + _CC_PUSH[0] + _CC_RELOAD[0] + _CC_DEEP_TEST[0] + _CC_DEEP_NOT_TAKEN[0], \
+                            _CC_TRIGGER_HEAD[1] + _CC_PUSH[1] + _CC_RELOAD[1] + _CC_DEEP_TEST[1] + _CC_DEEP_NOT_TAKEN[1]
+    cycles, instructions = cycles + _CC_FREQUENCY[0] + _CC_DIR_TEST[0], instructions + _CC_FREQUENCY[1] + _CC_DIR_TEST[1]
+    dir_step = _CC_DIR_BACK if back else _CC_DIR_FWD
+    cycles, instructions = cycles + dir_step[0], instructions + dir_step[1]
+    if back:
+        cycles, instructions = cycles + _CC_NEG[0], instructions + _CC_NEG[1]
+    cycles, instructions = cycles + _CC_STORE_AND_LOAD[0], instructions + _CC_STORE_AND_LOAD[1]
+    bias = _CC_BIAS_BACK if back else _CC_BIAS_FWD
+    cycles, instructions = cycles + bias[0], instructions + bias[1]
+    cycles, instructions = cycles + _CC_CALL[0] + _CC_CALLEE_HEAD[0], instructions + _CC_CALL[1] + _CC_CALLEE_HEAD[1]
+    # sub.w $f3f0.w,d3 (the Y subtraction, the callee's own last instruction before the window test) is a SUB: it
+    # sets X (unlike the CMPs that follow, which retain it), and nothing after this point ever sets X again.
+    camera_y = int.from_bytes(machine.peek_ram(timers.CAMERA_Y & 0xFFFF, 2), 'big')
+    sr_x = _sub_sr(sr, result['pos_y'], camera_y, 2)
+    window_cycles, window_instructions, reject_ccr = _cc_window_cost_and_ccr(sr_x, result, variant)
+    cycles, instructions = cycles + window_cycles, instructions + window_instructions
+    if arm == 'trigger-spawn':
+        cycles, instructions = cycles + _CC_POOL_SETUP[0], instructions + _CC_POOL_SETUP[1]
+        cycles, instructions = cycles + result['tries'] * _CC_POOL_ITER[0], instructions + result['tries'] * _CC_POOL_ITER[1]
+        cycles, instructions = cycles + _CC_POOL_FOUND[0] + _CC_POOL_STORE[0] + _CC_POOL_EXIT_BRA[0], \
+                                instructions + _CC_POOL_FOUND[1] + _CC_POOL_STORE[1] + _CC_POOL_EXIT_BRA[1]
+        # move.w #marker,(a0)+ (or clr.w) is the pool store's own last flag-setter: N/Z/V=0/C=0 from the marker.
+        exit_ccr = _logic_sr(sr_x, variant['marker'], 2)
+    else:
+        exit_ccr = reject_ccr
+    cycles, instructions = cycles + _CC_POP_A0[0] + _CC_RTS_INNER[0], instructions + _CC_POP_A0[1] + _CC_RTS_INNER[1]
+    cycles, instructions = cycles + _CC_POP_D0D1[0] + _CC_RTS_OUTER[0], instructions + _CC_POP_D0D1[1] + _CC_RTS_OUTER[1]
+    d2 = (registers['d2'] & 0xFFFF0000) | (result['screen_x'] & 0xFFFF)
+    d3 = ((result['frequency_upper'] & 0xFFFF) << 16) | (result['screen_y'] & 0xFFFF)
+    exit_registers = {'d0': registers['d0'], 'd1': registers['d1'], 'd2': d2, 'd3': d3,
+                       'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_ccr}
+    if arm == 'trigger-spawn':
+        exit_registers['d5'] = (0x13 - result['tries']) & 0xFFFFFFFF
     writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
-    return AtomicPlan(cycles=_CC_WAITING_COST[0], instructions=_CC_WAITING_COST[1], writes=writes,
-                      registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
-                      last_pc=COUNTDOWN_CHECK_LAST_PC)
+    writes += _cc_frame_writes(sp, registers) + _cc_call_writes(sp, variant['resume'], registers['a0'])
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=variant['resume'] + 4)
 
 
 # --- 010A14: the collision gate (game/movement.py: collision_gate) -----------
