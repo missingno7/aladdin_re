@@ -691,15 +691,33 @@ def draw_solid_plan(machine, registers):
 
 # --- 00FE08: the animation step (game/animation.py: animation_step) ----------
 #
-# Cost from the tracer (artifacts/gods/evidence/census-00FE08*): the
-# 'idle' arm only -- a plain leaf, constant cost.  The 'moving' arm (common,
-# not merely unwitnessed) calls the unrecovered coroutine/dispatch at
-# 00FFF0 and is declined: the boundary cannot reproduce a call into code
-# that has not itself been recovered.
-ANIMATION_STEP_ENTRY, ANIMATION_STEP_LAST_PC = 0x00FE08, 0x00FE5A
+# Cost from the tracer (artifacts/gods/evidence/census-00FE08*): the 'idle'
+# arm (a plain leaf, constant cost) and, since 16 Sep, the 'moving' arm's own
+# head (up to and including the bsr into the walker resume WALKER_RESUME_ENTRY,
+# below) and tail (the position store, the completion test on d7, and on
+# completion the next-waypoint load and remaining-count test).  The call
+# itself costs exactly WALKER_RESUME_ENTRY's own cost fragments
+# (_WR_HEAD/_WR_STEP/_WR_TAIL), reused here the way 0049DA reuses 001164's
+# own cost table -- 00FFF0 *is* this bsr's target, not a twin.
+# 'moving-coldstart' (the walk completes with at most one waypoint left)
+# falls into the per-object-type waypoint dispatch 00FEC0/00FF54: censused
+# fresh over all eight recordings (16 Sep) and unwitnessed on every one, so
+# it stays declined, along with a zero budget and a record whose stored
+# continuation is not one of the walker's own four bodies.
+ANIMATION_STEP_ENTRY = 0x00FE08
+ANIMATION_STEP_IDLE_LAST_PC = 0x00FE5A
+ANIMATION_STEP_CONTINUE_LAST_PC = 0x00FE5A
+ANIMATION_STEP_COMPLETE_LAST_PC = 0x00FE54
 ANIMATION_STEP_FRAME = 24                              # movem.l d0-d3/a1-a2,-(a7)
+ANIMATION_STEP_CALL_FRAME = ANIMATION_STEP_FRAME + 4    # + the bsr 00FFF0 return address
+ANIMATION_STEP_CALL_RETURN = 0x00FE26                   # the PC bsr.w 00FFF0 pushes and returns to
 _AS_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'a1', 'a2')
 ANIMATION_STEP_IDLE_COST = (194, 10)
+_AS_MOVING_HEAD = (134, 9)      # 00FE08..00FE22: the frame, the budget refresh, tst.b/bmi not taken, bsr taken
+_AS_POST_CALL = (88, 5)         # 00FE26..00FE32: d5=d6, the frame restore, the position store, tst.w d7
+_AS_TAIL_CONTINUE = (26, 2)     # bpl taken; rts (00FE5A)
+_AS_TAIL_COMPLETE = (118, 11)   # bpl not taken; the waypoint load, the remaining-count test, -1 store; rts (00FE54)
+_AS_DECLINED_ARMS = {'moving-coldstart', 'moving-zero-budget', 'moving-unrecovered-record'}
 
 
 def _animation_frame_writes(sp, registers):
@@ -707,19 +725,8 @@ def _animation_frame_writes(sp, registers):
                  for pair in _bytes(sp - ANIMATION_STEP_FRAME + 4 * index, registers[name], 4))
 
 
-def animation_step_plan(machine, registers):
-    """00FE08: the frame-budget refresh and the immediate return; the 'moving' arm is declined."""
+def _animation_idle_plan(machine, registers, result, sp32, sp, sr, record):
     from .game import animation
-    if registers['pc'] != ANIMATION_STEP_ENTRY:
-        raise UnsupportedCandidate('animation step planner needs the machine parked at 00FE08')
-    sp32, sr = registers['a7'], registers['sr']
-    sp = sp32 & 0xFFFFFF
-    record, definition = registers['a1'] & 0xFFFFFF, registers['a2'] & 0xFFFFFF
-    if (sp | record | definition) & 1:
-        raise UnsupportedCandidate('unaligned stack, record or definition')
-    result = animation.animation_step(_reader(machine), record, definition)
-    if result['arm'] != 'idle':
-        raise UnsupportedCandidate('animation step arm calls unrecovered 00FFF0: ' + result['arm'])
     _spans_disjoint([('animation step frame', sp - ANIMATION_STEP_FRAME, ANIMATION_STEP_FRAME),
                      ('animation frame budget', animation.FRAME_BUDGET & 0xFFFFFF, 2)])
     moving_flag = machine.peek_ram((record + animation.LIVE_MOVING_FLAG) & 0xFFFF, 1)[0]
@@ -732,7 +739,86 @@ def animation_step_plan(machine, registers):
     return AtomicPlan(cycles=ANIMATION_STEP_IDLE_COST[0], instructions=ANIMATION_STEP_IDLE_COST[1], writes=writes,
                       registers={'d4': d4, 'a3': (registers['a1'] + 6) & 0xFFFFFFFF,
                                  'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
-                      last_pc=ANIMATION_STEP_LAST_PC)
+                      last_pc=ANIMATION_STEP_IDLE_LAST_PC)
+
+
+def _animation_moving_plan(machine, registers, result, sp32, sp, sr, record):
+    from .game import animation, walker
+    arm = result['arm']
+    walker_record = (record + animation.WALKER_RECORD_OFFSET) & 0xFFFFFF
+    if (walker_record | (sp - ANIMATION_STEP_CALL_FRAME)) & 1:
+        raise UnsupportedCandidate('unaligned walker record or call frame')
+    _spans_disjoint([('animation step call frame', sp - ANIMATION_STEP_CALL_FRAME, ANIMATION_STEP_CALL_FRAME),
+                     ('animation frame budget', animation.FRAME_BUDGET & 0xFFFFFF, 2),
+                     ('animation record header', record, 6),
+                     ('walker record', walker_record, walker.RECORD_SIZE)])
+    walk, after = result['walk'], result['after']
+    steps, counter_before_subq = _walk_steps(walk, result['budget'], 'object')
+    call_cost = _add(_WR_HEAD, *(_WR_STEP[step] for step in steps), _WR_TAIL)
+    high = lambda name: registers[name] & 0xFFFF0000
+    loaded = lambda word: 0xFFFF0000 if word & 0x8000 else 0
+    walker_record32 = (registers['a1'] + animation.WALKER_RECORD_OFFSET) & 0xFFFFFFFF
+    # The walker's own residue, the same formulas WALKER_RESUME_ENTRY's own plan uses: d0/d4/d6 keep this
+    # call's own upper word (never touched going in), d2/d3/d5/d7 are movem.w's own sign extension, a0/a3/a5
+    # the walker's own.  d5 is the walker's own d5 (the error word's own sign extension) with its low word
+    # replaced by d6's (00FE26: move.w d6,d5).  The frame restore (d0-d3/a1-a2) brings d0-d2 and a1/a2
+    # straight back to their entry values, so only d3 (on 'moving-complete': the waypoint index), d4, d5,
+    # d6, d7, a0, a3, a5 differ from entry.
+    d4 = high('d4') | after.x
+    d5 = loaded(walk.error) | after.y
+    d6 = high('d6') | after.y
+    d7 = loaded(walk.counter) | after.counter
+    a0 = walker.OBJECT_BODIES[walk.phase]
+    a5 = walker_record32
+    a3 = (walker_record32 + 10) & 0xFFFFFFFF
+    call_return_writes = (_animation_frame_writes(sp, registers)
+                          + _bytes(sp - ANIMATION_STEP_CALL_FRAME, ANIMATION_STEP_CALL_RETURN, 4))
+    stores_writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    writes = call_return_writes + stores_writes
+    exit_registers = {'d4': d4, 'd5': d5, 'd6': d6, 'd7': d7, 'a0': a0, 'a3': a3, 'a5': a5,
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    if arm == 'moving-continue':
+        cost = _add(_AS_MOVING_HEAD, call_cost, _AS_POST_CALL, _AS_TAIL_CONTINUE)
+        # tst.w d7 is the last flag-setter (N/Z from the final counter, V=C=0); X is the walker's own
+        # residue (its final subq.w #1,d7's borrow), unaffected by every instruction since.
+        x = 0x10 if counter_before_subq == 0 else 0
+        nz = 0x08 if after.counter & 0x8000 else (0x04 if after.counter == 0 else 0)
+        exit_registers['sr'] = (sr & ~0x1F) | x | nz
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                          last_pc=ANIMATION_STEP_CONTINUE_LAST_PC)
+    # 'moving-complete': the waypoint load and remaining-count test add their own fixed cost; d3 becomes
+    # the waypoint index (the +5 byte re-read, sign-extended, minus one, times four -- two SUBQ/ADD pairs
+    # that overwrite the walker's own X residue); the last flag-setter is move.b #$ff,$5(a1) (N=1,Z=0
+    # always -- storing -1); X is the second ADD's own carry (doubling the post-SUBQ word).
+    cost = _add(_AS_MOVING_HEAD, call_cost, _AS_POST_CALL, _AS_TAIL_COMPLETE)
+    doubled_once = (((result['slot'] - 1) & 0xFFFF) * 2) & 0xFFFF
+    x = 0x10 if doubled_once & 0x8000 else 0
+    exit_registers['d3'] = high('d3') | (result['index'] & 0xFFFF)
+    exit_registers['sr'] = (sr & ~0x1F) | x | 0x08
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                      last_pc=ANIMATION_STEP_COMPLETE_LAST_PC)
+
+
+def animation_step_plan(machine, registers):
+    """00FE08: the frame-budget refresh, the idle return, and the 'moving' arm's own walker call plus
+    its own tail; the walk-completes-with-no-waypoints-left arm ('moving-coldstart') is declined, along
+    with a zero budget and a record whose continuation is not one of the walker's own bodies."""
+    from .game import animation
+    if registers['pc'] != ANIMATION_STEP_ENTRY:
+        raise UnsupportedCandidate('animation step planner needs the machine parked at 00FE08')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    record, definition = registers['a1'] & 0xFFFFFF, registers['a2'] & 0xFFFFFF
+    if (sp | record | definition) & 1:
+        raise UnsupportedCandidate('unaligned stack, record or definition')
+    result = animation.animation_step(_reader(machine), record, definition)
+    arm = result['arm']
+    if arm in _AS_DECLINED_ARMS:
+        raise UnsupportedCandidate('animation step arm calls unrecovered 00FEC0/00FF54: ' + arm) \
+            if arm == 'moving-coldstart' else UnsupportedCandidate('animation step arm not witnessed: ' + arm)
+    if arm == 'idle':
+        return _animation_idle_plan(machine, registers, result, sp32, sp, sr, record)
+    return _animation_moving_plan(machine, registers, result, sp32, sp, sr, record)
 
 
 # --- 010332: the rate-gated countdown check (game/timers.py: countdown_check) --

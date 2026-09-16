@@ -147,9 +147,9 @@ ids, never to `main`:
 | **`00FC8E` solid drawer**: the plan reproduces every fact of the original on all 51 retained fixtures over four recordings (0-9 cells, off-screen cells skipped on the x or the y test, the table scan matching within 1-2 mismatches); the inline VDP upload arm (a table entry with the tile index's sign bit set) and an unterminated or unmatched table scan are declined (unwitnessed) | `factcheck check` on every fixture | `tests/games/gods/test_solids.py` |
 | `solid-draw` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 11,472 hits, 110 fallbacks (all scheduler admission)**; `camera-sprites` (all eight gates) on the tree of all eight recordings: **PASS, 107,519 frames, 718,111 hits, 5,648 fallbacks (5,304 scheduler admission incl. 766 at `00FC8E`, 344 seam deadline)** | `history-verify f0ac19738f19 --candidate solid-draw`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-solid-draw-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16h` |
 | the solid drawer's negative control (a register: the routine's own last write is the unconditional list-head pointer, corrupting it risks an address error in the unrecovered sprite-list flush) diverges at frame 429 | `--candidate solid-draw-mutant-result` | `artifacts/gods/verify-solid-draw-mutant` |
-| **`00FE08` animation step**: the plan reproduces every fact of the original on the 6 retained 'idle'-arm fixtures over four recordings; the 'moving' arm (common, not merely unwitnessed) is declined -- it calls the unrecovered coroutine/dispatch at `00FFF0` | `factcheck check` on every fixture | `tests/games/gods/test_animation.py` |
-| `animation-step` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 11,542 hits, 40 fallbacks (38 scheduler admission, 2 unsupported domain)**; `camera-sprites` (nine gates) on the tree of all eight recordings: **PASS, 107,519 frames, 788,232 hits, 6,274 fallbacks (5,609 scheduler admission, 344 seam deadline, 321 unsupported domain at `00FE08`)** | `history-verify f0ac19738f19 --candidate animation-step`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-animation-step-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16i` |
-| the animation step's negative control (the last write is the shared frame-budget word, not a pointer) diverges at frame 430 | `--candidate animation-step-mutant-result` | `artifacts/gods/verify-animation-step-mutant` |
+| **`00FE08` animation step**: the plan reproduces every fact of the original on all 43 retained fixtures over four recordings -- the 'idle' arm and, since 17 Sep, the 'moving' arm's own call into the already-recovered walker resume `00FFF0` (`moving-continue`: the walk has not finished this call; `moving-complete`: it has, with more than one waypoint left, the next one loaded and the slot reset to -1); `moving-coldstart` (the walk finishes with at most one waypoint left, falling into a per-object-type waypoint dispatch `00FEC0`/`00FF54`) is declined -- censused fresh over all eight recordings, unwitnessed on every one -- along with a zero budget and a record whose continuation is not one of the walker's own bodies | `factcheck check` on every fixture | `tests/games/gods/test_animation.py` |
+| `animation-step` reproduces the original on `fb408bc7…`: **PASS, 34,904 frames, 30,043 hits, 39 fallbacks, all exact adapter refusals (0 unsupported domain)**; `camera-sprites` (twenty-four gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,047,974 hits, 6,586 fallbacks (00FE08's own fallbacks-by-gate 321 → 118, all now exact adapter refusals, 0 unsupported domain at this gate)** | `history-verify fb408bc75597 --candidate animation-step`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-animation-step2-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17a` |
+| the animation step's negative control diverges at frame 2,260, the tree's first entry into the 'moving' arm | `--candidate animation-step-mutant-result` | `artifacts/gods/verify-animation-step2-mutant` |
 | **`010332` countdown check**: the plan reproduces every fact of the original on 38 of the 43 retained fixtures over four recordings ('idle'/'waiting', and the 'trigger' arm's own 'trigger-reject'/'trigger-spawn' sub-arms -- the countdown reload and frequency word, a direction-mirrored screen window test and a bounded pool scan+fill); the 'trigger-deep' sub-arm (a further A3 gate byte, calling unrecovered `0091BC`) and 'trigger-pool-full' (the same bounded pool exhausted, unwitnessed) are declined | `factcheck check` on every fixture | `tests/games/gods/test_timers.py` |
 | `countdown-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,273 hits, 33 fallbacks (all scheduler admission)**; `camera-sprites` (all fourteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,019,144 hits, 11,195 fallbacks (7,040 scheduler admission, 3,728 seam deadline, 426 unsupported domain across two declined-call regions, 1 gate-without-planner foreign-return edge, tree still bit-exact)** | `history-verify f0ac19738f19 --candidate countdown-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-countdown-check2-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16p` |
 | the countdown check's negative control diverges at frame 469 | `--candidate countdown-check-mutant-result` | `artifacts/gods/verify-countdown-check2-mutant` |
@@ -308,18 +308,32 @@ longest recordings before choosing:
 
 Next bites of the walker subsystem, in order, all with `game/walker.py`
 as the semantics and `walker_resume_plan` as the boundary model: (1)
-`00FE08`'s `moving` arm — own the resume call the way `0049DA` owns
-`001164`, then its cold-start path (`00FE5C`–`00FE8C`: the next waypoint
-from the solid's table, the budget from the speed byte, `bra 010002` —
-`walker.start` then `walker.run`), so that the 321 declined `moving`
-arms on the tree disappear; (2) `0091BC` — the pool scan (declined when
-full, unwitnessed) then the projectile copy's cold start
-(`walker.run(walker.start(...), budget, 'projectile')`; mind `move.w
-#$ffff,d0` versus `moveq` in the residue) and `010332`'s `trigger-deep`
-arm over it; (3) the driver `009210`'s resume call (`0093D2`) — census it;
-the driver itself only as far as the walker's contract needs
-(completion is the driver's: who frees a slot, who runs the tile test,
-where `00932C` belongs).
+DONE, 17 Sep — `00FE08`'s `moving` arm now owns the resume call the way
+`0049DA` owns `001164` (`animation.animation_step` extended:
+`'moving-continue'`/`'moving-complete'`, the walker's own cost fragments
+`_WR_HEAD`/`_WR_STEP`/`_WR_TAIL` reused directly since `00FFF0` *is* this
+arm's `bsr` target); the 321 declined `moving` arms on the tree are gone
+(00FE08's own fallbacks-by-gate 321 → 118, all exact adapter refusals).
+The cold-start path (`00FE5C`–`00FE8C`: the next waypoint from the
+solid's table, the budget from the speed byte, `bra 010002` —
+`walker.start` then `walker.run`) stays declined as `'moving-coldstart'`:
+its own callees `00FEC0`/`00FF54` (a per-object-type waypoint dispatch,
+four handlers each, both fully disassembled) were freshly censused this
+session over all eight recordings and fired on **none** of them — real
+ROM code, unwitnessed, per the grinder-protocol's own rule ("every arm no
+recording entered stays declined"), not a mechanism gap.  (2) `0091BC` —
+the pool scan (declined when full, unwitnessed) then the projectile
+copy's cold start (`walker.run(walker.start(...), budget, 'projectile')`;
+mind `move.w #$ffff,d0` versus `moveq` in the residue) and `010332`'s
+`trigger-deep` arm over it: `0091BC` fires 50 times on `fb408bc75597…`
+alone (census-0091BC, 32 real path classes, all retained) but from a
+caller at `009D12`-ish, *not* from `010332`'s own declined `trigger-deep`
+arm (still 0 occurrences on every four-recording census of `010332`,
+though the eight-recording tree above shows it firing 8 times overall) —
+the true call site is not yet identified; (3) the driver `009210`'s
+resume call (`0093D2`) — census it; the driver itself only as far as the
+walker's contract needs (completion is the driver's: who frees a slot,
+who runs the tile test, where `00932C` belongs).
 
 Screened over the full `fb408bc75597…` history (`recovery_census.py
 --classifier entry`, not a direct park -- the 600-frame window's tight
@@ -331,7 +345,7 @@ a grinder's to invent:
 
 | entry | path classes (full history) | why |
 |---|---|---|
-| `00FE08` | 19 | recovered as `animation-step` (the 'idle' arm; 'moving' calls unrecovered `00FFF0`) |
+| `00FE08` | 19 | recovered as `animation-step` (the 'idle' arm and, since 17 Sep, 'moving-continue'/'moving-complete' -- its own call into the already-recovered `00FFF0`; 'moving-coldstart' declined, unwitnessed) |
 | `010A14` | 10 | recovered as `collision-gate` (the 'held'/'gated' arms and, since 16 Sep, the 'collision' arm's own 'collision-clear'/'collision-held' sub-arms via `010CBC`, now also recovered; 'collision-deep' and phase>7 declined as unwitnessed) |
 | `00BCCE` | 28 (15 real: 13 were the same VBlank-in-interrupt-handler misattribution `00FDB8`'s screening hit) | recovered as `zone-check`: fully witnessed, no declines |
 | `00470C` | 30 (re-censused, current tracer) | a genuine per-type dispatch: `move.w d5,d0; add.w d0,d0; add.w d0,d0; movea.l $4718(pc,d0.w),a5; jmp (a5)` into a ROM jump table at `004718` (disassembles as `ori.b` data -- it is a table of handler addresses, not code) with at least a dozen distinct handler bodies; the census's 30 small (6-15 instruction) classes are those handlers' own bodies, not variants of one shape.  Leave for the supervisor: not a leaf, needs an object/kind convention |
@@ -453,22 +467,23 @@ type id at `+4`, an index at `+5`, four longs at `+6`, the footprint width
 and height at `+0x1A`/`+0x1B`).  Every game tick `00FBB6` replays the undo
 list (`00FAF4`, 50 entries at `FF4982`), then for each active solid: steps
 its animation (`00FE08`, recovered as `animation-step`: the shared
-frame-budget refresh and the 'idle' immediate return; the common 'moving'
-arm calls `00FFF0`, a resumable Bresenham-style line walk that stores its
-own continuation address back into the live record and dispatches through
-it -- disassembled fully 16 Sep, confirmed bounded (four internal,
-self-contained loop bodies, no per-object-type handler table after all;
-`docs/gods/blockers/2026-09-16-0091BC.md`), but not yet recovered: a
-coroutine engine, not a leaf, and the next real gap in this subsystem),
-stamps its footprint (`00FDB8`), and draws it (`00FC8E`, recovered as
-`solid-draw`: the sprite records for a width×height grid of 32×16 cells,
-tile index from the table at `FFF2D6` by type id; a negative entry means
-the tiles are uploaded by an inline VDP block from `FFEA2C`-relative data,
-unwitnessed and declined).  The grid `FF885E` is what `0063FA` (the
-player) and `010CBC` (the movers) consult.  Next bites in this subsystem:
-`00FFF0`'s coroutine (per the blocker above, likely two bounded
-compositions over one shared Bresenham-step semantic module, not a new
-convention), then the whole per-tick pass `00FBB6` as a composition of
+frame-budget refresh, the 'idle' immediate return, and, since 17 Sep, the
+'moving' arm's own call into `00FFF0` -- the walker's resume, a resumable
+Bresenham-style line walk that stores its own continuation address back
+into the live record and dispatches through it, recovered on its own 16
+Sep (candidate `walker`) and now owned by this call the way `0049DA` owns
+`001164`; the cold-start continuation past a finished walk with at most
+one waypoint left, `'moving-coldstart'`, stays declined -- its own
+per-object-type waypoint dispatch (`00FEC0`/`00FF54`) is real ROM code no
+recording enters), stamps its footprint (`00FDB8`), and draws it
+(`00FC8E`, recovered as `solid-draw`: the sprite records for a
+width×height grid of 32×16 cells, tile index from the table at `FFF2D6`
+by type id; a negative entry means the tiles are uploaded by an inline
+VDP block from `FFEA2C`-relative data, unwitnessed and declined).  The
+grid `FF885E` is what `0063FA` (the player) and `010CBC` (the movers)
+consult.  Next bites in this subsystem: the projectile copy's own launch
+(`0091BC`) and driver (`009210`), per the walker subsystem's own next
+bites above, then the whole per-tick pass `00FBB6` as a composition of
 recovered leaves.
 
 A general note for the next long leaf: a routine whose own activation runs
@@ -516,10 +531,14 @@ mutant (the re-armed x one off) diverges at the next invocation — a
 counter one off is not a usable control: it drives the original's own
 waypoint code into a write to the cartridge, a fault, which is itself a
 fact about the game's tolerance of its records; *remaining
-blocker* — none for the resume; the cold start inside `00FE08`'s `moving`
-arm (`00FE5C`–`00FE8C` → `010002`) and the projectile copy are the next
-bites, with the same semantics (`walker.start`, `walker.run(...,
-'projectile')`).
+blocker* — none for the resume, and (17 Sep) none for `00FE08`'s own call
+into it (`animation-step`, above); the cold start proper (`00FE5C`–`00FE8C`
+→ `010002`, reached only when a finished walk has at most one waypoint
+left) stays declined -- unwitnessed on all eight recordings, not a missing
+mechanism (`walker.start` already models the cold-start arithmetic).  The
+projectile copy's own cold start (`0091BC` → `0093E4`) and driver
+(`009210` → `0093D2`) are the next bites, with the same semantics
+(`walker.start`, `walker.run(..., 'projectile')`).
 
 **The pickups** (the subsystem `013264` belongs to): a byte grid at
 `FFBBDE` (8×8-pixel cells, 48 per row) holds pickup codes; the pickup
