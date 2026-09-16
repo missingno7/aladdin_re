@@ -157,3 +157,60 @@ def emit_static_sprite(read, x, y, sprite):
     stores[LIST_HEAD] = ((head + RECORD_SIZE) & 0xFFFFFFFF, 4)
     stores[LIST_COUNT] = ((count + 1) & 0xFFFF, 2)
     return {**result, 'arm': 'placed', 'record': record, 'count': count}
+
+
+# --- 00126A: the particle drawer's own emitter ------------------------------
+#
+# Called from the particle drawer's jump table (010248) with a world
+# position and a descriptor byte *offset* (not an id: the caller already
+# knows it, so there is no id-to-offset table here, unlike the dynamic and
+# static emitters).  No per-frame cache at all -- every on-screen call
+# uploads its tile fresh, the same VDP command arithmetic and record
+# layout as ``emit_sprite``'s own cache-miss upload, but its own fixed
+# attribute word (``PARTICLE_PRIORITY_ATTRIBUTE``) instead of
+# ``PRIORITY_ATTRIBUTE``.  Always a seam when on-screen (there is nothing
+# else to be but a miss); ``boundary.particle_emit_plan`` hands the whole
+# control-write-then-data-loop span to the machine, exactly as
+# ``sprite_emit_plan`` does for ``0018C8``'s own upload.
+
+PARTICLE_PRIORITY_ATTRIBUTE = 0x4000                # this routine's own fixed attribute bit (0018C8's own is 0x2000)
+
+
+def emit_particle_sprite(read, x, y, offset):
+    """What ``00126A`` does for world position ``(x, y)`` and descriptor byte offset ``offset`` (D2).
+
+    Returns the arm (``'offscreen-x'``, ``'offscreen-y'``, ``'upload'``),
+    whether the sprite is flipped, the durable stores, the record's
+    address, and (for ``'upload'``) the VDP command and the ROM source the
+    machine will copy from -- ``boundary`` cedes the copy itself to the
+    real machine, so the byte count is not needed here.
+    """
+    screen_x = (x - read(CAMERA_X, 2)) & 0xFFFF
+    screen_y = (y - read(CAMERA_Y, 2)) & 0xFFFF
+    flip = bool(offset & FLIP_ID_BIT)
+    result = {'flip': flip, 'stores': {}, 'record': None, 'screen': (screen_x, screen_y)}
+    if ((screen_x + SCREEN_MARGIN) & 0xFFFF) > SCREEN_X_LIMIT:
+        return {**result, 'arm': 'offscreen-x'}
+    if ((screen_y + SCREEN_MARGIN) & 0xFFFF) > SCREEN_Y_LIMIT:
+        return {**result, 'arm': 'offscreen-y'}
+    descriptor = (DESCRIPTORS + (offset & 0x7FFF)) & 0xFFFFFF
+    x_offset = read(descriptor + (X_OFFSET_FLIPPED if flip else X_OFFSET), 2)
+    attribute = (FLIP_ATTRIBUTE if flip else 0) | PARTICLE_PRIORITY_ATTRIBUTE
+    record_x = (screen_x + x_offset) & 0xFFFF
+    record_y = (screen_y + read(descriptor + Y_OFFSET, 2)) & 0xFFFF
+    head = read(LIST_HEAD, 4)
+    record = head & 0xFFFFFF
+    count = read(LIST_COUNT, 2)
+    cursor = read(TILE_CURSOR, 2)
+    tile = cursor >> 5
+    stores = result['stores']
+    stores[LIST_LAST] = (head, 4)
+    stores[record] = (record_y, 2)
+    stores[record + 2] = (count | read(descriptor + SIZE_ATTRIBUTE, 2), 2)
+    stores[record + 4] = (tile | attribute, 2)
+    stores[record + 6] = (record_x, 2)
+    stores[LIST_HEAD] = ((head + RECORD_SIZE) & 0xFFFFFFFF, 4)
+    stores[LIST_COUNT] = ((count + 1) & 0xFFFF, 2)
+    command = (VDP_VRAM_WRITE | ((cursor & 0x3FFF) << 16) | (cursor >> 14)) & 0xFFFFFFFF
+    return {**result, 'arm': 'upload', 'record': record, 'descriptor': descriptor, 'count': count,
+            'upload': {'command': command, 'source': read(descriptor + TILES_POINTER, 4) & 0xFFFFFF}}

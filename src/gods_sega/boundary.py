@@ -949,3 +949,116 @@ def zone_check_plan(machine, registers):
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
                       last_pc=ZONE_CHECK_INSIDE_LAST_PC)
 
+
+# --- 00126A: the particle drawer's own emitter (game/sprites.py: emit_particle_sprite) ---
+#
+# Cost from the tracer (artifacts/gods/evidence/census-00126A-fresh): no
+# cache, so every on-screen call is a seam (Aladdin recipe 2/3, the same
+# shape as 0018C8's own cache-miss upload).  The ceded block's own length
+# (the data-loop trip count) varies with the descriptor's tile size, but
+# that cost is the machine's own -- charged for real, never modeled here.
+PARTICLE_EMIT_ENTRY, PARTICLE_EMIT_UPLOAD = 0x00126A, 0x0012F4
+PARTICLE_EMIT_RESUME, PARTICLE_EMIT_LAST_PC = 0x00130C, 0x001310
+PARTICLE_EMIT_PREFIX_LAST_PC = 0x0012EE          # ori.l #$40000000,d0: the last instruction before the VDP control write
+PARTICLE_EMIT_FRAME = 28                          # movem.l d0-d4/a0-a1,-(a7)
+_PARTICLE_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'd4', 'a0', 'a1')
+_PE_HEAD = (64 + 8 + 12 + 12 + 4 + 12 + 8 + 8, 8)      # movem push; move#4000,d4; sub x2; move d2,d3; lea; andi; adda
+_PE_X_TEST_PASS, _PE_X_TEST_FAIL = (4 + 4 + 8 + 12, 4), (4 + 4 + 8 + 10, 4)      # moveq;add;cmpi;bhi.w
+_PE_Y_TEST_PASS, _PE_Y_TEST_FAIL = (4 + 4 + 8 + 12, 4), (4 + 4 + 8 + 10, 4)
+_PE_RECORD_NOFLIP = (12 + 8 + 10, 3)                   # move $6(a0),d2; andi #$8000,d3; beq taken
+_PE_RECORD_FLIP = (12 + 8 + 8 + 8 + 12, 5)             # beq not taken; move #$800,d3; move $8(a0),d2
+_PE_RECORD_BODY = (4 + 4 + 12 + 16 + 16 + 8 + 12 + 12 + 8 + 12 + 16 + 4 + 8 + 8 + 16 + 16, 16)
+_PE_UPLOAD_SETUP = (4 + 12 + 12 + 10 + 4 + 16, 6)      # moveq#0,d0; move ee84->d0; rol.l#2; lsr.w#2; swap; ori.l
+_PE_RESTORE = (68 + 16, 2)                             # movem.l (a7)+; rts
+
+
+def _particle_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(_PARTICLE_FRAME_REGISTERS)
+                 for pair in _bytes(sp - PARTICLE_EMIT_FRAME + 4 * index, registers[name], 4))
+
+
+def particle_emit_plan(machine, registers):
+    """00126A: an off-screen particle as one plan; an on-screen one as a ``Seam`` (no cache, always a miss)."""
+    from .game import sprites
+    if registers['pc'] != PARTICLE_EMIT_ENTRY:
+        raise UnsupportedCandidate('particle emit planner needs the machine parked at 00126A')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    frame = ('particle frame', sp - PARTICLE_EMIT_FRAME, PARTICLE_EMIT_FRAME + 4)
+    _ram_span(*frame)
+    result = sprites.emit_particle_sprite(_reader(machine), registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                                          registers['d2'] & 0xFFFF)
+    arm = result['arm']
+    writes = _particle_frame_writes(sp, registers)
+    if arm == 'offscreen-x':
+        cost = (_PE_HEAD[0] + _PE_X_TEST_FAIL[0] + _PE_RESTORE[0], _PE_HEAD[1] + _PE_X_TEST_FAIL[1] + _PE_RESTORE[1])
+        # The margin add (moveq #$20,d2; add.w d0,d2) is the last X-setter; the cmpi does not touch X.
+        x_bit = _add_sr(sr, result['screen'][0], sprites.SCREEN_MARGIN, 2) & 0x10
+        exit_sr = (_cmp_sr(sr, (result['screen'][0] + sprites.SCREEN_MARGIN) & 0xFFFF, sprites.SCREEN_X_LIMIT, 2)
+                   & ~0x10) | x_bit
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=PARTICLE_EMIT_LAST_PC)
+    if arm == 'offscreen-y':
+        cost = (_PE_HEAD[0] + _PE_X_TEST_PASS[0] + _PE_Y_TEST_FAIL[0] + _PE_RESTORE[0],
+                _PE_HEAD[1] + _PE_X_TEST_PASS[1] + _PE_Y_TEST_FAIL[1] + _PE_RESTORE[1])
+        # The Y test's own margin add is the last X-setter (it runs after the X test's own).
+        x_bit = _add_sr(sr, result['screen'][1], sprites.SCREEN_MARGIN, 2) & 0x10
+        exit_sr = (_cmp_sr(sr, (result['screen'][1] + sprites.SCREEN_MARGIN) & 0xFFFF, sprites.SCREEN_Y_LIMIT, 2)
+                   & ~0x10) | x_bit
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=PARTICLE_EMIT_LAST_PC)
+    # 'upload': the prefix ends at the VDP control write with the upload's registers in place.
+    # The descriptor lives in ROM (066794-relative), read-only and out of the RAM aliasing check.
+    record = result['record']
+    spans = [frame, ('particle record', record, sprites.RECORD_SIZE), *_SPRITE_GLOBALS]
+    _spans_disjoint(spans)
+    record_flip = _PE_RECORD_FLIP if result['flip'] else _PE_RECORD_NOFLIP
+    cycles = (_PE_HEAD[0] + _PE_X_TEST_PASS[0] + _PE_Y_TEST_PASS[0] + record_flip[0]
+              + _PE_RECORD_BODY[0] + _PE_UPLOAD_SETUP[0])
+    instructions = (_PE_HEAD[1] + _PE_X_TEST_PASS[1] + _PE_Y_TEST_PASS[1] + record_flip[1]
+                    + _PE_RECORD_BODY[1] + _PE_UPLOAD_SETUP[1])
+    writes = writes + tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    upload = result['upload']
+    stores = result['stores']
+    high = lambda name: registers[name] & 0xFFFF0000
+    attribute = (sprites.FLIP_ATTRIBUTE if result['flip'] else 0) | sprites.PARTICLE_PRIORITY_ATTRIBUTE
+    # The ceded block (0012F4-001308) reads only D0 (the VDP command) and A0 (the descriptor,
+    # to fetch the tile pointer at its own +0); the strict witness still checks every register
+    # the prefix's own path (0012BA-0012EE) actually changes, dead to the ceded block or not.
+    # D1-D3 are the record's own words (already computed for the stores); D4 never moves past
+    # its entry move.w #$4000; A0 stays the descriptor; A1 ends at the advanced list head.
+    # rol.l #2 always clears bits 0-1 of the low word (a left shift by 2), and lsr.w #2 then
+    # shifts those same two zero bits into the carry/X position last: X is always 0 here.
+    prefix = AtomicPlan(
+        cycles=cycles, instructions=instructions, writes=writes,
+        registers={'d0': upload['command'], 'd1': high('d1') | stores[record + 4][0],
+                   # D2's upper word is gone by here: moveq #$20,d2 (the X and Y screen tests, both taken
+                   # before any record work) sign-extends the whole 32-bit register, and nothing after
+                   # that touches more than D2's low word.
+                   'd2': stores[record + 2][0], 'd3': high('d3') | attribute,
+                   'd4': high('d4') | 0x4000, 'a0': result['descriptor'], 'a1': stores[sprites.LIST_HEAD][0],
+                   'a7': (sp32 - PARTICLE_EMIT_FRAME) & 0xFFFFFFFF,
+                   'pc': PARTICLE_EMIT_UPLOAD,
+                   'sr': _logic_sr(sr, upload['command'], 4) & ~0x10},
+        last_pc=PARTICLE_EMIT_PREFIX_LAST_PC)
+    return Seam(prefix=prefix, resume_pc=PARTICLE_EMIT_RESUME,
+                stack_basis=(sp32 - PARTICLE_EMIT_FRAME) & 0xFFFFFFFF,
+                guards=((sp - PARTICLE_EMIT_FRAME, PARTICLE_EMIT_FRAME + 4),), suffix=particle_emit_suffix)
+
+
+def particle_emit_suffix(machine, registers):
+    """00130C after the upload: the frame back into the registers, the RTS; the CCR is the machine's."""
+    if registers['pc'] != PARTICLE_EMIT_RESUME:
+        raise UnsupportedCandidate('particle emit suffix needs the machine parked at 00130C')
+    base = registers['a7']
+    restored = {name: int.from_bytes(machine.peek_ram((base + 4 * index) & 0xFFFF, 4), 'big')
+                for index, name in enumerate(_PARTICLE_FRAME_REGISTERS)}
+    sp = (base + PARTICLE_EMIT_FRAME) & 0xFFFFFFFF
+    restored.update(a7=(sp + 4) & 0xFFFFFFFF, pc=_return(machine, sp))
+    return AtomicPlan(cycles=_PE_RESTORE[0], instructions=_PE_RESTORE[1], writes=(), registers=restored,
+                      last_pc=PARTICLE_EMIT_LAST_PC)
+

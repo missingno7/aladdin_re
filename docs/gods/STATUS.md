@@ -20,14 +20,15 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with twelve gates armed, the camera follow step `002806`, the
+  original with thirteen gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
-  step `00FE08`, the countdown check `010332`, the collision gate `010A14`
-  and the zone check `00BCCE`; `camera`, `sprites`, `sprites-static`,
-  `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
-  `animation-step`, `countdown-check`, `collision-gate` and `zone-check`
+  step `00FE08`, the countdown check `010332`, the collision gate `010A14`,
+  the zone check `00BCCE` and the particle drawer's own emitter `00126A`;
+  `camera`, `sprites`, `sprites-static`, `table-reset`, `spawn-queue`,
+  `grid-cell`, `footprint`, `solid-draw`, `animation-step`,
+  `countdown-check`, `collision-gate`, `zone-check` and `particle-emit`
   arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
@@ -95,7 +96,10 @@ ids, never to `main`:
 | **`00BCCE` zone check**: the plan reproduces every fact of the original on all 69 retained fixtures over four recordings (a box test around the player's own position, widened on two levels; fully witnessed, no declines) | `factcheck check` on every fixture | `tests/games/gods/test_zones.py` |
 | `zone-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 4,316 hits, 35 fallbacks (all scheduler admission)**; `camera-sprites` (all twelve gates) on the tree of all eight recordings: **PASS, 107,519 frames, 881,371 hits, 7,335 fallbacks (6,100 scheduler admission, 344 seam deadline, 891 unsupported domain)** | `history-verify f0ac19738f19 --candidate zone-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-zone-check-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16l` |
 | the zone check's negative control (a register: 'held'/'outside', the great majority, store nothing durable at all) diverges at frame 475 | `--candidate zone-check-mutant-result` | `artifacts/gods/verify-zone-check-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 40 s | 767 tests, none skipped | — |
+| **`00126A` particle drawer's own emitter**: `0018C8`'s own seam shape reproduced with this routine's addresses -- no per-frame cache, so every on-screen call uploads; the plan reproduces every fact of the original on all 58 retained fixtures over four recordings (off-screen x/y, flip and no-flip uploads) | `factcheck check` on every fixture | `tests/games/gods/test_particles.py` |
+| `particle-emit` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 7,330 hits (3,314 seams entered, 3,026 completed), 335 fallbacks (53 scheduler admission, 282 seam deadline)**; `camera-sprites` (all thirteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 955,464 hits, 105,964 seams entered, 101,583 completed, 11,118 fallbacks (6,498 scheduler admission, 3,728 seam deadline, 891 unsupported domain, 1 gate-without-planner -- a foreign-return edge the shared seam runner already falls back on safely, tree still bit-exact)** | `history-verify f0ac19738f19 --candidate particle-emit`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-particle-emit-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16m` |
+| the particle emitter's negative control diverges at frame 469 | `--candidate particle-emit-mutant-result` | `artifacts/gods/verify-particle-emit-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 830 tests, none skipped | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -115,7 +119,7 @@ entered.
 
 ## What is not recovered
 
-Everything else.  Twelve routines are recovered: the camera follow step
+Everything else.  Thirteen routines are recovered: the camera follow step
 (`game/camera.py`, six words); the sprite emitter and its RAM-only sibling
 (`game/sprites.py`: the sprite list at `FFEBF6`–`FFEBFF`, the per-frame
 tile cache at `FFEE98`/`FFEEAA`, the dynamic-tile cursor `FFEE84`, the ROM
@@ -154,8 +158,12 @@ as unwitnessed); and the zone check (`game/zones.py`: a box test around
 the player's own position (`0063FA`'s own `GRID_X`/`GRID_Y`), widened on
 two levels -- fully recovered, no declines, the routine's own eight-register
 save/restore frame makes the whole box arithmetic scratch except a
-cooldown word and D2's own final value).  The
-emitter's remaining siblings (`001256`/`001260`/`00126A`, `001312`) share
+cooldown word and D2's own final value); and the particle drawer's own
+emitter (`game/sprites.py: emit_particle_sprite`, `00126A`: `0018C8`'s own
+seam shape with this routine's own descriptor-offset convention -- the
+caller passes the descriptor byte offset directly, no id-to-offset table
+-- and no per-frame cache, so every on-screen call is a seam upload).  The
+emitter's remaining siblings (`001256`/`001260`, `001312`) share
 its descriptor layout and list conventions but are not recovered.  There
 is no object-table convention, no semantic map, no native runtime, no
 sound-driver knowledge.  The seam for a platform operation inside a
@@ -176,7 +184,7 @@ longest recordings before choosing:
 | `00FDB8` | 600 | 27–47 | recovered (`footprint`): a solid's footprint stamped into the level grid `FF885E` (32×16-pixel cells, 128 bytes per row), each cell's old byte queued on the undo list at A5; rows and cells are the definition's height and width bytes (A2 `+0x1B`, `+0x1A`); the no-footprint arm (width bit 7) unwitnessed, declined one path class, but a 34,904-frame census shows **16 distinct path classes** with differing loop trip counts -- looks like a per-object-type dispatch (varying tile sizes, record counts), not a bounded single-shape leaf; census every recording before treating this as a small candidate, or treat it as the first case needing an object-record convention |
 | `002806` | 300 | 17–21 | recovered (`camera`) |
 | `0018C8` | 742 | 10–145 | recovered (`sprites`): the dynamic sprite emitter with a per-frame tile cache; a miss uploads the tiles inline (`001974`–`001988`), the first Gods seam |
-| `00126A` (`001256`, `001260`) | 412 | 305–307 | from `010248` (the particle drawer's jump table at `0100F2`): the emitter's sibling without the cache — the same seam shape (record composition, inline upload `0012F4`–`001308`, restore); `factcheck facts --park 00126A` does not reach the routine from `boundary-6000.state` within the default step budget.  A full census of `f0ac1973…` alone (15,148 frames) finds **32 retained path classes plus 17 more that overflowed retention**.  Read from the disassembly (not re-censused this session): not a per-object-type dispatch after all -- it is `0018C8`'s own seam shape, and its own class diversity is almost certainly the same cache/descriptor cost variation `0018C8` already has a formula for.  The next candidate |
+| `00126A` (`001256`, `001260`) | 412 | 305–307 | recovered (`particle-emit`): the emitter's sibling without the cache, called from `010248` (the particle drawer's jump table at `0100F2`) — `0018C8`'s own seam shape, no cache so every on-screen call is a seam; only 5-13 real path classes once censused with the current tracer (the earlier "32 + 17 overflowed" count was the online classifier retaining a fixture per deadline-cut occurrence, not per real path) |
 | `001164` | 1,015 | 9–40 | recovered (`sprites-static`): the emitter's RAM-only sibling, its own descriptor-offset table (`0011E6`) and a fixed tile field instead of a cache (six callers) |
 | `0063FA` | 309 | 9 (constant) | recovered (`grid-cell`): a pure address computation, one path, no branch, no store; three callers (`006468`, `006FFE`, `007282`) |
 | `00FC8E` | 600 | 33–106 | recovered (`solid-draw`): the same definition `00FDB8` reads drawn as sprites, a work-RAM `(type id, tile index)` table scan then a rows x cells grid appended to the sprite list, off-screen cells skipped; the inline VDP upload arm (a negative table entry) declined, unwitnessed on every recording |
@@ -197,7 +205,7 @@ a grinder's to invent:
 | `00470C` | 30 (re-censused, current tracer) | a genuine per-type dispatch: `move.w d5,d0; add.w d0,d0; add.w d0,d0; movea.l $4718(pc,d0.w),a5; jmp (a5)` into a ROM jump table at `004718` (disassembles as `ori.b` data -- it is a table of handler addresses, not code) with at least a dozen distinct handler bodies; the census's 30 small (6-15 instruction) classes are those handlers' own bodies, not variants of one shape.  Leave for the supervisor: not a leaf, needs an object/kind convention |
 | `010332` | 7 | recovered as `countdown-check` (the 'idle' and 'waiting' arms; 'trigger' calls unrecovered `01158C`/`0115D4`) |
 | `014084` | 32 retained + 25 more overflowed | two disjoint bodies behind one early `tst.b $48(a1); beq`: the active arm dereferences the level grid (`FF885E`, `0063FA`'s and `00FDB8`'s own table), rarely calls unrecovered `00F828`, then searches a bounded 20-entry pool at `FFF90E` (a `dbra`-counted scan, cost climbing steadily with scan depth -- matches the instruction counts 42..112) and fills an empty slot; the inactive arm (and a failed grid check) fall into a second body writing byte pairs into two fixed tile arrays (`FFBBDE`/`FFBBAA`) keyed by world position.  Plausibly two more RAM-mostly leaves (the pool scan bounded like `0018C8`'s cache scan, the tile-array write unconditional), but needs a full census and fact read of both bodies before treating it as one candidate -- not attempted this session |
-| `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | **not** a per-type dispatch: disassembly through `0012F4` is exactly `0018C8`'s own shape (camera subtraction, the same two screen-margin tests, a descriptor lookup at `066794`, the four-word sprite record, the inline VDP upload `0012F4`+); the earlier "per-object-type like `00FDB8`" worry was the same kind of false alarm this session's other three corrections were.  The next candidate: reproduce `0018C8`'s seam shape here with `00126A`'s own addresses and cost formula (its own descriptor field layout differs slightly -- read the fact traces before assuming they match `0018C8`'s exactly); not attempted this session for lack of remaining time, not for any structural reason |
+| `00126A` (`001256`, `001260`) | 32 retained + 17 more overflowed (on `f0ac1973…` alone) | recovered as `particle-emit`: **not** a per-type dispatch after all -- disassembly through `0012F4` is exactly `0018C8`'s own shape (camera subtraction, the same two screen-margin tests, a descriptor lookup at `066794`, the four-word sprite record, the inline VDP upload `0012F4`+).  Re-censused with the current tracer: 5-13 real path classes per recording, not 32+17 -- the earlier count was inflated the same way `00FDB8`'s was before its own fix |
 | `00FDB8` | 16 (4 real: 13 were VBlank variants) | recovered — see the solids below |
 
 `010CBC` is worth flagging on its own: it is exactly `0063FA`'s grid
@@ -228,9 +236,9 @@ positions, which the tracer now sets aside (`00FDB8`: 16 → 4).  Re-screen
 value (`00FE08` and `010332` were re-screened and are now recovered, each
 as a dominant bounded arm plus a declined call into unrecovered code;
 `00470C` was re-screened and confirmed a genuine per-type dispatch, not a
-tracer artifact; `00126A` was read from the disassembly rather than
-re-censused and turned out to be `0018C8`'s own seam shape, not a
-dispatch).  (3)
+tracer artifact; `00126A` was read from the disassembly, then re-censused
+with the current tracer once its shape was confirmed, and recovered as
+`particle-emit` -- 5-13 real path classes, not 32+17).  (3)
 `00FC8E`'s own worry ("per-object-type diversity" like `00FDB8`'s pre-fix
 screening) also did not hold once censused with the current tracer: over
 107,519 tree frames the routine only ever takes the positive (tile-table)
