@@ -12,12 +12,12 @@ from dataclasses import dataclass, field
 
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
-from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, COUNTDOWN_CHECK_ENTRY,
+from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY, PARTICLE_EMIT_ENTRY,
                        SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY,
                        TABLE_RESET_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, footprint_stamp_plan,
-                       grid_cell_plan, hazard_tick_plan, particle_emit_plan, spawn_queue_plan,
+                       condition_plan, grid_cell_plan, hazard_tick_plan, particle_emit_plan, spawn_queue_plan,
                        sprite_emit_plan, static_emit_plan, table_reset_plan, zone_check_plan)
 
 
@@ -28,6 +28,18 @@ def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
     address, value = plan.writes[-1]
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes[:-1] + ((address, (value + 1) & 0xFF),),
                       plan.registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_outcome(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for a predicate: a false outcome (the slot cleared) is reported as true (nothing stored).
+
+    A register mutant is blind here: the dispatcher's residue is dead once
+    the evaluator reloads its registers, and a cleared slot rewritten to
+    another non-negative value still reads as false.  Dropping the clear
+    makes a failing condition pass, and a record whose other conditions
+    hold then fires its action.
+    """
+    return AtomicPlan(plan.cycles, plan.instructions, (), plan.registers, plan.last_pc, plan.direct_calls)
 
 
 def _mutate_register(plan: AtomicPlan) -> AtomicPlan:
@@ -52,15 +64,18 @@ PLANNERS = {
     'zone-check': {ZONE_CHECK_ENTRY: zone_check_plan},
     'particle-emit': {PARTICLE_EMIT_ENTRY: particle_emit_plan},
     'hazard-tick': {HAZARD_TICK_ENTRY: hazard_tick_plan},
+    'conditions': {CONDITION_ENTRY: condition_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
                        FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan, SOLID_DRAW_ENTRY: draw_solid_plan,
                        ANIMATION_STEP_ENTRY: animation_step_plan, COUNTDOWN_CHECK_ENTRY: countdown_check_plan,
                        COLLISION_GATE_ENTRY: collision_gate_plan, ZONE_CHECK_ENTRY: zone_check_plan,
-                       PARTICLE_EMIT_ENTRY: particle_emit_plan, HAZARD_TICK_ENTRY: hazard_tick_plan},
+                       PARTICLE_EMIT_ENTRY: particle_emit_plan, HAZARD_TICK_ENTRY: hazard_tick_plan,
+                       CONDITION_ENTRY: condition_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
+             'conditions-mutant-outcome': ('conditions', _mutate_outcome),
              'sprites-mutant-result': ('sprites', _mutate_result),
              'sprites-mutant-register': ('sprites', _mutate_register),
              'sprites-static-mutant-result': ('sprites-static', _mutate_result),

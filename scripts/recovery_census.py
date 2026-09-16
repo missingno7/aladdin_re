@@ -65,7 +65,29 @@ def entry_classifier(machine, pc):
     return {'branch': 'entry'}
 
 
+def register_classifier(spec):
+    """``reg:d5.w``: one class per value of a register at the entry (a dispatcher's kind in a data register).
+
+    No game knowledge either: the register and width name the convention
+    the caller saw in the facts (Gods' condition kinds arrive in ``d5``).
+    """
+    name, _, width = spec.partition('.')
+    if name not in [f'd{i}' for i in range(8)] + [f'a{i}' for i in range(8)] or width not in ('', 'b', 'w', 'l'):
+        raise ValueError('register classifier: reg:<d0-d7|a0-a7>[.b|.w|.l]')
+    mask = {'b': 0xFF, 'w': 0xFFFF, '': 0xFFFF, 'l': 0xFFFFFFFF}[width]
+    digits = {0xFF: 2, 0xFFFF: 4, 0xFFFFFFFF: 8}[mask]
+
+    def classify(machine, pc):
+        value = machine.registers()[name] & mask
+        return {'branch': '%s-%0*X' % (name, digits, value), 'kind': value}
+    return classify
+
+
 CLASSIFIERS = {'kind': kind_classifier, 'entry': entry_classifier}
+
+
+def classifier(spec):
+    return register_classifier(spec[4:]) if spec.startswith('reg:') else CLASSIFIERS[spec]
 
 
 def _safe_branch(branch):
@@ -274,6 +296,15 @@ def capture_entries(entries, classify, output, *, game, history=None, node='main
     return report
 
 
+def _branch_kind(branch):
+    """The classifier's value behind a branch name: ``kindNN`` (Aladdin) or ``dN-VVVV`` (a register)."""
+    if branch.startswith('kind'):
+        return int(branch[4:], 16)
+    if re.fullmatch(r'[da][0-7]-[0-9A-F]+', branch):
+        return int(branch.split('-')[1], 16)
+    return None
+
+
 def _build_index(evidence, path, parent, entries, pathfacts, game):
     """One evidence row per retained signature, with facets traced from the fixture.
 
@@ -297,7 +328,7 @@ def _build_index(evidence, path, parent, entries, pathfacts, game):
                 except (RuntimeError, ValueError):
                     writes = None
             rows.append({
-                'entry': entry, 'branch': branch, 'kind': int(branch[4:], 16) if branch.startswith('kind') else None,
+                'entry': entry, 'branch': branch, 'kind': _branch_kind(branch),
                 'path_class': row['index'], 'signature_key': pathfacts.signature_key(signature),
                 'count': row['count'], 'first_frame': row['first_frame'], 'last_frame': row['last_frame'],
                 'instructions': signature['instructions'], 'cycles': signature['cycles'], 'exit': signature['exit'],
@@ -323,13 +354,14 @@ def main(argv=None):
     parser.add_argument('--plain', action='store_true', help='group by (entry, kind) only; retain the first --retain')
     parser.add_argument('--game', required=True)
     parser.add_argument('--history', default=None, help='history store; default history/<game>')
-    parser.add_argument('--classifier', choices=sorted(CLASSIFIERS), default='kind',
+    parser.add_argument('--classifier', default='kind',
                         help="'kind': the record kind byte at (A1), Aladdin's object-table convention; "
-                             "'entry': one class per entry, no game knowledge")
+                             "'entry': one class per entry, no game knowledge; "
+                             "'reg:d5.w': one class per value of a register at the entry")
     args = parser.parse_args(argv)
     entries = [int(value, 16) for value in args.entry]
     parent = int(args.parent, 16) if args.parent else None
-    report = capture_entries(entries, CLASSIFIERS[args.classifier], args.output, game=args.game, history=args.history,
+    report = capture_entries(entries, classifier(args.classifier), args.output, game=args.game, history=args.history,
                              node=args.node, retain=args.retain, parent=parent,
                              signatures=not args.plain, max_classes=args.max_classes)
     print('census of %s (%d frames) took %s s (replay %s s)' % (

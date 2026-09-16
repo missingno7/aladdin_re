@@ -20,13 +20,14 @@ platform fixes its boot path needed were made in PortForge and pinned
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with fourteen gates armed, the camera follow step `002806`, the
+  original with fifteen gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
   step `00FE08`, the countdown check `010332`, the collision gate `010A14`,
-  the zone check `00BCCE`, the particle drawer's own emitter `00126A` and
-  the hazard tick `014084`; `camera`, `sprites`, `sprites-static`,
+  the zone check `00BCCE`, the particle drawer's own emitter `00126A`, the
+  hazard tick `014084` and the trigger conditions `00470C`; `camera`,
+  `sprites`, `sprites-static`, `conditions`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
   `particle-emit` and `hazard-tick` arm each alone.
@@ -102,7 +103,10 @@ ids, never to `main`:
 | **`014084` hazard tick**: two disjoint bodies behind one early branch -- 'paint' (inactive, or an active object whose grid cell isn't 1: a tile-array write clamped to bounds) and 'spawn' (grid cell 1: a sound request, then a bounded 20-entry pool scan and fill, whether or not a slot was free); the plan reproduces every fact of the original on all 113 retained fixtures over four recordings; the 'trigger' arm (rare, gated by a parallel table byte and a counter, calling unrecovered `00F828`) is declined | `factcheck check` on every fixture | `tests/games/gods/test_hazard.py` |
 | `hazard-tick` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 26,075 hits, 218 fallbacks (185 scheduler admission, 33 unsupported domain)**; `camera-sprites` (all fourteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,018,584 hits, 11,755 fallbacks (7,038 scheduler admission, 3,728 seam deadline, 988 unsupported domain, 1 gate-without-planner foreign-return edge, tree still bit-exact)** | `history-verify fb408bc75597 --candidate hazard-tick`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-hazard-tick-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16n` |
 | the hazard tick's negative control diverges at frame 2,628 (the first frame the region is exercised on `fb408bc75597…`) | `--candidate hazard-tick-mutant-result` | `artifacts/gods/verify-hazard-tick-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 30 s | 950 tests, none skipped | — |
+| **`00470C` trigger conditions** (the first Gods dispatcher): the plan reproduces every fact of the original on all 129 retained fixtures over five census directories (fourteen kinds, every witnessed compare position) | `factcheck check` on every fixture | `tests/games/gods/test_conditions.py` |
+| `conditions` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 5,247 hits, 36 fallbacks (all scheduler admission)**; `camera-sprites` (all fifteen gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,055,949 hits, 11,521 fallbacks (7,366 scheduler admission, 3,728 seam deadline, 426 declined arms of other regions), 30.6M instructions replaced** | `history-verify f0ac19738f19 --candidate conditions`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-conditions-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-16p` |
+| the conditions negative control (a failing condition reported as passing) diverges at frame 993; a register mutant was blind and was dropped | `--candidate conditions-mutant-outcome` | `artifacts/gods/verify-conditions-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 45 s | 1,120 tests | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
@@ -328,6 +332,24 @@ A general note for the next long leaf: a routine whose own activation runs
 long enough to span a VBlank shows up as a `scheduler admission` fallback
 at that gate on the tree (exact by construction, not a declined arm) --
 `001164` and `0049DA` both do this; do not mistake it for a missed arm.
+
+**The triggers** (the subsystem `00470C` belongs to): the level's trigger
+records at `FFB01A` (0x18 bytes each) carry three (kind, argument)
+condition pairs at `+0`..`+A`, an action index at `+10` and a message
+index at `+14`; the evaluator `00462C` presets three result slots
+(`FFF38C`/`FFF38E`/`FFF390`) to -1, calls `00470C` for each pair (kind in
+D5, argument in D6, slot in A3), ANDs the slots, and on all-true marks the
+record fired, shows its message (`0046A4`–`0046B4`, through `007986` /
+`0079DC`), and dispatches its action through the ROM table at `0046D0`
+(fifteen handlers).  `00470C` is recovered: fourteen of its seventeen
+predicate kinds (0–3, 5–12, 15, 16) over the current markers `FFF22E`, the
+tracked ids `FFEF8C`/`FFF01E`/`FFF0B0`, the status words `FF502A`, the two
+progress words `FFEF3E`/`FFF1CC`, the elapsed seconds `FFF2AA`/`FFEEC0`
+and the flagged entries `FF62F6`; kinds 4 (unwitnessed), 13 and 14 (the
+score, through `00364C`) are declined.  Next in this subsystem: `00364C`
+(the score conversion) to admit kinds 13/14, then the evaluator `00462C`
+as a composition of three recovered predicate calls (its action arm is a
+second dispatcher, the fifteen handlers each their own leaf or seam).
 
 Deferred, not first candidates: `003BEC` (the tile-pair VDP writer inside
 the map streaming interpreter `003158`/`003480`, which does not return

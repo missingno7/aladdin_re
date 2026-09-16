@@ -81,8 +81,11 @@ the reason as the first line of the session notes.
 & $py scripts\recovery_census.py artifacts\gods\evidence\census-<PC> --game gods --classifier entry --entry <PC> --node <NODE>
 ```
 
-`--classifier entry` carries no game knowledge (Gods has no object-table
-convention yet; `kind` is Aladdin's).  The report lists the executed path
+`--classifier entry` carries no game knowledge (`kind` is Aladdin's
+object-table convention).  A dispatcher whose selector arrives in a
+register is censused per selector value with `--classifier reg:d5.w`
+(the trigger conditions `00470C`: one class per kind in D5, fixtures named
+`00470C-d5-0007-p0.state`); the class counts are then the kinds' own.  The report lists the executed path
 classes with counts, and retains one entry state per class plus one per
 exit CCR (`<PC>-entry-p<N>[-ccr<XX>].state` + `.json`).  Run it on the
 longest history; if another recording reaches the routine in situations the
@@ -139,6 +142,22 @@ contract (`src/genesis_re/seam.py`); the boundary imports them.  The 68000
 flag helpers (`_logic_sr`, `_cmp_sr`, `_add_sr`) and the alias guard
 (`_spans_disjoint`) are Gods' own copies in `boundary.py`.
 
+## 6a. A dispatcher: one gate, the kinds as arms
+
+A routine that selects a handler through a table indexed by a register
+(`00470C`: `move.w d5,d0; add; add; movea.l (pc,d0),a5; jmp (a5)` into
+seventeen predicates) is one gate and one planner when every handler is a
+small leaf: the semantics take the kind as an argument and return the
+handler's outcome (`conditions.evaluate`), the boundary owns the head's
+cost and register residue plus a per-kind cost table, and the set of
+witnessed `(kind, arm)` pairs (`CONDITION_WITNESSED`) is the admission
+domain — a kind, or a compare position inside a kind, that no recording
+entered is declined, not guessed.  Kinds whose handler calls an
+unrecovered routine are `'unrecovered'` in the semantics and declined in
+the boundary until that routine is a leaf.  This is Aladdin's family
+dispatch shape (its contact families) with the selector in a register
+instead of a record byte.
+
 ## 6b. Boundary plan with a platform operation inside: the seam
 
 The shape Aladdin proved for its sound requests and platform tails, on
@@ -189,7 +208,14 @@ that is a blocker.
 new candidate name for a new region, or extend the existing one when the
 regions are meant to be verified together), and a mutant to `MUTATIONS`
 (`<candidate>-mutant-result`: one stored byte off).  The `Candidate` class
-needs no change for a plain leaf.
+needs no change for a plain leaf.  Choose a mutant that the game can
+*see*: a register the caller reloads is dead residue and a register-only
+mutant then passes (`conditions-mutant-register` did, over 102 hits); a
+stored value that is re-read as a sign or a zero test must be flipped
+across that test, not nudged by one.  The right control for a predicate
+is its outcome (`_mutate_outcome`: a failing condition reported as
+passing).  A mutant that passes the segment tier is not evidence of
+anything until it is understood.
 
 ## 8. Tests, then the strict witness on every retained path
 

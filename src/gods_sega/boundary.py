@@ -1343,3 +1343,120 @@ def hazard_tick_plan(machine, registers):
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
                       last_pc=last_pc)
 
+
+
+# --- 00470C: the trigger conditions (game/conditions.py) -----------------------
+#
+# The first Gods dispatcher: the head selects a predicate by kind (D5)
+# through the ROM table at 004718, each predicate is a small RAM-only leaf.
+# One gate, one planner, the kinds as arms; a kind or a compare position
+# no recording entered is declined.  Cost from the tracer
+# (artifacts/gods/evidence/census-00470C-*): the head (move.w d5,d0; add;
+# add; movea.l (pc,d0); jmp (a5)) is 38 cycles / 5 instructions, rts 16 / 1.
+CONDITION_ENTRY = 0x00470C
+_CD_HEAD = (38, 5)
+_CD_RTS = (16, 1)
+_CD_CLEAR = (12, 1)                    # clr.w (a3)
+_CD_COMPARE_NEXT = (20, 2)             # cmp.w abs.w,d6; branch not taken
+_CD_COMPARE_LAST = (22, 2)             # cmp.w abs.w,d6; branch taken
+_CD_STATUS = (42, 6)                   # move; subq; add; add; lea.l; tst.w (a4,d0.w)
+_CD_PROGRESS = (12, 1)                 # cmp.w abs.w,d6
+_CD_ELAPSED = (16 + 166 + 4 + 4 + 4 + 4 + 4, 7)   # move.l; divs.w abs.w (the engine's fixed cost); move; add; add; add; cmp
+_CD_FLAGGED = (12 + 4 + 8 + 4 + 8 + 16, 6)        # lea.l; add; adda; add; adda; btst.b #0,d16(a4)
+_CD_BRANCH_TAKEN, _CD_BRANCH_NOT = (10, 1), (8, 1)
+# Witnessed arms: (kind, 'match', position) / (kind, 'none', None) for the membership kinds, (kind, holds) for
+# the rest.  Everything else is declined.
+CONDITION_WITNESSED = {
+    (1, 'match', 0), (1, 'match', 1), (1, 'match', 2), (1, 'match', 3), (1, 'none', None),
+    (2, 'match', 0), (2, 'match', 3), (2, 'none', None),
+    (3, 'match', 0), (3, 'match', 1), (3, 'none', None),
+    (5, True), (5, False), (6, True), (6, False), (7, True), (7, False), (8, True), (8, False),
+    (9, True), (9, False), (10, True), (10, False), (11, True), (11, False), (12, True), (12, False),
+    (15, True), (15, False), (16, True), (16, False)}
+_CONDITION_LAST_PCS = {0: 0x00475C, 1: 0x004B12, 2: 0x004B2E, 3: 0x004B44, 4: 0x004B5A, 5: 0x004B72, 6: 0x004B8A,
+                       7: 0x004B94, 8: 0x004B9E, 9: 0x004BB6, 10: 0x004BCE, 11: 0x004BE8, 12: 0x004C02,
+                       15: 0x004C0C, 16: 0x004C16}
+
+
+def _add(*costs):
+    return sum(c[0] for c in costs), sum(c[1] for c in costs)
+
+
+def condition_plan(machine, registers):
+    """00470C: one trigger predicate by kind; unwitnessed kinds and compare positions are declined."""
+    from .game import conditions
+    if registers['pc'] != CONDITION_ENTRY:
+        raise UnsupportedCandidate('condition planner needs the machine parked at 00470C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    kind, argument, slot = registers['d5'] & 0xFFFF, registers['d6'] & 0xFFFF, registers['a3']
+    if (sp | slot) & 1:
+        raise UnsupportedCandidate('unaligned stack or result slot')
+    read = _reader(machine)
+    result = conditions.evaluate(read, kind, argument, slot)
+    arm = result['arm']
+    if arm == 'unrecovered':
+        raise UnsupportedCandidate(f'condition kind {kind} not recovered')
+    _spans_disjoint([('condition frame', sp, 4), ('condition slot', slot & 0xFFFFFF, 2)])
+    # The dispatcher's residue: D0 = 4 * kind (word, the upper half kept), A5 = the predicate's address;
+    # add.w d0,d0 is the last flag-setter when the predicate sets none (kind 0).
+    doubled = (2 * kind) & 0xFFFF
+    exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | ((4 * kind) & 0xFFFF), 'a5': result['handler'],
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    head_sr = _add_sr(sr, doubled, doubled, 2)
+    cost = _add(_CD_HEAD, _CD_RTS)
+    holds = arm == 'true'
+    if kind == 0:
+        exit_sr = head_sr
+    elif kind in (1, 2, 3, 4):
+        addresses = conditions.MARKERS if kind in (1, 2) else conditions.TRACKED
+        matched = result['matched']
+        key = (kind, 'match', matched) if matched is not None else (kind, 'none', None)
+        if key not in CONDITION_WITNESSED:
+            raise UnsupportedCandidate(f'condition kind {kind} compare position not witnessed by a recording')
+        compared = matched + 1 if matched is not None else len(addresses)
+        exit_sr = _cmp_sr(head_sr, argument, read(addresses[compared - 1], 2), 2)
+        # Every compare but the decisive one falls through; the decisive one branches (over the clear for
+        # any-equal, to the clear for none-equal) unless it is the last compare of a none-equal chain,
+        # whose bne falls into the clear on a match and branches past it otherwise.
+        final = compared == len(addresses)
+        if kind in (1, 3):
+            decisive = _CD_COMPARE_LAST if matched is not None else _CD_COMPARE_NEXT
+        else:
+            decisive = _CD_COMPARE_LAST if (matched is None if final else matched is not None) else _CD_COMPARE_NEXT
+        cost = _add(cost, *([_CD_COMPARE_NEXT] * (compared - 1)), decisive)
+    elif kind in (5, 6):
+        entry = result['entry']
+        exit_sr = _logic_sr(head_sr, read(entry & 0xFFFFFF, 2), 2)
+        exit_registers.update(d0=(registers['d0'] & 0xFFFF0000) | (((argument - 1) & 0xFFFF) * 4 & 0xFFFF),
+                              a4=conditions.STATUS_WORDS)   # the index rides in the addressing mode, a4 is the base
+        cost = _add(cost, _CD_STATUS, _CD_BRANCH_TAKEN if holds else _CD_BRANCH_NOT)
+    elif kind in (7, 8, 15, 16):
+        word = read(conditions.PROGRESS_A if kind in (7, 8) else conditions.PROGRESS_B, 2)
+        exit_sr = _cmp_sr(head_sr, argument, word, 2)
+        cost = _add(cost, _CD_PROGRESS, _CD_BRANCH_TAKEN if holds else _CD_BRANCH_NOT)
+    elif kind in (9, 10):
+        quotient, scaled = result['quotient'] & 0xFFFF, result['scaled']
+        # divs leaves the remainder in the upper word; the adds then the cmp set the flags (X from the last add).
+        d0 = ((result['remainder'] & 0xFFFF) << 16) | quotient
+        add_sr = _add_sr(head_sr, (4 * argument) & 0xFFFF, argument, 2)
+        exit_sr = _cmp_sr(add_sr, scaled, quotient, 2)
+        exit_registers.update(d0=d0, d1=(registers['d1'] & 0xFFFF0000) | argument,
+                              d6=(registers['d6'] & 0xFFFF0000) | scaled)
+        cost = _add(cost, _CD_ELAPSED, _CD_BRANCH_TAKEN if holds else _CD_BRANCH_NOT)
+    else:                                                             # 11, 12
+        entry, quadrupled = result['entry'], result['scaled']
+        flag = read((entry + conditions.FLAGGED_FLAG_BYTE) & 0xFFFFFF, 1) & 1
+        add_sr = _add_sr(head_sr, (2 * argument) & 0xFFFF, (2 * argument) & 0xFFFF, 2)
+        exit_sr = (add_sr & ~0x04) | (0x00 if flag else 0x04)        # btst: Z only
+        exit_registers.update(d6=(registers['d6'] & 0xFFFF0000) | quadrupled, a4=entry)
+        cost = _add(cost, _CD_FLAGGED, _CD_BRANCH_TAKEN if holds else _CD_BRANCH_NOT)
+    if kind not in (0, 1, 2, 3, 4) and (kind, holds) not in CONDITION_WITNESSED:
+        raise UnsupportedCandidate(f'condition kind {kind} arm not witnessed by a recording')
+    if arm == 'false':
+        exit_sr = _logic_sr(exit_sr, 0, 2)                            # clr.w (a3): Z set, N/V/C clear, X kept
+        cost = _add(cost, _CD_CLEAR)
+    exit_registers['sr'] = exit_sr
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                      last_pc=_CONDITION_LAST_PCS[kind])
