@@ -14,7 +14,8 @@ requested when sound is on (``FFEF14``), and the slot is consumed when the
 record's byte at ``+0x49`` says so.  Negative codes are the special
 pickups: -1 takes the value from ``FFF158`` and reports 1 in D4, -2 is
 worth 10,000 (nothing when sound is on), -3 is worth nothing; -4 and below
-continue into the routine that follows and are not recovered.
+continue into ``013316`` (``grid_inverse_award``, below), the grid inverse
+and a bounded debris burst.
 
 Pure functions of ``read(address, size)``; no cycles, CCR, stack or
 registers.  The names are what the arithmetic supports, not more.
@@ -93,6 +94,10 @@ def collect(read, after_code):
     if code == -3:
         stores[AWARD] = (0, 2)
         return {**result, 'arm': 'special-3'}
+    # -4 and below: the same cascade that tests -1/-2/-3 falls all the way through to the code's own
+    # "worth nothing special" tail, which unconditionally awards BIG_VALUE (10000) before continuing
+    # into 013316 (grid_inverse_award, below) -- a real, witnessed store, not a silent fall-through.
+    stores[AWARD] = (BIG_VALUE, 2)
     return {**result, 'arm': 'unrecovered'}
 
 
@@ -304,3 +309,110 @@ def pickup_check(read, d0, d1, d2):
     return {**result, 'arm': 'found-effect', 'd3': d3, 'box_result': box_result, 'stores': stores, 'd2': box_result,
             'px': px, 'py': py, 'dx_negative': dx_negative, 'dy_negative': dy_negative,
             'pool_x': pool_x, 'pool_y': pool_y, 'mask_y': mask_y}
+
+
+# --- 013316: the grid inverse and debris burst (continuation of 013264's code -4 and below) ---
+#
+# Converts the pickup grid byte's own address back to a world position (the
+# grid inverse: offset // 48 is the row, offset % 48 the column, each *8 for
+# pixels, plus the camera), then either an immediate fixed award when sound
+# is off... no: on (0x32, GRID_CODE_AWARD), rts -- or (sound off, the only
+# witnessed arm) a bounded debris burst: up to DEBRIS_PARTICLES slots of a
+# shared 80-slot pool (DEBRIS_POOL, the same "unrolled test count" shape
+# 00932C's own pool shares, but the scan position carries over slot to slot
+# instead of restarting), each filled with the position, a table-driven
+# offset word (DEBRIS_TABLE, ROM, one entry per particle) and a randomised
+# impact cue via the already-recovered next_random.  A rate gate
+# (DEBRIS_RATE_FLAG/DEBRIS_RATE_COUNTER) can decline the whole burst before
+# it starts, or (once per particle) arm a rate limit for future calls; every
+# recording's own DEBRIS_RATE_FLAG is already negative at entry and none of
+# them ever flips it, so only the "already limited" shape is witnessed.
+DEBRIS_POOL = 0xFFFF123E
+DEBRIS_POOL_STRIDE = 6
+DEBRIS_POOL_COUNT = 80                   # 0x4F + 1
+DEBRIS_PARTICLES = 8
+DEBRIS_TABLE = 0x0134EA                  # ROM: one word per particle
+DEBRIS_RATE_FLAG = 0xFFFFEF5E            # word: zero or (rare) unwitnessed-positive skip the burst outright
+DEBRIS_RATE_COUNTER = 0xFFFFEF62         # word: >= DEBRIS_RATE_LIMIT also skips it
+DEBRIS_RATE_LIMIT = 0xBE
+DEBRIS_RATE_TIMER = 0xFFFFEF48           # word: set to -10 the first time a particle arms the rate limit
+GRID_CODE_AWARD = 0x32                   # the sound-on arm's own fixed award
+DEBRIS_CUE_BASE = 0x58                   # each particle's own impact cue: (draw & 7, wrapped into 0-5) + this
+
+
+def _signed_long(value):
+    value &= 0xFFFFFFFF
+    return value - 0x100000000 if value & 0x80000000 else value
+
+
+def _truncating_divmod(dividend, divisor):
+    """DIVS.W: signed division truncating toward zero (Python's // floors instead)."""
+    quotient = abs(dividend) // divisor
+    if (dividend < 0) != (divisor < 0):
+        quotient = -quotient
+    return quotient, dividend - quotient * divisor
+
+
+def grid_inverse_position(read, a0):
+    """013316's own head: the grid byte's address, inverted back to a world position."""
+    offset = _signed_long((a0 - PICKUP_GRID) & 0xFFFFFFFF)
+    row, col = _truncating_divmod(offset, PICKUP_GRID_ROW)
+    x = (((col << 3) & 0xFFFF) + read(CAMERA_X, 2)) & 0xFFFF
+    y = (((row << 3) & 0xFFFF) + read(CAMERA_Y, 2)) & 0xFFFF
+    return x, y
+
+
+def _debris_scan(read, start_index):
+    """One slot of the shared, carrying-over pool scan; ``None`` if the pool is exhausted."""
+    for index in range(start_index, DEBRIS_POOL_COUNT):
+        address = (DEBRIS_POOL + DEBRIS_POOL_STRIDE * index) & 0xFFFFFFFF
+        if _signed_word(read(address & 0xFFFFFF, 2)) < 0:
+            return index, address
+    return None, None
+
+
+def grid_inverse_award(read, after_code):
+    """013316: the grid inverse and (sound off) the debris burst; the sound-on arm is unwitnessed."""
+    x, y = grid_inverse_position(read, after_code)
+    if read(SOUND_ON, 2):
+        return {'arm': 'grid-code', 'x': x, 'y': y, 'stores': {AWARD: (GRID_CODE_AWARD, 2)}, 'd4': 0}
+
+    rate_flag = read(DEBRIS_RATE_FLAG, 2)
+    if rate_flag != 0 and read(DEBRIS_RATE_COUNTER, 2) >= DEBRIS_RATE_LIMIT:
+        return {'arm': 'debris-limited', 'x': x, 'y': y, 'stores': {}, 'd4': 0}
+
+    stores, cursor, particles = {}, 0, []
+    live_cursor = read(RANDOM_CURSOR & 0xFFFFFF, 2)
+
+    def draw(address):
+        nonlocal live_cursor
+        result = next_random(lambda a, s: live_cursor if (a & 0xFFFFFF) == (address & 0xFFFFFF) else read(a, s))
+        live_cursor = result['stores'][RANDOM_CURSOR & 0xFFFFFF][0]
+        return result['value']
+
+    for slot in range(DEBRIS_PARTICLES):
+        index, address = _debris_scan(read, cursor)
+        if index is None:
+            stores[RANDOM_CURSOR & 0xFFFFFF] = (live_cursor, 2)
+            return {'arm': 'debris-exhausted', 'x': x, 'y': y, 'stores': stores, 'd4': 0, 'particles': particles,
+                    'skipped': index}   # a bounded pool with no free slot left: not witnessed by any recording
+        skipped = index - cursor
+        table_value = read(DEBRIS_TABLE + 2 * slot, 2)
+        drawn = draw(RANDOM_CURSOR)
+        masked = drawn & 7
+        cue = (((masked - 6) if masked >= 6 else masked) + DEBRIS_CUE_BASE) & 0xFFFF
+        stores[address & 0xFFFFFF] = (x, 2)
+        stores[(address + 2) & 0xFFFFFF] = (y, 2)
+        stores[(address + 4) & 0xFFFFFF] = (table_value, 2)
+        stores[SOUND_CUE] = (cue, 2)
+        particles.append({'index': index, 'address': address, 'skipped': skipped, 'table_value': table_value,
+                          'drawn': drawn, 'masked': masked, 'high_range': masked >= 6, 'cue': cue})
+        cursor = index + 1
+        if rate_flag == 0:
+            # The rate gate arms itself the first time it is found clear -- unwitnessed by every
+            # recording (DEBRIS_RATE_FLAG is already nonzero at entry on all of them).
+            stores[RANDOM_CURSOR & 0xFFFFFF] = (live_cursor, 2)
+            return {'arm': 'debris-arms-rate-limit', 'x': x, 'y': y, 'stores': stores, 'd4': 0,
+                    'particles': particles}
+    stores[RANDOM_CURSOR & 0xFFFFFF] = (live_cursor, 2)
+    return {'arm': 'debris', 'x': x, 'y': y, 'stores': stores, 'd4': 0, 'particles': particles}

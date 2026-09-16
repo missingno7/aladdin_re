@@ -1785,7 +1785,7 @@ def pickup_award_plan(machine, registers):
     result = pickups.collect(read, registers['a0'] & 0xFFFFFF)
     arm, code = result['arm'], result['code']
     if arm == 'unrecovered':
-        raise UnsupportedCandidate(f'pickup code {code} continues into the routine after 013264: not recovered')
+        return _grid_inverse_award_plan(machine, registers, result, sp32, sr, sp)
     frame = ('pickup frame', sp - 4, 8)                                # the saved a1 and the caller's return slot
     high = lambda name: registers[name] & 0xFFFF0000
     exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'd4': result['d4']}
@@ -1825,6 +1825,126 @@ def pickup_award_plan(machine, registers):
     writes = _bytes(sp - 4, registers['a1'], 4) + writes
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
                       last_pc=_PA_LAST_PC[arm])
+
+
+# --- 013316: the grid inverse and debris burst (game/pickups.py: grid_inverse_award) ---
+#
+# 013264's own code -4-and-below cascade (BIG_VALUE awarded, matching special-2/-3's own shape)
+# falls straight through into 013316 -- no separate call, so no separate gate (013316 has no other
+# caller): the composition owns it the way 00BA8E owns its own callees.  Cost fragments from the
+# tracer (artifacts/gods/evidence/census-013264-* for the cascade prefix, census-013316 for the rest).
+GRID_INVERSE_LAST_PC = 0x0134A8
+_GI_CASCADE = (80, 10)                  # push a1; ext.w/bmi taken; three (addq;bmi taken) tests
+_GI_AWARD = (16 + 4, 2)                 # move.w #$2710,AWARD; moveq #0,d4
+_GI_POP_A1 = (12, 1)                    # movea.l (a7)+,a1 (013264's own frame; a1 is reused right after)
+_GI_HEAD = (4 + 16 + 162 + 4 + 12 + 4 + 12 + 12 + 12, 9)   # move.l a0,d0; subi.l; divs.w; move.w; asl.w;
+                                                            # swap; asl.w; add.w x2
+_GI_TST_SOUND = (12, 1)
+_GI_BEQ_SOUND_TAKEN = (10, 1)           # word branch: sound off, the only witnessed arm
+_GI_RATE_TST = (12, 1)                  # tst.w DEBRIS_RATE_FLAG
+_GI_RATE_BEQ_NOTTAKEN = (8, 1)          # byte: EF5E != 0 (always, in every recording)
+_GI_RATE_CMPI = (16, 1)                 # cmpi.w #$be,DEBRIS_RATE_COUNTER
+_GI_RATE_BGE_NOTTAKEN = (8, 1)          # byte: under the limit (always, in every recording)
+_GI_POOL_SETUP = (12 + 8 + 32 + 4 + 4, 5)   # lea a0; lea a1; movem push d2-d3/d7; moveq #7,d7; moveq #$4f,d2
+_GI_SKIP = (8 + 8 + 4 + 10, 4)          # tst.w (a0); bmi.b not taken; addq.w #6,a0; dbra taken
+_GI_FOUND_TEST = (8 + 10, 2)            # tst.w (a0); bmi.b taken
+_GI_FILL_HEAD = (8 + 8 + 4, 3)          # move.w d0,(a0)+; move.w d1,(a0)+; move.w d0,d3
+_GI_JSR_RANDOM = (20, 1)                # jsr $14a3c.l (014A3C's own cost added separately, via _NR_COST)
+_GI_MASK = (8, 1)                       # andi.w #7,d0
+_GI_RANGE_LOW = (8 + 10, 2)             # cmpi.w #6,d0; blt.b taken (0-5)
+_GI_RANGE_HIGH = (8 + 8 + 4, 3)         # cmpi.w #6,d0; blt.b not taken; subq.w #6,d0 (6-7)
+_GI_CUE = (8 + 12, 2)                   # addi.w #$58,d0; move.w d0,SOUND_CUE
+_GI_RESTORE_X = (4, 1)                  # move.w d3,d0
+_GI_TABLE_COPY = (12, 1)                # move.w (a1)+,(a0)+
+_GI_RATE_ARM_TST = (12, 1)              # tst.w DEBRIS_RATE_FLAG (per particle)
+_GI_RATE_ARM_SKIP = (10, 1)             # bmi.b taken (always, in every recording: EF5E stays negative)
+_GI_DBRA_TAKEN = (10, 1)
+_GI_DBRA_LAST = (14, 1)
+_GI_BRA_LAST = (10, 1)
+_GI_TAIL = (36 + 16, 2)                 # movem.l (a7)+,d2-d3/d7; rts
+
+
+def _grid_inverse_award_plan(machine, registers, result, sp32, sr, sp):
+    """013316: the grid inverse and (sound off) debris burst 013264's own -4-and-below cascade falls into."""
+    from .game import pickups
+    read = _reader(machine)
+    # grid_inverse_position does the ROM's own full 32-bit subtraction (move.l a0,d0; subi.l), so this
+    # needs A0's own full register form (0xFFFFxxxx), not the 24-bit address a plain RAM read would use.
+    inverse = pickups.grid_inverse_award(read, registers['a0'] & 0xFFFFFFFF)
+    arm = inverse['arm']
+    cycles, instructions = _add(_GI_CASCADE, _GI_AWARD, _GI_POP_A1, _GI_HEAD, _GI_TST_SOUND)
+    order = {}
+    for address, (value, size) in result['stores'].items():
+        for a, b in _bytes(address, value, size):
+            order[a] = b
+    _ram_span('pickup award frame (the -4-and-below cascade)', sp - 4, 4)
+    _pk_push(order, sp, [registers['a1']])
+
+    if arm == 'grid-code':
+        raise UnsupportedCandidate('grid inverse award grid-code (sound-on) arm not witnessed by a recording')
+    if arm != 'debris':
+        raise UnsupportedCandidate(f'grid inverse award {arm} arm not witnessed by a recording')
+
+    c, i = _add(_GI_BEQ_SOUND_TAKEN, _GI_RATE_TST, _GI_RATE_BEQ_NOTTAKEN, _GI_RATE_CMPI, _GI_RATE_BGE_NOTTAKEN,
+               _GI_POOL_SETUP)
+    cycles += c
+    instructions += i
+    _ram_span('grid inverse debris frame', sp - 12, 12)
+    # d3 here is 013264's own cascade-modified value (ext.w then three addq.w #1 = code+3), not the
+    # caller's own entry d3: the movem push happens after the cascade already overwrote it.
+    cascade_d3 = (registers['d3'] & 0xFFFF0000) | ((result['code'] + 3) & 0xFFFF)
+    _pk_push(order, sp, [registers['d2'], cascade_d3, registers['d7']])
+
+    particles = inverse['particles']
+    for slot, particle in enumerate(particles):
+        c, i = _add(*([_GI_SKIP] * particle['skipped']))
+        cycles += c
+        instructions += i
+        c, i = _add(_GI_FOUND_TEST, _GI_FILL_HEAD, _GI_JSR_RANDOM)
+        cycles += c
+        instructions += i
+        # jsr 014a3c's own return address, then its own move.l a0,-(a7) -- a0 has already advanced by
+        # 4 (the two word writes just above) by the time of this call.  The stack depth is the same
+        # every iteration, so each particle's push overwrites the previous one's, exactly as real
+        # memory ends the activation with only the LAST particle's values here.
+        _pk_push(order, sp - 12, [0x0134B6])
+        _pk_push(order, sp - 16, [(particle['address'] + 4) & 0xFFFFFFFF])
+        cycles, instructions = cycles + _NR_COST[0], instructions + _NR_COST[1]
+        c, i = _add(_GI_MASK, _GI_RANGE_HIGH if particle['high_range'] else _GI_RANGE_LOW, _GI_CUE, _GI_RESTORE_X,
+                   _GI_TABLE_COPY, _GI_RATE_ARM_TST, _GI_RATE_ARM_SKIP)
+        cycles += c
+        instructions += i
+        last = slot == len(particles) - 1
+        # Continuing (not the last particle): dbra d7 (outer, taken) falls into 0134A0, which is
+        # ALSO the inner scan's own dbra d2 -- a second, separate dbra before the next slot's test.
+        c, i = _add(_GI_DBRA_LAST, _GI_BRA_LAST) if last else _add(_GI_DBRA_TAKEN, _GI_DBRA_TAKEN)
+        cycles += c
+        instructions += i
+    c, i = _GI_TAIL
+    cycles += c
+    instructions += i
+
+    for address, (value, size) in inverse['stores'].items():
+        for a, b in _bytes(address, value, size):
+            order[a] = b
+    last_particle = particles[-1]
+    x_bit = _add_sr(sr, last_particle['masked'] - (6 if last_particle['high_range'] else 0), 0x58, 2) & 0x10
+    ef5e = read(pickups.DEBRIS_RATE_FLAG, 2)
+    exit_sr = (_logic_sr(sr, ef5e, 2) & ~0x10) | x_bit
+    # d0's own upper half never gets touched by any .W op after the divs.w/swap that first placed the
+    # (unshifted) row quotient there; it is d0's own state all the way to the exit.
+    offset = pickups._signed_long((registers['a0'] - pickups.PICKUP_GRID) & 0xFFFFFFFF)
+    row_quotient, _ = pickups._truncating_divmod(offset, pickups.PICKUP_GRID_ROW)
+    # d3: the cascade's own ext.w (byte-to-word only: the upper half survives from entry) then three
+    # addq.w #1 -- code+3, which for every witnessed code (-4) is -1.  d4 is the cascade's own moveq #0.
+    exit_registers = {'d0': ((row_quotient & 0xFFFF) << 16) | inverse['x'],
+                      'd1': (registers['d1'] & 0xFFFF0000) | inverse['y'],
+                      'd3': (registers['d3'] & 0xFFFF0000) | ((result['code'] + 3) & 0xFFFF), 'd4': 0,
+                      'a0': (last_particle['address'] + 6) & 0xFFFFFFFF,
+                      'a1': (pickups.DEBRIS_TABLE + 2 * pickups.DEBRIS_PARTICLES) & 0xFFFFFFFF,
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()), registers=exit_registers,
+                      last_pc=GRID_INVERSE_LAST_PC)
 
 
 # --- 014A3C: the next-random draw (game/effects.py: next_random) ------------

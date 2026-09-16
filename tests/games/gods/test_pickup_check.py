@@ -160,6 +160,47 @@ def test_found_sound_leaves_the_check_own_cue_not_the_award_own_cue():
     assert result['stores'][pickups.SOUND_CUE] == (pickups.ZONE_CUE_SOUND_ON, 2)
 
 
+# --- 013316: the grid inverse and debris burst, 013264's own code -4-and-below continuation -------
+#
+# No separate gate (013316 has no other caller): boundary._grid_inverse_award_plan composes it into
+# PICKUP_AWARD_ENTRY (013264) itself, the way 00BA8E owns its own callees.  Fixture coverage for the
+# full composition lives in test_pickups.py (every census-013264-* fixture, including the eleven with
+# code <= -4); this covers the semantics directly.
+
+def test_grid_inverse_position_converts_the_grid_bytes_own_address_back_to_a_world_position():
+    world = {(pickups.CAMERA_X & 0xFFFFFF, 2): 0x100, (pickups.CAMERA_Y & 0xFFFFFF, 2): 0x200}
+    # Row 2, column 3 of the grid (48 bytes/row): address = PICKUP_GRID + 2*48 + 3.
+    address = (pickups.PICKUP_GRID + 2 * pickups.PICKUP_GRID_ROW + 3) & 0xFFFFFFFF
+    x, y = pickups.grid_inverse_position(_reader(world), address)
+    assert (x, y) == ((3 << 3) + 0x100, (2 << 3) + 0x200)
+
+
+def test_grid_inverse_award_places_eight_particles_in_the_shared_pool_with_a_table_driven_offset():
+    base = 0xFFFF123E & 0xFFFFFF
+    world = {(pickups.CAMERA_X & 0xFFFFFF, 2): 0, (pickups.CAMERA_Y & 0xFFFFFF, 2): 0,
+            (pickups.SOUND_ON & 0xFFFFFF, 2): 0,
+            (pickups.DEBRIS_RATE_FLAG & 0xFFFFFF, 2): 0xFFFF, (pickups.DEBRIS_RATE_COUNTER & 0xFFFFFF, 2): 0,
+            (pickups.RANDOM_CURSOR & 0xFFFFFF, 2): 0}
+    for index in range(pickups.DEBRIS_POOL_COUNT):
+        world[(base + pickups.DEBRIS_POOL_STRIDE * index, 2)] = 0xFFFF   # every slot free
+    result = pickups.grid_inverse_award(_reader(world), pickups.PICKUP_GRID & 0xFFFFFFFF)
+    assert result['arm'] == 'debris'
+    assert len(result['particles']) == pickups.DEBRIS_PARTICLES
+    assert [p['skipped'] for p in result['particles']] == [0] * pickups.DEBRIS_PARTICLES
+    first = result['particles'][0]
+    assert result['stores'][first['address'] & 0xFFFFFF] == (0, 2)          # x
+    assert result['stores'][(first['address'] + 4) & 0xFFFFFF] == (first['table_value'], 2)
+
+
+def test_grid_inverse_award_declines_sound_on_and_the_rate_limit():
+    world = {(pickups.CAMERA_X & 0xFFFFFF, 2): 0, (pickups.CAMERA_Y & 0xFFFFFF, 2): 0,
+            (pickups.SOUND_ON & 0xFFFFFF, 2): 1}
+    assert pickups.grid_inverse_award(_reader(world), pickups.PICKUP_GRID & 0xFFFFFFFF)['arm'] == 'grid-code'
+    limited = {**world, (pickups.SOUND_ON & 0xFFFFFF, 2): 0, (pickups.DEBRIS_RATE_FLAG & 0xFFFFFF, 2): 1,
+              (pickups.DEBRIS_RATE_COUNTER & 0xFFFFFF, 2): pickups.DEBRIS_RATE_LIMIT}
+    assert pickups.grid_inverse_award(_reader(limited), pickups.PICKUP_GRID & 0xFFFFFFFF)['arm'] == 'debris-limited'
+
+
 def test_candidate_names_are_explicit():
     assert recovery.Candidate('next-random').gate_pcs == (boundary.NEXT_RANDOM_ENTRY,)
     assert recovery.Candidate('effect-pool-add').gate_pcs == (boundary.EFFECT_POOL_ADD_ENTRY,)

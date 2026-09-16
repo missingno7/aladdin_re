@@ -86,7 +86,11 @@ def test_plan_reproduces_every_fact_of_the_original_on_each_retained_path_or_dec
 
 
 @needs_census
-def test_the_continuation_code_is_declined_and_the_original_runs_it():
+def test_the_continuation_code_is_now_admitted_via_the_grid_inverse_composition():
+    # 013316 (the grid inverse + debris burst 013264's own -4-and-below cascade falls into) is
+    # recovered: every retained code -4 fixture reaches its witnessed 'debris' arm and is admitted,
+    # not declined -- see tests/games/gods/test_pickup_check.py for 013316's own coverage.
+    found = False
     for fixture in FIXTURES:
         with Machine(GODS.read_rom()) as machine:
             machine.restore(fixture.read_bytes())
@@ -94,16 +98,20 @@ def test_the_continuation_code_is_declined_and_the_original_runs_it():
             code = machine.peek_ram((registers['a0'] - 1) & 0xFFFF, 1)[0]
             if code < 0x80 or code - 0x100 > -4:
                 continue
+            found = True
             machine.gates([registers['pc']])
             candidate = recovery.Candidate('pickups')
             candidate.arm(machine)
             assert machine.run(instructions=1) == 'gate'
-            assert candidate.on_gate(machine, machine.info['tick'] + 1_000_000) is False
-            assert candidate.stats['fallbacks'] == 1 and candidate.stats['candidate_hits'] == 0
-            assert list(candidate.stats['fallback_reasons'])[0].startswith('unsupported domain: pickup code')
-            assert machine.info['pc'] == 0x013266
-            return
-    pytest.skip('no retained fixture carries a continuation code')
+            # A long activation (up to ~370 instructions) can straddle an interrupt boundary: the
+            # scheduler's own admission refusal is exact (the original runs it), not a decline.
+            admitted = candidate.on_gate(machine, machine.info['tick'] + 1_000_000)
+            if not admitted:
+                assert set(candidate.stats['fallback_reasons']) <= {'scheduler admission'}
+                continue
+            assert candidate.stats['candidate_hits'] == 1 and candidate.stats['fallbacks'] == 0
+    if not found:
+        pytest.skip('no retained fixture carries a continuation code')
 
 
 def test_candidate_names_are_explicit():
