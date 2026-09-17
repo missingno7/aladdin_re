@@ -1168,3 +1168,115 @@ def state9_fall_tail(read, found, f19c, new_y):
             STATE_INDEX: (0xC, 2), F194 & 0xFFFFFF: (0, 2), F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2),
             F19C: (new_f19c, 2)}, 'd7': 0}
     return {'arm': 'countdown', 'stores': {F19C: (new_f19c, 2)}}
+
+
+# --- 0069AC: state 26's own decision tree -- a near-twin of state 9's own shape (the SAME jump-arc
+# table 006414 and the SAME two row-gate leaves 006442/006468, `_row_gate_open`, reused verbatim, not
+# copied), reached from the movement-cluster contact-consume family's own state 24 (`006AD8` sits
+# immediately after this region's own end in ROM, confirmed by a fresh disassembly, 0069AC-006AD8;
+# `factcheck.py facts --path` on real fixtures over `census-0069AC-*` covering every witnessed arm,
+# 18 September).  Three real differences from state 9's own shape: the head normalizes D7 from
+# `FFFFF1BA` (a flag, not D7's own live value) instead of F19C; the X-advance has no F19C gate at all
+# (it always applies once the grid-block test declines); and the re-check ground-ahead probe (after
+# the fall step) uses `STATE26_RECHECK_GATE` (0x12), not `STATE9_TRIGGER_GATE` (0x16) -- the SAME
+# STATE9_TRIGGER_GATE the FIRST (before-the-fall) probe still uses.  In place of state 9's own
+# trigger gate, state 26's own tail is D7-based: D7 (already bumped by the head) at or past 3
+# transitions STRAIGHT INTO STATE 9 (D7 forced to 5, matching state9_step's own "any other value"
+# head arm, so state 9's own head is a no-op on this hand-off); short of 3, D7 == 1 calls the
+# already-recovered contact-consume primary (`012DA0`) first.  Both tails then advance F19C by 2 the
+# same way state 9's own countdown/terminal tail does -- `state9_fall_tail`'s own 'countdown'/
+# 'terminal' arms are reused verbatim for this (no trigger is possible here, so `found` is always
+# `None`).
+STATE26_ENTRY = 0x0069AC
+STATE26_CONSUME_COUNTER = 1        # D7 (post-head) that calls 012DA0 in the "short of 3" tail
+STATE26_TO_STATE9_COUNTER = 3      # D7 (post-head) at/past this hands off straight into state 9
+STATE26_TO_STATE9_D7 = 5           # the forced D7 state 9's own head would derive anyway
+STATE26_TO_STATE9_STATE_INDEX = 9
+STATE26_RECHECK_GATE = 0x12        # the re-check ground-ahead probe's own threshold (not STATE9_TRIGGER_GATE)
+
+
+def _state26_head(read, d7):
+    """0069AC-0069BC: D7 -= 1 (and FFFFF1BA cleared) when F1BA is set, else D7 += 1 -- both ADDQ/SUBQ,
+    the entry's own upper half survives either way."""
+    if read(F1BA, 2) != 0:
+        return (d7 - 1) & 0xFFFF, True
+    return (d7 + 1) & 0xFFFF, False
+
+
+def state26_step(read, d7):
+    """0069AC-006A76: state 26's own decision tree up to (but not including) its own D7-based tail
+    (`state26_tail` below).  Returns `'ground-before'` / `'ground-after'` (state 16,
+    `_state9_ground_stores`), `'landed'` (state 12, the SAME stores `state9_step`'s own 'landed' arm
+    uses), or `'tail'` (the caller reads `d7` -- already bumped by the head -- to choose between
+    `state26_tail`'s own two continuations)."""
+    from .grid import grid_cell
+    new_d7, f1ba_was_set = _state26_head(read, d7)
+    base = {'d7': new_d7, 'f1ba_was_set': f1ba_was_set}
+    cell = grid_cell(read)
+    address = cell['address']
+    position_x = read(POSITION_X, 2)
+    low5 = position_x & 0x1F
+    base['cell1'] = cell
+    blocked = False
+    if low5 < 8:
+        for offset in (1, 0x81, 0x101):
+            if read((address + offset) & 0xFFFFFF, 1) == 1:
+                blocked = True
+                break
+    base['blocked'] = blocked
+    if not blocked:
+        step = read(F196, 2)
+        position_x = (position_x + step) & 0xFFFF
+    # Unlike state 9, state 26 does NOT re-read the grid cell after the X-advance: 0069EE's own
+    # cmpi.w #$16,f19c.w follows 0069EA's own add.w directly, with no second bsr.w $63fa in between
+    # (confirmed by a fresh disassembly) -- the ground-ahead probe below runs on the SAME cell
+    # `address` the head's own single grid_cell call already computed, even though POSITION_X may
+    # have just moved.  A real defect the FAST tier's own cost mismatch caught before any of this
+    # reached the tree: an earlier draft copied state 9's own two-call shape here by assumption.
+
+    f19c = read(F19C, 2)
+    if f19c >= STATE9_TRIGGER_GATE and _row_gate_open(read, address, position_x, 0x180):
+        return {'arm': 'ground-before', 'stores': _state9_ground_stores(read(POSITION_Y, 2)), **base}
+
+    if f19c > STATE9_FALL_TABLE_LIMIT:
+        raise ValueError('state 26 fall table index past its own last entry')
+    step = _signed_word(read((STATE9_FALL_TABLE + f19c) & 0xFFFFFF, 2))
+    new_y = (read(POSITION_Y, 2) - step) & 0xFFFF
+    if read(F19E, 2) != 0:
+        raise ValueError('state 26 doubled fall step (FFFFF19E != 0) not witnessed by a recording')
+
+    def _read_after_fall(a, s, _new_y=new_y, _position_x=position_x):
+        masked = a & 0xFFFFFF
+        if masked == (POSITION_Y & 0xFFFFFF):
+            return _new_y
+        if masked == (POSITION_X & 0xFFFFFF):
+            return _position_x
+        return read(a, s)
+    cell3 = grid_cell(_read_after_fall)
+    address3 = cell3['address']
+    base['new_y'] = new_y
+    base['cell3'] = cell3
+    if _row_gate_open(read, address3, position_x, 0):
+        new_y_aligned = (new_y & 0xFFF0) + 0x10
+        return {'arm': 'landed', 'stores': {
+            POSITION_Y: (new_y_aligned & 0xFFFF, 2), STATE_INDEX: (0xC, 2), F194 & 0xFFFFFF: (0, 2),
+            F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2)}, **base}
+
+    if f19c >= STATE26_RECHECK_GATE and _row_gate_open(read, address3, position_x, 0x180):
+        return {'arm': 'ground-after', 'stores': _state9_ground_stores(new_y), **base}
+
+    return {'arm': 'tail', **base}
+
+
+def state26_tail(read, d7):
+    """006A72-006AD4 (D7 >= 3) / 006AA6-006AD4 (D7 < 3): state 26's own D7-based tail.  Returns
+    `'to-state9'` (D7 forced to `STATE26_TO_STATE9_D7`, STATE_INDEX to `STATE26_TO_STATE9_STATE_INDEX`
+    -- a plain hand-off into state 9's own gate, not a call) or `'consume'` / `'wait'` (D7 == 1 also
+    calls the already-recovered contact-consume primary, `012DA0` -- the caller composes it).  Either
+    way the caller then advances F19C the SAME way `state9_fall_tail`'s own 'countdown'/'terminal'
+    arms already do (reused verbatim, `found` always `None` here: state 26 has no trigger gate)."""
+    if d7 >= STATE26_TO_STATE9_COUNTER:
+        return {'arm': 'to-state9', 'stores': {STATE_INDEX: (STATE26_TO_STATE9_STATE_INDEX, 2)},
+                'd7': STATE26_TO_STATE9_D7}
+    calls_consumer = d7 == STATE26_CONSUME_COUNTER
+    return {'arm': 'consume' if calls_consumer else 'wait', 'calls_consumer': calls_consumer}

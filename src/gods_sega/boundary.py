@@ -7947,3 +7947,393 @@ def state9_plan(machine, registers):
     exit_registers['sr'] = _logic_sr(sr, 0, 2)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x006882)
+
+
+# --- 0069AC: state 26 (game.player.state26_step / state26_tail) -- a near-twin of state 9's own
+# shape, reusing its own row-gate cost helper (`_row_gate_cost`) and jump-arc table constants
+# verbatim; only the head, the always-on X-advance and the tail differ (see the module note in
+# game/player.py above `state26_step`).  Costed from the tracer on real fixtures over
+# `census-0069AC-*` covering every witnessed arm, 18 September; every shared block's own cost
+# already matched state 9's own constants exactly (confirmed, not assumed).
+STATE26_ENTRY = 0x0069AC
+
+_S26_TST_F1BA = (12, 1)                     # 0069AC tst.w f1ba.w
+_S26_BEQ_F1BA = {True: (10, 1), False: (8, 1)}      # beq.b -- taken: F1BA == 0 (the addq.w branch)
+_S26_SUBQ1 = (4, 1)                         # 0069B2 subq.w #1,d7
+_S26_CLR_F1BA = (16, 1)                     # 0069B4 clr.w f1ba.w
+_S26_HEAD_BRA = (10, 1)                     # 0069B8 bra.b $69bc
+_S26_ADDQ1 = (4, 1)                         # 0069BA addq.w #1,d7
+
+_S26_TAIL_CMPI3 = (8, 1)                    # 006A72 cmpi.w #3,d7
+_S26_TAIL_BLT3 = {True: (10, 1), False: (8, 1)}     # blt.b -- taken: D7 < 3 (the consume/wait tail)
+_S26_TO9_MOVEQ5 = (4, 1)                    # 006A78 moveq #5,d7
+_S26_TO9_MOVE_STATE = (16, 1)               # 006A7A move.w #9,f192.w
+_S26_CONSUME_CMPI1 = (8, 1)                 # 006AA6 cmpi.w #1,d7
+_S26_CONSUME_BNE1 = {True: (10, 1), False: (8, 1)}  # bne.b -- taken: D7 != 1, skip the jsr
+_S26_BEQ_LANDED_WORD = {True: (10, 1), False: (12, 1)}  # 006A3A beq.w -- a word branch, unlike state 9's own $6468 landed check
+
+
+def state26_plan(machine, registers):
+    """0069AC (state 26): the player state machine's own dispatch table entry 26.  See game/player.py's
+    own module note above `state26_step` for the shape and its three real differences from state 9's
+    own.  Every terminal arm ends at `pc = 0x0075D6`."""
+    from .game import player
+    if registers['pc'] != STATE26_ENTRY:
+        raise UnsupportedCandidate('state 26 planner needs the machine parked at 0069AC')
+    read = _reader(machine)
+    sr = registers['sr']
+    entry_d7 = registers['d7'] & 0xFFFF
+    sp32 = registers['a7']
+    order = {}
+
+    f1ba_set = read(player.F1BA, 2) != 0
+    c, i = _S26_TST_F1BA
+    cycles, instructions = c, i
+    c, i = _S26_BEQ_F1BA[not f1ba_set]
+    cycles += c
+    instructions += i
+    if f1ba_set:
+        c, i = _add(_S26_SUBQ1, _S26_CLR_F1BA, _S26_HEAD_BRA)
+        cycles += c
+        instructions += i
+        sr = _sub_sr(sr, entry_d7, 1, 2)   # 0069B2 subq.w #1,d7
+        d7 = (entry_d7 - 1) & 0xFFFF
+        for a, b in _bytes(player.F1BA & 0xFFFFFF, 0, 2):
+            order[a] = b
+    else:
+        c, i = _S26_ADDQ1
+        cycles += c
+        instructions += i
+        sr = _add_sr(sr, entry_d7, 1, 2)   # 0069BA addq.w #1,d7
+        d7 = (entry_d7 + 1) & 0xFFFF
+
+    from .game.grid import grid_cell
+    c, i = _S9_BSR_GRID
+    cycles += c
+    instructions += i
+    cycles += GRID_CELL_COST[0]
+    instructions += GRID_CELL_COST[1]
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x0069C0, 4))   # 0069BC bsr.w $63fa's own return site
+    cell1 = grid_cell(read)
+    address = cell1['address']
+    sr = _asl_sr(sr, cell1['row_source'], 3, 2)
+    position_x = read(player.POSITION_X, 2)
+    low5 = position_x & 0x1F
+    exit_registers = {'a0': cell1['address'] & 0xFFFFFFFF,
+                       'd0': (registers['d0'] & 0xFFFF0000) | cell1['d0'],
+                       'd1': (registers['d1'] & 0xFFFF0000) | cell1['d1']}
+
+    c, i = _S9_P1_HEAD
+    cycles += c
+    instructions += i
+    blocked = False
+    if low5 < 8:
+        c, i = _S9_P1_BGE[False]
+        cycles += c
+        instructions += i
+        for offset in (1, 0x81, 0x101):
+            c, i = _S9_P1_GRIDTEST
+            cycles += c
+            instructions += i
+            hit = read((address + offset) & 0xFFFFFF, 1) == 1
+            c, i = _S9_P1_GRIDBEQ[hit]
+            cycles += c
+            instructions += i
+            if hit:
+                blocked = True
+                break
+    else:
+        c, i = _S9_P1_BGE[True]
+        cycles += c
+        instructions += i
+
+    if not blocked:
+        c, i = _S9_P1_ADVANCE
+        cycles += c
+        instructions += i
+        step = read(player.F196, 2)
+        sr = _add_sr(sr, position_x, step, 2)   # 0069EA add.w d0,f18c.w
+        position_x = (position_x + step) & 0xFFFF
+        order.update(_bytes(player.POSITION_X, position_x, 2))
+    # Unlike state 9, state 26 does NOT re-read the grid cell after the X-advance: 0069EE's own
+    # cmpi.w #$16,f19c.w follows the add.w directly, with no second bsr.w $63fa in between (a real
+    # defect an earlier draft introduced by assuming state 9's own two-call shape here; the FAST
+    # tier's own cost mismatch caught it before any of this reached the tree).  The ground-ahead
+    # probe below runs on the SAME cell (`cell1`/`address`) the head's own single grid_cell call
+    # already computed, even though POSITION_X may have just moved.
+    address2, cell2 = address, cell1
+
+    f19c = read(player.F19C, 2)
+    c, i = _S9_G_CMPI_F19C
+    cycles += c
+    instructions += i
+    trigger_gate_before = f19c >= player.STATE9_TRIGGER_GATE
+    c, i = _S9_G_BLT[not trigger_gate_before]
+    cycles += c
+    instructions += i
+    found_before = False
+    if trigger_gate_before:
+        c, i = _S9_BSR_ROWGATE
+        cycles += c
+        instructions += i
+        order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x0069FA, 4))   # 0069F6 bsr.w $6442's own return site
+        rc, ri, found_before, rowgate_order, rowgate_d0 = _row_gate_cost(
+            read, address2, position_x, 0x180, sp32 - 4, cell2['d0'])
+        cycles += rc
+        instructions += ri
+        order.update(rowgate_order)
+        exit_registers['a0'] = cell2['address'] & 0xFFFFFFFF
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | rowgate_d0
+        exit_registers['d1'] = 1 if found_before else 0   # moveq #0/#1,d1: a full 32-bit clear
+        sr = _asl_sr(sr, cell2['row_source'], 3, 2)
+        c, i = _S9_G_TST_D1
+        cycles += c
+        instructions += i
+        c, i = _S9_G_BEQ_D1[not found_before]
+        cycles += c
+        instructions += i
+
+    if found_before:
+        c, i = _S9_GROUND_TAIL
+        cycles += c
+        instructions += i
+        original_y = read(player.POSITION_Y, 2)
+        stores = player._state9_ground_stores(original_y)
+        for a, b in _bytes(player.STATE_INDEX, stores[player.STATE_INDEX][0], 2):
+            order[a] = b
+        for a, b in _bytes(player.POSITION_Y, stores[player.POSITION_Y][0], 2):
+            order[a] = b
+        for a, b in _bytes(player.F1B8 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        from .game.pickups import MOVEMENT_SOUND_CUE
+        for a, b in _bytes(MOVEMENT_SOUND_CUE & 0xFFFFFF, 0x39, 2):
+            order[a] = b
+        exit_registers['d7'] = 0
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0x39, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006A16)
+
+    c, i = _add(_S9_D_LEA, _S9_D_MOVE_F19C, _S9_D_TABLE_READ)
+    cycles += c
+    instructions += i
+    exit_registers['a1'] = player.STATE9_FALL_TABLE & 0xFFFFFFFF
+    if f19c > player.STATE9_FALL_TABLE_LIMIT:
+        raise UnsupportedCandidate('state 26 fall table index past its own last entry (F19E path) not witnessed')
+    step = player._signed_word(read((player.STATE9_FALL_TABLE + f19c) & 0xFFFFFF, 2))
+    original_y = read(player.POSITION_Y, 2)
+    c, i = _S9_D_SUB
+    cycles += c
+    instructions += i
+    sr = _sub_sr(sr, original_y, step & 0xFFFF, 2)
+    new_y = (original_y - step) & 0xFFFF
+    for a, b in _bytes(player.POSITION_Y, new_y, 2):
+        order[a] = b
+    c, i = _S9_D_TST_F19E
+    cycles += c
+    instructions += i
+    if read(player.F19E, 2) != 0:
+        raise UnsupportedCandidate('state 26 doubled fall step (FFFFF19E != 0) not witnessed by a recording')
+    c, i = _S9_D_BEQ_F19E[True]
+    cycles += c
+    instructions += i
+
+    c, i = _S9_BSR_ROWGATE
+    cycles += c
+    instructions += i
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x006A38, 4))   # 006A34 bsr.w $6468's own return site
+
+    def _read_after_fall(a, s, _new_y=new_y, _position_x=position_x):
+        masked = a & 0xFFFFFF
+        if masked == (player.POSITION_Y & 0xFFFFFF):
+            return _new_y
+        if masked == (player.POSITION_X & 0xFFFFFF):
+            return _position_x
+        return read(a, s)
+    cell3 = grid_cell(_read_after_fall)
+    address3 = cell3['address']
+    rc, ri, found_landed, rowgate_order, rowgate_d0 = _row_gate_cost(
+        read, address3, position_x, 0, sp32 - 4, cell3['d0'])
+    cycles += rc
+    instructions += ri
+    order.update(rowgate_order)
+    exit_registers['a0'] = cell3['address'] & 0xFFFFFFFF
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | rowgate_d0
+    exit_registers['d1'] = 1 if found_landed else 0
+    sr = _asl_sr(sr, cell3['row_source'], 3, 2)
+    c, i = _S9_G_TST_D1
+    cycles += c
+    instructions += i
+    # 006A3A beq.w $6a62 -- a WORD-displacement branch here (unlike state 9's own byte-displacement
+    # 0067F4), so its own not-taken cost is 12, not 8.
+    c, i = _S26_BEQ_LANDED_WORD[not found_landed]
+    cycles += c
+    instructions += i
+
+    if found_landed:
+        c, i = _S9_LANDED_TAIL
+        cycles += c
+        instructions += i
+        masked_y = new_y & 0xFFF0
+        sr = _add_sr(sr, masked_y, 0x10, 2)   # addi.w #$10,f18e.w
+        new_y_aligned = (masked_y + 0x10) & 0xFFFF
+        for a, b in _bytes(player.POSITION_Y, new_y_aligned, 2):
+            order[a] = b
+        for a, b in _bytes(player.STATE_INDEX, 0xC, 2):
+            order[a] = b
+        for a, b in _bytes(player.F194 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        for a, b in _bytes(player.F1A0 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        for a, b in _bytes(player.F198 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        c, i = _add(_S9_LANDED_MOVEQ, _S9_LANDED_BRA)
+        cycles += c
+        instructions += i
+        exit_registers['d7'] = 0
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006A5E)
+
+    c, i = _S9_G_CMPI_F19C
+    cycles += c
+    instructions += i
+    recheck_gate_open = f19c >= player.STATE26_RECHECK_GATE
+    c, i = _S9_G_BLT[not recheck_gate_open]
+    cycles += c
+    instructions += i
+    found_after = False
+    if recheck_gate_open:
+        c, i = _S9_BSR_ROWGATE
+        cycles += c
+        instructions += i
+        order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x006A6E, 4))   # 006A6A bsr.w $6442's own return site
+        rc, ri, found_after, rowgate_order, rowgate_d0 = _row_gate_cost(
+            read, address3, position_x, 0x180, sp32 - 4, cell3['d0'])
+        cycles += rc
+        instructions += ri
+        order.update(rowgate_order)
+        exit_registers['a0'] = cell3['address'] & 0xFFFFFFFF
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | rowgate_d0
+        exit_registers['d1'] = 1 if found_after else 0
+        sr = _asl_sr(sr, cell3['row_source'], 3, 2)
+        c, i = _S9_G_TST_D1
+        cycles += c
+        instructions += i
+        c, i = _S9_G2_BNE_D1[found_after]
+        cycles += c
+        instructions += i
+
+    if found_after:
+        c, i = _S9_GROUND_TAIL
+        cycles += c
+        instructions += i
+        stores = player._state9_ground_stores(new_y)
+        for a, b in _bytes(player.STATE_INDEX, stores[player.STATE_INDEX][0], 2):
+            order[a] = b
+        for a, b in _bytes(player.POSITION_Y, stores[player.POSITION_Y][0], 2):
+            order[a] = b
+        for a, b in _bytes(player.F1B8 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        from .game.pickups import MOVEMENT_SOUND_CUE
+        for a, b in _bytes(MOVEMENT_SOUND_CUE & 0xFFFFFF, 0x39, 2):
+            order[a] = b
+        exit_registers['d7'] = 0
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0x39, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006A16)
+
+    # The D7-based tail: at/past 3 hands straight off into state 9; short of 3, D7 == 1 also calls
+    # the already-recovered contact-consume primary first.
+    c, i = _S26_TAIL_CMPI3
+    cycles += c
+    instructions += i
+    to_state9 = d7 >= player.STATE26_TO_STATE9_COUNTER
+    c, i = _S26_TAIL_BLT3[not to_state9]
+    cycles += c
+    instructions += i
+
+    if to_state9:
+        c, i = _add(_S26_TO9_MOVEQ5, _S26_TO9_MOVE_STATE)
+        cycles += c
+        instructions += i
+        for a, b in _bytes(player.STATE_INDEX, player.STATE26_TO_STATE9_STATE_INDEX, 2):
+            order[a] = b
+        d7 = player.STATE26_TO_STATE9_D7
+        sr = _logic_sr(sr, player.STATE26_TO_STATE9_STATE_INDEX, 2)   # 006A7A move.w #9,f192.w
+    else:
+        c, i = _S26_CONSUME_CMPI1
+        cycles += c
+        instructions += i
+        calls_consumer = d7 == player.STATE26_CONSUME_COUNTER
+        c, i = _S26_CONSUME_BNE1[not calls_consumer]
+        cycles += c
+        instructions += i
+        if calls_consumer:
+            c, i = _S5_JSR_CONSUME
+            cycles += c
+            instructions += i
+            for a, b in _bytes((sp32 - 4) & 0xFFFFFF, 0x006AB2, 4):
+                order[a] = b
+            # POSITION_X/POSITION_Y already carry this activation's own X-advance and fall step
+            # (above); 012DA0's own _consume_position reads GRID_X/GRID_Y live, so it must see those
+            # values too, not the machine's own (pre-advance / pre-fall) ones.
+            def _read_for_consume(a, s, _position_x=position_x, _new_y=new_y):
+                masked = a & 0xFFFFFF
+                if masked == (player.POSITION_X & 0xFFFFFF):
+                    return _position_x
+                if masked == (player.POSITION_Y & 0xFFFFFF):
+                    return _new_y
+                return read(a, s)
+            cc_cycles, cc_instructions, cc_order, cc_registers, _ = _cc_resolve(
+                machine, _read_for_consume, registers, 0, sp32 - 4)
+            cycles += cc_cycles
+            instructions += cc_instructions
+            order.update(cc_order)
+            exit_registers.update(cc_registers)
+
+    c, i = _S9_COUNTDOWN_ADDQ
+    cycles += c
+    instructions += i
+    new_f19c = (f19c + 2) & 0xFFFF
+    sr = _add_sr(sr, f19c, 2, 2)   # ...'s own addq.w #2,f19c.w
+    for a, b in _bytes(player.F19C & 0xFFFFFF, new_f19c, 2):
+        order[a] = b
+    c, i = _S9_COUNTDOWN_CMPI
+    cycles += c
+    instructions += i
+    terminal = new_f19c >= player.STATE9_COUNTDOWN_CAP
+    c, i = _S9_COUNTDOWN_BLT[not terminal]
+    cycles += c
+    instructions += i
+
+    if not terminal:
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _cmp_sr(sr, new_f19c, player.STATE9_COUNTDOWN_CAP, 2)
+        if to_state9:
+            exit_registers['d7'] = d7   # moveq #5,d7: a full 32-bit clear
+        else:
+            exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | d7   # a word op: the entry's own upper half survives
+        last_pc = 0x006ABC if not to_state9 else 0x006A8A
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=last_pc)
+
+    c, i = _S9_TERMINAL_TAIL
+    cycles += c
+    instructions += i
+    for a, b in _bytes(player.STATE_INDEX, 0xC, 2):
+        order[a] = b
+    for a, b in _bytes(player.F194 & 0xFFFFFF, 0, 2):
+        order[a] = b
+    for a, b in _bytes(player.F1A0 & 0xFFFFFF, 0, 2):
+        order[a] = b
+    for a, b in _bytes(player.F198 & 0xFFFFFF, 0, 2):
+        order[a] = b
+    exit_registers['d7'] = 0
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = _logic_sr(sr, 0, 2)
+    last_pc = 0x006AD4 if not to_state9 else 0x006AA2   # the terminal tail's own final bra.w $75d6
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=last_pc)
