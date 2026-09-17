@@ -89,7 +89,12 @@ frequently-witnessed fraction of activations.  The first two
 movement-cluster states are composed over these recovered pieces the
 same day: state 24 (`006AD8`) and state 25 (`006B14`), a 3-tick shape
 that calls the consumer once and transitions to state 14 -- fully
-witnessed, no declines.  States 1 and 0 (`007282`/`006FFE`, falling
+witnessed, no declines.  `00722C`, the 200-entry box-overlap scan
+states 0 and 1 both call, is recovered too (`game.movement.
+box_overlap_scan`) -- but its own result is discarded at both call
+sites (no conditional branch reads it), so, like `tile_trigger_scan`
+before `0075D6` existed, it is not yet its own gate: it waits to be
+composed.  States 1 and 0 (`007282`/`006FFE`, falling
 through into state 5's own entry `00746A`) reach `008222`/`012DA0`
 directly too but are larger bodies (~150 instructions each) still to
 be composed; they are the next bite.
@@ -273,7 +278,8 @@ ids, never to `main`:
 | **`006AD8` (state 24) / `006B14` (state 25) movement-cluster hit states**: the first two movement-cluster states composed over the contact-consume family -- a 3-tick shape (STATE_COUNTER) that calls the already-recovered consumer once on tick 1, falls into the shared tail on ticks 1-2, and transitions to state 14 (copying a tracked position into `grid.GRID_Y`) on tick 3; fully witnessed, no declines | `factcheck check` on every fixture | `tests/games/gods/test_movement_states.py` |
 | `state-24` reproduces the original on `fb408bc75597…`: **PASS, 153 hits of 153 gates, 0 fallbacks**; `state-25`: **PASS, 52 hits of 52 gates, 0 fallbacks**; `camera-sprites` (all forty gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,100,252 hits, 14,169 fallbacks (13 at the two new gates, all exact adapter refusals), tree bit-exact** | `history-verify fb408bc75597 --candidate state-24`; `--candidate state-25`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-state-24-fb408bc75597`, `artifacts/gods/verify-state-25-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18h` |
 | both negative controls diverge essentially at the first frame each region is exercised (frame 2,736 vs first occurrence 2,733; frame 3,236 vs 3,233) | `--candidate state-24-mutant-result`, `--candidate state-25-mutant-result` | `artifacts/gods/verify-state-24-mutant`, `artifacts/gods/verify-state-25-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 48 s | 4,371 tests (9 skipped) | — |
+| **`00722C` box-overlap scan**: a bounded 200-entry scan against a box around the player's own tracked position, stopping on the first entry whose own box contains it; fully witnessed (every skip/fail/found/exhausted shape), no declines -- but its own result is discarded at both witnessed call sites (states 0 and 1), so it is not yet its own gated candidate (no mutant the game can see until composed) | `factcheck check` on every fixture | `tests/games/gods/test_box_overlap_scan.py` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 46 s | 4,393 tests (9 skipped) | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a

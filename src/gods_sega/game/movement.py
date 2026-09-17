@@ -95,3 +95,71 @@ def collision_gate(read, state, a3, d0, d1):
         return result
     result['arm'] = 'collision-held'
     return result
+
+
+# --- 00722C: the 200-entry box-overlap scan (states 0/1's own shared callee) ---------------------
+#
+# A bounded scan of a 200-entry, 8-byte-stride table (FFFF4342) against a box around the player's
+# own tracked position: real ROM code, structurally recoverable (RAM-only, bounded, no calls), but
+# its own RESULT (returned through the CCR by a deliberate `move.w #imm,-(a7); rtr` trick) is
+# discarded at BOTH of its own witnessed call sites (states 0 and 1) -- no conditional branch reads
+# it before the next flag-setting instruction -- so it contributes no game semantics of its own yet.
+# Modelled here in full regardless, since a boundary plan must reproduce every fact whether or not
+# its own caller happens to use them.
+BOX_SCAN_TABLE = 0xFFFF4342
+BOX_SCAN_COUNT = 200
+BOX_SCAN_STRIDE = 8
+BOX_SCAN_STATUS_A, BOX_SCAN_STATUS_B = 0x4, 0x6   # entry fields: negative / zero each skip the entry
+BOX_SCAN_PLAYER_X_MARGIN, BOX_SCAN_PLAYER_Y_MARGIN = 0x10, 0x28
+BOX_SCAN_ENTRY_X_NEAR, BOX_SCAN_ENTRY_X_FAR = -4, 0x14
+BOX_SCAN_ENTRY_Y_NEAR, BOX_SCAN_ENTRY_Y_FAR = -0xC, 0x10
+
+
+def box_overlap_scan(read):
+    """00722C: up to 200 entries, each either skipped (a status field negative or zero) or tested
+    as a box around its own (x, y) against the player's tracked position (GRID_X + 0x10,
+    GRID_Y + 0x28); the first entry whose box contains that position stops the scan early.
+
+    Returns the arm ('found' / 'not-found'), the player's own computed position, the found entry
+    (index, address, x/y and its own box) when there is one, and every entry's own arm ('skip-
+    negative', 'skip-zero', 'tested' or 'found') for the boundary's own per-entry costing.
+    """
+    from .grid import GRID_X, GRID_Y
+    player_x = (BOX_SCAN_PLAYER_X_MARGIN + read(GRID_X, 2)) & 0xFFFF
+    player_y = (BOX_SCAN_PLAYER_Y_MARGIN + read(GRID_Y, 2)) & 0xFFFF
+    px, py = _signed_word(player_x), _signed_word(player_y)
+    entries = []
+    found = None
+    entry_addr = BOX_SCAN_TABLE
+    for index in range(BOX_SCAN_COUNT):
+        status_a = read((entry_addr + BOX_SCAN_STATUS_A) & 0xFFFFFF, 2)
+        if _signed_word(status_a) < 0:
+            entries.append({'index': index, 'arm': 'skip-negative', 'entry': entry_addr})
+        else:
+            status_b = read((entry_addr + BOX_SCAN_STATUS_B) & 0xFFFFFF, 2)
+            if status_b == 0:
+                entries.append({'index': index, 'arm': 'skip-zero', 'entry': entry_addr})
+            else:
+                ex = read(entry_addr & 0xFFFFFF, 2)
+                ey = read((entry_addr + 2) & 0xFFFFFF, 2)
+                near_x = (ex + BOX_SCAN_ENTRY_X_NEAR) & 0xFFFF
+                far_x = (ex + BOX_SCAN_ENTRY_X_FAR) & 0xFFFF
+                near_y = (ey + BOX_SCAN_ENTRY_Y_NEAR) & 0xFFFF
+                far_y = (ey + BOX_SCAN_ENTRY_Y_FAR) & 0xFFFF
+                pass_x_near = px >= _signed_word(near_x)
+                pass_x_far = pass_x_near and px <= _signed_word(far_x)
+                pass_y_near = pass_x_far and py >= _signed_word(near_y)
+                pass_y_far = pass_y_near and py <= _signed_word(far_y)
+                step = {'index': index, 'entry': entry_addr, 'x': ex, 'y': ey,
+                       'near_x': near_x, 'far_x': far_x, 'near_y': near_y, 'far_y': far_y,
+                       'pass_x_near': pass_x_near, 'pass_x_far': pass_x_far, 'pass_y_near': pass_y_near}
+                if pass_y_far:
+                    step['arm'] = 'found'
+                    entries.append(step)
+                    found = step
+                    break
+                step['arm'] = 'tested'
+                entries.append(step)
+        entry_addr = (entry_addr + BOX_SCAN_STRIDE) & 0xFFFFFFFF
+    return {'arm': 'found' if found is not None else 'not-found', 'entries': entries, 'found': found,
+            'player_x': player_x, 'player_y': player_y, 'end_entry': entry_addr}

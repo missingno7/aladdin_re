@@ -5069,3 +5069,142 @@ def movement_hit_primary_plan(machine, registers):
 def movement_hit_secondary_plan(machine, registers):
     """006B14 (state 25): the contact-consume-secondary family's own caller."""
     return _movement_hit_plan(machine, registers, 1, STATE25_ENTRY, STATE25_CMPI_PC)
+
+
+# --- 00722C: the 200-entry box-overlap scan (game.movement.box_overlap_scan) ---------------------
+#
+# Costed one instruction-block at a time exactly like every other census-driven leaf here; every
+# instruction's own cost confirmed data-independent against the tracer
+# (artifacts/gods/evidence/census-00722C-entry).  The result is discarded at both witnessed call
+# sites, so this candidate has no mutant the game can see yet (game.movement's own module
+# docstring) -- not armed in `camera-sprites` for that reason, recovered on its own merits.
+BOX_SCAN_ENTRY, BOX_SCAN_FOUND_LAST_PC, BOX_SCAN_EXHAUSTED_LAST_PC = 0x00722C, 0x007280, 0x00727A
+_BS_HEAD_FIXED = (12 + 4 + 4 + 12 + 12 + 8, 6)      # lea; moveq #$10,d0; moveq #$28,d1; add.w x2; move.w #$c7,d6
+_BS_TEST_A = (12, 1)                                 # tst.w $4(a0)
+_BS_SKIP_NEGATIVE_TAIL = (10, 1)                     # bmi.b taken
+_BS_TEST_A_CONTINUE = (8, 1)                         # bmi.b not taken
+_BS_TEST_B = (12, 1)                                 # tst.w $6(a0)
+_BS_SKIP_ZERO_TAIL = (10, 1)                         # beq.b taken
+_BS_TEST_B_CONTINUE = (8, 1)                         # beq.b not taken
+_BS_BOX_HEAD = (8 + 12 + 4 + 4 + 4 + 4 + 4 + 8, 8)   # move.w (a0),d2 .. subi.w #$c,d3
+_BS_CMP = (4, 1)
+_BS_COND_FAIL = (10, 1)                              # blt/bgt taken (the box test's own failing branch)
+_BS_COND_PASS = (8, 1)                                # not taken (continue the chain)
+_BS_FOUND_TAKEN = (10, 1)                             # ble.b taken (the fourth comparison's own match)
+_BS_FOUND_NOTTAKEN = (8, 1)                           # ble.b not taken (the fourth comparison's own fail)
+_BS_ADVANCE_CONTINUE = (4 + 10, 2)                   # addq.w #8,a0; dbra taken
+_BS_ADVANCE_EXHAUSTED = (4 + 14, 2)                  # addq.w #8,a0; dbra not taken (the 200th entry)
+_BS_FOUND_EXIT = (12 + 20, 2)                        # move.w #imm,-(a7); rtr
+_BS_NOTFOUND_EXIT = (14 + 20, 2)                     # clr.w -(a7); rtr
+
+
+def _bs_entry_cost(step, is_last):
+    """One entry's own cost, from its own tst.w $4(a0) through whichever tail (skip / box-test
+    fail / found, with the advance-and-loop suffix only when the scan continues) it reaches."""
+    cycles, instructions = _BS_TEST_A
+    if step['arm'] == 'skip-negative':
+        c, i = _BS_SKIP_NEGATIVE_TAIL
+        cycles += c
+        instructions += i
+        c, i = _BS_ADVANCE_EXHAUSTED if is_last else _BS_ADVANCE_CONTINUE
+        return cycles + c, instructions + i
+    c, i = _BS_TEST_A_CONTINUE
+    cycles += c
+    instructions += i
+    c, i = _BS_TEST_B
+    cycles += c
+    instructions += i
+    if step['arm'] == 'skip-zero':
+        c, i = _BS_SKIP_ZERO_TAIL
+        cycles += c
+        instructions += i
+        c, i = _BS_ADVANCE_EXHAUSTED if is_last else _BS_ADVANCE_CONTINUE
+        return cycles + c, instructions + i
+    c, i = _BS_TEST_B_CONTINUE
+    cycles += c
+    instructions += i
+    c, i = _BS_BOX_HEAD
+    cycles += c
+    instructions += i
+    # The four chained comparisons: each PASS costs CMP+COND_PASS and continues to the next; the
+    # first FAIL costs CMP+COND_FAIL and ends this entry; the fourth (pass_y_far) is 'ble', whose
+    # own TAKEN outcome is the match (ends the whole scan, no advance/loop suffix at all).
+    for passed, is_fourth in ((step['pass_x_near'], False), (step['pass_x_far'], False),
+                              (step['pass_y_near'], False), (step['arm'] == 'found', True)):
+        c, i = _BS_CMP
+        cycles += c
+        instructions += i
+        if is_fourth:
+            c, i = _BS_FOUND_TAKEN if passed else _BS_FOUND_NOTTAKEN
+            cycles += c
+            instructions += i
+            if passed:
+                return cycles, instructions   # found: no advance/loop suffix
+            break
+        if not passed:
+            c, i = _BS_COND_FAIL
+            cycles += c
+            instructions += i
+            break
+        c, i = _BS_COND_PASS
+        cycles += c
+        instructions += i
+    c, i = _BS_ADVANCE_EXHAUSTED if is_last else _BS_ADVANCE_CONTINUE
+    return cycles + c, instructions + i
+
+
+def box_overlap_scan_plan(machine, registers):
+    """00722C: the box-overlap scan, admitted for every entry pattern (no arm declines -- every
+    instruction the routine can execute is modelled; nothing here is unwitnessed by name)."""
+    from .game import movement
+    if registers['pc'] != BOX_SCAN_ENTRY:
+        raise UnsupportedCandidate('box overlap scan planner needs the machine parked at 00722C')
+    sr = registers['sr']
+    read = _reader(machine)
+    result = movement.box_overlap_scan(read)
+    entries = result['entries']
+
+    cycles, instructions = _BS_HEAD_FIXED
+    for index, step in enumerate(entries):
+        c, i = _bs_entry_cost(step, index == movement.BOX_SCAN_COUNT - 1)
+        cycles += c
+        instructions += i
+    c, i = _BS_FOUND_EXIT if result['arm'] == 'found' else _BS_NOTFOUND_EXIT
+    cycles += c
+    instructions += i
+
+    sp32 = registers['a7']
+    # moveq #$10,d0 / moveq #$28,d1 (the fixed head, always run) clear the WHOLE register; moveq
+    # #$14,d4 / moveq #$10,d5 (only when some entry reaches the box test) do too -- unlike d2/d3
+    # (plain .w moves throughout) and d6 (a MOVE.W of the loop count, then DBcc, neither of which
+    # ever touches its own upper half: preserved from entry the whole time).
+    exit_registers = {'d0': result['player_x'], 'd1': result['player_y'],
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp32 & 0xFFFFFF)}
+    last_tested = next((e for e in reversed(entries) if e['arm'] in ('tested', 'found')), None)
+    if last_tested is not None:
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | ((last_tested['x'] - 4) & 0xFFFF)
+        exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | ((last_tested['y'] - 0xC) & 0xFFFF)
+        exit_registers['d4'] = last_tested['far_x']
+        exit_registers['d5'] = last_tested['far_y']
+    dbra_count = len(entries) - (1 if result['arm'] == 'found' else 0)
+    exit_registers['d6'] = (registers['d6'] & 0xFFFF0000) | ((0xC7 - dbra_count) & 0xFFFF)
+    if result['arm'] == 'found':
+        found = result['found']
+        exit_registers['a0'] = found['entry'] & 0xFFFFFFFF
+        # move.w #imm,-(a7); rtr: RTR pops the pushed word AS the exit CCR outright (the whole
+        # point of the trick), so it sets X too, not just NZVC -- 0x0008 gives X=0,N=1,Z=V=C=0.
+        exit_sr = (sr & ~0x1F) | 0x08
+        last_pc = BOX_SCAN_FOUND_LAST_PC
+        pushed = 8
+    else:
+        exit_registers['a0'] = result['end_entry'] & 0xFFFFFFFF
+        exit_sr = sr & ~0x1F
+        last_pc = BOX_SCAN_EXHAUSTED_LAST_PC
+        pushed = 0
+    exit_registers['sr'] = exit_sr
+    # "move.w #imm,-(a7)" / "clr.w -(a7)" pushes the word RTR immediately pops back off again --
+    # transient, but a real write at (entry a7 - 2) all the same (the same "a routine that saves
+    # registers writes its whole frame" rule this project already follows elsewhere).
+    writes = tuple(_bytes((sp32 - 2) & 0xFFFFFF, pushed, 2))
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers=exit_registers, last_pc=last_pc)
