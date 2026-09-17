@@ -4137,3 +4137,222 @@ def launch_plan(machine, registers):
                       'pc': _return(machine, sp), 'sr': (sr & ~0x1F) | x}
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
                       last_pc=LAUNCH_LAST_PC)
+
+
+# --- 0075D6: the player state machine's shared tail (game/player.py, game/camera.py) ---------------
+#
+# A platform-tail seam (recipe 6b, 0018C8's and 0047DA's own shape), per the supervisor's Decision
+# (``docs/gods/blockers/2026-09-17-005700.md``).  Reached by a plain ``bra.w`` from every witnessed
+# state handler and the dispatcher's own 'inactive' arm, so there is no frame of its own on the
+# stack: the top of stack, throughout, is whatever 005700's own true caller's ``jsr`` left there.
+# The prefix, in ROM order: the tile trigger scan's clean arm (``game.player.tile_trigger_scan`` --
+# a 'trigger' arm, an event raised through 007850, DECLINES BY NAME: real code this module does not
+# model); the follow-point step (``game.camera.follow_point_step``, the FFFFEF4E == 0 arm only -- the
+# sibling cutscene-style tracker at 00755A is unwitnessed on the full tree of all eight recordings,
+# 55,326 activations, and DECLINES BY NAME); and the state-table re-index
+# (``game.player.state_table_reindex``).  The ceded operation is the tail's own ``jmp 001312``
+# through that second inline upload's own ``rts`` -- 0048B4's own "no intermediate resume layer"
+# shape, one level further removed: that ``rts`` pops the return address that was ALREADY on the
+# stack when this activation began, so there is no suffix at all, because nothing of this
+# candidate's own remains once the ceded block returns.  ``resume_pc`` is that return address
+# itself, read live off the stack (never a fixed ROM constant: the tail returns to different true
+# callers depending on what raised it -- the main loop's own per-tick dispatch, or a nested
+# reentry the tile scan's own 'trigger' cascade can reach before falling back here, witnessed as
+# 001FD6 and 012BA0 on the very same history).
+PLAYER_TAIL_ENTRY = 0x0075D6
+PLAYER_TAIL_UPLOAD_ENTRY = 0x001312
+PLAYER_TAIL_UPLOAD_RTS = 0x0013CE       # the ceded upload's own rts: the seam's resume gate (see the suffix)
+PLAYER_TAIL_LAST_PC = 0x0076AA          # jmp $1312.l: the prefix's own last instruction
+
+_PT_HEAD = _add((12, 1), (12, 1), (18, 1), (12, 1))     # 0075D6 store; 0075DA push d7; 0075DC bsr; 0075E0 pop d7
+_PT_TILE_SCAN_NARROW = (224, 22)        # 00773A entry to its own rts, three cells (from the tracer, clean arm)
+_PT_TILE_SCAN_WIDE = (312, 31)          # ... six cells (widen: x & 0x1f >= 0x10)
+_PT_FOLLOW_HEAD = _add((12, 1), (12, 1), (12, 1), (12, 1), (12, 1), (10, 1))   # 0075E2..0075F6 (taken: EF4E==0)
+
+# The x band (007600-00762B): a fixed step of four, clamped to 0/0xEC0.
+_PT_X_TEST = (8, 1)                                            # 007600 cmpi.w #$50,d0
+_PT_X_DEC_NOTTAKEN = (8, 1)                                     # 007604 bgt (not taken: dx<=0x50)
+_PT_X_DEC_BODY = (16, 1)                                        # 007606 subq.w #4,FOLLOW_X
+_PT_X_DEC_CHECK_HOLD, _PT_X_DEC_CHECK_CLAMP = (10, 1), (8, 1)   # 00760A bpl
+_PT_X_DEC_CLAMP = (16, 1)                                       # 00760C clr.w FOLLOW_X
+_PT_X_DEC_CLAMP_BRA = (10, 1)                                   # 007610 bra.b (taken)
+_PT_X_INC_TAKEN = (10, 1)                                       # 007604 bgt (taken: dx>0x50)
+_PT_X_INC_SETUP = _add((8, 1), (4, 1))                          # 007612 move #$d0,d3; 007616 cmp.w d3,d0
+_PT_X_INC_CHECK_HOLD, _PT_X_INC_CHECK_INCREASE = (10, 1), (8, 1)   # 007618 blt
+_PT_X_INC_BODY = _add((16, 1), (16, 1))                         # 00761A addq.w #4,FOLLOW_X; 00761E cmpi #$ec0
+_PT_X_INC_CLAMP_CHECK_OK, _PT_X_INC_CLAMP_CHECK_CLAMP = (10, 1), (8, 1)   # 007624 blt
+_PT_X_INC_CLAMP = (16, 1)                                       # 007626 move.w #$ec0,FOLLOW_X
+_PT_X_COST = {
+    'decrease': _add(_PT_X_TEST, _PT_X_DEC_NOTTAKEN, _PT_X_DEC_BODY, _PT_X_DEC_CHECK_HOLD),
+    'decrease-clamped': _add(_PT_X_TEST, _PT_X_DEC_NOTTAKEN, _PT_X_DEC_BODY, _PT_X_DEC_CHECK_CLAMP,
+                             _PT_X_DEC_CLAMP, _PT_X_DEC_CLAMP_BRA),
+    'hold': _add(_PT_X_TEST, _PT_X_INC_TAKEN, _PT_X_INC_SETUP, _PT_X_INC_CHECK_HOLD),
+    'increase': _add(_PT_X_TEST, _PT_X_INC_TAKEN, _PT_X_INC_SETUP, _PT_X_INC_CHECK_INCREASE,
+                     _PT_X_INC_BODY, _PT_X_INC_CLAMP_CHECK_OK),
+    # 'increase-clamped' (FOLLOW_X reaching 0xEC0): unwitnessed by any of the eight recordings -- declined.
+}
+
+# The y band (00762C-00766C): half the distance beyond the band (minimum one), clamped to 0/0x340.
+_PT_Y_TEST = (8, 1)                                             # 00762C cmpi.w #$70,d1
+_PT_Y_CHECK1_LOW, _PT_Y_CHECK1_HIGH = (10, 1), (8, 1)           # 007630 ble (taken: dy<=0x70)
+_PT_Y_INC_SETUP = _add((4, 1), (8, 1), (8, 1))                  # 007632 move; 007634 subi #$70; 007638 asr #1
+_PT_Y_INC_ROUND_OK = (10, 1)                                    # 00763A bne (taken: the raw step is nonzero) --
+                                                                 # the not-taken arm (the minimum-of-one override,
+                                                                 # 00763C addq) is unwitnessed by any recording.
+_PT_Y_INC_ADD = (16, 1)                                         # 007640 add.w d3,FOLLOW_Y
+_PT_Y_INC_TEST2 = (16, 1)                                       # 007644 cmpi.w #$340,FOLLOW_Y
+_PT_Y_INC_CLAMP_CHECK_OK, _PT_Y_INC_CLAMP_CHECK_CLAMP = (10, 1), (8, 1)   # 00764A blt
+_PT_Y_INC_CLAMP = (16, 1)                                       # 00764C move.w #$340,FOLLOW_Y
+_PT_Y_INC_CLAMP_BRA = (10, 1)                                   # 007652 bra.b (taken)
+_PT_Y_TEST3 = (8, 1)                                            # 007654 cmpi.w #$20,d1
+_PT_Y_CHECK2_HOLD, _PT_Y_CHECK2_DECREASE = (10, 1), (8, 1)      # 007658 bge (taken: dy>=0x20)
+_PT_Y_DEC_SETUP = _add((4, 1), (4, 1), (8, 1))                  # 00765A moveq #$20; 00765C sub.w d1; 00765E asr #1
+_PT_Y_DEC_ROUND_OK, _PT_Y_DEC_ROUND_MIN = (10, 1), (8, 1)       # 007660 bne
+_PT_Y_DEC_MIN = (16, 1)                                         # 007662 subq.w #1,FOLLOW_Y (the minimum override)
+_PT_Y_DEC_SUB = (16, 1)                                         # 007666 sub.w d3,FOLLOW_Y
+_PT_Y_DEC_CLAMP_CHECK_OK = (10, 1)                              # 00766A bpl (taken: not clamped) -- the not-taken
+                                                                 # arm (the clamp to 0, 00766C clr.w) is
+                                                                 # unwitnessed by any recording.
+_PT_Y_HOLD_COST = _add(_PT_Y_TEST, _PT_Y_CHECK1_LOW, _PT_Y_TEST3, _PT_Y_CHECK2_HOLD)
+_PT_Y_INCREASE_COST = _add(_PT_Y_TEST, _PT_Y_CHECK1_HIGH, _PT_Y_INC_SETUP, _PT_Y_INC_ROUND_OK,
+                           _PT_Y_INC_ADD, _PT_Y_INC_TEST2, _PT_Y_INC_CLAMP_CHECK_OK)
+_PT_Y_INCREASE_CLAMPED_COST = _add(_PT_Y_TEST, _PT_Y_CHECK1_HIGH, _PT_Y_INC_SETUP, _PT_Y_INC_ROUND_OK,
+                                   _PT_Y_INC_ADD, _PT_Y_INC_TEST2, _PT_Y_INC_CLAMP_CHECK_CLAMP,
+                                   _PT_Y_INC_CLAMP, _PT_Y_INC_CLAMP_BRA)
+_PT_Y_DECREASE_COST_OK = _add(_PT_Y_TEST, _PT_Y_CHECK1_LOW, _PT_Y_TEST3, _PT_Y_CHECK2_DECREASE,
+                              _PT_Y_DEC_SETUP, _PT_Y_DEC_ROUND_OK, _PT_Y_DEC_SUB, _PT_Y_DEC_CLAMP_CHECK_OK)
+_PT_Y_DECREASE_COST_MIN = _add(_PT_Y_TEST, _PT_Y_CHECK1_LOW, _PT_Y_TEST3, _PT_Y_CHECK2_DECREASE,
+                               _PT_Y_DEC_SETUP, _PT_Y_DEC_ROUND_MIN, _PT_Y_DEC_MIN, _PT_Y_DEC_SUB,
+                               _PT_Y_DEC_CLAMP_CHECK_OK)
+# 'decrease-clamped' (FOLLOW_Y reaching 0): unwitnessed by any of the eight recordings -- declined.
+
+# The state-table re-index (007670-0076AA): fully witnessed, every branch (both mask tables, both
+# flip outcomes -- 5,137 clean activations of the whole tail checked on the main history alone).
+_PT_RE_HEAD = _add((12, 1), (12, 1), (8, 1), (18, 1), (4, 1), (16, 1))   # 007670..007680
+_PT_RE_SPLIT_TEST = (8, 1)                                      # 007684 cmpi.w #$20,d2
+_PT_RE_SPLIT_LOW, _PT_RE_SPLIT_HIGH = (10, 1), (8, 1)           # 007688 blt
+_PT_RE_HIGH_LOAD = (16, 1)                                      # 00768A move.l (the high mask, d2>=0x20)
+_PT_RE_TAIL = _add((4, 1), (8, 1), (4, 1), (14, 1))             # 00768E..007696
+_PT_RE_BTST = (6, 1)                                            # 00769A btst.l d0,d1
+_PT_RE_FLIP_CHECK_NONE, _PT_RE_FLIP_CHECK_FLIP = (10, 1), (8, 1)   # 00769C beq
+_PT_RE_FLIP = (8, 1)                                            # 00769E ori.w #$8000,d2
+_PT_RE_FINAL = _add((12, 1), (12, 1), (12, 1))                  # 0076A2, 0076A6, 0076AA (this prefix's last_pc)
+_PT_REINDEX_COST = {}
+for _mask_table, _mask_cost in (('low', _add(_PT_RE_SPLIT_TEST, _PT_RE_SPLIT_LOW)),
+                                ('high', _add(_PT_RE_SPLIT_TEST, _PT_RE_SPLIT_HIGH, _PT_RE_HIGH_LOAD))):
+    for _flip, _flip_cost in ((False, _PT_RE_FLIP_CHECK_NONE),
+                              (True, _add(_PT_RE_FLIP_CHECK_FLIP, _PT_RE_FLIP))):
+        _PT_REINDEX_COST[(_mask_table, _flip)] = _add(
+            _PT_RE_HEAD, _mask_cost, _PT_RE_TAIL, _PT_RE_BTST, _flip_cost, _PT_RE_FINAL)
+del _mask_table, _mask_cost, _flip, _flip_cost
+
+
+def player_tail_plan(machine, registers):
+    """0075D6: the player state machine's shared tail, as a platform-tail seam over the second inline
+    upload (001312).  See the module note above; the game facts are ``game.player``/``game.camera``."""
+    from .game import camera, player
+    if registers['pc'] != PLAYER_TAIL_ENTRY:
+        raise UnsupportedCandidate('player tail planner needs the machine parked at 0075D6')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    if registers['a6'] != 0xC00000:
+        raise UnsupportedCandidate('player tail planner needs a6 = C00000 (the VDP data port)')
+    read = _reader(machine)
+    d7 = registers['d7'] & 0xFFFF
+    position_x, position_y = read(player.POSITION_X, 2), read(player.POSITION_Y, 2)
+    scan = player.tile_trigger_scan(read, position_x, position_y)
+    if scan['arm'] != 'clean':
+        raise UnsupportedCandidate('shared tail: the tile trigger scan found an event (007850), unwitnessed here')
+    if read(player.SHARED_TAIL_ALT_GATE, 2) & 0xFFFF:
+        raise UnsupportedCandidate('shared tail: the FFFFEF4E cutscene-tracker arm (00755A) is unwitnessed '
+                                   'by any of the eight recordings')
+    follow = camera.follow_point_step(lambda address: read(address, 2), position_x, position_y)
+    x_branch, y_branch = follow['x_branch'], follow['y_branch']
+    if x_branch == 'increase-clamped':
+        raise UnsupportedCandidate("shared tail: the follow point's own x clamp at 0xEC0 is unwitnessed "
+                                   "by any of the eight recordings")
+    if y_branch == 'decrease-clamped':
+        raise UnsupportedCandidate("shared tail: the follow point's own y clamp at 0 is unwitnessed "
+                                   "by any of the eight recordings")
+    if y_branch in ('increase', 'increase-clamped') and follow['y_rounded']:
+        raise UnsupportedCandidate("shared tail: the follow point's own y minimum step on the increase "
+                                   "side (dy=0x71) is unwitnessed by any of the eight recordings")
+
+    state_index = read(player.STATE_INDEX, 2)
+    reindex = player.state_table_reindex(read, state_index, d7)
+
+    cycles, instructions = _PT_HEAD
+    tile_cost = _PT_TILE_SCAN_WIDE if scan['widen'] else _PT_TILE_SCAN_NARROW
+    cycles, instructions = cycles + tile_cost[0], instructions + tile_cost[1]
+    fh_c, fh_i = _PT_FOLLOW_HEAD
+    cycles, instructions = cycles + fh_c, instructions + fh_i
+    x_c, x_i = _PT_X_COST[x_branch]
+    cycles, instructions = cycles + x_c, instructions + x_i
+    if y_branch == 'hold':
+        y_c, y_i = _PT_Y_HOLD_COST
+    elif y_branch == 'increase':
+        y_c, y_i = _PT_Y_INCREASE_COST
+    elif y_branch == 'increase-clamped':
+        y_c, y_i = _PT_Y_INCREASE_CLAMPED_COST
+    elif y_branch == 'decrease':
+        y_c, y_i = _PT_Y_DECREASE_COST_MIN if follow['y_rounded'] else _PT_Y_DECREASE_COST_OK
+    else:
+        raise UnsupportedCandidate(f'shared tail: follow point y branch {y_branch!r} not modelled')
+    cycles, instructions = cycles + y_c, instructions + y_i
+    re_c, re_i = _PT_REINDEX_COST[(reindex['mask_table'], reindex['flip'])]
+    cycles, instructions = cycles + re_c, instructions + re_i
+
+    order = {}
+    # 0075DA/0075DC push D7, then the bsr's own return address, both popped again by the time the
+    # tail's own tile scan returns (0075E0) -- the stack pointer ends up unchanged, but the tracer's
+    # diff-based writes still show these bytes (whichever of them differ from what RAM already held),
+    # and the strict check compares the prefix's own final RAM values, abandoned stack scratch
+    # included: the plan must write them too (a plan write that happens to match what RAM already
+    # held is harmless, `pathfacts.check_plan`'s own "redundant" note).
+    for a, b in _bytes((sp - 4) & 0xFFFFFF, registers['d7'] & 0xFFFFFFFF, 4):
+        order[a] = b
+    for a, b in _bytes((sp - 8) & 0xFFFFFF, 0x0075E0, 4):
+        order[a] = b
+    for a, b in _bytes(player.STATE_COUNTER & 0xFFFFFF, d7, 2):
+        order[a] = b
+    for address, value in follow['stores'].items():
+        for a, b in _bytes(address & 0xFFFFFF, value, 2):
+            order[a] = b
+
+    # d0's own upper half is zero from the tile scan's own head onward (00773A: moveq #$10,d0 sign-
+    # extends a positive immediate to the full 32 bits, and every later write to d0 in this whole
+    # region is a plain .w move or arithmetic op that leaves the upper half alone) -- not the
+    # caller's own entry upper half, unlike every other register this planner touches.
+    high = lambda name: 0 if name == 'd0' else registers[name] & 0xFFFF0000
+    d2 = ((reindex['high'] << 16) | reindex['descriptor']) & 0xFFFFFFFF
+    # move.w $f18e.w,d1 (0076A6) is the last N/Z/V/C setter before the jmp on every branch (the
+    # window-clamp code and 00755A's own sibling both merge back into the re-index at 007670, and
+    # nothing between there and the jmp sets N/Z/V/C except the two final moves themselves) -- but X
+    # is untouched by MOVE, so it survives from the LAST arithmetic instruction that does set it,
+    # which is the SAME on every branch too: 007694's own add.w d2,d2 (the re-index's own doubling,
+    # always executed, always after every X/Y band arithmetic and the tile scan's own): X is the
+    # carry out of doubling a 16-bit value, i.e. the re-index's own index bit 15.
+    exit_sr = _logic_sr(sr, position_y, 2)
+    exit_sr = (exit_sr & ~0x10) | (0x10 if (reindex['index'] >> 15) & 1 else 0)
+    exit_registers = {'d0': high('d0') | position_x, 'd1': (reindex['mask'] & 0xFFFF0000) | position_y,
+                      'd2': d2, 'a0': 0x00005618, 'a7': sp32, 'pc': PLAYER_TAIL_UPLOAD_ENTRY, 'sr': exit_sr}
+    if follow['d3'] is not None:
+        exit_registers['d3'] = high('d3') | follow['d3']
+    prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                        registers=exit_registers, last_pc=PLAYER_TAIL_LAST_PC)
+
+    def player_tail_suffix(machine, live_registers):
+        # Gated at the ceded upload's own rts (0013CE) rather than after it: the native adapter
+        # refuses a zero-cost atomic, and there is exactly one instruction of this candidate's own
+        # left to admit -- the rts itself, which pops the return address that was ALREADY on the
+        # stack when this activation began (0048B4's own shape, one level further removed).  0013CE
+        # sets no flag of its own; the ceded block's own residue SR is already live and correct.
+        return AtomicPlan(cycles=16, instructions=1, writes=(),
+                          registers={'a7': (live_registers['a7'] + 4) & 0xFFFFFFFF,
+                                     'pc': _return(machine, live_registers['a7'] & 0xFFFFFF)},
+                          last_pc=PLAYER_TAIL_UPLOAD_RTS)
+
+    return Seam(prefix=prefix, resume_pc=PLAYER_TAIL_UPLOAD_RTS, stack_basis=sp32,
+               guards=((sp, 4),), suffix=player_tail_suffix)

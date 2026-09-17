@@ -91,6 +91,9 @@ STATE_HANDLERS = (
 # the identical internal branch pattern -- see the blocker).  Real ROM code, not claimed here.
 UNWITNESSED_STATES = (7, 15)
 TAIL_ENTRY = 0x0075D6              # every witnessed state handler's own exit; also the "inactive" arm's target
+SHARED_TAIL_ALT_GATE = 0xFFFFEF4E  # word: nonzero selects the cutscene-style tracker (ROM 00755A) instead of
+                                    # the follow-point step (game.camera.follow_point_step); zero on every
+                                    # occurrence of every recording (55,326 activations, all eight histories)
 
 
 def _signed_word(value):
@@ -158,3 +161,47 @@ def tile_trigger_scan(read, x, y):
     trigger = next((index for index, value in enumerate(values) if value > TILE_THRESHOLD), None)
     return {'cells': cells, 'values': values, 'widen': widen,
             'arm': 'clean' if trigger is None else 'trigger', 'trigger_index': trigger}
+
+
+# --- The shared tail's own state-table re-index (ROM 007670-0076AA) --------------------------------
+#
+# Reached unconditionally after the follow-point step (``game.camera.follow_point_step``) or its
+# unmodelled EF4E-nonzero sibling (ROM 00755A): re-indexes ``STATE_TABLE`` at ``STATE_INDEX``, adds
+# back the ORIGINAL entry D7 (``STATE_COUNTER``, still held live in D7 -- not the value already
+# written back to RAM at the tail's own first instruction), and uses the sum as an index into a
+# second ROM table (0076B8, unbounded like ``game.sprites``' own descriptor tables -- read live, never
+# hard-coded) to select a tile/sprite descriptor for the second inline upload (ROM 001312, the
+# ceded operation ``boundary.player_tail_plan`` hands the machine).  A bit test against one of two
+# 32-bit ROM masks (0076B0 for a sum under 0x20, 0076B4 otherwise), indexed by the sum's own low five
+# bits, decides whether the descriptor's own flip bit (0x8000) is set.  Pure arithmetic and ROM/RAM
+# reads; no store of its own.
+STATE_TABLE_REINDEX_LOW_MASK, STATE_TABLE_REINDEX_HIGH_MASK = 0x0076B0, 0x0076B4
+STATE_TABLE_REINDEX_TABLE = 0x0076B8
+STATE_TABLE_REINDEX_SPLIT = 0x20
+
+
+def state_table_reindex(read, state_index, state_counter):
+    """007670-0076AA: the descriptor index (and its own flip bit) for the second inline upload.
+
+    ``state_counter`` is D7 as the tail's caller left it (the state
+    handler's own working counter), read fresh here exactly as the ROM's
+    own ``add.w d7,d2`` does -- not re-derived from the ``STATE_COUNTER``
+    RAM word the tail already wrote back.  Returns the entry longword's own
+    upper half (``high``, preserved into D2 by every later ``.w`` op), the
+    sum (``index``, D2's own low word after the add), which mask table was
+    used, and the final descriptor value with its own flip bit applied.
+    """
+    entry = read(STATE_TABLE + 8 * (state_index & 0xFFFF), 4)
+    high, low = (entry >> 16) & 0xFFFF, entry & 0xFFFF
+    index = (low + state_counter) & 0xFFFF
+    if index < STATE_TABLE_REINDEX_SPLIT:
+        mask_table, mask = 'low', read(STATE_TABLE_REINDEX_LOW_MASK, 4)
+    else:
+        mask_table, mask = 'high', read(STATE_TABLE_REINDEX_HIGH_MASK, 4)
+    bit = index & 0x1F
+    descriptor = read((STATE_TABLE_REINDEX_TABLE + ((index * 2) & 0xFFFF)) & 0xFFFFFFFF, 2)
+    flip = bool((mask >> bit) & 1)
+    if flip:
+        descriptor |= 0x8000
+    return {'high': high, 'index': index, 'mask_table': mask_table, 'mask': mask, 'flip': flip,
+            'descriptor': descriptor}

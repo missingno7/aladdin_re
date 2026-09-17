@@ -17,14 +17,14 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
-                       PICKUP_PROBE_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
+                       PICKUP_PROBE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
-                       next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, proximity_plan,
+                       next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_tail_plan, proximity_plan,
                        record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, string_copy_plan, table_reset_plan,
                        walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
@@ -77,6 +77,26 @@ def _mutate_register(plan: AtomicPlan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+_FOLLOW_POINT_ADDRESSES = frozenset((0xFFF3EE, 0xFFF3EF, 0xFFF3F0, 0xFFF3F1))
+
+
+def _mutate_follow_point(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for the player tail: a follow-point byte off (FOLLOW_X or FOLLOW_Y, whichever
+    this occurrence's own follow-point step wrote last) -- the camera consumes it next tick.  A
+    'hold'/'hold' occurrence (about half of them) writes neither and passes through unmutated: the
+    ONLY other write every occurrence makes is STATE_COUNTER, read back by the NEXT activation's own
+    state-table re-index into a ROM descriptor table with no bounds check of its own -- corrupting it
+    risks an M68000 address error (confirmed: 001312's own tile-copy loop faulted on a garbage
+    descriptor pointer under an earlier version of this control), not a clean divergence."""
+    follow_indices = [index for index, (address, _) in enumerate(plan.writes) if address in _FOLLOW_POINT_ADDRESSES]
+    if not follow_indices:
+        return plan
+    index = follow_indices[-1]
+    address, value = plan.writes[index]
+    writes = plan.writes[:index] + ((address, (value + 1) & 0xFF),) + plan.writes[index + 1:]
+    return AtomicPlan(plan.cycles, plan.instructions, writes, plan.registers, plan.last_pc, plan.direct_calls)
+
+
 def _mutate_address(plan: AtomicPlan) -> AtomicPlan:
     """Negative control for a routine whose result is an address in a0 the caller dereferences: one cell
     off.  (A residue register such as d0 is not a control the game can see: with the observation instant
@@ -127,6 +147,7 @@ PLANNERS = {
     'record-id-scan': {RECORD_ID_SCAN_ENTRY: record_id_scan_plan},
     'action-reset-elapsed': {ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan},
     'action-clear-group': {ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
+    'player-tail': {PLAYER_TAIL_ENTRY: player_tail_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -143,7 +164,8 @@ PLANNERS = {
                        ACHIEVEMENT_SLOT_RESET_ENTRY: achievement_slot_reset_plan,
                        ACHIEVEMENT_DISPATCH_ENTRY: achievement_slot_dispatch_plan,
                        SLOT_SCAN_ENTRY: slot_scan_plan, RECORD_ID_SCAN_ENTRY: record_id_scan_plan,
-                       ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan, ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
+                       ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan, ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan,
+                       PLAYER_TAIL_ENTRY: player_tail_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -212,7 +234,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # blind on the far more common no-call arms (empty writes) but clean and safe on the seam.
              'record-id-scan-mutant-result': ('record-id-scan', _mutate_result),
              'action-reset-elapsed-mutant-result': ('action-reset-elapsed', _mutate_result),
-             'action-clear-group-mutant-result': ('action-clear-group', _mutate_result)}
+             'action-clear-group-mutant-result': ('action-clear-group', _mutate_result),
+             'player-tail-mutant-result': ('player-tail', _mutate_follow_point)}
 
 
 @dataclass

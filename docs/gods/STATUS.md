@@ -82,7 +82,7 @@ the world update (`0030CC`), the next three subsystems.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with thirty-four gates armed, the camera follow step `002806`, the
+  original with thirty-five gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -104,7 +104,11 @@ the world update (`0030CC`), the next three subsystems.
   straight into `0047DA`), and two of the trigger evaluator's own
   action-table handlers, the elapsed-seconds reset `0048E4` and the pickup
   group clear `004ACA` (both reached by the evaluator's own firing tail
-  through a tail jump, `0046CE`, needing no seam of their own); `camera`,
+  through a tail jump, `0046CE`, needing no seam of their own), and the
+  player state machine's own shared tail `0075D6` (a platform-tail seam
+  over a second inline upload, `001312`, with no suffix beyond its own
+  `rts`: the tile trigger scan's clean arm, the follow-point step, the
+  state-table re-index); `camera`,
   `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
@@ -113,7 +117,7 @@ the world update (`0030CC`), the next three subsystems.
   `pickup-probe`, `walker`, `projectile-launch`, `projectile-resume`,
   `message-gate`, `string-copy`, `achievement-slot-reset`,
   `achievement-slot-dispatch`, `slot-scan`, `record-id-scan`,
-  `action-reset-elapsed` and `action-clear-group` arm each alone.
+  `action-reset-elapsed`, `action-clear-group` and `player-tail` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -233,7 +237,10 @@ ids, never to `main`:
 | `record-id-scan` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 68 hits (3 seam entries/completions), 1 fallback (icon slot 2)**; segment_verify at boundary-6000/12000 PASS (0/0, 1/0 hits/fallbacks); mutant DIVERGENCE at frame 20,282 (a byte, not a register: a witnessed match reaches icon slot 3, and D0+1 there is out of 001648's own four-entry table); `camera-sprites` (all thirty-two gates) on the tree of all eight recordings: **PASS, tree bit-exact** | `history-verify fb408bc75597 --candidate record-id-scan` | `artifacts/gods/verify-record-id-scan-fb408bc75597`, `artifacts/gods/verify-record-id-scan-mutant` |
 | **`0048E4`/`004ACA` action-table handlers** (`game/actions.py`, part 3 of the trigger firing subsystem blocker): the evaluator's own firing tail dispatches its action through the ROM table at `0046D0` via a tail jump (`jmp (a5)`, `0046CE`, disassembled fresh), so a handler's own `rts` returns straight past the whole evaluator activation -- no seam, no frame. `0048E4` is `clr.l ELAPSED; rts` unconditionally (the elapsed-seconds counter `conditions.py`'s own kinds 9/10 already read); `004ACA` clears whichever of `pickups.py`'s three group active-id words matches a caller record's own `+0x12` word (each of the three has its own `rts`; only the second group is ever witnessed to match). The other action-table entries (`004A0A`, `004D04`, `004E1C`, `004E74`, `0048EA`, `005024`, `00772E`; `004A74`/`005074` unwitnessed) call still-unrecovered helpers (`004AAA`, `004926`, `004ECE`/`004D7E`, `0050A4`, `0077A8`, `004F16`) or write the level grid across several blocks -- an ordinary decline | `factcheck check` on every fixture | `tests/games/gods/test_actions.py` |
 | `action-reset-elapsed` and `action-clear-group` reproduce the original on `fb408bc75597…`: **PASS, 34,904 frames, 1 hit each, 0 fallbacks**; segment_verify at boundary-6000/12000 PASS (0 hits both, too rare for a 300-frame window); mutants DIVERGENCE at frames 15,102 and 17,112; `camera-sprites` (all thirty-four gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,047,004 hits, 5,540 fallbacks, tree bit-exact** | `history-verify fb408bc75597 --candidate action-reset-elapsed`; `--candidate action-clear-group`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-action-reset-elapsed-fb408bc75597`, `artifacts/gods/verify-action-clear-group-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17p` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 47 s | 2,950 tests (7 skipped) | — |
+| **`0075D6` player state machine shared tail** (the supervisor's Decision, `docs/gods/blockers/2026-09-17-005700.md`): a platform-tail seam, gated where every witnessed state handler and the dispatcher's own 'inactive' arm falls through with no frame of its own; the plan reproduces every fact of the original on 84 of 654 retained fixtures (the tile trigger scan's clean arm, `game.player.tile_trigger_scan`; the follow-point step, `game.camera.follow_point_step` -- FOLLOW_X/FOLLOW_Y eased toward the player's position, X by a fixed step within a 0x50/0xD0 band, Y by half the excess within a 0x70/0x20 band, both clamped; the state-table re-index, `game.player.state_table_reindex`, fully witnessed); the tile scan's own 'trigger' arm (an event through 007850), the FFFFEF4E cutscene tracker (00755A, unwitnessed on all 55,326 activations of every recording), the follow point's own x/y clamps and the y-increase band's own minimum-step edge (dy=0x71 exactly) all decline by name, the remaining 570 fixtures correctly so | `factcheck check` on every fixture (`MATCH (seam: prefix to 001312, suffix from 0013CE)` or a named `DECLINED`) | `tests/games/gods/test_player_tail.py` |
+| `player-tail` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 10,042 hits (5,025 seam entries, 5,017 completions), 6,059 fallbacks (5,939 tile-scan trigger declines, 87 z80 bank guard, 31 y-minimum-step declines, 2 seam deadline)**; `camera-sprites` (all thirty-five gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,075,426 hits, 24,106 fallbacks (18,249 tile-scan trigger declines, 4,403 z80 bank guard, 451 seam deadline, 345 observation deadline, 304 vblank in span, 133 y follow-point declines, 189 evaluator firing/disabled, 27 machine admission, 5 achievement/pickup declines), tree bit-exact** | `history-verify fb408bc75597 --candidate player-tail`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-player-tail-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17q` |
+| the player tail's negative control (a follow-point byte off; a 'hold'/'hold' occurrence passes through unmutated rather than risk STATE_COUNTER, confirmed once to fault the machine outright) diverges at frame 539 on `f0ac19738f19…`, and at frame 6,013 in the boundary-6000 segment window | `--candidate player-tail-mutant-result` | `artifacts/gods/verify-player-tail-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 51 s | 4,021 tests (9 skipped) | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
