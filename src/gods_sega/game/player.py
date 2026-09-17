@@ -1436,3 +1436,205 @@ def state8_fall_tail(read, found, f19c, new_y):
             STATE_INDEX: (STATE8_LANDED_INDEX, 2), F194 & 0xFFFFFF: (0, 2), F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2),
             F19C: (new_f19c, 2)}, 'd7': 0}
     return {'arm': 'countdown', 'stores': {F19C: (new_f19c, 2)}}
+
+
+# --- 006B4E: state 13's own decision tree -- a vertical-movement dispatcher, state 14's own
+# counterpart (states 13/14 are a pair the same way 0/1 and 8/9 are), reached the SAME way, with a
+# LARGE amount of code genuinely shared: the contact-search gate (`006C62`-`006CC5`) is byte-
+# identical to state 14's own (`006EC4`-`006F27`, confirmed against the ROM save for relocated branch
+# displacements) and reuses `state14_contact`/`state14_contact_found` directly; the two jump-start
+# tails (`006FB8` into state 8, `006FDA` into state 9) are the SAME PHYSICAL ROM addresses state 14's
+# own arm A/B jump into too, not copies.  Real differences from state 14's own shape, all confirmed
+# by a fresh disassembly and `factcheck.py facts --path` on real fixtures over `census-006B4E-*`
+# (18 September): (1) state 13's own head has no `FFFFF1B0` store and no separate `FFFFEA1E`-sign
+# gate before the `FFFFEA20` dispatch -- instead, the "settle, carrying the counter" hand-off is
+# folded INTO the `FFFFEA20 == 0` arm itself (`FFFFEA1E == 1` there, not state 14's own `< 0` test
+# one level up); (2) arm A/B's own jump-start gate is `FFFFEA1E`'s SIGN (not state 14's own
+# `FFFFEA23` bit 0); (3) arm D's own toggle gate is `FFFFEA1E >= 0` / `< 0` (a sign test, `tst`+`bpl`)
+# rather than state 14's own EXACT `== 1` (`cmpi`+`bne`) -- a real, different condition, not just a
+# relocated copy, and it toggles INTO state 14 (0xE), the mirror of state 14's own toggle into 13;
+# (4) the settle tail's own retry probe is NOT state 14's own "always exits unchanged" shape: after
+# the SAME bounded retry-and-sound mechanism, state 13's own probe tests `+0x180(a0)` for a BLOCKING
+# byte (value 1, not state 14's own solid-ground value 2 at `+-0x80`) and, on a miss, tests
+# `+0x100(a0)`/`+0x180(a0)` for solid ground (value 2) -- a genuine three-way result (blocked:
+# transition to state 26; ground found: exit unchanged; neither: transition to state 10), where
+# state 14's own probe only ever exits unchanged or loops; state 13 also has no `FFFFF1B0`-based d7
+# restore at all (confirmed absent from the ROM).
+STATE13_ENTRY = 0x006B4E
+STATE13_WRAP = 0x14
+STATE13_TO_STATE14 = 0xE           # arm D's own toggle target (state 14's own mirror toggles into 13)
+STATE13_TO_STATE26 = 0x1A          # the settle probe's own "blocked" transition
+STATE13_TO_STATE10 = 0xA           # the settle probe's own "clear" transition
+
+
+def state13_step(read, d7):
+    """006B4E-006B84: state 13's own head, up to the EA20-based arm fork.  Returns `'frozen'` (exit
+    unchanged, `FFFFEF4A == 0`), `'settle'` (hand off to `state13_settle`, either freshly reset --
+    STATE_COUNTER wrapped past `0x14` -- or carrying the caller's own counter -- `FFFFEA20 == 0` AND
+    `FFFFEA1E == 1`), or `'main'` (the `FFFFEA20 == 1` fork, `state13_arm_a`/`state13_arm_b`)."""
+    if read(FROZEN_LIKE_FLAG, 2) & 0xFFFF == 0:
+        return {'arm': 'frozen'}
+    if d7 >= STATE13_WRAP:
+        return {'arm': 'settle', 'settle_d7': 0, 'reset': True}
+    ea20 = read(EA20_WORD, 2) & 0xFFFF
+    if ea20 == 0:
+        if read(EA1E_WORD, 2) & 0xFFFF == 1:
+            return {'arm': 'settle', 'settle_d7': d7, 'reset': False}
+        stores = {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}
+        return {'arm': 'main', 'ea20_one': False, 'stores': stores}
+    return {'arm': 'main', 'ea20_one': ea20 == 1, 'stores': {}}
+
+
+def state13_arm_a(read):
+    """006B84-006BEC: state 13's own arm A (`FFFFEA20 == 1`).  Returns `'contact-gate'` (bit 2 set:
+    `FFFFF1A8` forced to 1) or `'contact-gate-f1a6'` (the retry budget not yet exhausted) to hand off
+    to `state14_contact` (the SAME shared contact-search gate state 14's own arm reaches, byte-
+    identical ROM); `'transition-9'` (`FFFFEA1E < 0`, a jump-start into state 9's own gate -- the
+    SAME physical ROM address, `0x6FDA`, state 14's own arm A reaches via its own DIFFERENT gate,
+    `FFFFEA23` bit 0 -- UNWITNESSED by any of the four recordings that reach state 13 at all,
+    declined by the boundary); `'contact-gate-grid'` (a blocked cell, one of the three `+1`/`+0x81`/
+    `+0x101` row offsets); `'contact-gate-nibble'` (the low nibble of `FFFFF18E` nonzero and the
+    `+0x181` byte matched); or `'transition-1'` (blocked or the low nibble zero)."""
+    from .grid import grid_cell
+    bit2 = read(EA23_WORD, 1) & 4
+    if bit2:
+        return {'arm': 'contact-gate', 'stores': {F1A8 & 0xFFFFFF: (1, 2)}, 'f1a8_forced': 1}
+    if _signed_word(read(EA1E_WORD, 2)) < 0:
+        from .pickups import MOVEMENT_SOUND_CUE
+        position_x = read(POSITION_X, 2)
+        stores = {STATE_INDEX: (9, 2), F196 & 0xFFFFFF: (4, 2), F19A & 0xFFFFFF: (position_x, 2),
+                  F19C & 0xFFFFFF: (0, 2), MOVEMENT_SOUND_CUE & 0xFFFFFF: (0x30, 2)}
+        return {'arm': 'transition-9', 'stores': stores, 'd7': 0xC}
+    f1a6 = (read(F1A6, 2) + 1) & 0xFFFF
+    if f1a6 <= 5:
+        return {'arm': 'contact-gate-f1a6', 'stores': {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (f1a6, 2)}}
+    # Unlike state 14's own arm A (which re-clears F1A6 to 0 here, its own 006E0A clr.w f1a6.w,
+    # before the grid_cell call), state 13's own ROM has NO such clear: F1A6 stays at the
+    # incremented `f1a6` value through the grid test, the nibble test and the transition --
+    # confirmed by a real trace (FFFFF1A7 held 6, not 0, on a real 'transition-1' occurrence).
+    cell = grid_cell(read)
+    address = cell['address']
+    for offset in (1, 0x81, 0x101):
+        if read((address + offset) & 0xFFFFFF, 1) == 1:
+            return {'arm': 'contact-gate-grid',
+                    'stores': {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (f1a6, 2)}, 'cell': cell}
+    low_nibble = read(POSITION_Y, 2) & 0xF
+    if low_nibble != 0 and read((address + 0x181) & 0xFFFFFF, 1) == 1:
+        return {'arm': 'contact-gate-nibble', 'stores': {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (f1a6, 2)},
+                'cell': cell, 'nibble_tested': True, 'd0': low_nibble}
+    position_x = read(POSITION_X, 2)
+    stores = {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (f1a6, 2), STATE_INDEX: (1, 2),
+              POSITION_X: ((position_x + 8) & 0xFFFF, 2), POSITION_Y: ((read(POSITION_Y, 2) - 4) & 0xFFFF, 2)}
+    return {'arm': 'transition-1', 'stores': stores, 'd7': 6, 'cell': cell, 'nibble_tested': low_nibble != 0,
+            'd0': low_nibble}
+
+
+def state13_arm_b(read):
+    """006BF0-006C5E: state 13's own arm B (`FFFFEA20`'s own sign, the mirror of arm A's literal
+    compare).  Returns the same arm names as `state13_arm_a`, `'transition-0'` instead of
+    `'transition-1'`, `'contact-gate-immediate'` when `FFFFEA20 >= 0` (arm B's own body never runs at
+    all -- the SAME shortcut state 14's own arm B takes), and `'transition-8'` instead of
+    `'transition-9'` (`FFFFEA1E < 0`, the SAME physical ROM address `0x6FB8` state 14's own arm B
+    reaches via its own `FFFFEA23` bit 0 -- WITNESSED here, unlike arm A's own `'transition-9'`)."""
+    from .grid import grid_cell
+    if _signed_word(read(EA20_WORD, 2)) >= 0:
+        return {'arm': 'contact-gate-immediate'}
+    bit2 = read(EA23_WORD, 1) & 4
+    if bit2:
+        return {'arm': 'contact-gate', 'stores': {F1A8 & 0xFFFFFF: (0xFFFF, 2)}, 'f1a8_forced': 0xFFFF}
+    if _signed_word(read(EA1E_WORD, 2)) < 0:
+        from .pickups import MOVEMENT_SOUND_CUE
+        position_x = read(POSITION_X, 2)
+        stores = {STATE_INDEX: (8, 2), F196 & 0xFFFFFF: (0xFFFC, 2), F19A & 0xFFFFFF: (position_x, 2),
+                  F19C & 0xFFFFFF: (0, 2), MOVEMENT_SOUND_CUE & 0xFFFFFF: (0x30, 2)}
+        return {'arm': 'transition-8', 'stores': stores, 'd7': 0xD}
+    f1a4 = (read(F1A4, 2) + 1) & 0xFFFF
+    if f1a4 <= 5:
+        return {'arm': 'contact-gate-f1a4', 'stores': {F1A6 & 0xFFFFFF: (0, 2), F1A4 & 0xFFFFFF: (f1a4, 2)}}
+    cell = grid_cell(read)
+    address = cell['address']
+    for offset in (-1, 0x7F, 0xFF):
+        if read((address + offset) & 0xFFFFFF, 1) == 1:
+            return {'arm': 'contact-gate-grid',
+                    'stores': {F1A6 & 0xFFFFFF: (0, 2), F1A4 & 0xFFFFFF: (f1a4, 2)}, 'cell': cell}
+    low_nibble = read(POSITION_Y, 2) & 0xF
+    if low_nibble != 0 and read((address + 0x17F) & 0xFFFFFF, 1) == 1:
+        return {'arm': 'contact-gate-nibble', 'stores': {F1A6 & 0xFFFFFF: (0, 2), F1A4 & 0xFFFFFF: (f1a4, 2)},
+                'cell': cell, 'nibble_tested': True, 'd0': low_nibble}
+    position_x = read(POSITION_X, 2)
+    stores = {F1A6 & 0xFFFFFF: (0, 2), F1A4 & 0xFFFFFF: (f1a4, 2), STATE_INDEX: (0, 2),
+              POSITION_X: ((position_x - 8) & 0xFFFF, 2), POSITION_Y: ((read(POSITION_Y, 2) - 4) & 0xFFFF, 2)}
+    return {'arm': 'transition-0', 'stores': stores, 'd7': 6, 'cell': cell, 'nibble_tested': low_nibble != 0,
+            'd0': low_nibble}
+
+
+def state13_arm_d(read):
+    """006CC6-006CE4: state 13's own arm D (the contact-search gate's own fall-through) --
+    `FFFFEA1E < 0` (a SIGN test, `tst`+`bpl` -- not state 14's own exact `== 1`, `cmpi`+`bne`) toggles
+    `FFFFF1AE` and transitions to state 14 (`STATE13_TO_STATE14`); `FFFFEA1E >= 0` exits unchanged."""
+    if _signed_word(read(EA1E_WORD, 2)) >= 0:
+        return {'arm': 'unchanged'}
+    f1ae = (~read(F1AE, 2)) & 0xFFFF
+    return {'arm': 'transition-14', 'stores': {F1AE & 0xFFFFFF: (f1ae, 2), STATE_INDEX: (STATE13_TO_STATE14, 2),
+                                               F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}}
+
+
+def state13_settle(read, d7, f1ae_override=None):
+    """006CE4-006D3A: ONE pass through state 13's own "settle" head, reached either fresh
+    (STATE_COUNTER wrapped past `0x14`) or carrying the caller's own counter (`FFFFEA20 == 0` and
+    `FFFFEA1E == 1`), and again on the `'loopback'` arm's own second pass.  Unlike state 14's own
+    settle, `FFFFEA20` is NOT re-tested here at all (state 13's own settle entry has no
+    `'rejoin-main'` arm: the loopback re-enters this SAME function directly, never through the main
+    `FFFFEA20` dispatch) -- clears `FFFFF1A4`/`FFFFF1A6` unconditionally then forks on `FFFFF1AE`,
+    the SAME shape `state14_settle` already proves bounded (a single extra pass at most).
+    `f1ae_override` carries the LOOPBACK pass's own just-toggled `FFFFF1AE` (not yet in real RAM at
+    this point in the SAME plan computation, exactly like `state14_settle`'s own parameter);  `None`
+    reads it live, whatever an EARLIER activation last left there."""
+    stores = {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}
+    f1ae = (read(F1AE, 2) & 0xFFFF) if f1ae_override is None else (f1ae_override & 0xFFFF)
+    from .pickups import MOVEMENT_SOUND_CUE
+    if f1ae != 0:
+        after = (d7 - 1) & 0xFFFF
+        if after != 0:
+            return {'arm': 'probe-f1ae', 'stores': stores, 'settle_d7': after, 'sound': False}
+        new_f1ae = (~f1ae) & 0xFFFF
+        stores[MOVEMENT_SOUND_CUE & 0xFFFFFF] = (0x6A, 2)
+        stores[F1AE & 0xFFFFFF] = (new_f1ae, 2)
+        return {'arm': 'loopback', 'stores': stores, 'next_d7': (after + 1) & 0xFFFF, 'next_f1ae': new_f1ae}
+    bumped = (d7 + 1) & 0xFFFF
+    sound = bumped > 3
+    if sound:
+        settle_d7 = (bumped - 2) & 0xFFFF
+        stores[MOVEMENT_SOUND_CUE & 0xFFFFFF] = (0x6A, 2)
+        stores[F1AE & 0xFFFFFF] = ((~f1ae) & 0xFFFF, 2)
+    else:
+        settle_d7 = bumped
+    return {'arm': 'probe', 'stores': stores, 'settle_d7': settle_d7, 'sound': sound}
+
+
+def state13_settle_probe(read, settle_d7):
+    """006CFA-006D64: state 13's own settle probe -- unlike state 14's own (which only ever exits
+    unchanged), this one produces two real transitions.  Steps `POSITION_Y` by `+6` (state 14's own
+    steps by `-6`), calls `game.grid.grid_cell`, and tests `+0x180(a0)` for a BLOCKING byte (value 1,
+    not state 14's own solid-ground value 2): a match transitions to state 26 (`STATE13_TO_STATE26`)
+    with `POSITION_Y` realigned down to a tile boundary and `FFFFF192`'s own D7 forced to 0; a miss
+    tests `+0x100(a0)`/`+0x180(a0)` for solid ground (value 2) -- either exits unchanged (`d7` left at
+    `settle_d7`, state 13 has no `FFFFF1B0`-based restore at all) or transitions to state 10
+    (`STATE13_TO_STATE10`, `d7` forced to 0 there too)."""
+    from .grid import grid_cell
+    position_y = read(POSITION_Y, 2)
+    new_y = (position_y + 6) & 0xFFFF
+    cell = grid_cell(lambda a, s: new_y if (a & 0xFFFFFF) == (POSITION_Y & 0xFFFFFF) else read(a, s))
+    address = cell['address']
+    if read((address + 0x180) & 0xFFFFFF, 1) == 1:
+        new_y_aligned = new_y & 0xFFF0
+        return {'arm': 'blocked', 'cell': cell, 'd7': 0,
+                'stores': {STATE_INDEX: (STATE13_TO_STATE26, 2), POSITION_Y: (new_y_aligned, 2)}}
+    if read((address + 0x100) & 0xFFFFFF, 1) == 2 or read((address + 0x180) & 0xFFFFFF, 1) == 2:
+        # 006CFA's own addq.w #6,f18e.w is an UNCONDITIONAL memory add (unlike state 14's own
+        # register-based -6 step, saved/restored via F1B2): POSITION_Y stays at the advanced value
+        # even when the probe finds solid ground and exits "unchanged" otherwise.
+        return {'arm': 'unchanged', 'cell': cell, 'd7': settle_d7, 'stores': {POSITION_Y: (new_y, 2)}}
+    return {'arm': 'clear', 'cell': cell, 'd7': 0, 'stores': {
+        STATE_INDEX: (STATE13_TO_STATE10, 2), POSITION_Y: (new_y, 2), F194 & 0xFFFFFF: (0, 2),
+        F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2)}}

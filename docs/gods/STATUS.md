@@ -179,7 +179,7 @@ one planner") is the next bite.
   `contact-search`, `contact-consume-primary`,
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
-  `state-26` and `state-8` arm each alone.
+  `state-26`, `state-8` and `state-13` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -970,32 +970,52 @@ small leaf):
   (167), 24 (153), 4 (150), 17 (145), 21 (137), 18 (63), 25 (52), 28
   (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
-  state-24, state-25, state-5, state-6, state-9, state-26, state-8 --
-  8,914 of 13,488 activations (66%) directly reproduced by their own
-  candidate, every remaining activation still running the original but
-  reaching the ALREADY-recovered `player-tail` gate one level in.  State
-  5 (`00746A`, a real sibling of state 1 sharing code both ways, "one
-  region, two gates, one planner") and state 6 (its own mirror, sharing
-  state 0's own hand-off the same way) are both plain leaves composed
-  over the already-recovered contact-consume family; state 9 (`0066A8`),
-  state 26 (`0069AC`, a near-twin reusing state 9's own jump-arc table and
-  row-gate leaves verbatim) and state 8 (`00648C`, state 9's own sibling,
-  recovered 18 Sep -- two of its own five arms byte-identical to state
-  9's own ROM code, confirmed against the ROM; four real differences:
-  its own resting D7 value (6, not 5), its own block-test gate (low5 ==
-  0, not < 8, checking the LEFT neighbour's offsets) with one fewer
-  instruction, its own ground/landed/trigger targets (states 17/11/21,
-  not 16/12/20) and its own re-check gate (0x12, not state 9's 0x16); and
-  its own 'landing-13' arm IS witnessed here, unlike state 9's own
-  declined one) are a shared falling/jump-arc shape
-  (`game.player._row_gate_open`, the same gate test state1_step's own
-  uses, parameterised on the row bias); state 26's own tail hands off
-  directly into state 9's own gate the same "separately armed gate" way
-  state 5/6 hand off to state 1/0.
+  state-24, state-25, state-5, state-6, state-9, state-26, state-8,
+  state-13 -- 9,390 of 13,488 activations (70%) directly reproduced by
+  their own candidate, every remaining activation still running the
+  original but reaching the ALREADY-recovered `player-tail` gate one
+  level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
+  both ways, "one region, two gates, one planner") and state 6 (its own
+  mirror, sharing state 0's own hand-off the same way) are both plain
+  leaves composed over the already-recovered contact-consume family;
+  state 9 (`0066A8`), state 26 (`0069AC`, a near-twin reusing state 9's
+  own jump-arc table and row-gate leaves verbatim) and state 8
+  (`00648C`, state 9's own sibling, recovered 18 Sep -- two of its own
+  five arms byte-identical to state 9's own ROM code, confirmed against
+  the ROM; four real differences: its own resting D7 value (6, not 5),
+  its own block-test gate (low5 == 0, not < 8, checking the LEFT
+  neighbour's offsets) with one fewer instruction, its own
+  ground/landed/trigger targets (states 17/11/21, not 16/12/20) and its
+  own re-check gate (0x12, not state 9's 0x16); and its own 'landing-13'
+  arm IS witnessed here, unlike state 9's own declined one) are a shared
+  falling/jump-arc shape (`game.player._row_gate_open`, the same gate
+  test state1_step's own uses, parameterised on the row bias); state
+  26's own tail hands off directly into state 9's own gate the same
+  "separately armed gate" way state 5/6 hand off to state 1/0.  State 13
+  (`006B4E`, recovered 18 Sep) is state 14's own counterpart: its
+  contact-search gate (`006C62`-`006CC5`) is byte-identical to state 14's
+  own (`006EC4`-`006F27`) and reuses the SAME shared composition
+  (`_state14_contact_cost`/`state14_contact`/`state14_contact_found`);
+  its two jump-start tails (`0x6FB8` into state 8, `0x6FDA` into state 9)
+  are the SAME physical ROM addresses state 14's own arm A/B jump into.
+  Real differences: no `FFFFF1B0` store and no separate `FFFFEA1E`-sign
+  gate before the `FFFFEA20` dispatch (the "settle, carrying" hand-off
+  folds into the `FFFFEA20 == 0` arm itself); arm A/B's own jump-start
+  gate is `FFFFEA1E`'s SIGN (not state 14's own `FFFFEA23` bit 0, and arm
+  A's own `'transition-9'` is unwitnessed by any of the four recordings
+  that reach state 13 at all, declined); arm D's own toggle gate is
+  `FFFFEA1E >= 0` / `< 0` (a sign test, not state 14's own exact `== 1`),
+  toggling INTO state 14 (the mirror of state 14's own toggle into 13);
+  and the settle tail's own retry probe produces two real transitions
+  (states 26/10), unlike state 14's own "always exits unchanged or
+  loops" shape -- and, unlike state 14's own register-based -6 step
+  (saved/restored via `FFFFF1B2`), state 13's own `addq.w #6,f18e.w` is
+  an unconditional MEMORY add, so `POSITION_Y` stays at the advanced
+  value even on the "exit unchanged" arm.
 - **Remaining blocker**: none structural -- the 17 September escalation
   was the shared tail itself, since resolved (`player-tail`).  What is
   left is pure volume: the remaining witnessed states in frequency order
-  (13, 12, 16, 20, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10), each
+  (12, 16, 20, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10), each
   needing the SAME per-arm survey/cost/verify recipe states 0/1/14
   already established; states 7 and 15 decline by name (unwitnessed)
   until a recording exercises them.
