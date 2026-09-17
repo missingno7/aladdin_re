@@ -4921,9 +4921,14 @@ def _contact_search_resolve(machine, read, registers, entry_sp):
     if result['arm'] == 'busy':
         cycles, instructions = _CS_BUSY
         # moveq #1,d0 sets N=0/Z=0/V=0/C=0 (a positive one-word value); tst/bne/rts touch no flag at
-        # all, and MOVEQ itself never touches X, so X survives from entry unchanged.
+        # all, and MOVEQ itself never touches X, so X survives from entry unchanged.  MOVEQ is a FULL
+        # 32-bit register write (sign-extends the 8-bit immediate) -- d0's own upper half is always 0
+        # here, never the caller's own entry upper half (caught by `factcheck.py check
+        # --perturb-upper-halves` on a state 5 fixture whose contact-search call hit this arm, 18
+        # September; every witnessed real fixture's own upper half already happened to be 0, so no
+        # retained fixture had ever exposed it).
         exit_sr = sr & ~0x0F
-        exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | 1, 'sr': exit_sr}
+        exit_registers = {'d0': 1, 'sr': exit_sr}
         return cycles, instructions, order, exit_registers, result
 
     cycles, instructions = _CS_HEAD
@@ -5092,6 +5097,25 @@ def _state1_grid_cost(result):
         cycles += c
         instructions += i
     return cycles, instructions
+
+
+# The cascade's own 'f182-set', 'position-advance' (without 'overflow') and 'shared-unchanged' arms
+# store D7 through an ADDQ/ANDI/TST -- word ops that leave the entry's own upper half untouched --
+# while 'ea1e-negative', 'shared-reset' and 'position-advance' WITH 'overflow' go through a MOVEQ
+# (a full 32-bit clear) first, so `result['d7']` there is already the caller's own complete register.
+# `factcheck.py check --perturb-upper-halves` found the boundary merging neither case correctly (a
+# blanket plain assignment truncated the first group's own upper half), 18 September; shared between
+# state 0's and state 1's own cascades, whose arm names and shapes agree here.
+_CASCADE_D7_MERGE_ARMS = frozenset({'f182-set', 'shared-unchanged'})
+
+
+def _cascade_exit_d7(entry_d7_register, result):
+    """The correct D7 for a cascade result's own 'd7' entry (or `None` if it has none at all)."""
+    if 'd7' not in result:
+        return None
+    if result['arm'] in _CASCADE_D7_MERGE_ARMS or (result['arm'] == 'position-advance' and not result.get('overflow')):
+        return (entry_d7_register & 0xFFFF0000) | (result['d7'] & 0xFFFF)
+    return result['d7']
 
 
 def _state1_cascade_cost(read, sr, d7, position_x, address):
@@ -5316,7 +5340,7 @@ def state1_plan(machine, registers):
                 for aa, bb in _bytes(a, b[0], b[1]):
                     order[aa] = bb
         if 'd7' in result:
-            exit_registers['d7'] = result['d7']
+            exit_registers['d7'] = _cascade_exit_d7(registers['d7'], result)
         if 'd0' in result:
             exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
         exit_registers['pc'] = 0x0075D6
@@ -5378,7 +5402,7 @@ def state1_plan(machine, registers):
             for aa, bb in _bytes(a, b[0], b[1]):
                 order[aa] = bb
     if 'd7' in result:
-        exit_registers['d7'] = result['d7']
+        exit_registers['d7'] = _cascade_exit_d7(registers['d7'], result)
     if 'd0' in result:
         # The ea20==1 grid tests re-read POSITION_X into d0 (0073F6/0073FA), overwriting
         # contact_search's own d0=1 (not found) residue; every other cascade arm leaves it.  The
@@ -5423,7 +5447,11 @@ _S5_HANDOFF_TABLE_READ = (14, 1)            # 0074B0 move.w 74b8(pc,d7.w),d7
 _S5_HANDOFF_BRA = (10, 1)                   # 0074B4 bra.w $75da
 
 
-def _state5_handoff_stores_and_cost(read, order, index, with_moveq):
+def _state56_handoff_stores_and_cost(read, order, index, with_moveq):
+    """The `0074A8`/`0074AA`-`0074B4` table hand-off: SHARED ROM code state 5's own entry (`00746A`)
+    and state 6's own entry (`0074C2`) both reach (confirmed byte-identical by a fresh disassembly of
+    each), so `player.state5_handoff` -- despite its name, nothing in it is state-5-specific -- is
+    reused verbatim rather than duplicated as `state6_handoff`."""
     from .game import player
     handoff = player.state5_handoff(read, index)
     for a, b in _bytes(player.STATE_COUNTER, handoff['stores'][player.STATE_COUNTER][0], 2):
@@ -5478,7 +5506,7 @@ def state5_plan(machine, registers):
         c, i = _S5_BLT5[True]
         cycles += c
         instructions += i
-        hc, hi, new_d7 = _state5_handoff_stores_and_cost(read, order, head['counter'], with_moveq=False)
+        hc, hi, new_d7 = _state56_handoff_stores_and_cost(read, order, head['counter'], with_moveq=False)
         cycles += hc
         instructions += hi
         exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | new_d7
@@ -5536,10 +5564,13 @@ def state5_plan(machine, registers):
     instructions += i
 
     if found:
-        hc, hi, new_d7 = _state5_handoff_stores_and_cost(read, order, 0, with_moveq=True)
+        hc, hi, new_d7 = _state56_handoff_stores_and_cost(read, order, 0, with_moveq=True)
         cycles += hc
         instructions += hi
-        exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | new_d7
+        # 0074A8's own moveq #0,d7 is a FULL 32-bit clear -- the entry's own upper half does NOT
+        # survive here (unlike the plain 'handoff' arm below, which never executes that moveq); caught
+        # by `factcheck.py check --perturb-upper-halves`, 18 September.
+        exit_registers['d7'] = new_d7
         exit_registers['pc'] = 0x0075DA
         add_sr = _add_sr(cs_registers['sr'], 0, 0, 2)   # 0074AE add.w d7,d7 with d7 forced to 0 by 0074A8's moveq
         exit_registers['sr'] = _logic_sr(add_sr, new_d7, 2)
@@ -5556,6 +5587,142 @@ def state5_plan(machine, registers):
     exit_registers['sr'] = _logic_sr(cs_registers['sr'], player.STATE5_FALLBACK_STATE_INDEX, 2)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x007496)
+
+
+# --- 0074C2: state 6 -- a byte-for-byte MIRROR of state 5's own shape (game.player.state6_step),
+# confirmed by a fresh disassembly AND by `factcheck.py facts --path` on all five of state 6's own
+# arms over `census-0074C2-fb408bc75597` (not assumed by symmetry: every one of the eleven costed
+# instruction blocks below matched state 5's own `_S5_*` constants exactly, addq/cmpi/bne/jsr/cmpi/
+# blt/btst/beq/bsr/tst/beq all identical shapes and cycle counts regardless of the different absolute
+# targets `012E5A`/`0x006FFE` bake into two of them -- so this planner reuses `_S5_*` directly rather
+# than a renamed duplicate).  Only the consumer routine (`012E5A`, secondary) and the fallback's own
+# STATE_INDEX/target gate (`0`/`STATE6_FALLBACK_PC`) differ; the handoff and contact-search-gate arms
+# are the exact SAME shared code state 5's own entry reaches (`_state56_handoff_stores_and_cost`).
+STATE6_ENTRY = 0x0074C2
+STATE6_CONSUME_RETURN_PC = 0x0074D0     # jsr 12e5a.l's own return site (cmpi.w #5,d7)
+STATE6_SEARCH_RETURN_PC = 0x0074E2      # bsr.w 8222's own return site (tst.w d0)
+STATE6_FALLBACK_BRA_PC = 0x0074EC       # 0074E6-0074EC: moveq #2,d7; clr.w f192.w; bra.w $6ffe
+
+
+def state6_plan(machine, registers):
+    """0074C2 (state 6): the player state machine's own dispatch table entry 6, ALSO reached by a
+    `bra.w` fallthrough from inside state 0's own body (`state0_handoff`, `0074A2`).  See the module
+    note above -- structurally state 5's own planner with the consumer routine and the fallback's own
+    target swapped."""
+    from .game import player
+    if registers['pc'] != STATE6_ENTRY:
+        raise UnsupportedCandidate('state 6 planner needs the machine parked at 0074C2')
+    read = _reader(machine)
+    d7 = registers['d7'] & 0xFFFF
+    head = player.state6_step(read, d7)
+    order = {}
+    sp32 = registers['a7']
+    sr = _add_sr(registers['sr'], d7, 1, 2)   # 0074C2 addq.w #1,d7 is the first X-setter
+    cycles, instructions = _add(_S5_ADDQ, _S5_CMPI3)
+    exit_registers = {}
+
+    if head['calls_consumer']:
+        c, i = _S5_BNE3[False]
+        cycles += c
+        instructions += i
+        c, i = _S5_JSR_CONSUME
+        cycles += c
+        instructions += i
+        for a, b in _bytes((sp32 - 4) & 0xFFFFFF, STATE6_CONSUME_RETURN_PC, 4):
+            order[a] = b
+        cc_cycles, cc_instructions, cc_order, cc_registers, _ = _cc_resolve(machine, read, registers, 1, sp32 - 4)
+        cycles += cc_cycles
+        instructions += cc_instructions
+        order.update(cc_order)
+        exit_registers.update(cc_registers)
+    else:
+        c, i = _S5_BNE3[True]
+        cycles += c
+        instructions += i
+    c, i = _S5_CMPI5
+    cycles += c
+    instructions += i
+
+    if head['arm'] == 'handoff':
+        c, i = _S5_BLT5[True]
+        cycles += c
+        instructions += i
+        hc, hi, new_d7 = _state56_handoff_stores_and_cost(read, order, head['counter'], with_moveq=False)
+        cycles += hc
+        instructions += hi
+        exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | new_d7
+        exit_registers['pc'] = 0x0075DA
+        add_sr = _add_sr(sr, head['counter'], head['counter'], 2)
+        exit_registers['sr'] = _logic_sr(add_sr, new_d7, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0074B4)
+
+    c, i = _S5_BLT5[False]
+    cycles += c
+    instructions += i
+    c, i = _S5_BTST2
+    cycles += c
+    instructions += i
+
+    if head['arm'] == 'fallback':
+        c, i = _S5_BEQ_BIT2[True]
+        cycles += c
+        instructions += i
+        c, i = _S5_FALLBACK_TAIL
+        cycles += c
+        instructions += i
+        for a, b in _bytes(player.STATE_INDEX, player.STATE6_FALLBACK_STATE_INDEX, 2):
+            order[a] = b
+        exit_registers['d7'] = player.STATE6_FALLBACK_COUNTER
+        exit_registers['pc'] = player.STATE6_FALLBACK_PC
+        exit_registers['sr'] = _logic_sr(sr, player.STATE6_FALLBACK_STATE_INDEX, 2)   # clr.w is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=STATE6_FALLBACK_BRA_PC)
+
+    c, i = _S5_BEQ_BIT2[False]
+    cycles += c
+    instructions += i
+    c, i = _S5_BSR_SEARCH
+    cycles += c
+    instructions += i
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, STATE6_SEARCH_RETURN_PC, 4):
+        order[a] = b
+    cs_cycles, cs_instructions, cs_order, cs_registers, cs_result = _contact_search_resolve(
+        machine, read, {**registers, 'pc': CONTACT_SEARCH_ENTRY, 'a7': sp32 - 4, 'sr': sr}, sp32 - 4)
+    cycles += cs_cycles
+    instructions += cs_instructions
+    order.update(cs_order)
+    exit_registers.update(cs_registers)
+    c, i = _S5_TST_D0
+    cycles += c
+    instructions += i
+    found = cs_result['d0'] == 0
+    c, i = _S5_BEQ_FOUND[found]
+    cycles += c
+    instructions += i
+
+    if found:
+        hc, hi, new_d7 = _state56_handoff_stores_and_cost(read, order, 0, with_moveq=True)
+        cycles += hc
+        instructions += hi
+        # 0074A8's own moveq #0,d7 is a FULL 32-bit clear -- see state 5's own planner above.
+        exit_registers['d7'] = new_d7
+        exit_registers['pc'] = 0x0075DA
+        add_sr = _add_sr(cs_registers['sr'], 0, 0, 2)
+        exit_registers['sr'] = _logic_sr(add_sr, new_d7, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0074B4)
+
+    c, i = _S5_FALLBACK_TAIL
+    cycles += c
+    instructions += i
+    for a, b in _bytes(player.STATE_INDEX, player.STATE6_FALLBACK_STATE_INDEX, 2):
+        order[a] = b
+    exit_registers['d7'] = player.STATE6_FALLBACK_COUNTER
+    exit_registers['pc'] = player.STATE6_FALLBACK_PC
+    exit_registers['sr'] = _logic_sr(cs_registers['sr'], player.STATE6_FALLBACK_STATE_INDEX, 2)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=STATE6_FALLBACK_BRA_PC)
 
 
 # --- 006FFE: state 0 (game.player.state0_step / state0_cascade / state0_shared_sub) ---------------
@@ -5905,7 +6072,7 @@ def state0_plan(machine, registers):
         if 'd7_full' in result:
             exit_registers['d7'] = result['d7_full']
         elif 'd7' in result:
-            exit_registers['d7'] = result['d7']
+            exit_registers['d7'] = _cascade_exit_d7(registers['d7'], result)
         if 'd0' in result:
             exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
         exit_registers['pc'] = 0x0075D6
@@ -5961,7 +6128,7 @@ def state0_plan(machine, registers):
     if 'd7_full' in result:
         exit_registers['d7'] = result['d7_full']
     elif 'd7' in result:
-        exit_registers['d7'] = result['d7']
+        exit_registers['d7'] = _cascade_exit_d7(registers['d7'], result)
     if 'd0' in result:
         exit_registers['d0'] = (cs_registers['d0'] & 0xFFFF0000) | result['d0']
     exit_registers['pc'] = 0x0075D6
@@ -6135,14 +6302,24 @@ def _state14_arm_d_cost(read, sr):
     return c, i, result, 0x006F44, exit_sr
 
 
-def _state14_settle_cost(read, sr, settle_d7, sp32, f1b0_value):
+def _state14_settle_cost(read, sr, settle_d7, sp32, f1b0_value, d7_register):
     """006F48-006FB4: state 14's own "settle" tail, reached from `state14_plan`'s own head with
     `settle_d7` either freshly reset to 0 or carrying the caller's own STATE_COUNTER.  Almost always
     one pass through `player.state14_settle`; the `'loopback'` arm (`FFFFF1AE != 0` on entry, the
     caller's own counter exactly 1) takes a second pass with `FFFFF1AE` now clear -- provably the
     only possible extra pass (`player.state14_settle`'s own module note), so the loop below is
-    capped at three passes purely as a defensive check, not a modelling choice."""
+    capped at three passes purely as a defensive check, not a modelling choice.  `d7_register` is
+    the FULL 32-bit register this tail starts with (0 on a fresh reset -- its own `moveq #0,d7` --
+    or the outer entry's own value, upper half included, when carried): every store here is an
+    ADDQ/SUBQ/AND on the low word only (`state14_settle`'s own bump/subq, the loopback's own second
+    pass), so this upper half survives unchanged through every exit below, merged back in rather
+    than truncated the way a plain low-16 return once was (`factcheck.py check
+    --perturb-upper-halves`, 18 September)."""
     from .game import player
+
+    def high_d7(low):
+        return (d7_register & 0xFFFF0000) | (low & 0xFFFF)
+
     order = {}
     cycles, instructions = (0, 0)
     current_d7 = settle_d7
@@ -6218,12 +6395,12 @@ def _state14_settle_cost(read, sr, settle_d7, sp32, f1b0_value):
         instructions += i
         if first_match:
             exit_sr = _cmp_sr(sr, 2, 2, 1)   # the matching cmpi.b #2,offset(a0): result 0, Z=1
-            return cycles, instructions, order, settle_d7_final, exit_sr, 0x006F9C, 'blocked', probe['cell']
+            return cycles, instructions, order, high_d7(settle_d7_final), exit_sr, 0x006F9C, 'blocked', probe['cell']
         c, i = _add(_S14S_TEST2, _S14S_TEST2_BEQ[True])
         cycles += c
         instructions += i
         exit_sr = _cmp_sr(sr, 2, 2, 1)
-        return cycles, instructions, order, settle_d7_final, exit_sr, 0x006FA6, 'blocked', probe['cell']
+        return cycles, instructions, order, high_d7(settle_d7_final), exit_sr, 0x006FA6, 'blocked', probe['cell']
     c, i = _add(_S14S_TEST1_BEQ[False], _S14S_TEST2, _S14S_TEST2_BEQ[False], _S14S_EXHAUST_TAIL)
     cycles += c
     instructions += i
@@ -6234,27 +6411,31 @@ def _state14_settle_cost(read, sr, settle_d7, sp32, f1b0_value):
     # grid_cell call -- caught by a real trace outside the single-history census (SR left unchanged
     # at 0, not the asl.w's own nonzero result).
     exit_sr = _logic_sr(sr, read(player.POSITION_Y, 2), 2)
-    return cycles, instructions, order, probe['d7'], exit_sr, 0x006FB4, 'exhausted', probe['cell']
+    return cycles, instructions, order, high_d7(probe['d7']), exit_sr, 0x006FB4, 'exhausted', probe['cell']
 
 
 def _state14_main_dispatch(machine, read, registers, sr, order, exit_registers, cycles, instructions,
-                            ea20_one, d7):
+                            ea20_one, d7, d7_register):
     """006DDE onward: state 14's own EA20-based arm dispatch (arm A/B, the shared contact-search
     gate, arm D, and the contact-search 'found' continuation) -- shared between the top-level
     'main' path (`state14_plan`'s own head) and the settle tail's own `'rejoin-main'` handoff
     (`006F4C bne.w $6dd4` lands exactly at this dispatch's own ARMSEL test, `_S14_ARMSEL_TEST`,
-    already accounted for by each caller before this function is entered).  `d7` is the machine's
-    own live D7 at the moment this dispatch starts -- the outer entry D7 for the top-level path,
-    `head['settle_d7']` for the rejoin (provably the same register value: settle's own EA20 test
-    runs before any D7 bump/subq, per `game.player.state14_settle`'s own module note).  Set as the
-    baseline exit register here (every later arm that DOES change D7 -- the transitions, the found
-    continuation -- overwrites it below): arm D's own `'unchanged'` result leaves it unset, relying
-    on D7 already equalling this dispatch's own entry value, which is true for the top-level 'main'
-    path (nothing before it touches D7) but NOT for the rejoin, where a fresh-reset settle entry
-    already forced D7 to 0 before ever reaching here -- caught by a real trace on a tree recording
-    outside the single-history census (D7 left at the plan's own OUTER entry value, not 0)."""
+    already accounted for by each caller before this function is entered).  `d7` is the LOW 16 BITS
+    of the machine's own live D7 at the moment this dispatch starts (the outer entry D7 for the
+    top-level path, `head['settle_d7']` for the rejoin), used only for the odd/even test inside the
+    contact-search 'found' continuation below.  `d7_register` is the FULL 32-bit register this
+    dispatch starts with -- the outer entry's own `registers['d7']` for the top-level path (nothing
+    before it touches D7 at all, upper half included) or, for the rejoin, EITHER that same entry
+    value (settle carried the counter forward untouched) OR exactly 0 (a fresh-reset settle entry's
+    own `moveq #0,d7`, a FULL clear, not just the low 16 bits it forces to 0) -- the caller decides
+    which.  Set as the baseline exit register here (every later arm that DOES change D7 -- the
+    transitions, the found continuation -- overwrites it below): arm D's own `'unchanged'` result
+    leaves it unset, relying on D7 already equalling this baseline (caught twice on a tree recording
+    outside the single-history census: first that the reset case needs 0, not the plan's own OUTER
+    entry value; then, under `factcheck.py check --perturb-upper-halves`, that neither case may
+    truncate the register's own upper half the way a plain `d7 & 0xFFFF` did)."""
     from .game import player
-    exit_registers['d7'] = d7 & 0xFFFF
+    exit_registers['d7'] = d7_register
     if ea20_one:
         arm_result = player.state14_arm_a(read)
     else:
@@ -6501,7 +6682,9 @@ def state14_plan(machine, registers):
             c, i = _add(_S14_STORE_F1B0, _S14_EA1E_TEST, _S14_EA1E_BMI[True])
             cycles += c
             instructions += i
-        sc, si, sorder, exit_d7, exit_sr, last_pc, arm, cell = _state14_settle_cost(read, sr, head['settle_d7'], registers['a7'], None if head['reset'] else head['settle_d7'])
+        settle_d7_register = 0 if head['reset'] else registers['d7']
+        sc, si, sorder, exit_d7, exit_sr, last_pc, arm, cell = _state14_settle_cost(
+            read, sr, head['settle_d7'], registers['a7'], None if head['reset'] else head['settle_d7'], settle_d7_register)
         cycles += sc
         instructions += si
         order.update(sorder)
@@ -6518,8 +6701,12 @@ def state14_plan(machine, registers):
             c, i = _S14_ARMSEL_BNE[not ea20_one]
             cycles += c
             instructions += i
+            # settle_d7_register (above) is exactly the "unchanged so far" D7 this rejoin needs too:
+            # a fresh-reset entry's own moveq #0,d7 clears the FULL register, and a carried entry
+            # never touches D7 before this rejoin at all (settle's own EA20 test runs before any
+            # bump/subq), so its own outer entry value (upper half included) survives untouched.
             return _state14_main_dispatch(machine, read, registers, sr, order, exit_registers, cycles,
-                                           instructions, ea20_one, head['settle_d7'])
+                                           instructions, ea20_one, head['settle_d7'], settle_d7_register)
         if cell is not None:
             exit_registers['a0'] = cell['address'] & 0xFFFFFFFF
             exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell['d0']
@@ -6554,8 +6741,10 @@ def state14_plan(machine, registers):
     cycles += c
     instructions += i
 
+    # Nothing before this dispatch touches D7 at all on the top-level 'main' path: the outer entry's
+    # own register (upper half included) is the correct "unchanged" baseline.
     return _state14_main_dispatch(machine, read, registers, sr, order, exit_registers, cycles,
-                                   instructions, ea20_one, d7)
+                                   instructions, ea20_one, d7, registers['d7'])
 
 
 # --- 012DA0/012E5A: the movement-cluster contact consumers (game/pickups.py: contact_consume) ---

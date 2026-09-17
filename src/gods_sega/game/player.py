@@ -542,6 +542,46 @@ def state5_fallback_stores():
     return {STATE_INDEX: (STATE5_FALLBACK_STATE_INDEX, 2)}
 
 
+# --- 0074C2: state 6's own table-dispatch entry -- a byte-for-byte MIRROR of state 5's own shape,
+# with three constants swapped: it calls the SECONDARY contact-consume routine (`012E5A`, not
+# `012DA0`), and its own fallback lands on state 0's own gate (`STATE_INDEX` CLEARED to 0 by a
+# `clr.w`, not forced to 1 by a `move.w #imm`; `pc = 0x006FFE`, not `0x007282`) -- reached both by
+# STATE_TABLE's own slot 6 and by state 0's own contact-search-found hand-off (`state0_handoff`,
+# `0074A2`, which forces STATE_INDEX to 6 before falling in one instruction ahead of state 5's own
+# entry).  The counter-under-5 arm and the contact-search gate are the SAME shared code state 5's own
+# entry reaches (`0074AA`-`0074B4`'s own table hand-off, `STATE1_HANDOFF_TABLE`) -- `state5_handoff`
+# is reused verbatim, not copied, since neither arm has anything state-6-specific in it (confirmed by
+# a fresh disassembly, 0074C2-0074FC, 18 September).
+STATE6_ENTRY = 0x0074C2
+STATE6_CONSUME_COUNTER = 3
+STATE6_HANDOFF_LIMIT = 5
+STATE6_FALLBACK_STATE_INDEX = 0    # cleared onto FFFFF192 before handing off to state 0's own gate
+STATE6_FALLBACK_COUNTER = 2        # the caller's own D7 on the fallback hand-off (not stored to RAM here)
+STATE6_FALLBACK_PC = 0x006FFE      # state 0's own entry -- state 6's own half of "two gates, one planner"
+
+
+def state6_step(read, d7):
+    """0074C2-0074EC: state 6's own head -- `state5_step`'s own mirror; see its docstring for the
+    shape.  Returns the SAME arm names (`'handoff'`, `'gate'`, `'fallback'`); the boundary reads
+    `state5_handoff` for the first two (shared code) and `state6_fallback_stores` for the third."""
+    counter = (d7 + 1) & 0xFFFF
+    calls_consumer = counter == STATE6_CONSUME_COUNTER
+    if counter < STATE6_HANDOFF_LIMIT:
+        return {'arm': 'handoff', 'counter': counter, 'calls_consumer': calls_consumer}
+    bit2 = read(EA23_WORD, 1) & 4
+    if not bit2:
+        return {'arm': 'fallback', 'counter': counter, 'calls_consumer': calls_consumer}
+    return {'arm': 'gate', 'counter': counter, 'calls_consumer': calls_consumer}
+
+
+def state6_fallback_stores():
+    """0074E6-0074E8: STATE_INDEX CLEARED to 0 (`clr.w $f192.w`, not a `move.w #imm` like state 5's own
+    fallback) before the `bra.w $6ffe` that ends the activation at state 0's own gate; the caller's
+    own D7 (`STATE6_FALLBACK_COUNTER`, 2) is not stored to RAM here, for the same reason as state 5's
+    own fallback."""
+    return {STATE_INDEX: (STATE6_FALLBACK_STATE_INDEX, 2)}
+
+
 # --- 006FFE: state 0's own decision tree -- the "move left" mirror of state 1, NOT a byte-identical
 # copy: real differences confirmed by the tracer, not assumed by symmetry (docs/gods/blockers/
 # 2026-09-17-008222.md's "18 September (continued)" addendum, extended when state 0 was recovered).
