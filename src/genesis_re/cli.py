@@ -35,12 +35,16 @@ def main(argv=None):
             mode = p.add_mutually_exclusive_group()
             mode.add_argument("--cold", action="store_true", help="Run continuously from reset; this is the default")
             mode.add_argument("--cache", action="store_true", help="Allow compatible player caches")
+            p.add_argument("--stop-at-divergence-from", type=Path, default=None,
+                           help="an oracle stream (a history-run payload) to stop at the first frame that differs from")
         if name == "history-verify":
             p.add_argument("--timeout-seconds", type=float, default=120)
             p.add_argument("--sequential", action="store_true",
                            help="Run the reference and candidate workers one after the other")
             p.add_argument("--refresh-oracle", action="store_true",
                            help="Execute the original again instead of reusing its cached stream for this history")
+            p.add_argument("--expect", choices=("pass", "divergence"), default="pass",
+                           help="divergence: a negative control may stop at its first differing frame")
         if name == "history-export":
             p.add_argument("--output", type=Path, required=True)
         if name == "history-capture":
@@ -104,17 +108,24 @@ def main(argv=None):
             elif args.command == "history-run":
                 if args.tree and args.cache:
                     raise ValueError("Tree verification uses only its own freshly computed prefix states")
+                expected = None
+                if args.stop_at_divergence_from is not None:
+                    oracle = json.loads(args.stop_at_divergence_from.read_text())
+                    expected = oracle["observations"][store.resolve(args.node or "main")]
                 result = execute_history(game, store, game.read_rom(rom_path), node=args.node,
-                                         candidate=args.candidate, tree=args.tree, use_cache=args.cache)
+                                         candidate=args.candidate, tree=args.tree, use_cache=args.cache,
+                                         expected=expected)
                 if args.output:
                     write_json(args.output, result)
                     result = {k:v for k,v in result.items() if k not in {"observations", "endpoints"}}
             else:
                 result = compare_history(game, history, rom_path, node=args.node, candidate=args.candidate,
                                          tree=args.tree, output=args.output, timeout_seconds=args.timeout_seconds,
-                                         parallel=not args.sequential, use_oracle_cache=not args.refresh_oracle)
+                                         parallel=not args.sequential, use_oracle_cache=not args.refresh_oracle,
+                                         expect=args.expect)
         print(json.dumps(result))
-        return 0 if result.get("status", "PASS") in {"PASS", "COMPLETED"} else 1
+        # A history-run that stopped at the divergence it was asked to stop at completed its job.
+        return 0 if result.get("status", "PASS") in {"PASS", "COMPLETED", "DIVERGED"} else 1
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, ImportError) as error:
         report = {"status": "ERROR", "detail": str(error)}
         if getattr(error, "__notes__", None):

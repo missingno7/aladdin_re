@@ -97,3 +97,44 @@ def test_the_key_changes_with_the_shared_package_the_instant_and_the_inputs():
     import dataclasses
     moved = dataclasses.replace(GODS, observation_offset_ticks=GODS.observation_offset_ticks + 1)
     assert v.oracle_key(moved, receipt, identities, rom, False) != key
+
+
+@needs_history
+def test_a_negative_control_may_stop_at_its_first_differing_frame(tmp_path, monkeypatch):
+    store_path = (ROOT / GODS.history_path()).resolve()
+    rom_path = (ROOT / GODS.rom_path).resolve()
+    store = HistoryStore(store_path, GODS.history_root)
+    node = store.resolve('f0ac19738f19')
+    receipt = execution_receipt(GODS)
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        candidate = command[command.index('--candidate') + 1]
+        output = Path(command[command.index('--output') + 1])
+        payload = _fake_worker(store, node, receipt, candidate)
+        if '--stop-at-divergence-from' in command:
+            oracle = json.loads(Path(command[command.index('--stop-at-divergence-from') + 1]).read_text())
+            assert oracle['oracle_key']
+            observations = payload['observations'][node][:2250]
+            observations.append(dict(observations[-1], frame=2251, state_sha256='mutated'))
+            payload.update(status='DIVERGED', observations={node: observations}, endpoints={}, stopped_frame=2251,
+                           executed_frames=2251)
+        output.write_text(json.dumps(payload))
+        summary = {k: v for k, v in payload.items() if k not in ('observations', 'endpoints')}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(summary), stderr='')
+
+    warm = v.compare_history(GODS, store_path, rom_path, node=node, candidate='camera', output=tmp_path / 'warm', runner=runner)
+    assert warm['status'] == 'PASS'
+    calls.clear()
+    report = v.compare_history(GODS, store_path, rom_path, node=node, candidate='camera-mutant-result',
+                               output=tmp_path / 'mutant', runner=runner, expect='divergence')
+    assert len(calls) == 1 and '--stop-at-divergence-from' in calls[0]
+    assert report['status'] == 'DIVERGENCE' and report['oracle']['cached'] is True
+    assert report['comparison']['first_difference']['reference']['frame'] == 2251
+    assert report['candidate_receipt']['status'] == 'DIVERGED' and report['candidate_receipt']['stopped_frame'] == 2251
+    # Without a cached stream the control runs the whole history like any candidate.
+    cold = v.compare_history(GODS, store_path, rom_path, node=node, candidate='camera-mutant-result',
+                             output=tmp_path / 'cold', runner=runner, expect='divergence', use_oracle_cache=False)
+    assert cold['candidate_receipt']['status'] == 'COMPLETED' and cold['status'] == 'PASS'

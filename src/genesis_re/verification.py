@@ -93,7 +93,7 @@ def run_worker(role, command, *, timeout_seconds, env=None, runner=None):
         payload = _last_json(completed.stdout)
     except ValueError as error:
         raise WorkerFailure(role, command, str(error), stdout=completed.stdout, stderr=completed.stderr) from error
-    if payload.get("status") != "COMPLETED" or payload.get("compared") is not False:
+    if payload.get("status") not in ("COMPLETED", "DIVERGED") or payload.get("compared") is not False:
         raise WorkerFailure(role, command, "worker did not report successful un-compared execution",
                             stdout=completed.stdout, stderr=completed.stderr)
     return WorkerResult(role, command, payload, completed.stdout, completed.stderr)
@@ -182,11 +182,33 @@ def compare_observations(reference, candidate):
 
 
 
-def execute_history(game, store, rom, *, node=None, candidate="original", tree=False, use_cache=False):
+def _executing_modules(receipt, candidate):
+    """The modules whose edit during a run would change what ran: all of them for a candidate, the shared
+    package's for the original (a game's recovered code is not executed by it, and another agent editing
+    that code while an oracle run is in flight must not invalidate the oracle)."""
+    modules = receipt["python_modules_sha256"]
+    if candidate == "original":
+        return {k: v for k, v in modules.items() if k.startswith("genesis_re/")}
+    return modules
+
+
+class _StopAtDivergence(Exception):
+    def __init__(self, frame):
+        super().__init__(frame)
+        self.frame = frame
+
+
+def execute_history(game, store, rom, *, node=None, candidate="original", tree=False, use_cache=False,
+                    expected=None):
     """Execute logical paths; traversal caches belong to this implementation only.
 
     Tree verification starts cold and caches only states just computed in that
     traversal. Persistent player caches are used only when explicitly requested.
+    ``expected`` (a cold run only) is the oracle's observation list for the
+    selected history: execution stops at the first frame whose observation
+    differs from it and the payload says ``DIVERGED`` with the frames observed
+    so far -- what a negative control needs, which is the first difference,
+    not the rest of the history.
     """
     if store.root != game.history_root:
         raise ValueError(f"History store {store.path} is not a {game.title} original-machine history")
@@ -195,6 +217,9 @@ def execute_history(game, store, rom, *, node=None, candidate="original", tree=F
     start = execution_receipt(game, candidate=candidate)
     observations, endpoints = {}, {}
     executed_frames = restores = 0
+    stopped = None
+    if expected is not None and tree:
+        raise ValueError("Stopping at a divergence needs a cold run of one history")
     with GenesisRun(game, rom, candidate) as run:
         if tree:
             children = {key: [] for key in nodes}
@@ -231,26 +256,40 @@ def execute_history(game, store, rom, *, node=None, candidate="original", tree=F
             before = run.frame
             edge = []
             events = [event for event in path["events"] if event["frame"] >= run.frame]
-            run.advance(path["end_frame"], events, lambda r: edge.append(r.observable()))
+
+            def observe(r):
+                value = r.observable()
+                edge.append(value)
+                if expected is not None:
+                    index = len(edge) - 1
+                    if index >= len(expected) or expected[index] != value:
+                        raise _StopAtDivergence(value["frame"])
+            try:
+                run.advance(path["end_frame"], events, observe)
+            except _StopAtDivergence as stop:
+                stopped = stop.frame
             executed_frames = run.frame - before
             observations[selected] = edge
-            endpoints[selected] = run.observable()
+            if stopped is None:
+                endpoints[selected] = run.observable()
         stats = dict(run.candidate.stats) if run.candidate else {}
         implementation = run.implementation
     end = execution_receipt(game, candidate=candidate)
-    if any(start[k] != end[k] for k in ("python_modules_sha256", "native_binary_sha256")):
+    if _executing_modules(start, candidate) != _executing_modules(end, candidate) or             start["native_binary_sha256"] != end["native_binary_sha256"]:
         raise RuntimeError("Implementation changed during history execution")
-    return {"status": "COMPLETED", "compared": False, "root": store.root_id, "game": game.id,
-            "history_id": selected, "mode": "tree" if tree else "cached" if use_cache else "cold",
-            "observations": observations, "endpoints": endpoints,
+    return {"status": "COMPLETED" if stopped is None else "DIVERGED", "compared": False, "root": store.root_id,
+            "game": game.id, "history_id": selected, "mode": "tree" if tree else "cached" if use_cache else "cold",
+            "observations": observations, "endpoints": endpoints, "stopped_frame": stopped,
             "executed_frames": executed_frames, "restores": restores,
             "candidate_stats": stats, "implementation": implementation, "receipt": end}
 
 
-def _validate_execution(payload, store, selected, tree, candidate, receipt, shared_only=False):
-    if (payload.get("status"), payload.get("compared"), payload.get("root"), payload.get("game"),
-            payload.get("history_id"), payload.get("mode")) != (
-            "COMPLETED", False, store.root_id, receipt["game"], selected, "tree" if tree else "cold"):
+def _validate_execution(payload, store, selected, tree, candidate, receipt, shared_only=False, may_stop=False):
+    diverged = may_stop and payload.get("status") == "DIVERGED" and not tree
+    if (("DIVERGED" if diverged else payload.get("status")), payload.get("compared"), payload.get("root"),
+            payload.get("game"), payload.get("history_id"), payload.get("mode")) != (
+            "DIVERGED" if diverged else "COMPLETED", False, store.root_id, receipt["game"], selected,
+            "tree" if tree else "cold"):
         raise ValueError("Worker history/execution contract mismatch")
     actual_receipt = payload.get("receipt", {})
     if actual_receipt.get("native_binary_sha256") != receipt["native_binary_sha256"]:
@@ -266,13 +305,21 @@ def _validate_execution(payload, store, selected, tree, candidate, receipt, shar
     if payload.get("implementation", {}).get("candidate") != candidate:
         raise ValueError("Worker candidate identity mismatch")
     nodes = store.nodes() if tree else {selected: store.node(selected)}
+    if diverged:
+        # Stopped at the first differing frame: every observation before it is a full one.
+        values = payload.get("observations", {}).get(selected)
+        if not values or values[-1]["frame"] != payload.get("stopped_frame"):
+            raise ValueError("Worker stopped without the differing observation")
+        for frame, value in enumerate(values, 1):
+            if set(value) != _REQUIRED or value["frame"] != frame:
+                raise ValueError("Incomplete or unordered frame observation")
+        return
     if set(payload.get("endpoints", {})) != set(nodes):
         raise ValueError("Worker omitted a history endpoint")
     observed = set(nodes) - {store.root_id} if tree else set(nodes)
     if set(payload.get("observations", {})) != observed:
         raise ValueError("Worker omitted a history input segment")
-    required = {"frame", "buttons", "state_sha256", "frame_sha256", "pcm_sha256", "pcm_bytes",
-                "tick", "pc", "sr", "m68k_cycles", "m68k_instructions", "z80_instructions", "vblanks"}
+    required = _REQUIRED
     for key, node in nodes.items():
         endpoint = payload["endpoints"][key]
         if set(endpoint) != required or endpoint["frame"] != node["end_frame"] or endpoint["buttons"] != node["buttons"]:
@@ -314,6 +361,10 @@ def _run_workers(roles, commands, *, timeout_seconds, parallel, runner=None):
             raise errors[role]
 
 
+_REQUIRED = {"frame", "buttons", "state_sha256", "frame_sha256", "pcm_sha256", "pcm_bytes",
+             "tick", "pc", "sr", "m68k_cycles", "m68k_instructions", "z80_instructions", "vblanks"}
+
+
 def oracle_key(game, receipt, identities, rom_sha256, tree):
     """What the original's observation stream of a history depends on, hashed.
 
@@ -342,7 +393,7 @@ def oracle_cache_path(game, key):
 
 def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecycle", tree=False,
                     output=Path("artifacts/comparison"), timeout_seconds=120, parallel=True,
-                    runner=None, use_oracle_cache=True):
+                    runner=None, use_oracle_cache=True, expect="pass"):
     """Separate fresh workers, strict per-frame state/video/PCM and final equality.
 
     The original's stream is the oracle: once a comparison has executed and
@@ -351,7 +402,11 @@ def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecyc
     and run only the candidate worker; ``use_oracle_cache=False`` executes the
     original again and refreshes the entry.  The report says which
     (``oracle``), and the candidate's receipt -- the one evidence is judged by
-    -- is always fresh.
+    -- is always fresh.  ``expect="divergence"`` (a negative control) lets the
+    candidate worker stop at the first frame that differs from the cached
+    stream instead of finishing the history; the verdict is the same
+    DIVERGENCE with the same first difference, and a control that never
+    differs still runs to the end and reports PASS.
     """
     store = HistoryStore(store_path, game.history_root)
     selected = store.resolve(node or "main")
@@ -366,8 +421,9 @@ def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecyc
     cached = use_oracle_cache and cache.is_file()
     report = {"game": game.id, "history_id": selected, "tree": tree, "candidate": candidate,
               "contract": "strict-genesis-every-canonical-frame", "status": "ERROR",
-              "workers": "parallel" if parallel else "sequential",
+              "workers": "parallel" if parallel else "sequential", "expect": expect,
               "oracle": {"key": key, "cached": cached, "path": str(cache)}}
+    stop_early = expect == "divergence" and cached and not tree
     try:
         roles = (("reference", "original"), ("candidate", candidate))
         commands = {}
@@ -378,6 +434,8 @@ def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecyc
                        "--candidate", choice, "--output", str(result_path.resolve())]
             if tree:
                 command.append("--tree")
+            if role == "candidate" and stop_early:
+                command += ["--stop-at-divergence-from", str(cache.resolve())]
             commands[role] = command
         if cached:
             payloads["reference"] = json.loads(cache.read_text())
@@ -389,7 +447,8 @@ def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecyc
         for role, choice in roles:
             if role in commands:
                 payloads[role] = json.loads((output / (role + ".json")).read_text())
-                _validate_execution(payloads[role], store, selected, tree, choice, receipt)
+                _validate_execution(payloads[role], store, selected, tree, choice, receipt,
+                                    may_stop=(role == "candidate" and stop_early))
         if not cached and use_oracle_cache:
             entry = dict(payloads["reference"], oracle_key=key, oracle_from=str(output.resolve()))
             cache.parent.mkdir(parents=True, exist_ok=True)
@@ -398,6 +457,8 @@ def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecyc
             temporary.replace(cache)
         left, right = payloads["reference"], payloads["candidate"]
         equal = left["observations"] == right["observations"] and left["endpoints"] == right["endpoints"]
+        if right.get("status") == "DIVERGED":
+            equal = False
         first = None
         for key in left["observations"]:
             a, b = left["observations"][key], right["observations"].get(key, [])
