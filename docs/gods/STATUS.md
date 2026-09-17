@@ -178,7 +178,8 @@ one planner") is the next bite.
   `action-reset-elapsed`, `action-clear-group`, `player-tail`,
   `contact-search`, `contact-consume-primary`,
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
-  `state-1`, `state-0` and `state-14` arm each alone.
+  `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9` and
+  `state-26` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -969,25 +970,34 @@ small leaf):
   (167), 24 (153), 4 (150), 17 (145), 21 (137), 18 (63), 25 (52), 28
   (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
-  state-24, state-25 -- 4,441 of 13,488 activations (33%) directly
-  reproduced by their own candidate, every remaining activation still
-  running the original but reaching the ALREADY-recovered `player-tail`
-  gate one level in.
+  state-24, state-25, state-5, state-6, state-9, state-26 -- 8,313 of
+  13,488 activations (62%) directly reproduced by their own candidate,
+  every remaining activation still running the original but reaching the
+  ALREADY-recovered `player-tail` gate one level in.  State 5 (`00746A`,
+  a real sibling of state 1 sharing code both ways, "one region, two
+  gates, one planner") and state 6 (its own mirror, sharing state 0's own
+  hand-off the same way) are both plain leaves composed over the
+  already-recovered contact-consume family; state 9 (`0066A8`) and state
+  26 (`0069AC`, a near-twin reusing state 9's own jump-arc table and
+  row-gate leaves verbatim) are a NEW shared falling/jump-arc shape
+  (`game.player._row_gate_open`, the same gate test state1_step's own
+  uses, parameterised on the row bias) that states 8 (`00648C`, not yet
+  recovered) and 26 both draw on; state 26's own tail hands off directly
+  into state 9's own gate the same "separately armed gate" way state 5/6
+  hand off to state 1/0.
 - **Remaining blocker**: none structural -- the 17 September escalation
   was the shared tail itself, since resolved (`player-tail`).  What is
-  left is pure volume: state 5 (1,492, the next bite -- a real sibling of
-  state 1 sharing code both ways, `00746A`'s own `bra.w $7282` falling
-  back into state 1's own body, "one region, two gates, one planner"),
-  then the twenty-three remaining witnessed states in frequency order (6,
-  9, 26, 8, 13, 12, 16, 20, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23,
-  10), each needing the SAME per-arm survey/cost/verify recipe states
-  0/1/14 already established; states 7 and 15 decline by name
-  (unwitnessed) until a recording exercises them.  Once every witnessed
-  state has its own gated candidate, `005700` is complete as a plain
-  per-state composite, the same shape `achievement-slot-dispatch` already
-  is over `0047DA`/`004800` -- no further card revision needed unless a
-  later state surfaces persistent state or platform interaction this
-  card does not already cover.
+  left is pure volume: state 8 (601, the next bite -- state 9's own
+  sibling, sharing the SAME jump-arc table and row-gate leaves), then the
+  remaining witnessed states in frequency order (13, 12, 16, 20, 19, 11,
+  2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10), each needing the SAME per-arm
+  survey/cost/verify recipe states 0/1/14 already established; states 7
+  and 15 decline by name (unwitnessed) until a recording exercises them.
+  Once every witnessed state has its own gated candidate, `005700` is
+  complete as a plain per-state composite, the same shape
+  `achievement-slot-dispatch` already is over `0047DA`/`004800` -- no
+  further card revision needed unless a later state surfaces persistent
+  state or platform interaction this card does not already cover.
 
 ## Open questions
 
