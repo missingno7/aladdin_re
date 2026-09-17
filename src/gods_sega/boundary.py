@@ -5392,6 +5392,418 @@ def state1_plan(machine, registers):
                       registers=exit_registers, last_pc=last_pc)
 
 
+# --- 006FFE: state 0 (game.player.state0_step / state0_cascade / state0_shared_sub) ---------------
+#
+# Costed one instruction-block at a time from the tracer the same way state 1 is; every block below
+# comes from a fresh set of `factcheck.py facts --path` traces and `branches --vary` sweeps on
+# `census-006FFE/006FFE-entry-p0.state` (plus real fixtures for the arms a single parked state
+# cannot reach: p1/p2/p100/p183/p276).  `game.player`'s own module note transcribes every real
+# difference from state 1's shape; this file does not assume symmetry either -- every block here has
+# its own tracer evidence, not a renamed copy of state 1's constants.
+STATE0_ENTRY = 0x006FFE
+
+_S0_BSR_GRID = (18, 1)                       # 006FFE bsr.w $63fa
+_S0_GATE_TEST = (16, 1)                      # 007002 cmpi.b #1,$180(a0)
+_S0_GATE_BEQ = {True: (10, 1), False: (8, 1)}           # 007008 beq.b -- taken: arm A; not taken: low-bits test
+_S0_LOW_HEAD = (12 + 8 + 8, 3)               # 00700A move.w f18c,d0; 00700E andi #$1e; 007012 cmpi #8
+_S0_LOW_BLT = {True: (10, 1), False: (8, 1)}            # 007016 blt.b -- taken: wall directly
+_S0_WALL_TEST2 = (16, 1)                     # 007018 cmpi.b #1,$181(a0)
+_S0_WALL_BEQ = {True: (10, 1), False: (8, 1)}           # 00701E beq.b -- taken: arm A; not taken: wall
+_S0_WALL_TAIL = (16 + 16 + 16 + 16 + 4 + 10, 6)         # 007020..007034: state=$b, f194/f1a0/f198=0, d7=0
+_S0_ARMA_TEST = (16, 1)                      # 007038 cmpi.w #1,ea20 -- the LITERAL compare, not a sign test
+_S0_ARMA_BNE = {True: (10, 1), False: (8, 1)}           # 00703E bne.b -- taken(!=1): arm A2; not taken(==1): transition-2
+_S0_TRANS2_TAIL = (16 + 4 + 10, 3)           # 007040..007048: state=2, d7=0
+_S0_EA1E_TEST = (16, 1)                      # 00704C cmpi.w #1,ea1e
+_S0_EA1E_BNE = {True: (10, 1), False: (12, 1)}          # 007052 bne.w -- taken: arm A3; not taken: box-overlap
+_S0_BIT0_TEST = (16, 1)                      # 0070D0 btst.b #0,ea23
+_S0_BIT0_BEQ = {True: (10, 1), False: (12, 1)}          # 0070D6 beq.w -- taken: arm A4; not taken: arm A3b
+_S0_A3B_TEST = (12, 1)                       # 0070DA tst.w ea20
+_S0_A3B_BEQ = {True: (10, 1), False: (8, 1)}            # 0070DE beq.b -- taken(==0): the zero route
+_S0_A3B_BPL = {True: (10, 1), False: (8, 1)}            # 0070E0 bpl.b -- taken(>0): positive tree; not taken(<0): state 8
+_S0_A3B_ZERO_HEAD = (16 + 10, 2)             # 007104 clr.w f196; 007108 bra.b (taken)
+_S0_A3B_NEG_HEAD = (16, 1)                   # 0070E2 move.w #$fffc,f196
+_S0_STATE8_TAIL = (16 + 20 + 4 + 16 + 16 + 10, 6)       # 0070E8..007100: state=8, f19a=x, d7=0, f19c=0, fdf6=$30
+_S0_POS_HEAD = (12 + 8 + 8, 3)               # 00710A move.w f18c,d0; 00710E andi #$1f; 007112 cmpi #$14
+_S0_POS_BGT = {True: (10, 1), False: (8, 1)}            # 007116 bgt.b -- taken(low5>0x14)
+_S0_POS_TEST_1 = (16, 1)                     # 007124 cmpi.b #2,$1(a0)
+_S0_POS_BNE_1 = {True: (10, 1), False: (8, 1)}          # 00712A bne.b -- taken(!=2): decline into arm A4; not taken: state 14
+_S0_POS_STATE14_ADDI = (20, 1)               # 00712C addi.w #$20,f18c (the low5>0x14, matched route only)
+_S0_POS_TEST_0 = (12, 1)                     # 007118 cmpi.b #2,(a0)
+_S0_POS_BEQ_0 = {True: (10, 1), False: (8, 1)}          # 00711C beq.b -- taken(==2): state 14 directly
+_S0_POS_TEST_C = (8, 1)                      # 00711E cmpi.w #$c,d0
+_S0_POS_BLT_C = {True: (10, 1), False: (8, 1)}          # 007122 blt.b -- taken(low5<0xc): decline into arm A4
+_S0_POS_STATE14_TAIL = (20 + 16 + 16 + 4 + 16 + 16 + 16 + 10, 7)  # 007132..007150: andi f18c, f1a8=0, state=e, d7=0x1a, f1ae/f1a4/f1a6=0
+_S0_BIT2_TEST = (16, 1)                      # 007154 btst.b #2,ea23
+_S0_BIT2_BEQ = {True: (10, 1), False: (8, 1)}           # 00715A beq.b -- taken: cascade directly; not taken: bsr 8222
+_S0_SEARCH_BSR = (18, 1)                     # 00715C bsr.w $8222
+_S0_SEARCH_TST = (4, 1)                      # 007160 tst.w d0
+_S0_SEARCH_BEQ = {True: (10, 1), False: (12, 1)}        # 007162 beq.w -- taken(found): hand-off; not taken: cascade
+
+_S0_CASCADE_TEST = (12, 1)                   # 007166 tst.w f182
+_S0_CASCADE_BNE = {True: (12, 1), False: (12, 1)}       # 00716A bne.w -- taken: f182-set; not taken: continue (both 12cy)
+_S0_F182_TAIL = (4 + 8 + 16 + 16 + 10, 5)    # 0071D4..0071E2: d7=(d7+1)&7, f182=0, x-=4
+_S0_EA20_SIGN_TEST = (12, 1)                 # 00716E tst.w ea20 (the cascade's own sign test, before the branch)
+_S0_SHARED_BPL = {True: (10, 1), False: (12, 1)}        # 007172 bpl.w -- taken(ea20>=0): shared sub; not taken: grid tests
+_S0_GRIDHEAD = (12 + 8, 2)                   # 007176 move.w f18c,d0; 00717A andi #$1f
+_S0_GRID_BNE = {True: (10, 1), False: (8, 1)}           # 00717E bne.b -- taken(low5!=0): skip grid tests
+_S0_GRID_TEST = (16, 1)                      # cmpi.b #1,offset(a0), each of the three positions
+_S0_GRID_BEQ = {True: (10, 1), False: (12, 1)}          # beq.w -- taken: immediate exit; not taken: next test / advance
+_S0_D7_2_TEST = (8, 1)                       # 0071A2 cmpi.w #2,d7
+_S0_D7_2_BNE = {True: (10, 1), False: (8, 1)}           # 0071A6 bne.b -- not taken(d7==2): write sound $48 first
+_S0_SOUND_WRITE = (16, 1)                    # move.w #imm,fdf6.w ($48 at 0071A8 or $49 at 0071B4)
+_S0_D7_6_TEST = (8, 1)                       # 0071AE cmpi.w #6,d7
+_S0_D7_6_BNE = {True: (10, 1), False: (8, 1)}           # 0071B2 bne.b -- not taken(d7==6): write sound $49
+_S0_ADVANCE_MID = (16, 1)                    # 0071BA clr.w f182
+_S0_D7_7_TEST = (8, 1)                       # 0071BE cmpi.w #7,d7
+_S0_D7_7_BLE = {True: (10, 1), False: (8, 1)}           # 0071C2 ble.b -- taken(d7<=7); not taken: overflow reset
+_S0_OVERFLOW_RESET = (4 + 16, 2)             # 0071C4 moveq #7,d7; 0071C6 addq.w #4,f18c (undoes the -4 above)
+_S0_ADVANCE_TAIL = (4 + 8 + 10, 3)           # 0071CA addq.w #1,d7; 0071CC andi.w #7,d7; 0071D0 bra.w
+_S0_POSITION_DECREMENT = (16, 1)             # 00719E subq.w #4,f18c (the position step itself, before the d7 tests)
+
+_S0_SHARED_TEST = (12, 1)                    # 0071E6 tst.w ea1e
+_S0_SHARED_BPL2 = {True: (10, 1), False: (8, 1)}        # 0071EA bpl.b -- taken: d7 test; not taken: negative tail
+_S0_SHARED_NEG_TAIL = (4 + 16 + 16 + 10, 4)  # 0071EC..0071F8: d7=0xffffffff (moveq #$ff), state=$1a, f24a=0
+_S0_SHARED_D7_TEST = (4, 1)                  # 0071FC tst.w d7
+_S0_SHARED_D7_BEQ = {True: (10, 1), False: (12, 1)}     # 0071FE beq.w -- taken: unchanged; not taken: reset tail
+_S0_SHARED_RESET_TAIL = (4 + 10, 2)          # 007202 moveq #$39,d7; 007204 bra.w
+
+_S0_HANDOFF_HEAD = (16, 1)                   # 0074A2 move.w #6,f192; falls straight into 0074A8 (no bra, unlike state 1's own 00749A)
+_S0_HANDOFF_TAIL = (4 + 12 + 4 + 14 + 10, 5)            # 0074A8..0074B4: d7=0, f190=0, table read, bra.w
+
+
+def _s0_gate_cost(head):
+    """007002-00701E: the cost to reach either 'wall' (007020) or arm A (007038), covering all three
+    routes `state0_step` can take there -- the SAME shape `_s1_gate_cost` already names, state 0's
+    own addresses and constants."""
+    if head['gate_direct']:
+        return _S0_GATE_BEQ[True]
+    cycles, instructions = _add(_S0_GATE_BEQ[False], _S0_LOW_HEAD)
+    if head['low_lt_8']:
+        c, i = _S0_LOW_BLT[True]
+        return cycles + c, instructions + i
+    c, i = _add(_S0_LOW_BLT[False], _S0_WALL_TEST2, _S0_WALL_BEQ[head['arm'] != 'wall'])
+    return cycles + c, instructions + i
+
+
+def _state0_grid_cost(result):
+    """0071A2-0071DE: the low-bits gate (0071A6... actually 00717E) then, when `low5 == 0`,
+    `result['checked']` row-stride grid tests in program order (-1/+0x7F/+0xFF) -- the LAST one only
+    'taken' (a match) on the `'grid-block'` arm.  Mirrors `_state1_grid_cost`."""
+    cycles, instructions = _S0_GRIDHEAD
+    c, i = _S0_GRID_BNE[result['low5'] != 0]
+    cycles += c
+    instructions += i
+    blocked = result['arm'] == 'grid-block'
+    for index in range(result['checked']):
+        c, i = _S0_GRID_TEST
+        cycles += c
+        instructions += i
+        matched = blocked and index == result['checked'] - 1
+        c, i = _S0_GRID_BEQ[matched]
+        cycles += c
+        instructions += i
+    return cycles, instructions
+
+
+def _state0_cascade_cost(read, sr, d7, position_x, address):
+    """007166-0075D6: state 0's own cascade cost and exit facts, the mirror of `_state1_cascade_cost`
+    over state 0's own shape (see `game.player`'s module note for what genuinely differs)."""
+    from .game import player
+    result = player.state0_cascade(read, d7, position_x, address)
+    cycles, instructions = _S0_CASCADE_TEST
+    if result['arm'] == 'f182-set':
+        c, i = _add(_S0_CASCADE_BNE[True], _S0_F182_TAIL)
+        cycles += c
+        instructions += i
+        last_pc = 0x0071E2
+        # 0071DE subq.w #4,f18c is the last flag-setter (SUBQ, unlike state 1's own ANDI-last shape):
+        # N/Z/V/C from POSITION_X's own new value, X from the same instruction's own borrow.
+        exit_sr = _sub_sr(sr, position_x, 4, 2)
+        return cycles, instructions, result, last_pc, exit_sr
+    c, i = _add(_S0_CASCADE_BNE[False], _S0_EA20_SIGN_TEST)
+    cycles += c
+    instructions += i
+    c, i = _S0_SHARED_BPL[player._signed_word(read(EA20_WORD_S0, 2)) >= 0]
+    cycles += c
+    instructions += i
+    if result['arm'] == 'shared-sub-gate':
+        # 0071E6-007204: state 0's own inline copy of the shared sub-body -- resolve it for real now
+        # that the cascade's own EA20 sign test proved it is reached.
+        result = player.state0_shared_sub(read, d7)
+    if result['arm'] not in ('grid-block', 'position-advance'):
+        c, i = _S0_SHARED_TEST
+        cycles += c
+        instructions += i
+        if result['arm'] == 'ea1e-negative':
+            c, i = _add(_S0_SHARED_BPL2[False], _S0_SHARED_NEG_TAIL)
+            cycles += c
+            instructions += i
+            last_pc = 0x0071F8
+            exit_sr = _logic_sr(sr, 0, 2)          # 0071F4 clr.w f24a is the last flag-setter
+            return cycles, instructions, result, last_pc, exit_sr
+        c, i = _S0_SHARED_BPL2[True]
+        cycles += c
+        instructions += i
+        c, i = _S0_SHARED_D7_TEST
+        cycles += c
+        instructions += i
+        if result['arm'] == 'shared-unchanged':
+            c, i = _S0_SHARED_D7_BEQ[True]
+            cycles += c
+            instructions += i
+            last_pc = 0x0071FE
+            exit_sr = _cmp_sr(sr, d7, 0, 2)        # 0071FC tst.w d7 is the last (and only) flag-setter
+            return cycles, instructions, result, last_pc, exit_sr
+        c, i = _add(_S0_SHARED_D7_BEQ[False], _S0_SHARED_RESET_TAIL)
+        cycles += c
+        instructions += i
+        last_pc = 0x007204
+        exit_sr = _cmp_sr(sr, d7, 0, 2)
+        return cycles, instructions, result, last_pc, exit_sr
+    grid_cycles, grid_instructions = _state0_grid_cost(result)
+    if result['arm'] == 'grid-block':
+        cycles += grid_cycles
+        instructions += grid_instructions
+        exit_sr = _cmp_sr(sr, 1, 1, 1)
+        return cycles, instructions, result, result['last_pc'], exit_sr
+    cycles += grid_cycles
+    instructions += grid_instructions
+    c, i = _S0_POSITION_DECREMENT
+    cycles += c
+    instructions += i
+    c, i = _S0_D7_2_TEST
+    cycles += c
+    instructions += i
+    c, i = _S0_D7_2_BNE[d7 != 2]
+    cycles += c
+    instructions += i
+    if d7 == 2:
+        c, i = _S0_SOUND_WRITE
+        cycles += c
+        instructions += i
+    c, i = _S0_D7_6_TEST
+    cycles += c
+    instructions += i
+    c, i = _S0_D7_6_BNE[d7 != 6]
+    cycles += c
+    instructions += i
+    if d7 == 6:
+        c, i = _S0_SOUND_WRITE
+        cycles += c
+        instructions += i
+    c, i = _add(_S0_ADVANCE_MID, _S0_D7_7_TEST)
+    cycles += c
+    instructions += i
+    if result.get('overflow'):
+        c, i = _add(_S0_D7_7_BLE[False], _S0_OVERFLOW_RESET, _S0_ADVANCE_TAIL)
+    else:
+        c, i = _add(_S0_D7_7_BLE[True], _S0_ADVANCE_TAIL)
+    cycles += c
+    instructions += i
+    last_pc = 0x0071D0
+    add_x_sr = _add_sr(sr, d7, 1, 2)
+    exit_sr = (_logic_sr(sr, result['d7'], 2) & ~0x10) | (add_x_sr & 0x10)
+    return cycles, instructions, result, last_pc, exit_sr
+
+
+EA20_WORD_S0 = 0xFFFFEA20   # the same word game.player.EA20_WORD names; a local alias to keep this
+                            # section self-contained the way state 1's own block above is.
+
+
+def state0_plan(machine, registers):
+    """006FFE (state 0): the player state machine's own dispatch table entry 0, composed over the
+    already-recovered grid cell (0063FA), contact search (008222) and the shared tail (0075D6), the
+    mirror of `state1_plan`'s own shape -- but see `game.player`'s module note for the real
+    differences state 0's own tracer evidence found, not assumed by symmetry."""
+    from .game import player
+    if registers['pc'] != STATE0_ENTRY:
+        raise UnsupportedCandidate('state 0 planner needs the machine parked at 006FFE')
+    sr = registers['sr']
+    read = _reader(machine)
+    d7 = registers['d7'] & 0xFFFF
+    head = player.state0_step(read, d7)
+    sr = _asl_sr(sr, head['row_source'], 3, 2)
+    order = {}
+    for a, b in _bytes((registers['a7'] - 4) & 0xFFFFFF, 0x007002, 4):
+        order[a] = b
+    cycles, instructions = _add(_S0_BSR_GRID, GRID_CELL_COST, _S0_GATE_TEST)
+    d0 = head['d0'] if head['gate_direct'] else (head['position_x'] & 0x1E)
+    exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | d0,
+                      'd1': (registers['d1'] & 0xFFFF0000) | head['d1'],
+                      'a0': head['address'] & 0xFFFFFFFF}
+
+    if head['arm'] == 'wall':
+        c, i = _add(_s0_gate_cost(head), _S0_WALL_TAIL)
+        cycles += c
+        instructions += i
+        for a, b in head['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = head['d7']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0, 2)   # 00702E clr.w f198 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x007034)
+
+    if head['arm'] == 'transition-2':
+        c, i = _add(_s0_gate_cost(head), _S0_ARMA_TEST, _S0_ARMA_BNE[False], _S0_TRANS2_TAIL)
+        cycles += c
+        instructions += i
+        for a, b in head['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = head['d7']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0, 2)   # 007046 moveq #0,d7 is the last flag-setter, not the move.w before it
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x007048)
+
+    if head['arm'] == 'box-overlap':
+        raise UnsupportedCandidate('state 0: the box-overlap scan (007056, FFFFEA1E == 1) is not composed here yet')
+
+    gate_cost = _add(_s0_gate_cost(head), _S0_ARMA_TEST, _S0_ARMA_BNE[True], _S0_EA1E_TEST, _S0_EA1E_BNE[True],
+                     _S0_BIT0_TEST)
+
+    if head['arm'] == 'jump-start':
+        if head['f196'] == 0:
+            # 0070DE beq.b taken (EA20 == 0): the zero route, 0070E0's own bpl.b never runs.
+            c, i = _add(gate_cost, _S0_BIT0_BEQ[False], _S0_A3B_TEST, _S0_A3B_BEQ[True], _S0_A3B_ZERO_HEAD)
+        else:
+            # 0070DE beq.b not taken, 0070E0 bpl.b not taken (EA20 < 0): both run before the negative head.
+            c, i = _add(gate_cost, _S0_BIT0_BEQ[False], _S0_A3B_TEST, _S0_A3B_BEQ[False], _S0_A3B_BPL[False],
+                        _S0_A3B_NEG_HEAD)
+        c3, i3 = _S0_STATE8_TAIL
+        cycles += c + c3
+        instructions += i + i3
+        for a, b in head['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = head['d7']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0x30, 2)   # 0070FA move.w #$30,fdf6 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x007100)
+
+    if head['arm'] == 'transition-14':
+        c, i = _add(gate_cost, _S0_BIT0_BEQ[False], _S0_A3B_TEST, _S0_A3B_BEQ[False], _S0_A3B_BPL[True],
+                    _S0_POS_HEAD)
+        low5 = head['low5']
+        if low5 <= 0x14:
+            c2, i2 = _add(_S0_POS_BGT[False], _S0_POS_TEST_0, _S0_POS_BEQ_0[True], _S0_POS_STATE14_TAIL)
+        else:
+            c2, i2 = _add(_S0_POS_BGT[True], _S0_POS_TEST_1, _S0_POS_BNE_1[False], _S0_POS_STATE14_ADDI,
+                          _S0_POS_STATE14_TAIL)
+        cycles += c + c2
+        instructions += i + i2
+        for a, b in head['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = head['d7']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0, 2)   # 00714C clr.w f1a6 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x007150)
+
+    # head['arm'] == 'gate': the shared cascade, directly (EA23 bit 2 clear) or after a contact-search
+    # call -- reached either straight from arm A3 (bit0 clear) or from the positive-EA20 tree's own
+    # decline (low5 < 0xc, or a grid byte that did not match).
+    if head.get('position_positive'):
+        low5 = head['low5']
+        if low5 > 0x14:
+            c, i = _add(gate_cost, _S0_BIT0_BEQ[False], _S0_A3B_TEST, _S0_A3B_BEQ[False], _S0_A3B_BPL[True],
+                        _S0_POS_HEAD, _S0_POS_BGT[True], _S0_POS_TEST_1, _S0_POS_BNE_1[True])
+        else:
+            c, i = _add(gate_cost, _S0_BIT0_BEQ[False], _S0_A3B_TEST, _S0_A3B_BEQ[False], _S0_A3B_BPL[True],
+                        _S0_POS_HEAD, _S0_POS_BGT[False], _S0_POS_TEST_0, _S0_POS_BEQ_0[False], _S0_POS_TEST_C,
+                        _S0_POS_BLT_C[low5 < 0xC])
+            if low5 >= 0xC:
+                c, i = _add((c, i), _S0_POS_TEST_1, _S0_POS_BNE_1[True])
+    else:
+        c, i = _add(gate_cost, _S0_BIT0_BEQ[True], _S0_BIT2_TEST)
+    cycles += c
+    instructions += i
+    position_x = head['position_x']
+    address = head['address']
+
+    if not head['needs_search']:
+        c, i = _S0_BIT2_BEQ[True]
+        cycles += c
+        instructions += i
+        cc, ci, result, last_pc, exit_sr = _state0_cascade_cost(read, sr, d7, position_x, address)
+        cycles += cc
+        instructions += ci
+        if 'stores' in result:
+            for a, b in result['stores'].items():
+                for aa, bb in _bytes(a, b[0], b[1]):
+                    order[aa] = bb
+        if 'd7_full' in result:
+            exit_registers['d7'] = result['d7_full']
+        elif 'd7' in result:
+            exit_registers['d7'] = result['d7']
+        if 'd0' in result:
+            exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = exit_sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=last_pc)
+
+    c, i = _S0_BIT2_BEQ[False]
+    cycles += c
+    instructions += i
+    sp32 = registers['a7']
+    c, i = _S0_SEARCH_BSR
+    cycles += c
+    instructions += i
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, 0x007160, 4):
+        order[a] = b
+    cs_cycles, cs_instructions, cs_order, cs_registers, cs_result = _contact_search_resolve(
+        machine, read, {**registers, 'pc': CONTACT_SEARCH_ENTRY, 'a7': sp32 - 4}, sp32 - 4)
+    cycles += cs_cycles
+    instructions += cs_instructions
+    order.update(cs_order)
+    exit_registers.update(cs_registers)
+    exit_registers['d0'] = cs_registers['d0']
+    c, i = _S0_SEARCH_TST
+    cycles += c
+    instructions += i
+    found = cs_result['d0'] == 0
+    c, i = _S0_SEARCH_BEQ[found]
+    cycles += c
+    instructions += i
+
+    if found:
+        handoff = player.state0_handoff(read)
+        c, i = _add(_S0_HANDOFF_HEAD, _S0_HANDOFF_TAIL)
+        cycles += c
+        instructions += i
+        for a, b in handoff['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = handoff['d7']
+        exit_registers['pc'] = 0x0075DA
+        exit_registers['sr'] = _logic_sr(cs_registers['sr'], handoff['d7'], 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0074B4)
+
+    cc, ci, result, last_pc, exit_sr = _state0_cascade_cost(read, cs_registers['sr'], d7, position_x, address)
+    cycles += cc
+    instructions += ci
+    if 'stores' in result:
+        for a, b in result['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+    if 'd7_full' in result:
+        exit_registers['d7'] = result['d7_full']
+    elif 'd7' in result:
+        exit_registers['d7'] = result['d7']
+    if 'd0' in result:
+        exit_registers['d0'] = (cs_registers['d0'] & 0xFFFF0000) | result['d0']
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = exit_sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=last_pc)
+
+
 # --- 012DA0/012E5A: the movement-cluster contact consumers (game/pickups.py: contact_consume) ---
 #
 # Costed the same way as 008222: one instruction-block at a time (every instruction's own cost

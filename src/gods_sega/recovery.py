@@ -19,7 +19,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
-                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE1_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
+                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, camera_follow_plan,
@@ -28,7 +28,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_tail_plan, proximity_plan,
-                       record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state1_plan, static_emit_plan, string_copy_plan, table_reset_plan,
+                       record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, static_emit_plan, string_copy_plan, table_reset_plan,
                        trail_check_plan, walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
 
@@ -124,6 +124,14 @@ def _mutate_address(plan: AtomicPlan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_state0_counter(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for state 0: the same shape as `_mutate_state1_counter`, for the same reason
+    (its own 'shared-unchanged'/'shared-reset' arms leave the plan's own semantic stores empty)."""
+    registers = dict(plan.registers)
+    registers['d7'] = registers.get('d7', 0) ^ 1
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
 def _mutate_state1_counter(plan: AtomicPlan) -> AtomicPlan:
     """Negative control for state 1: the generic "flip the last write" mutant crashes the machine on
     two of its arms (a stack-scratch byte from the composed grid_cell call, on 'shared-unchanged'/
@@ -186,6 +194,7 @@ PLANNERS = {
     'state-25': {STATE25_ENTRY: movement_hit_secondary_plan},
     'trail-check': {TRAIL_CHECK_ENTRY: trail_check_plan},
     'state-1': {STATE1_ENTRY: state1_plan},
+    'state-0': {STATE0_ENTRY: state0_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -207,7 +216,7 @@ PLANNERS = {
                        CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan,
                        CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan,
                        STATE24_ENTRY: movement_hit_primary_plan, STATE25_ENTRY: movement_hit_secondary_plan,
-                       TRAIL_CHECK_ENTRY: trail_check_plan, STATE1_ENTRY: state1_plan},
+                       TRAIL_CHECK_ENTRY: trail_check_plan, STATE1_ENTRY: state1_plan, STATE0_ENTRY: state0_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -297,7 +306,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'state-24-mutant-result': ('state-24', _mutate_result),
              'state-25-mutant-result': ('state-25', _mutate_result),
              'trail-check-mutant-result': ('trail-check', _mutate_result),
-             'state-1-mutant-result': ('state-1', _mutate_state1_counter)}
+             'state-1-mutant-result': ('state-1', _mutate_state1_counter),
+             'state-0-mutant-result': ('state-0', _mutate_state0_counter)}
 
 
 @dataclass

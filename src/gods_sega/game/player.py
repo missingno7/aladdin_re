@@ -455,10 +455,163 @@ def state1_cascade(read, d7, position_x, address):
     return {'arm': 'shared-reset', 'd7': 0x2D, 'stores': {}}
 
 
-def state1_handoff(read):
-    """00749A-0074B4: the contact-search-found hand-off -- fully deterministic, no branch: STATE_INDEX
-    forced to 5, STATE_COUNTER forced to 0, and a PC-relative table read always at index 0 (the ROM's
-    own `moveq #0,d7` immediately before it), landing one instruction into the shared tail (`pc =
+def _handoff(read, state_index):
+    """0074A8-0074B4 (reached at 0x00749A for state 1's own STATE_INDEX=5, at 0x0074A2 for state 0's
+    own STATE_INDEX=6): the contact-search-found hand-off, fully deterministic, no branch:
+    STATE_COUNTER forced to 0, and a PC-relative table read always at index 0 (the ROM's own
+    `moveq #0,d7` immediately before it), landing one instruction into the shared tail (`pc =
     0x0075DA`, skipping the tail's own first `move.w d7,$f190.w` -- already done here)."""
     d7 = read(STATE1_HANDOFF_TABLE, 2)
-    return {'stores': {STATE_INDEX: (5, 2), STATE_COUNTER: (0, 2)}, 'd7': d7}
+    return {'stores': {STATE_INDEX: (state_index, 2), STATE_COUNTER: (0, 2)}, 'd7': d7}
+
+
+def state1_handoff(read):
+    """00749A-0074B4: state 1's own contact-search-found hand-off (STATE_INDEX forced to 5)."""
+    return _handoff(read, 5)
+
+
+def state0_handoff(read):
+    """0074A2-0074B4: state 0's own contact-search-found hand-off (STATE_INDEX forced to 6) -- the
+    SAME deterministic tail-let `state1_handoff` reaches, entered one instruction earlier."""
+    return _handoff(read, 6)
+
+
+# --- 006FFE: state 0's own decision tree -- the "move left" mirror of state 1, NOT a byte-identical
+# copy: real differences confirmed by the tracer, not assumed by symmetry (docs/gods/blockers/
+# 2026-09-17-008222.md's "18 September (continued)" addendum, extended when state 0 was recovered).
+# The wall shape and the shared sub-body (state 0's own inline copy at 0071E6, not shared code the
+# way state 1 jumps into 007208) follow the same shape as state 1's with different constants; three
+# real differences: (1) state 0's own arm-A test compares FFFFEA20 to the LITERAL 1
+# (`cmpi.w #1,ea20; bne`), not its sign, so a negative EA20 can still reach every later branch, unlike
+# state 1 where arm A already proves EA20 >= 0; (2) where state 1's own bit-0 sub-arm only ever needed
+# EA20's zero/positive split (both converge into the SAME state-9 tail), state 0's needs all three:
+# EA20 negative and EA20 zero both reach the SAME state-8 tail, but EA20 positive reaches its own
+# three-way grid-byte dispatch (0x0710A-0x007150) state 1 has no analogue of at all, landing on state
+# 14 or falling into the shared cascade; (3) the cascade's own low-bits gate compares POSITION_X's low
+# 5 bits to 0 (not 8), the grid tests read offsets -1/+0x7F/+0xFF (not +1/+0x81/+0x101) and decrement
+# POSITION_X (not increment) -- state 0 is the "moving left" counterpart of state 1's "moving right".
+STATE0_ENTRY = 0x006FFE
+STATE0_SHARED_SUB = 0x0071E6
+F1A4, F1A6, F1A8, F1AE = 0xFFFFF1A4, 0xFFFFF1A6, 0xFFFFF1A8, 0xFFFFF1AE
+
+
+def _state0_wall_stores():
+    return {STATE_INDEX: (0xB, 2), F194 & 0xFFFFFF: (0, 2), F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2)}
+
+
+def _state0_state14_stores():
+    return {F1A8 & 0xFFFFFF: (0, 2), STATE_INDEX: (0xE, 2), F1AE & 0xFFFFFF: (0, 2),
+            F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}
+
+
+def state0_step(read, d7):
+    """006FFE: state 0's own head, up to the shared tail, a contact-search call, or a named decline.
+
+    Mirrors `state1_step`'s own contract (same base fields: `d0`/`d1`/`address`/`row_source`/
+    `position_x`/`gate_direct`/`low_lt_8`), but every test past the initial grid gate is state 0's
+    own, not state 1's copied with new constants -- see the module note above.
+    """
+    from .grid import grid_cell
+    from .pickups import MOVEMENT_SOUND_CUE
+    cell = grid_cell(read)
+    address = cell['address']
+    position_x = read(POSITION_X, 2)
+    base = {'d0': cell['d0'], 'd1': cell['d1'], 'address': address, 'row_source': cell['row_source'],
+            'position_x': position_x}
+    gate_direct = read((address + 0x180) & 0xFFFFFF, 1) == 1
+    if gate_direct:
+        wall, low_lt_8 = False, None
+    else:
+        low_lt_8 = (position_x & 0x1E) < 8
+        wall = low_lt_8 or read((address + 0x181) & 0xFFFFFF, 1) != 1
+    base['gate_direct'] = gate_direct
+    base['low_lt_8'] = low_lt_8
+    if wall:
+        return {'arm': 'wall', 'd7': 0, 'stores': _state0_wall_stores(), **base}
+    # Arm A: FFFFEA20 == 1 literally (not a sign test) transitions to state 2; EA20's own sign is
+    # untested here, unlike state 1's arm A.
+    if (read(EA20_WORD, 2) & 0xFFFF) == 1:
+        return {'arm': 'transition-2', 'd7': 0, 'stores': {STATE_INDEX: (2, 2)}, **base}
+    if read(EA1E_WORD, 2) == 1:
+        return {'arm': 'box-overlap', **base}
+    bit0 = read(EA23_WORD, 1) & 1
+    if bit0:
+        ea20_signed = _signed_word(read(EA20_WORD, 2))
+        if ea20_signed <= 0:
+            f196 = 0xFFFC if ea20_signed < 0 else 0   # -4 (negative) or 0 (zero): the SAME state-8 tail
+            stores = {STATE_INDEX: (8, 2), F196 & 0xFFFFFF: (f196, 2), F19A & 0xFFFFFF: (position_x, 2),
+                      F19C & 0xFFFFFF: (0, 2), MOVEMENT_SOUND_CUE & 0xFFFFFF: (0x30, 2)}
+            return {'arm': 'jump-start', 'd7': 0, 'f196': f196, 'stores': stores, **base}
+        # EA20 positive: a three-way grid-byte dispatch state 1 has no analogue of, landing on state
+        # 14 (two different ROM entry points, `007132`/`00712C`, only the second also advancing
+        # POSITION_X by 0x20 first) or falling into the shared cascade (ARM_A4) untransitioned.
+        low5 = position_x & 0x1F
+        if low5 <= 0x14 and read(address & 0xFFFFFF, 1) == 2:
+            return {'arm': 'transition-14', 'd7': 0x1A, 'advance': False, 'low5': low5,
+                    'stores': {POSITION_X: (position_x & 0xFFE0, 2), **_state0_state14_stores()}, **base}
+        if low5 > 0x14 or low5 >= 0xC:
+            if read((address + 1) & 0xFFFFFF, 1) == 2:
+                new_x = (position_x + 0x20) & 0xFFE0
+                return {'arm': 'transition-14', 'd7': 0x1A, 'advance': True, 'low5': low5,
+                        'stores': {POSITION_X: (new_x, 2), **_state0_state14_stores()}, **base}
+        base['low5'] = low5
+        base['position_positive'] = True
+    bit2 = read(EA23_WORD, 1) & 4
+    return {'arm': 'gate', 'needs_search': bool(bit2), **base}
+
+
+def state0_cascade(read, d7, position_x, address):
+    """0071DA(ARM_A4)-0075D6: the cascade `state0_step`'s own `'gate'` arm reaches directly (`EA23`
+    bit 2 clear) or a contact-search 'not found' result continues into.  `FFFFF182` first; when
+    clear, `FFFFEA20`'s own SIGN (not `== 1`, unlike arm A's own test) selects the shared sub-body
+    (`>= 0`) or the three row-stride grid tests at `-1`/`+0x7F`/`+0xFF` (`< 0`, gated by POSITION_X's
+    own low 5 bits being exactly 0, not `< 8`); POSITION_X decrements by 4, the mirror of state 1's
+    own increment.  A STATE_COUNTER already above 7 here (witnessed, the shared sub-body's own reset
+    arm is the only place that stores one this large) undoes the decrement and masks back to 0-7,
+    the mirror of state 1's own `007448`.
+    """
+    from .pickups import MOVEMENT_SOUND_CUE
+    if read(MOVEMENT_FLAG, 2) & 0xFFFF:
+        new_d7 = (d7 + 1) & 7
+        new_x = (position_x - 4) & 0xFFFF
+        return {'arm': 'f182-set', 'd7': new_d7,
+                'stores': {MOVEMENT_FLAG & 0xFFFFFF: (0, 2), POSITION_X: (new_x, 2)}}
+    if _signed_word(read(EA20_WORD, 2)) >= 0:
+        return {'arm': 'shared-sub-gate'}   # the boundary composes state0_shared_sub from here
+    # 007176 move.w f18c,d0; 00717A andi.w #$1f,d0 -- read regardless of low5's own value, the SAME
+    # low-bits value the caller already has; left in D0 either way, mirroring state 1's own 0073F6.
+    low5 = position_x & 0x1F
+    d0 = low5
+    checked = 0
+    if low5 == 0:
+        for offset, last_pc in ((-1, 0x007186), (0x7F, 0x007190), (0xFF, 0x00719A)):
+            checked += 1
+            if read((address + offset) & 0xFFFFFF, 1) == 1:
+                return {'arm': 'grid-block', 'last_pc': last_pc, 'low5': low5, 'checked': checked, 'd0': d0}
+    if d7 > 7:
+        new_x = position_x   # the -4 just below is undone again by the overflow's own +4
+        return {'arm': 'position-advance', 'd7': 0, 'low5': low5, 'checked': checked, 'overflow': True, 'd0': d0,
+                'stores': {MOVEMENT_FLAG & 0xFFFFFF: (0, 2), POSITION_X: (new_x, 2)}}
+    new_x = (position_x - 4) & 0xFFFF
+    stores = {MOVEMENT_FLAG & 0xFFFFFF: (0, 2), POSITION_X: (new_x, 2)}
+    if d7 == 2:
+        stores[MOVEMENT_SOUND_CUE & 0xFFFFFF] = (0x48, 2)
+    if d7 == 6:
+        stores[MOVEMENT_SOUND_CUE & 0xFFFFFF] = (0x49, 2)
+    return {'arm': 'position-advance', 'd7': (d7 + 1) & 7, 'low5': low5, 'checked': checked, 'd0': d0,
+            'stores': stores}
+
+
+def state0_shared_sub(read, d7):
+    """0071E6-007204: state 0's own inline copy of the shared five-instruction sub-body state 1
+    reaches by jumping into 007208 -- the SAME three arms, state 0's own physical copy."""
+    ea1e = _signed_word(read(EA1E_WORD, 2))
+    if ea1e < 0:
+        # 0071EC's own "moveq #$ff,d7" (state 1's copy at 007210 uses "moveq #$1,d7" instead) sign-
+        # extends to the FULL 32-bit register, not just the low word like every other arm here --
+        # 'd7_full' signals the boundary to skip the usual upper-half-preserving merge.
+        return {'arm': 'ea1e-negative', 'd7': 0xFFFF, 'd7_full': 0xFFFFFFFF,
+                'stores': {STATE_INDEX: (0x1A, 2), F24A & 0xFFFFFF: (0, 2)}}
+    if d7 == 0:
+        return {'arm': 'shared-unchanged', 'd7': 0, 'stores': {}}
+    return {'arm': 'shared-reset', 'd7': 0x39, 'stores': {}}
