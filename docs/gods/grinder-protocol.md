@@ -362,13 +362,15 @@ leaf's `history-verify` and the mutant (`--expect divergence`), launched
 together.  Commit locally.
 
 **MILESTONE SEAL** (before a push; ~5 min): `tree_verify.py` on the exact
-commit + the full suite.  A milestone is up to **five** sealed regions of
-one subsystem, or ninety minutes, or a subsystem boundary moving upward
-(a family composed, a parent's declines removed), whichever first; a tree
-that fails names the region by its first differing frame, and the last
-five commits are small enough to bisect in one run each.  A change to a
-shared module (`recovery.py`'s dispatcher, `boundary.py`'s helpers, a
-`game/` module several plans read) is a milestone by itself.
+commit + the full suite.  A milestone is up to **five** sealed leaves or
+**three** sealed compositions / state handlers of one subsystem, or
+ninety minutes, or a subsystem boundary moving upward (a family composed,
+a parent's declines removed), whichever first; a tree that fails names
+the region by its first differing frame, and the commits since the last
+seal are small enough to bisect in one run each.  Hard triggers that
+seal at once regardless of the count: an edit to a shared helper or a
+`game/` module several plans read, a change to an already-sealed arm, a
+`DECLINED` on a recording the census had not covered.
 
 What no tier skips: the strict witness on every retained fixture (the
 32-bit register file, the CCR, every write, the cost) before a region is
