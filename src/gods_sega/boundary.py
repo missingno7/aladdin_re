@@ -4186,13 +4186,15 @@ _TC_POSITION_RETURN = (0x00775C, 0x007768, 0x007774, 0x00778E, 0x00779A)   # pos
 _TC_HEAD = _add((4, 1), (12, 1), (12, 1), (8, 1), (16, 1), (12, 1), (8, 1), (8, 1), (8, 1))
 # 00773A..007752: moveq; add.w F18C; move.w F18E; andi; asr; asl; lea 885E; adda d0; adda d1
 
-# 0077A8's own head (move.l a0,-(a7) through move.w (a0),d0 -- the status word read) plus one of its
-# two decline tails (bmi taken: status < 0; bmi not-taken + beq taken: status == 0), both ending at
-# 00787A's own rts.  A status > 0 (event_status arm == 'event') continues past both instead: not
-# modelled by these two constants.
+# 0077A8's own head (move.l a0,-(a7) through move.w (a0),d0 -- the status word read) plus its
+# WITNESSED decline tail (bmi taken: status < 0; 517 of 654 retained fixtures, 0 mismatches), ending
+# at 00787A's own rts.  The status == 0 tail (bmi not taken -- 12cy, not 8: a real defect caught 18
+# Sep by cross-checking against a status > 0 trace before any fixture exercised it -- then beq taken)
+# is a DIFFERENT, unwitnessed cost (game.player.event_status arm == 'declined-zero'); like a real
+# event (arm == 'event'), it is one of scan['fires'] and player_tail_plan raises before this function
+# is ever called with it in scan['checks'] -- see the assertion below.
 _ES_HEAD = _add((12, 1), (4, 1), (8, 1), (4, 1), (12, 1), (4, 1), (4, 1), (8, 1), (8, 1))
 _ES_DECLINE_NEG = _add((10, 1), (12, 1), (16, 1))          # bmi taken; movea (a7)+,a0; rts
-_ES_DECLINE_ZERO = _add((8, 1), (10, 1), (12, 1), (16, 1))  # bmi not taken; beq taken; movea; rts
 
 
 def _tc_position(check, *, bra=False):
@@ -4206,10 +4208,9 @@ def _tc_position(check, *, bra=False):
         return cycles + c, instructions + i, False
     c, i = _TC_CALL_LAST if bra else _TC_CALL_MID
     cycles, instructions = cycles + c, instructions + i
-    decline = check['status'] - 0x10000 if check['status'] & 0x8000 else check['status']
-    body = _ES_DECLINE_NEG if decline < 0 else _ES_DECLINE_ZERO
-    cycles += _ES_HEAD[0] + body[0]
-    instructions += _ES_HEAD[1] + body[1]
+    assert check['arm'] == 'declined', check  # 'declined-zero'/'event' are scan['fires']; never reach here
+    cycles += _ES_HEAD[0] + _ES_DECLINE_NEG[0]
+    instructions += _ES_HEAD[1] + _ES_DECLINE_NEG[1]
     return cycles, instructions, bra
 
 
@@ -4339,8 +4340,8 @@ def player_tail_plan(machine, registers):
     position_x, position_y = read(player.POSITION_X, 2), read(player.POSITION_Y, 2)
     scan = player.tile_trigger_scan(read, position_x, position_y)
     if scan['fires']:
-        kinds = ', '.join(str(fire['kind']) for fire in scan['fires'])
-        raise UnsupportedCandidate(f'shared tail: the tile trigger scan found an event (007850), kind {kinds}, '
+        names = ', '.join(str(fire['kind']) if fire['arm'] == 'event' else fire['arm'] for fire in scan['fires'])
+        raise UnsupportedCandidate(f'shared tail: the tile trigger scan found an event (007850), kind {names}, '
                                     'unwitnessed here')
     if read(player.SHARED_TAIL_ALT_GATE, 2) & 0xFFFF:
         raise UnsupportedCandidate('shared tail: the FFFFEF4E cutscene-tracker arm (00755A) is unwitnessed '

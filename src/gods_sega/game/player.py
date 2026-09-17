@@ -159,16 +159,26 @@ def event_status(read, tile_value):
 
     ``tile_value`` is read again from ``EVENT_STATUS_WORDS`` at ``tile_value
     - EVENT_STATUS_INDEX_BIAS`` (a word, the SAME table's 4-byte stride
-    ``game.conditions.STATUS_WORDS`` uses): zero or negative declines (the
-    module docstring above); a strictly positive value is the 1-11 index
-    into ``EVENT_TABLE`` (``EVENT_HANDLERS[value - 1]``) after the ten
-    unmodelled flag clears.
+    ``game.conditions.STATUS_WORDS`` uses).  The ROM takes one of THREE
+    branches on this word (``0077BE bmi`` then ``0077C2 beq``), not two: a
+    NEGATIVE status declines by the ``bmi`` taken arm (``'declined'``,
+    witnessed 517 times over the 654 retained fixtures, none of the other
+    two); a ZERO status declines too, but by the OTHER instruction
+    (``bmi`` not taken, ``beq`` taken) -- the SAME outcome (the scan tries
+    the next cell) at a DIFFERENT cost, unwitnessed by any of the eight
+    recordings, so it stays its own named arm (``'declined-zero'``) rather
+    than being folded into ``'declined'`` on an untraced cost; a strictly
+    POSITIVE value is the 1-11 index into ``EVENT_TABLE``
+    (``EVENT_HANDLERS[value - 1]``) after the ten unmodelled flag clears
+    (``'event'``).
     """
     index = (tile_value - EVENT_STATUS_INDEX_BIAS) & 0xFFFF
     status = read((EVENT_STATUS_WORDS + 4 * index) & 0xFFFFFFFF, 2)
     signed = _signed_word(status)
-    if signed <= 0:
+    if signed < 0:
         return {'arm': 'declined', 'status': status}
+    if signed == 0:
+        return {'arm': 'declined-zero', 'status': status}
     handler = EVENT_HANDLERS[signed - 1] if signed <= len(EVENT_HANDLERS) else None
     return {'arm': 'event', 'status': status, 'kind': signed, 'handler': handler}
 
@@ -180,11 +190,14 @@ def tile_trigger_scan(read, x, y):
     widened to a second column, ``checks`` (one entry per cell whose byte
     exceeded ``TILE_THRESHOLD``, in scan order, each carrying its own
     ``event_status`` result), ``fires`` (the sub-list of ``checks`` whose
-    arm is ``'event'`` -- real code this module does not model further),
-    and, for backward compatibility with callers that only care whether
-    0077A8 was ever reached, ``arm`` (``'clean'``: no cell exceeded the
-    threshold; ``'trigger'``: at least one did, whether or not any of them
-    actually fired an event) and ``trigger_index`` (the first such cell).
+    arm is not the witnessed ``'declined'`` -- an ``'event'`` (real code
+    this module does not model further) or the unwitnessed
+    ``'declined-zero'``, either of which the boundary must decline the
+    whole activation for), and, for backward compatibility with callers
+    that only care whether 0077A8 was ever reached, ``arm`` (``'clean'``:
+    no cell exceeded the threshold; ``'trigger'``: at least one did,
+    whether or not any of them actually fired an event) and
+    ``trigger_index`` (the first such cell).
     """
     base = _tile_cell(x, y)
     cells = [base, (base + TILE_ROW_BYTES) & 0xFFFFFFFF, (base + 2 * TILE_ROW_BYTES) & 0xFFFFFFFF]
@@ -199,7 +212,7 @@ def tile_trigger_scan(read, x, y):
             continue
         checks.append({'index': index, 'value': value, **event_status(read, value)})
     trigger = checks[0]['index'] if checks else None
-    fires = [check for check in checks if check['arm'] == 'event']
+    fires = [check for check in checks if check['arm'] != 'declined']
     return {'cells': cells, 'values': values, 'widen': widen,
             'arm': 'clean' if trigger is None else 'trigger', 'trigger_index': trigger,
             'checks': checks, 'fires': fires}

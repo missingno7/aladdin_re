@@ -51,10 +51,10 @@ def test_low_x_bits_at_or_above_0x10_widen_to_a_second_column():
 
 def test_a_byte_over_the_threshold_triggers_at_its_own_index():
     reads = {(0xFF885E, 1): 0, (0xFF885E + 0x80, 1): 3, (0xFF885E + 0x100, 1): 0,
-             (player.EVENT_STATUS_WORDS, 2): 0}   # status 0 at index (3 - bias) = 0: declines, no event
+             (player.EVENT_STATUS_WORDS, 2): 0xFFFF}   # status -1 (negative) at index (3 - bias) = 0: declines
     result = player.tile_trigger_scan(_reader(reads), x=0x00, y=0)
     assert result['arm'] == 'trigger' and result['trigger_index'] == 1
-    assert result['checks'] == [{'index': 1, 'value': 3, 'arm': 'declined', 'status': 0}]
+    assert result['checks'] == [{'index': 1, 'value': 3, 'arm': 'declined', 'status': 0xFFFF}]
     assert result['fires'] == []
 
 
@@ -66,11 +66,15 @@ def test_the_threshold_itself_does_not_trigger():
 
 # --- 0077A8's own status check (event_status) and the scan's fuller resolution ------------------------
 
-def test_event_status_declines_on_a_negative_or_zero_status_word():
+def test_event_status_declines_on_a_negative_status_word_but_names_zero_separately():
+    # A negative status is the ONLY witnessed decline (517 of 654 retained fixtures); a zero status
+    # declines too (the scan still tries the next cell) but by the OTHER branch at a different,
+    # unwitnessed cost (18 Sep: bmi not-taken is 12cy, not 8 -- caught before any fixture exercised
+    # it), so it stays its own named arm rather than being folded into 'declined'.
     negative = player.event_status(_reader({(player.EVENT_STATUS_WORDS + 4 * 7, 2): 0xFFFF}), tile_value=10)
     assert negative == {'arm': 'declined', 'status': 0xFFFF}
     zero = player.event_status(_reader({(player.EVENT_STATUS_WORDS + 4 * 7, 2): 0}), tile_value=10)
-    assert zero == {'arm': 'declined', 'status': 0}
+    assert zero == {'arm': 'declined-zero', 'status': 0}
 
 
 def test_event_status_fires_the_event_table_entry_on_a_positive_status_word():
@@ -80,13 +84,21 @@ def test_event_status_fires_the_event_table_entry_on_a_positive_status_word():
 
 
 def test_a_triggered_cell_that_declines_lets_the_scan_continue_to_the_next_one():
-    # Two triggered cells (index 0 and 1): the first's own status word is zero (declines, matching
+    # Two triggered cells (index 0 and 1): the first's own status word is negative (declines, matching
     # 0077A8's own bsr-returns-to-try-the-next-cell shape), the second's is genuinely never checked
     # because it never exceeds TILE_THRESHOLD -- only the FIRST cell's own decline is under test here.
     reads = {(0xFF885E, 1): 5, (0xFF885E + 0x80, 1): 0, (0xFF885E + 0x100, 1): 0,
-             (player.EVENT_STATUS_WORDS + 4 * (5 - player.EVENT_STATUS_INDEX_BIAS), 2): 0}
+             (player.EVENT_STATUS_WORDS + 4 * (5 - player.EVENT_STATUS_INDEX_BIAS), 2): 0xFFFF}
     result = player.tile_trigger_scan(_reader(reads), x=0x00, y=0)
     assert result['arm'] == 'trigger' and result['checks'][0]['arm'] == 'declined' and result['fires'] == []
+
+
+def test_a_triggered_cell_with_a_zero_status_is_also_reported_in_fires_unwitnessed():
+    reads = {(0xFF885E, 1): 5, (0xFF885E + 0x80, 1): 0, (0xFF885E + 0x100, 1): 0,
+             (player.EVENT_STATUS_WORDS + 4 * (5 - player.EVENT_STATUS_INDEX_BIAS), 2): 0}
+    result = player.tile_trigger_scan(_reader(reads), x=0x00, y=0)
+    assert result['checks'][0]['arm'] == 'declined-zero'
+    assert result['fires'] == [{'index': 0, 'value': 5, 'arm': 'declined-zero', 'status': 0}]
 
 
 def test_a_triggered_cell_that_fires_is_reported_in_fires():
