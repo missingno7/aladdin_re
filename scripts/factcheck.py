@@ -99,6 +99,31 @@ def poke(game, state, writes):
         return m.snapshot()
 
 
+def perturb_upper_halves(game, state, pattern=0x5A5A):
+    """The same entry with every data register's upper word replaced by ``pattern``.
+
+    A plan that carries an entry register's upper half where the original
+    clears or sign-extends it (a tree run found such a d3 on 18 September)
+    agrees with the tracer on every witnessed fixture, whose upper halves
+    happen to be zero, and differs on this one: a constructed input, never a
+    gameplay claim, but a cheap instrument for that defect class.  The
+    original's behaviour with those upper halves is whatever the trace of
+    this state records; a MISMATCH names an unmodelled dependence.
+    """
+    with Machine(game.read_rom(), game) as m:
+        m.restore(state)
+        pc = m.info['pc']
+        registers = m.registers()
+        for index in range(8):
+            registers['d%d' % index] = (registers['d%d' % index] & 0xFFFF) | (pattern << 16)
+        m.gates([pc])
+        assert m.run(instructions=1) == 'gate'
+        if not m.atomic(target=m.info['tick'] + 1_000_000, cycles=1, instructions=1, last_pc=pc,
+                        writes=[], registers=registers):
+            return None                      # the adapter refused the constructed entry (m.refusal says why)
+        return m.snapshot()
+
+
 def _combinations(specs):
     combos = list(itertools.product(*parse_vary(specs))) if specs else [()]
     return [[pair for group in combo for pair in group] for combo in combos]
@@ -148,6 +173,11 @@ def command_check(args):
         with contextlib.redirect_stdout(buffer) if quiet else contextlib.nullcontext():
             status = _check_one(args)
         verdict = {0: 'MATCH', 1: 'MISMATCH', 2: 'DECLINED'}[status]
+        if status == 0 and 'SKIPPED' in buffer.getvalue():
+            verdict = 'SKIPPED'
+            counts.setdefault('SKIPPED', 0)
+            counts['SKIPPED'] += 1
+            counts['MATCH'] -= 1
         counts[verdict] += 1
         worst = max(worst, status)
         detail = ''
@@ -155,8 +185,9 @@ def command_check(args):
             lines = [line for line in buffer.getvalue().splitlines() if line.startswith(('MISMATCH', 'DECLINED', '  '))]
             detail = ('  ' + ' | '.join(line.strip() for line in lines[:4])) if status else ''
         print('%-9s %s%s' % (verdict, _short(fixture), detail))
-    print('summary: %d fixtures, MATCH %d, MISMATCH %d, DECLINED %d' % (
-        len(fixtures), counts['MATCH'], counts['MISMATCH'], counts['DECLINED']))
+    print('summary: %d fixtures, MATCH %d, MISMATCH %d, DECLINED %d%s' % (
+        len(fixtures), counts['MATCH'], counts['MISMATCH'], counts['DECLINED'],
+        ', SKIPPED %d' % counts['SKIPPED'] if counts.get('SKIPPED') else ''))
     return worst
 
 
@@ -177,6 +208,11 @@ def _short(path):
 
 def _check_one(args):
     state = _load(args)
+    if getattr(args, 'perturb_upper_halves', False):
+        state = perturb_upper_halves(args.game, state)
+        if state is None:
+            print('SKIPPED: the adapter refused the constructed entry (a bank or interrupt guard); the fixture stands as witnessed')
+            return 0
     worst = 0
     for writes in _combinations(args.vary):
         if args.vary:
@@ -237,9 +273,16 @@ def _check_state(state, args):
         print(pathfacts.report(facts, path=False))
         return 2
     if stop is None and plan.registers.get('pc') != facts['exit_pc']:
-        print('NOTE: plan continues at %06X but the original returns to its caller at %06X;'
-              ' pass --stop %06X to compare the plan span' % (
-                  plan.registers.get('pc', 0), facts['exit_pc'], plan.registers.get('pc', 0)))
+        handoff = plan.registers.get('pc', 0)
+        if any(step['pc'] == handoff for step in facts['steps']):
+            # A plan that hands off to another gated region (a state handler into the shared tail):
+            # the plan's span ends where the original reaches that PC, so compare up to there.
+            print('NOTE: plan hands off at %06X before the original returns at %06X; comparing the span to the handoff'
+                  % (handoff, facts['exit_pc']))
+            facts = _region(pathfacts.trace(state, game=args.game, stop_pc=handoff, max_instructions=args.max))
+        else:
+            print('NOTE: plan continues at %06X but the original returns to its caller at %06X;'
+                  ' pass --stop %06X to compare the plan span' % (handoff, facts['exit_pc'], handoff))
     problems = _compare('prefix ' if seam is not None else '', plan, facts, regs)
     if seam is not None and not problems:
         # The platform operation runs on the original; the suffix is planned from the live state at the resume.
@@ -295,6 +338,8 @@ def main(argv=None):
             p.add_argument('fixture', nargs='+', help='one or more .state files, or globs (quoted on PowerShell)')
             p.add_argument('planner', help='module:function, e.g. aladdin_sega.boundary:begin_contact_family_type55')
             p.add_argument('--verbose', action='store_true', help='full per-fixture output when checking many')
+            p.add_argument('--perturb-upper-halves', action='store_true',
+                           help='check the same entry with every data register\'s upper word set to 5A5A (constructed)')
         else:
             p.add_argument('fixture')
         p.add_argument('--game', type=select_game, required=True)

@@ -349,9 +349,17 @@ retained fixture of the class (300 frames, ~2 s).  Iterate here until the
 plan MATCHes.
 
 **REGION SEAL** (before a region's commit; ~5 min, mostly concurrent):
-every retained fixture MATCH (the test module); the full `run_tests.py
-gods`; the segment tier from the boundary states; the shortest exercising
-leaf's `history-verify` and the mutant, launched together.  Commit locally.
+every retained fixture MATCH (the test module) **and MATCH again under
+`factcheck check ... --perturb-upper-halves`** (the same entries with every
+data register's upper word set to `5A5A`: a plan that carries an entry
+register's upper half where the original clears it, or clears one the
+original keeps, agrees with every witnessed fixture and differs here —
+the d3 residue a tree run found on 18 September, and the d7/d0 residue
+the check found in states 0, 1 and 14 the same day; a `SKIPPED` fixture
+is one the adapter refused to construct); the full `run_tests.py gods`;
+the segment tier from the boundary states; the shortest exercising
+leaf's `history-verify` and the mutant (`--expect divergence`), launched
+together.  Commit locally.
 
 **MILESTONE SEAL** (before a push; ~5 min): `tree_verify.py` on the exact
 commit + the full suite.  A milestone is up to **five** sealed regions of
