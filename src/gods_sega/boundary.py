@@ -1805,15 +1805,22 @@ _TE_OUTER_RTS = (16, 1)
 _TE_RETURN_PC = (0x00465E, 0x00466C, 0x00467A)   # the internal bsr's own return address, one per pair
 
 
-def evaluator_plan(machine, registers):
-    """00462C: the trigger evaluator's non-firing arm, three composed calls into 00470C."""
+def _evaluator_resolve(read, sr, a0, entry_d1, entry_d5, entry_d6, entry_a4, entry_a5):
+    """00462C's own non-firing arm, from the disabled-flag test through the AND tail, shared by
+    ``evaluator_plan`` (parked directly at 00462C, ``a0`` its own caller-supplied status-table address)
+    and ``player_tail_plan``'s own composed raise (0075D6's tile scan, ``a0`` the STATUS_WORDS entry
+    ``event_status`` already read the status word from -- the SAME convention: 00462C's own head reads
+    ``2(a0)`` as the trigger-record index either way).  Raises ``UnsupportedCandidate`` for the disabled
+    arm (unwitnessed), an unrecovered condition kind, or the firing arm (all three conditions hold --
+    left for the supervisor, docs/gods/blockers/2026-09-16-00462C-firing.md).  Returns the cost, every
+    RAM store (the two preset slot writes, then whichever the three condition calls clear -- NOT the
+    caller-specific return-address residue, added by each caller separately), the register residue
+    (d0/d1/d5/d6/a1/a2/a3/a4/a5) and the exit SR chained from ``sr``.  ``entry_d1``/``entry_d5``/
+    ``entry_d6``/``entry_a4``/``entry_a5`` are the caller's own values at the point 00462C is entered --
+    only their UPPER halves (d1/d5/d6) or their whole value when no condition call ever touches them
+    (a4; a5 is always set, by every pair's own dispatch) survive into the result.
+    """
     from .game import triggers
-    if registers['pc'] != EVALUATOR_ENTRY:
-        raise UnsupportedCandidate('trigger evaluator planner needs the machine parked at 00462C')
-    sp32, sr = registers['a7'], registers['sr']
-    sp = sp32 & 0xFFFFFF
-    a0 = registers['a0'] & 0xFFFFFFFF
-    read = _reader(machine)
     disable_flag = read(triggers.DISABLE_FLAG & 0xFFFFFF, 2)
     if disable_flag & 0xFFFF:
         raise UnsupportedCandidate('trigger evaluator disabled arm not witnessed by a recording')
@@ -1824,13 +1831,12 @@ def evaluator_plan(machine, registers):
     if result['arm'] == 'firing':
         raise UnsupportedCandidate('trigger evaluator firing arm is not recovered (left for the supervisor)')
     entry = result['entry']
-    _spans_disjoint([('trigger frame', sp, 4), ('trigger record', entry & 0xFFFFFF, triggers.TRIGGER_STRIDE)])
     cycles, instructions = _TE_HEAD
     # muls.w #$18,d0 (the head's own index-to-entry-offset multiply) leaves the full 32-bit signed
     # product in d0 before the first internal call -- the caller's own entering d0 is gone by then.
     index_signed = index - 0x10000 if index & 0x8000 else index
-    regs = {'d0': (index_signed * triggers.TRIGGER_STRIDE) & 0xFFFFFFFF, 'd1': registers['d1'],
-           'd5': registers['d5'], 'd6': registers['d6'], 'a4': registers['a4'], 'a5': registers['a5']}
+    regs = {'d0': (index_signed * triggers.TRIGGER_STRIDE) & 0xFFFFFFFF, 'd1': entry_d1,
+           'd5': entry_d5, 'd6': entry_d6, 'a4': entry_a4, 'a5': entry_a5}
     call_sr = sr
     slot_values = []
     for pair_index, call in enumerate(result['calls']):
@@ -1858,16 +1864,40 @@ def evaluator_plan(machine, registers):
     exit_registers = {'d0': (regs['d0'] & 0xFFFF0000) | final, 'a2': a0,
                       'a1': (triggers.TRIGGER_TABLE + triggers.TRIGGER_STRIDE * index) & 0xFFFFFFFF,
                       'a3': (triggers.SLOT_BASE + 4) & 0xFFFFFFFF, 'a4': regs['a4'], 'a5': regs['a5'],
-                      'd1': regs.get('d1', registers['d1']), 'd5': regs['d5'], 'd6': regs['d6'],
-                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
-    writes = list(_bytes(triggers.SLOT_BASE & 0xFFFFFF, 0xFFFFFFFF, 4))
-    writes.extend(_bytes((triggers.SLOT_BASE + 4) & 0xFFFFFF, 0xFFFF, 2))
+                      'd1': regs['d1'], 'd5': regs['d5'], 'd6': regs['d6']}
+    writes = {}
+    for a, b in _bytes(triggers.SLOT_BASE & 0xFFFFFF, 0xFFFFFFFF, 4):
+        writes[a] = b
+    for a, b in _bytes((triggers.SLOT_BASE + 4) & 0xFFFFFF, 0xFFFF, 2):
+        writes[a] = b
     for call in result['calls']:
-        writes.extend(pair for address, (value, size) in call['result']['stores'].items()
-                      for pair in _bytes(address, value, size))
-    writes.extend(_bytes((sp - 4) & 0xFFFFFF, _TE_RETURN_PC[len(result['calls']) - 1], 4))
-    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(writes), registers=exit_registers,
-                      last_pc=EVALUATOR_LAST_PC)
+        for address, (value, size) in call['result']['stores'].items():
+            for a, b in _bytes(address, value, size):
+                writes[a] = b
+    return {'cycles': cycles, 'instructions': instructions, 'writes': writes, 'registers': exit_registers,
+           'sr': exit_sr, 'entry': entry, 'pair_count': len(result['calls'])}
+
+
+def evaluator_plan(machine, registers):
+    """00462C: the trigger evaluator's non-firing arm, three composed calls into 00470C."""
+    from .game import triggers
+    if registers['pc'] != EVALUATOR_ENTRY:
+        raise UnsupportedCandidate('trigger evaluator planner needs the machine parked at 00462C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a0 = registers['a0'] & 0xFFFFFFFF
+    read = _reader(machine)
+    resolved = _evaluator_resolve(read, sr, a0, registers['d1'], registers['d5'], registers['d6'],
+                                  registers['a4'], registers['a5'])
+    _spans_disjoint([('trigger frame', sp, 4),
+                     ('trigger record', resolved['entry'] & 0xFFFFFF, triggers.TRIGGER_STRIDE)])
+    exit_registers = dict(resolved['registers'])
+    exit_registers.update(a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=resolved['sr'])
+    writes = dict(resolved['writes'])
+    for a, b in _bytes((sp - 4) & 0xFFFFFF, _TE_RETURN_PC[resolved['pair_count'] - 1], 4):
+        writes[a] = b
+    return AtomicPlan(cycles=resolved['cycles'], instructions=resolved['instructions'],
+                      writes=tuple(writes.items()), registers=exit_registers, last_pc=EVALUATOR_LAST_PC)
 
 
 # --- 007986/0079DC: the message display gate and string copy (game/messages.py) ---------------------
@@ -4145,9 +4175,13 @@ def launch_plan(machine, registers):
 # (``docs/gods/blockers/2026-09-17-005700.md``).  Reached by a plain ``bra.w`` from every witnessed
 # state handler and the dispatcher's own 'inactive' arm, so there is no frame of its own on the
 # stack: the top of stack, throughout, is whatever 005700's own true caller's ``jsr`` left there.
-# The prefix, in ROM order: the tile trigger scan's clean arm (``game.player.tile_trigger_scan`` --
-# a 'trigger' arm, an event raised through 007850, DECLINES BY NAME: real code this module does not
-# model); the follow-point step (``game.camera.follow_point_step``, the FFFFEF4E == 0 arm only -- the
+# The prefix, in ROM order: the tile trigger scan (``game.player.tile_trigger_scan``), composed with
+# its own found-tile arm (``event_status``, a strictly positive status raising one of EVENT_HANDLERS
+# through the shared preamble 0077BE-007876): kind 3 (00462C, the trigger evaluator)'s own non-firing
+# outcome is admitted and the scan continues, up to six raises per activation; every other kind, the
+# evaluator's own firing arm, its disabled arm and a zero status all DECLINE BY NAME (real code this
+# module does not model -- docs/gods/blockers/2026-09-16-00462C-firing.md); the follow-point step
+# (``game.camera.follow_point_step``, the FFFFEF4E == 0 arm only -- the
 # sibling cutscene-style tracker at 00755A is unwitnessed on the full tree of all eight recordings,
 # 55,326 activations, and DECLINES BY NAME); and the state-table re-index
 # (``game.player.state_table_reindex``).  The ceded operation is the tail's own ``jmp 001312``
@@ -4171,8 +4205,8 @@ _PT_HEAD = _add((12, 1), (12, 1), (18, 1), (12, 1))     # 0075D6 store; 0075DA p
 # empty -- see test_player_tail.py) to every triggered cell whose own event_status declines: each
 # such cell adds 0077A8's own call overhead (bsr, or bra for the scan's absolute last position, only
 # reachable when widen) and its decline body (0077A8's head through its own bmi/beq-taken rts --
-# game.player.event_status arm == 'declined').  A cell that FIRES (arm == 'event') is not modelled
-# here; player_tail_plan raises before calling this for a scan with any scan['fires'].
+# game.player.event_status arm == 'declined').  An admitted event (arm == 'event', kind 3) adds the
+# raiser's own preamble and _trigger_evaluate_resolve's own cost instead -- see _tc_position below.
 _TC_TEST = (12, 1)                      # cmpi.b #2,(a0)
 _TC_SKIP = (10, 1)                      # bls.b taken: not triggered
 _TC_CALL_MID = (8 + 18, 1 + 1)          # bls.b not taken (8,1) + bsr.b $77a8 (18,1)
@@ -4190,57 +4224,155 @@ _TC_HEAD = _add((4, 1), (12, 1), (12, 1), (8, 1), (16, 1), (12, 1), (8, 1), (8, 
 # WITNESSED decline tail (bmi taken: status < 0; 517 of 654 retained fixtures, 0 mismatches), ending
 # at 00787A's own rts.  The status == 0 tail (bmi not taken -- 12cy, not 8: a real defect caught 18
 # Sep by cross-checking against a status > 0 trace before any fixture exercised it -- then beq taken)
-# is a DIFFERENT, unwitnessed cost (game.player.event_status arm == 'declined-zero'); like a real
-# event (arm == 'event'), it is one of scan['fires'] and player_tail_plan raises before this function
-# is ever called with it in scan['checks'] -- see the assertion below.
+# is a DIFFERENT, unwitnessed cost (game.player.event_status arm == 'declined-zero'), declined by name
+# in _tc_position below the moment the scan actually reaches it.
 _ES_HEAD = _add((12, 1), (4, 1), (8, 1), (4, 1), (12, 1), (4, 1), (4, 1), (8, 1), (8, 1))
 _ES_DECLINE_NEG = _add((10, 1), (12, 1), (16, 1))          # bmi taken; movea (a7)+,a0; rts
 
+# A STRICTLY POSITIVE status (arm == 'event') raises one of EVENT_HANDLERS through a shared preamble
+# (0077BE-007876): both branches of _ES_HEAD's own status test fall through (not taken), then ten
+# unconditional flag-word checks (real code, no recording has ever been seen with any of them set --
+# game.player's own docstring) and the table dispatch itself.  Only kind 3 (00462C, the trigger
+# evaluator) is modelled past this point -- every other kind is declined by name -- and only 00462C's
+# own non-firing arm (at least one of a record's three conditions false) is admitted; the firing arm
+# (all three hold) stands declined, docs/gods/blockers/2026-09-16-00462C-firing.md's own
+# NEW_GODS_SUBSYSTEM.  Costs from artifacts/gods/evidence/census-0075D6/parent-00773A-entry-p4/p15.state.
+_ES_EVENT_BRANCHES = _add((12, 1), (12, 1))                # 0077BE bmi.w / 0077C2 beq.w, both NOT taken
+_ES_EVENT_FLAGS = _add(*([(20, 1), (10, 1)] * 10))          # 0077C6-00785E: ten (cmpi.b; bne.b not taken)
+_ES_EVENT_DISPATCH = _add((4, 1), (4, 1), (4, 1), (12, 1), (18, 1), (16, 1))
+# 007866-007876: subq.w #1,d0; add.w d0,d0 (x2); lea.l 4494,a1; movea.l (a1,d0.w),a1; jsr (a1)
+_ES_EVENT_HEAD = _add(_ES_EVENT_BRANCHES, _ES_EVENT_FLAGS, _ES_EVENT_DISPATCH)
+_ES_EVENT_CLOSE = _add((12, 1), (16, 1))    # 007878 movea.l (a7)+,a0; 00787A rts -- 00462C's own rts (004688)
+                                             # pops straight back into THIS same exit, same as a decline's own
+_ES_EVENT_JSR_RETURN = 0x007878             # the raiser's own return address (jsr (a1), fixed)
+# 00462C's own three internal bsr's into 00470C (_TE_RETURN_PC above) always run, in order, on any
+# non-firing raise -- only the LAST one's own return address survives (the reused stack slot).
+_ES_EVENT_PAIR_RETURN = _TE_RETURN_PC[-1]
 
-def _tc_position(check, *, bra=False):
+
+def _trigger_evaluate_resolve(read, status_address, *, entry_a4):
+    """The raise dispatch's own call into 00462C (jsr (a1), a0 = ``status_address``): a thin wrapper
+    over ``_evaluator_resolve`` (the SAME cost/register model ``evaluator_plan`` uses standalone -- the
+    trigger evaluator's own shape does not change with who calls it, the way ``achievement_slot_
+    dispatch`` reuses ``achievement_slot_reset_plan``); 00462C's own head re-reads the record index from
+    ``2(a0)`` itself (``game.player.event_status`` already read the SAME word as ``record_index``, kept
+    there for its own report, not needed again here).  d1 is never exposed to the caller here -- nothing
+    later in the shared tail ever reads it; d0/d5/d6's own upper half and a5 are recombined by
+    ``player_tail_plan`` itself the same way for every raise; only ``entry_a4`` (carried across however
+    many raises one activation makes, since nothing but a kind 5/6/11/12 condition ever touches it)
+    matters as an input.  Raises ``UnsupportedCandidate`` for the disabled arm, an unrecovered/
+    unwitnessed condition kind, or the firing arm (both left to ``_evaluator_resolve`` --
+    docs/gods/blockers/2026-09-16-00462C-firing.md).
+    """
+    resolved = _evaluator_resolve(read, 0, status_address & 0xFFFFFFFF, 0, 0, 0, entry_a4, 0)
+    registers = dict(resolved['registers'])
+    del registers['d1']
+    registers['d0'] = registers['d0'] & 0xFFFF0000
+    return {'cycles': resolved['cycles'], 'instructions': resolved['instructions'],
+           'writes': resolved['writes'], 'registers': registers}
+
+
+def _tc_position(read, check, entry_a4, *, bra=False):
     """One of 00773A's own six candidate positions: the test, then a skip (not triggered) or a call
     into 0077A8 (``check``, the corresponding entry of ``scan['checks']``, or ``None``) -- ``bra`` for
     the scan's own absolute last position (widen only), which tail-branches instead of calling, so a
-    triggered position 5 leaves control in 0077A8's own rts rather than returning here at all."""
+    triggered position 5 leaves control in 0077A8's own rts rather than returning here at all.  A
+    'declined' check costs only; an admitted 'event' (kind 3, 00462C's own non-firing arm) also returns
+    ``_trigger_evaluate_resolve``'s own result as the fourth element (``None`` otherwise)."""
     cycles, instructions = _TC_TEST
     if check is None:
         c, i = _TC_SKIP
-        return cycles + c, instructions + i, False
+        return cycles + c, instructions + i, False, None
     c, i = _TC_CALL_LAST if bra else _TC_CALL_MID
     cycles, instructions = cycles + c, instructions + i
-    assert check['arm'] == 'declined', check  # 'declined-zero'/'event' are scan['fires']; never reach here
-    cycles += _ES_HEAD[0] + _ES_DECLINE_NEG[0]
-    instructions += _ES_HEAD[1] + _ES_DECLINE_NEG[1]
-    return cycles, instructions, bra
+    arm = check['arm']
+    if arm == 'declined':
+        cycles += _ES_HEAD[0] + _ES_DECLINE_NEG[0]
+        instructions += _ES_HEAD[1] + _ES_DECLINE_NEG[1]
+        return cycles, instructions, bra, None
+    if arm == 'declined-zero':
+        raise UnsupportedCandidate('shared tail: the tile trigger scan found a zero-status cell (0077A8), '
+                                   'unwitnessed by any of the eight recordings')
+    assert arm == 'event', check
+    if check['handler'] != 0x00462C:
+        raise UnsupportedCandidate(f"shared tail: the tile trigger scan found an event (0077A8), kind "
+                                   f"{check['kind']}, unwitnessed here")
+    cycles += _ES_HEAD[0]
+    instructions += _ES_HEAD[1]
+    eh_c, eh_i = _ES_EVENT_HEAD
+    cycles, instructions = cycles + eh_c, instructions + eh_i
+    resolve = _trigger_evaluate_resolve(read, check['status_address'], entry_a4=entry_a4)
+    cycles, instructions = cycles + resolve['cycles'], instructions + resolve['instructions']
+    close_c, close_i = _ES_EVENT_CLOSE
+    cycles, instructions = cycles + close_c, instructions + close_i
+    return cycles, instructions, bra, resolve
 
 
-def _tile_scan_cost(scan):
-    """00773A's own total cost (cycles, instructions) for a scan whose triggered cells (if any) all
-    decline (``scan['fires']`` empty -- the caller checks this first).  Reduces to the two constants
-    this replaces when ``scan['checks']`` is empty (the fully clean arm)."""
+def _tile_scan_cost(read, scan, sp, entry_a4):
+    """00773A's own total cost (cycles, instructions), every RAM write the scan itself abandons (the
+    per-position stack residue at sp-12/sp-16, generalised below to the deeper residue an admitted
+    event's own nested calls leave at sp-16/sp-20 or, past widen's last (bra) position, sp-12/sp-16 --
+    ``sp`` is THIS activation's own entry a7, matching ``player_tail_plan``'s own ``order`` dict
+    convention: 'the tracer only sees the bytes that changed', so a write that matches stale RAM is
+    harmless) and the LAST admitted event's own register residue (``None`` if the scan raised nothing
+    kind 3 could resolve).  ``entry_a4`` is this ACTIVATION's own entry a4 (before the scan even starts),
+    the value the FIRST raise's own possibly-untouched a4 falls back to.  Reduces to the two constants
+    this once was when ``scan['checks']`` is empty (the fully clean arm)."""
     by_index = {c['index']: c for c in scan['checks']}
     widen = scan['widen']
     cycles, instructions = _TC_HEAD
-    for position in (0, 1):
-        c, i, _ = _tc_position(by_index.get(position))
+    writes = {}
+    registers = None
+    a4_carry = entry_a4   # a4 changes only on a condition kind that sets it (5/6/11/12); once set, later
+                       # raises whose own three pairs never touch it again leave it exactly as the last
+                       # raise that did -- 68000 registers only change when something writes them.
+    d0_upper = None    # 0077A8's own `moveq #0,d0` (0077AA) resets d0's upper half on EVERY call, an
+                       # event's own condition calls aside -- unlike a1/a2/a3/a4/a5/d5/d6, a PLAIN
+                       # decline touches this too, so it is tracked across every check, not only events.
+
+    def _position(index, *, bra=False):
+        nonlocal cycles, instructions, registers, a4_carry, d0_upper
+        check = by_index.get(index)
+        c, i, ended, resolve = _tc_position(read, check, a4_carry, bra=bra)
         cycles, instructions = cycles + c, instructions + i
+        if check is not None:
+            d0_upper = 0
+            cell_slot = (sp - 12) if index == 5 else (sp - 16)
+            if index != 5:
+                for a, b in _bytes((sp - 12) & 0xFFFFFF, _TC_POSITION_RETURN[index], 4):
+                    writes[a] = b
+            for a, b in _bytes(cell_slot & 0xFFFFFF, scan['cells'][index] & 0xFFFFFFFF, 4):
+                writes[a] = b
+            if resolve is not None:
+                for a, b in _bytes((cell_slot - 4) & 0xFFFFFF, _ES_EVENT_JSR_RETURN, 4):
+                    writes[a] = b
+                for a, b in _bytes((cell_slot - 8) & 0xFFFFFF, _ES_EVENT_PAIR_RETURN, 4):
+                    writes[a] = b
+                writes.update(resolve['writes'])
+                registers = dict(resolve['registers'])
+                d0_upper = registers['d0']
+                a4_carry = registers['a4']   # always present: _trigger_evaluate_resolve's own a4 falls
+                                              # back to entry_a4 (this closure's a4_carry) when nothing
+                                              # in this particular raise touches it, so this is a no-op
+                                              # unless a kind 5/6/11/12 condition just set a NEW value.
+        return ended
+
+    for position in (0, 1):
+        _position(position)
         cycles, instructions = cycles + _TC_ADV[0], instructions + _TC_ADV[1]
-    c, i, _ = _tc_position(by_index.get(2))
-    cycles, instructions = cycles + c, instructions + i
+    _position(2)
     widen_cost = _TC_WIDEN_WIDE if widen else _TC_WIDEN_NARROW
     cycles, instructions = cycles + widen_cost[0], instructions + widen_cost[1]
     if not widen:
-        return cycles + _TC_FINAL_RTS[0], instructions + _TC_FINAL_RTS[1]
+        return cycles + _TC_FINAL_RTS[0], instructions + _TC_FINAL_RTS[1], writes, registers, d0_upper
     cycles, instructions = cycles + _TC_ADV3[0], instructions + _TC_ADV3[1]
     for position in (3, 4):
-        c, i, _ = _tc_position(by_index.get(position))
-        cycles, instructions = cycles + c, instructions + i
+        _position(position)
         cycles, instructions = cycles + _TC_ADV[0], instructions + _TC_ADV[1]
-    c, i, ended = _tc_position(by_index.get(5), bra=True)
-    cycles, instructions = cycles + c, instructions + i
+    ended = _position(5, bra=True)
     if not ended:
         cycles, instructions = cycles + _TC_FINAL_RTS[0], instructions + _TC_FINAL_RTS[1]
-    return cycles, instructions
+    return cycles, instructions, writes, registers, d0_upper
 
 
 _PT_FOLLOW_HEAD = _add((12, 1), (12, 1), (12, 1), (12, 1), (12, 1), (10, 1))   # 0075E2..0075F6 (taken: EF4E==0)
@@ -4339,10 +4471,6 @@ def player_tail_plan(machine, registers):
     d7 = registers['d7'] & 0xFFFF
     position_x, position_y = read(player.POSITION_X, 2), read(player.POSITION_Y, 2)
     scan = player.tile_trigger_scan(read, position_x, position_y)
-    if scan['fires']:
-        names = ', '.join(str(fire['kind']) if fire['arm'] == 'event' else fire['arm'] for fire in scan['fires'])
-        raise UnsupportedCandidate(f'shared tail: the tile trigger scan found an event (007850), kind {names}, '
-                                    'unwitnessed here')
     if read(player.SHARED_TAIL_ALT_GATE, 2) & 0xFFFF:
         raise UnsupportedCandidate('shared tail: the FFFFEF4E cutscene-tracker arm (00755A) is unwitnessed '
                                    'by any of the eight recordings')
@@ -4362,8 +4490,9 @@ def player_tail_plan(machine, registers):
     reindex = player.state_table_reindex(read, state_index, d7)
 
     cycles, instructions = _PT_HEAD
-    tile_cost = _tile_scan_cost(scan)
-    cycles, instructions = cycles + tile_cost[0], instructions + tile_cost[1]
+    tile_cycles, tile_instructions, tile_writes, event_registers, d0_upper = _tile_scan_cost(
+        read, scan, sp, registers['a4'])
+    cycles, instructions = cycles + tile_cycles, instructions + tile_instructions
     fh_c, fh_i = _PT_FOLLOW_HEAD
     cycles, instructions = cycles + fh_c, instructions + fh_i
     x_c, x_i = _PT_X_COST[x_branch]
@@ -4393,28 +4522,17 @@ def player_tail_plan(machine, registers):
         order[a] = b
     for a, b in _bytes((sp - 8) & 0xFFFFFF, 0x0075E0, 4):
         order[a] = b
-    if scan['checks']:
-        # Every triggered-and-declined cell's own 0077A8 call (bsr for positions 0-4, bra for the
-        # scan's absolute last position, 5, which pushes no return address of its own) nets the stack
-        # pointer back to its own entry depth by the time it returns -- but each one's own push
-        # abandons residue at sp-12 (the bsr's return address, or position 5's own pushed a0, since a
-        # bra pushes nothing of its own) and sp-16 (the pushed a0 of a bsr call only), twelve/sixteen
-        # bytes below THIS routine's own entry sp, one bsr-frame below the tile scan's own call at
-        # sp-8 above.  Positions 0-4 share both slots (only the LAST one among them survives); position
-        # 5 (bra, only reachable when widen) shares only sp-12 with them -- it never touches sp-16, so
-        # an earlier bsr position's own cell address left there survives untouched if position 5 is
-        # the only -- or the last -- one to decline.
-        bsr_checks = [c for c in scan['checks'] if c['index'] != 5]
-        if bsr_checks:
-            last_bsr = bsr_checks[-1]
-            for a, b in _bytes((sp - 16) & 0xFFFFFF, scan['cells'][last_bsr['index']] & 0xFFFFFFFF, 4):
-                order[a] = b
-            if not any(c['index'] == 5 for c in scan['checks']):
-                for a, b in _bytes((sp - 12) & 0xFFFFFF, _TC_POSITION_RETURN[last_bsr['index']], 4):
-                    order[a] = b
-        if any(c['index'] == 5 for c in scan['checks']):
-            for a, b in _bytes((sp - 12) & 0xFFFFFF, scan['cells'][5] & 0xFFFFFFFF, 4):
-                order[a] = b
+    # Every triggered cell's own 0077A8 call (bsr for positions 0-4, bra for the scan's absolute last
+    # position, 5, which pushes no return address of its own) nets the stack pointer back to its own
+    # entry depth by the time it returns -- but each one's own push abandons residue at sp-12 (the
+    # bsr's return address, or position 5's own pushed a0, since a bra pushes nothing of its own) and
+    # sp-16 (the pushed a0 of a bsr call only); an admitted event's own nested calls (the jsr into
+    # 00462C, then its own three bsr's into 00470C, the last one's return address surviving) go deeper
+    # still, four and eight bytes below wherever THAT position's own cell address landed.  Positions
+    # 0-4 share the sp-12/sp-16 pair (only the LAST one among them survives); position 5 (bra, only
+    # reachable when widen) touches only its own cell slot (sp-12) -- _tile_scan_cost computes all of
+    # this in scan order, so the last write per address is whichever position actually made it last.
+    order.update(tile_writes)
     for a, b in _bytes(player.STATE_COUNTER & 0xFFFFFF, d7, 2):
         order[a] = b
     for address, value in follow['stores'].items():
@@ -4422,9 +4540,12 @@ def player_tail_plan(machine, registers):
             order[a] = b
 
     # d0's own upper half is zero from the tile scan's own head onward (00773A: moveq #$10,d0 sign-
-    # extends a positive immediate to the full 32 bits, and every later write to d0 in this whole
-    # region is a plain .w move or arithmetic op that leaves the upper half alone) -- not the
-    # caller's own entry upper half, unlike every other register this planner touches.
+    # extends a positive immediate to the full 32 bits) UNLESS an admitted event's own last condition
+    # call (a kind 9/10 predicate's own divs remainder) left it nonzero -- every other write to d0 in
+    # this whole region, on every branch, is a plain .w move or arithmetic op that leaves the upper
+    # half alone from there to the tail's own final "move.w f18c,d0" (0076A2) -- not the caller's own
+    # entry upper half either way, unlike every other register this planner touches.
+    d0_upper = 0 if d0_upper is None else d0_upper
     high = lambda name: 0 if name == 'd0' else registers[name] & 0xFFFF0000
     d2 = ((reindex['high'] << 16) | reindex['descriptor']) & 0xFFFFFFFF
     # move.w $f18e.w,d1 (0076A6) is the last N/Z/V/C setter before the jmp on every branch (the
@@ -4436,7 +4557,7 @@ def player_tail_plan(machine, registers):
     # carry out of doubling a 16-bit value, i.e. the re-index's own index bit 15.
     exit_sr = _logic_sr(sr, position_y, 2)
     exit_sr = (exit_sr & ~0x10) | (0x10 if (reindex['index'] >> 15) & 1 else 0)
-    exit_registers = {'d0': high('d0') | position_x, 'd1': (reindex['mask'] & 0xFFFF0000) | position_y,
+    exit_registers = {'d0': d0_upper | position_x, 'd1': (reindex['mask'] & 0xFFFF0000) | position_y,
                       'd2': d2, 'a0': 0x00005618, 'a7': sp32, 'pc': PLAYER_TAIL_UPLOAD_ENTRY, 'sr': exit_sr}
     if follow['d3'] is not None:
         # The y-decrease band's own d3 setter is `moveq #$20,d3` (007654-0076
@@ -4448,6 +4569,18 @@ def player_tail_plan(machine, registers):
         # candidate wrote 0x4B460004 where the original left 0x00000004.
         d3_high = 0 if follow['y_branch'] in ('decrease', 'decrease-clamped') else high('d3')
         exit_registers['d3'] = d3_high | follow['d3']
+    if event_registers is not None:
+        # The LAST admitted event's own register residue: nothing after the tile scan (the follow-point
+        # step, the re-index) ever touches a1/a2/a3/a4/a5/d5/d6 again, so whichever raise ran last in
+        # scan order leaves these live all the way to the ceded upload -- the clean arm never sets any
+        # of them at all (the caller's own entry values ride through untouched, the existing 'clean'-arm
+        # tests already prove it).  a1/a2/a3/a5 (and a4, when present) are already full 32-bit addresses;
+        # d5/d6 are only ever touched by .w moves anywhere in this whole region, so the caller's own
+        # entry upper half survives exactly like d0-d3 above.
+        exit_registers.update({name: value for name, value in event_registers.items()
+                               if name in ('a1', 'a2', 'a3', 'a4', 'a5')})
+        exit_registers['d5'] = high('d5') | (event_registers['d5'] & 0xFFFF)
+        exit_registers['d6'] = high('d6') | (event_registers['d6'] & 0xFFFF)
     prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                         registers=exit_registers, last_pc=PLAYER_TAIL_LAST_PC)
 

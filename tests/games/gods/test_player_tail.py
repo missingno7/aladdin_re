@@ -144,11 +144,16 @@ def test_plan_reproduces_every_fact_of_the_original_on_each_retained_path_or_dec
         except boundary.UnsupportedCandidate as error:
             # A cell exceeding TILE_THRESHOLD is not itself the decline: most such cells decline at
             # 0077A8's own status check and compose exactly as a clean scan (18 Sep, player.event_status).
-            # Only an actual fired event (scan['fires']) declines this way; the other declines are the
-            # follow-point/EF4E arms named 'unwitnessed'.
+            # A raised event that reaches kind 3 (00462C) is admitted on its own non-firing arm and the
+            # scan continues (19 Sep) -- so a decline needs either a fired event of some OTHER kind (or
+            # kind 3's own firing/disabled arm, both still unrecovered) or one of the follow-point/EF4E
+            # arms named 'unwitnessed'.
             assert scan['fires'] or 'unwitnessed' in str(error)
             return
-    assert isinstance(plan, boundary.Seam) and not scan['fires']
+    assert isinstance(plan, boundary.Seam)
+    # Every fired check, if any, must be an admitted kind-3 (00462C) event: a decline for any other
+    # reason would have raised above instead of returning a plan.
+    assert all(fire['arm'] == 'event' and fire['handler'] == 0x00462C for fire in scan['fires'])
     check_seam(plan, state)
 
 

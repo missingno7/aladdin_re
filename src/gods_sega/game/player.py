@@ -146,6 +146,10 @@ EVENT_STATUS_INDEX_BIAS = 3
 EVENT_TABLE = 0x004494             # one long per event, indexed by (status - 1)
 EVENT_HANDLERS = (0x0045D0, 0x00457A, 0x00462C, 0x0094D0, 0x009514, 0x0044C0,
                   0x00FB28, 0x00FB2C, 0x00FB30, 0x00FB34, 0x00D2BA)
+EVENT_RECORD_INDEX_OFFSET = 2      # the SAME EVENT_STATUS_WORDS entry's own +2 word: kind 3's (00462C's)
+                                    # own trigger.TRIGGER_TABLE record index (00462C: move.w 2(a0),d0),
+                                    # read from the STATUS_WORDS entry a0 already points at (0077B0-0077BA)
+                                    # when the status word itself (+0) was read; unread by any other kind.
 
 
 def _tile_cell(x, y):
@@ -169,18 +173,26 @@ def event_status(read, tile_value):
     recordings, so it stays its own named arm (``'declined-zero'``) rather
     than being folded into ``'declined'`` on an untraced cost; a strictly
     POSITIVE value is the 1-11 index into ``EVENT_TABLE``
-    (``EVENT_HANDLERS[value - 1]``) after the ten unmodelled flag clears
-    (``'event'``).
+    (``EVENT_HANDLERS[value - 1]``) after the ten unmodelled flag clears --
+    ``'event'`` -- and the raiser also reads the SAME table entry's own
+    ``EVENT_RECORD_INDEX_OFFSET`` (+2) word (``record_index``): kind 3's own
+    handler (00462C) reads it back as its trigger-record index (``move.w
+    2(a0),d0``, ``a0`` still the STATUS_WORDS entry address this function
+    read the status word from); the other ten kinds never read it, but it
+    costs nothing to carry for every kind alike.
     """
     index = (tile_value - EVENT_STATUS_INDEX_BIAS) & 0xFFFF
-    status = read((EVENT_STATUS_WORDS + 4 * index) & 0xFFFFFFFF, 2)
+    address = (EVENT_STATUS_WORDS + 4 * index) & 0xFFFFFFFF
+    status = read(address, 2)
     signed = _signed_word(status)
     if signed < 0:
         return {'arm': 'declined', 'status': status}
     if signed == 0:
         return {'arm': 'declined-zero', 'status': status}
     handler = EVENT_HANDLERS[signed - 1] if signed <= len(EVENT_HANDLERS) else None
-    return {'arm': 'event', 'status': status, 'kind': signed, 'handler': handler}
+    record_index = read((address + EVENT_RECORD_INDEX_OFFSET) & 0xFFFFFFFF, 2)
+    return {'arm': 'event', 'status': status, 'kind': signed, 'handler': handler,
+            'status_address': address, 'record_index': record_index}
 
 
 def tile_trigger_scan(read, x, y):

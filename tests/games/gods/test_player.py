@@ -78,8 +78,10 @@ def test_event_status_declines_on_a_negative_status_word_but_names_zero_separate
 
 
 def test_event_status_fires_the_event_table_entry_on_a_positive_status_word():
-    result = player.event_status(_reader({(player.EVENT_STATUS_WORDS + 4 * 0, 2): 3}), tile_value=3)
-    assert result == {'arm': 'event', 'status': 3, 'kind': 3, 'handler': 0x00462C}
+    reads = {(player.EVENT_STATUS_WORDS + 4 * 0, 2): 3, (player.EVENT_STATUS_WORDS + 4 * 0 + 2, 2): 7}
+    result = player.event_status(_reader(reads), tile_value=3)
+    assert result == {'arm': 'event', 'status': 3, 'kind': 3, 'handler': 0x00462C,
+                      'status_address': player.EVENT_STATUS_WORDS + 4 * 0, 'record_index': 7}
     assert player.EVENT_HANDLERS[2] == 0x00462C  # kind 3: the trigger evaluator, already recovered
 
 
@@ -103,9 +105,11 @@ def test_a_triggered_cell_with_a_zero_status_is_also_reported_in_fires_unwitness
 
 def test_a_triggered_cell_that_fires_is_reported_in_fires():
     reads = {(0xFF885E, 1): 5, (0xFF885E + 0x80, 1): 0, (0xFF885E + 0x100, 1): 0,
-             (player.EVENT_STATUS_WORDS + 4 * (5 - player.EVENT_STATUS_INDEX_BIAS), 2): 3}
+             (player.EVENT_STATUS_WORDS + 4 * (5 - player.EVENT_STATUS_INDEX_BIAS), 2): 3,
+             (player.EVENT_STATUS_WORDS + 4 * (5 - player.EVENT_STATUS_INDEX_BIAS) + 2, 2): 9}
     result = player.tile_trigger_scan(_reader(reads), x=0x00, y=0)
     assert result['arm'] == 'trigger' and len(result['fires']) == 1 and result['fires'][0]['kind'] == 3
+    assert result['fires'][0]['record_index'] == 9
 
 
 @needs_census
