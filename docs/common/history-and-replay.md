@@ -114,6 +114,23 @@ Constructed histories can qualify the candidate paths they actually exercise;
 they must never be described as user recordings or a completed playthrough.
 Fresh user input histories are required for recorded-gameplay coverage.
 
+## The oracle cache
+
+The original's observation stream of a history depends on the shared
+package, the native binary and source, the cartridge profile, the
+observation instant, the cache contract, the ROM and the history's inputs
+— never on a game's recovered code, which the original does not execute.
+`compare_history` hashes those into an *oracle key* and stores the
+reference worker's validated stream under it
+(`artifacts/<game>/oracle/<key>.json`, or `$GENESIS_ORACLE_CACHE/<game>/`);
+a later comparison of any candidate on the same history runs only the
+candidate worker, validates the cached stream's shared-module and native
+receipts, and compares.  The candidate's receipt — what evidence is judged
+by — is always fresh; the report records the key and whether the stream
+was cached; `--refresh-oracle` executes the original again.  The original
+is deterministic run against run (checked on every Gods recording before
+the cache existed), which is what makes the stream reusable.
+
 ## Portability boundary
 
 `history-export` requires neither a native DLL nor a ROM. Its root, end frame

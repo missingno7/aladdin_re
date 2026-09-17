@@ -111,7 +111,7 @@ def test_reference_and_candidate_workers_run_at_the_same_time(tmp_path):
         raise subprocess.TimeoutExpired(command, kwargs['timeout'])
 
     result = compare_history(GAME, store.path, DEFAULT_ROM, candidate='original', output=tmp_path / 'c',
-                             timeout_seconds=1, runner=runner)
+                             timeout_seconds=1, runner=runner, use_oracle_cache=False)
     assert result['status'] == 'TIMEOUT'
     assert result['error']['worker'] == 'reference'
     assert result['workers'] == 'parallel'
@@ -126,7 +126,7 @@ def test_sequential_mode_stops_at_the_first_failed_worker(tmp_path):
         raise subprocess.TimeoutExpired(command, kwargs['timeout'])
 
     result = compare_history(GAME, store.path, DEFAULT_ROM, candidate='lifecycle', output=tmp_path / 'c',
-                             timeout_seconds=1, runner=runner, parallel=False)
+                             timeout_seconds=1, runner=runner, parallel=False, use_oracle_cache=False)
     assert result['status'] == 'TIMEOUT' and result['workers'] == 'sequential'
     assert started == ['original']
 

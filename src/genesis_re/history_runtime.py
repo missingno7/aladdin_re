@@ -19,6 +19,9 @@ def safe_state(machine):
     return machine.snapshot()
 
 
+CACHE_CONTRACT = 4      # what a cached observation means; bumped when the observation model changes
+
+
 class GenesisRun:
     """One game's cartridge stepping in canonical frames, original or with a candidate armed."""
     def __init__(self, game, rom, candidate="original"):
@@ -41,10 +44,10 @@ class GenesisRun:
         except BaseException:
             self.machine.close()     # one native machine per process: never leak it on a refused run
             raise
-        # cache_contract 4: the observation instant is part of what a cached
+        # CACHE_CONTRACT 4: the observation instant is part of what a cached
         # observation means, so it is part of the key (the profile hash is the
         # cartridge's identity and does not carry it).
-        self.implementation = {"backend": "genesis", "cache_contract": 4, "game": game.id,
+        self.implementation = {"backend": "genesis", "cache_contract": CACHE_CONTRACT, "game": game.id,
                                "observation": game.observation_offset_ticks,
                                "native": receipt["native_binary_sha256"],
                                "source": receipt["python_modules_sha256"],

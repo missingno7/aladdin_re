@@ -39,6 +39,8 @@ def main(argv=None):
             p.add_argument("--timeout-seconds", type=float, default=120)
             p.add_argument("--sequential", action="store_true",
                            help="Run the reference and candidate workers one after the other")
+            p.add_argument("--refresh-oracle", action="store_true",
+                           help="Execute the original again instead of reusing its cached stream for this history")
         if name == "history-export":
             p.add_argument("--output", type=Path, required=True)
         if name == "history-capture":
@@ -110,7 +112,7 @@ def main(argv=None):
             else:
                 result = compare_history(game, history, rom_path, node=args.node, candidate=args.candidate,
                                          tree=args.tree, output=args.output, timeout_seconds=args.timeout_seconds,
-                                         parallel=not args.sequential)
+                                         parallel=not args.sequential, use_oracle_cache=not args.refresh_oracle)
         print(json.dumps(result))
         return 0 if result.get("status", "PASS") in {"PASS", "COMPLETED"} else 1
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, ImportError) as error:

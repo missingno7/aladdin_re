@@ -285,7 +285,15 @@ worker's observations of the last original-vs-original PASS of that history
 ```
 
 About 7 s per 1,000 frames (`fb408bc7…`, 34,904 frames: ~4 min; `f0ac1973…`,
-15,148 frames: ~1.7 min); give 20 s of timeout per 1,000 frames.  Pick the
+15,148 frames: ~1.7 min); give 20 s of timeout per 1,000 frames.  The
+original's stream of a history is executed once and cached under its
+oracle key (`artifacts\gods\oracle\<key>.json`: the shared package, the
+native binary, the profile and instant, the ROM, the inputs — never the
+recovered code); every later `history-verify` of any candidate or mutant
+on that history runs only its own worker against the cached stream
+(`comparison.json` says `oracle.cached`).  `--refresh-oracle` executes
+the original again; a change to `genesis_re/`, the native library or the
+instant changes the key by itself.  Pick the
 **shortest leaf that exercises the region** (the census prints the
 occurrences per node); a longer leaf adds prefix replay, not evidence, once
 every witnessed path class has its fixture MATCH.  Launch the negative

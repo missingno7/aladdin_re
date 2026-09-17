@@ -34,6 +34,10 @@ def _prepend_paths():
     native = ROOT / "build" / "libgenesis_native.dll"
     if "GENESIS_NATIVE_LIBRARY" not in os.environ and native.is_file():
         os.environ["GENESIS_NATIVE_LIBRARY"] = str(native)
+    # The oracle cache of the tests' own comparisons lives in a fresh directory: a test's
+    # synthetic history must never seed the checkout's artifacts/<game>/oracle.
+    import tempfile
+    os.environ["GENESIS_ORACLE_CACHE"] = tempfile.mkdtemp(prefix="genesis-oracle-tests-")
 
 
 _prepend_paths()

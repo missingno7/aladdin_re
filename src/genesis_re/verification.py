@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -246,15 +247,22 @@ def execute_history(game, store, rom, *, node=None, candidate="original", tree=F
             "candidate_stats": stats, "implementation": implementation, "receipt": end}
 
 
-def _validate_execution(payload, store, selected, tree, candidate, receipt):
+def _validate_execution(payload, store, selected, tree, candidate, receipt, shared_only=False):
     if (payload.get("status"), payload.get("compared"), payload.get("root"), payload.get("game"),
             payload.get("history_id"), payload.get("mode")) != (
             "COMPLETED", False, store.root_id, receipt["game"], selected, "tree" if tree else "cold"):
         raise ValueError("Worker history/execution contract mismatch")
     actual_receipt = payload.get("receipt", {})
-    for key in ("python_modules_sha256", "native_binary_sha256"):
-        if actual_receipt.get(key) != receipt[key]:
-            raise ValueError("Worker implementation receipt mismatch: " + key)
+    if actual_receipt.get("native_binary_sha256") != receipt["native_binary_sha256"]:
+        raise ValueError("Worker implementation receipt mismatch: native_binary_sha256")
+    recorded, current = actual_receipt.get("python_modules_sha256", {}), receipt["python_modules_sha256"]
+    if shared_only:
+        # A cached original stream: the game's recovered code never ran in it, so only the
+        # shared package must still be what executed (the rest of its identity is the oracle key).
+        recorded = {k: v for k, v in recorded.items() if k.startswith("genesis_re/")}
+        current = {k: v for k, v in current.items() if k.startswith("genesis_re/")}
+    if recorded != current:
+        raise ValueError("Worker implementation receipt mismatch: python_modules_sha256")
     if payload.get("implementation", {}).get("candidate") != candidate:
         raise ValueError("Worker candidate identity mismatch")
     nodes = store.nodes() if tree else {selected: store.node(selected)}
@@ -306,10 +314,45 @@ def _run_workers(roles, commands, *, timeout_seconds, parallel, runner=None):
             raise errors[role]
 
 
+def oracle_key(game, receipt, identities, rom_sha256, tree):
+    """What the original's observation stream of a history depends on, hashed.
+
+    The shared package's modules, the native binary and source, the cartridge
+    profile, the observation instant and the cache contract, the ROM, the
+    history's flattened inputs and the mode -- and not the game's own
+    recovered code, which the original never executes.  Two runs with the
+    same key observe the same stream (the original is deterministic: checked
+    run-against-run on every recording before the cache existed), so the
+    reference worker's stream is stored under it and reused by every later
+    comparison of any candidate until one of those inputs changes.
+    """
+    from .history_runtime import CACHE_CONTRACT
+    shared = {k: v for k, v in receipt["python_modules_sha256"].items() if k.startswith("genesis_re/")}
+    record = {"shared_modules": shared, "native_binary_sha256": receipt["native_binary_sha256"],
+              "native_source_id": receipt["native_source_id"], "profile_sha256": game.profile_sha256,
+              "observation_offset_ticks": game.observation_offset_ticks, "cache_contract": CACHE_CONTRACT,
+              "rom_sha256": rom_sha256, "inputs": identities, "mode": "tree" if tree else "cold"}
+    return hashlib.sha256(json.dumps(record, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def oracle_cache_path(game, key):
+    root = os.environ.get("GENESIS_ORACLE_CACHE")
+    return (Path(root) / game.id if root else Path("artifacts") / game.id / "oracle") / (key + ".json")
+
+
 def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecycle", tree=False,
                     output=Path("artifacts/comparison"), timeout_seconds=120, parallel=True,
-                    runner=None):
-    """Separate fresh workers, strict per-frame state/video/PCM and final equality."""
+                    runner=None, use_oracle_cache=True):
+    """Separate fresh workers, strict per-frame state/video/PCM and final equality.
+
+    The original's stream is the oracle: once a comparison has executed and
+    validated it for a history under an ``oracle_key``, later comparisons of
+    any candidate reuse that stream (``artifacts/<game>/oracle/<key>.json``)
+    and run only the candidate worker; ``use_oracle_cache=False`` executes the
+    original again and refreshes the entry.  The report says which
+    (``oracle``), and the candidate's receipt -- the one evidence is judged by
+    -- is always fresh.
+    """
     store = HistoryStore(store_path, game.history_root)
     selected = store.resolve(node or "main")
     output = Path(output)
@@ -317,9 +360,14 @@ def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecyc
     identities = {key: store.flatten(key) for key in store.nodes()} if tree else store.flatten(selected)
     payloads = {}
     receipt = execution_receipt(game)
+    rom_sha256 = hashlib.sha256(Path(rom_path).read_bytes()).hexdigest()
+    key = oracle_key(game, receipt, identities, rom_sha256, tree)
+    cache = oracle_cache_path(game, key)
+    cached = use_oracle_cache and cache.is_file()
     report = {"game": game.id, "history_id": selected, "tree": tree, "candidate": candidate,
               "contract": "strict-genesis-every-canonical-frame", "status": "ERROR",
-              "workers": "parallel" if parallel else "sequential"}
+              "workers": "parallel" if parallel else "sequential",
+              "oracle": {"key": key, "cached": cached, "path": str(cache)}}
     try:
         roles = (("reference", "original"), ("candidate", candidate))
         commands = {}
@@ -331,11 +379,23 @@ def compare_history(game, store_path, rom_path, *, node=None, candidate="lifecyc
             if tree:
                 command.append("--tree")
             commands[role] = command
-        _run_workers([role for role, _ in roles], commands, timeout_seconds=timeout_seconds,
-                     parallel=parallel, runner=runner)
+        if cached:
+            payloads["reference"] = json.loads(cache.read_text())
+            if payloads["reference"].get("oracle_key") != key:
+                raise ValueError("Oracle cache entry does not carry its own key")
+            _validate_execution(payloads["reference"], store, selected, tree, "original", receipt, shared_only=True)
+            del commands["reference"]
+        _run_workers(list(commands), commands, timeout_seconds=timeout_seconds, parallel=parallel, runner=runner)
         for role, choice in roles:
-            payloads[role] = json.loads((output / (role + ".json")).read_text())
-            _validate_execution(payloads[role], store, selected, tree, choice, receipt)
+            if role in commands:
+                payloads[role] = json.loads((output / (role + ".json")).read_text())
+                _validate_execution(payloads[role], store, selected, tree, choice, receipt)
+        if not cached and use_oracle_cache:
+            entry = dict(payloads["reference"], oracle_key=key, oracle_from=str(output.resolve()))
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            temporary = cache.with_suffix(".tmp")
+            temporary.write_text(json.dumps(entry))
+            temporary.replace(cache)
         left, right = payloads["reference"], payloads["candidate"]
         equal = left["observations"] == right["observations"] and left["endpoints"] == right["endpoints"]
         first = None
