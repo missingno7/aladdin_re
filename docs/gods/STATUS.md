@@ -77,7 +77,7 @@ into work RAM only); it is not changed by this baseline.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with thirty gates armed, the camera follow step `002806`, the
+  original with thirty-four gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -91,15 +91,24 @@ into work RAM only); it is not changed by this baseline.
   resume `00FFF0`, the projectile launch `0091BC`, the line walker's
   projectile resume `0093D2`, the message display gate `007986`, the
   string copy `0079DC`, the achievement slot reset `0047DA` (a seam over
-  the collected-item icon upload `001648`) and the achievement slot dispatch
-  `004790` (a seam over `0047DA`'s own seam); `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
+  the collected-item icon upload `001648`), the achievement slot dispatch
+  `004790` (a seam over `0047DA`'s own seam), the slot scan `00475E` (up to
+  three calls into `004790`, one of them possibly its own seam), the record
+  id scan `004800` (up to three calls into a freshly-disassembled `0048B4`,
+  achievement_slot_dispatch's own id-compare tail reached by a tail jump
+  straight into `0047DA`), and two of the trigger evaluator's own
+  action-table handlers, the elapsed-seconds reset `0048E4` and the pickup
+  group clear `004ACA` (both reached by the evaluator's own firing tail
+  through a tail jump, `0046CE`, needing no seam of their own); `camera`,
+  `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
   `particle-emit`, `hazard-tick`, `score-convert`, `evaluator`,
   `proximity`, `next-random`, `effect-pool-add`, `pickup-check`,
   `pickup-probe`, `walker`, `projectile-launch`, `projectile-resume`,
-  `message-gate`, `string-copy`, `achievement-slot-reset` and
-  `achievement-slot-dispatch` arm each alone.
+  `message-gate`, `string-copy`, `achievement-slot-reset`,
+  `achievement-slot-dispatch`, `slot-scan`, `record-id-scan`,
+  `action-reset-elapsed` and `action-clear-group` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -213,7 +222,13 @@ ids, never to `main`:
 | `achievement-slot-reset` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 12 hits (6 seam entries/completions), 1 fallback (icon slot 2, the one real occurrence)**; segment_verify at boundary-6000/12000 PASS, 0/0 hits (too rare for a 300-frame window); mutant DIVERGENCE at frame 20,282; `camera-sprites` (all twenty-nine gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,046,643 hits, 5,538 fallbacks (4,227 z80 bank guard, 443 seam deadline, 345 observation deadline, 304 vblank in span, 190 evaluator firing/disabled, 27 machine admission, 2 achievement-slot-reset icon-slot-2 declines, 1 pickup-check found-special-timer decline, tree bit-exact)** | `history-verify fb408bc75597 --candidate achievement-slot-reset`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-achievement-slot-reset-fb408bc75597`, `artifacts/gods/verify-achievement-slot-reset-mutant2`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18a` |
 | **`004790` achievement slot dispatch**: a caller-supplied record pointer's own tracked id, gated by a shared record table's own status word (only 2 witnessed) then checked against 0047DA's own four ids; a miss is a plain leaf, a match is a seam over 0047DA composed one level up (a seam over a seam -- `genesis_re.seam.run_seam` narrows the gate array to the resume PC alone while a seam runs, so 0047DA's own separate gate never fires inside this one even though both are armed in the same composite candidate) | `factcheck check` on every fixture | `tests/games/gods/test_achievements.py` |
 | `achievement-slot-dispatch` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 8 hits (2 seam entries/completions), 0 fallbacks**; segment_verify at boundary-6000/12000 PASS, 0/0 hits (too rare for a 300-frame window); mutant DIVERGENCE at frame 24,370; `camera-sprites` (all thirty gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,046,650 hits, 5,538 fallbacks, tree bit-exact -- zero fallbacks at the 004790 gate itself** | `history-verify fb408bc75597 --candidate achievement-slot-dispatch`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-achievement-slot-dispatch-fb408bc75597`, `artifacts/gods/verify-achievement-slot-dispatch-mutant`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17i` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 47 s | 2,834 tests (3 skipped) | — |
+| **`00475E` slot scan** (the trigger firing subsystem blocker's own part 3 preamble): gates on bit 7 of the caller's own record's `$10` byte; when set, checks three independent flag words in program order and, for whichever is 1, calls the already-recovered `004790` with a pointer two bytes past the flag -- up to three times in one activation, but every witnessed occurrence has at most one flag true. A match composes one level up from `achievement_slot_dispatch_plan` exactly as that planner composes one level up from `achievement_slot_reset_plan`; only the first position's call is ever witnessed to match | `factcheck check` on every fixture | `tests/games/gods/test_achievements.py` |
+| `slot-scan` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 68 hits (2 seam entries/completions), 0 fallbacks**; segment_verify at boundary-6000/12000 PASS (0/0, 1/0 hits/fallbacks); mutant DIVERGENCE at frame 24,370; `camera-sprites` (all thirty-one gates) on the tree of all eight recordings: **PASS, tree bit-exact** | `history-verify fb408bc75597 --candidate slot-scan` | `artifacts/gods/verify-slot-scan-fb408bc75597`, `artifacts/gods/verify-slot-scan-mutant` |
+| **`004800` record id scan** (the trigger firing subsystem blocker's own part 2, last caller): gates on `d5 = ($10(a1)) & 0x7fff` being one of `{2,3,4,7,8}`; the same three (flag, id) field pairs `00475E` checks, but the id word must fall in one of two ranges (`0x12`-`0x17` or `0x7f`-`0x81`) rather than equal 1. A witnessed pair calls a freshly-disassembled `0048B4` (achievement_slot_dispatch's own id-compare tail with no status gate, reached by a tail `bra.w` straight into `0047DA` -- no bsr, no extra resume layer); every witnessed call is a match | `factcheck check` on every fixture | `tests/games/gods/test_achievements.py` |
+| `record-id-scan` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 68 hits (3 seam entries/completions), 1 fallback (icon slot 2)**; segment_verify at boundary-6000/12000 PASS (0/0, 1/0 hits/fallbacks); mutant DIVERGENCE at frame 20,282 (a byte, not a register: a witnessed match reaches icon slot 3, and D0+1 there is out of 001648's own four-entry table); `camera-sprites` (all thirty-two gates) on the tree of all eight recordings: **PASS, tree bit-exact** | `history-verify fb408bc75597 --candidate record-id-scan` | `artifacts/gods/verify-record-id-scan-fb408bc75597`, `artifacts/gods/verify-record-id-scan-mutant` |
+| **`0048E4`/`004ACA` action-table handlers** (`game/actions.py`, part 3 of the trigger firing subsystem blocker): the evaluator's own firing tail dispatches its action through the ROM table at `0046D0` via a tail jump (`jmp (a5)`, `0046CE`, disassembled fresh), so a handler's own `rts` returns straight past the whole evaluator activation -- no seam, no frame. `0048E4` is `clr.l ELAPSED; rts` unconditionally (the elapsed-seconds counter `conditions.py`'s own kinds 9/10 already read); `004ACA` clears whichever of `pickups.py`'s three group active-id words matches a caller record's own `+0x12` word (each of the three has its own `rts`; only the second group is ever witnessed to match). The other action-table entries (`004A0A`, `004D04`, `004E1C`, `004E74`, `0048EA`, `005024`, `00772E`; `004A74`/`005074` unwitnessed) call still-unrecovered helpers (`004AAA`, `004926`, `004ECE`/`004D7E`, `0050A4`, `0077A8`, `004F16`) or write the level grid across several blocks -- an ordinary decline | `factcheck check` on every fixture | `tests/games/gods/test_actions.py` |
+| `action-reset-elapsed` and `action-clear-group` reproduce the original on `fb408bc75597…`: **PASS, 34,904 frames, 1 hit each, 0 fallbacks**; segment_verify at boundary-6000/12000 PASS (0 hits both, too rare for a 300-frame window); mutants DIVERGENCE at frames 15,102 and 17,112; `camera-sprites` (all thirty-four gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,047,004 hits, 5,540 fallbacks, tree bit-exact** | `history-verify fb408bc75597 --candidate action-reset-elapsed`; `--candidate action-clear-group`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-action-reset-elapsed-fb408bc75597`, `artifacts/gods/verify-action-clear-group-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17p` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 47 s | 2,950 tests (7 skipped) | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
