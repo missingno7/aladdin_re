@@ -2519,6 +2519,11 @@ def effect_pool_add_plan(machine, registers):
 # confirmed on real fixtures throughout (68000 Bcc.b: taken 10, not taken 8;
 # Bcc.w: taken 10, not taken 12; DBcc: taken 10, expired 14).
 PICKUP_CHECK_ENTRY = 0x00BA8E
+# AWARD_SCALE_LEVEL (00BBEA onward, game.pickups._scaled_box_result): every real occurrence across all
+# eight recordings reads 1 (104 occurrences on 7251bbd0ecf7 alone, 0 on the other seven) -- a fresh gate
+# scan at the tst.w instruction itself, not the 32/400-class census (the arm's own path signature never
+# survived the box/scan diversity's own class budget on any node).  Any other level declines.
+WITNESSED_SCALE_LEVELS = {1}
 PICKUP_CHECK_ZONE_CUE_LAST_PC = 0x00BAE2      # the sound-off arm's own rts
 PICKUP_CHECK_ZONE_CUE_SOUND_ON_LAST_PC = 0x00BADA   # the sound-on arm has its OWN separate rts
 PICKUP_CHECK_CLEAN_LAST_PC = 0x00BBCA
@@ -2589,9 +2594,70 @@ _PK_TST_D4 = (4, 1)                     # tst.w d4
 _PK_BEQ_D4_TAKEN, _PK_BEQ_D4_NOTTAKEN = (10, 1), (8, 1)             # beq.b $bbea (d4==0 vs the special-1 arm)
 _PK_SPECIAL_TIMER_SUB = (16, 1)         # sub.w d2, SPECIAL_TIMER (special-1's own extra decrement, 00BBDE)
 _PK_BPL_TIMER_TAKEN, _PK_BPL_TIMER_NOTTAKEN = (10, 1), (8, 1)       # bpl.b $bbea (00BBE2)
-_PK_TST_EF46 = (12, 1)                  # tst.w MESSAGE_FLAG
-_PK_BEQ_EF46_TAKEN = (10, 1)            # beq.b (ef46==0, the only witnessed continuation)
+_PK_TST_EF46 = (12, 1)                  # tst.w AWARD_SCALE_LEVEL
+_PK_BEQ_EF46_TAKEN = (10, 1)            # beq.b (level==0: the unscaled sub.w d3,d2 tail)
+_PK_BEQ_EF46_NOTTAKEN = (8, 1)          # beq.b not taken (level!=0: the scaled tail, 00BBF0 onward)
 _PK_SUB_D3_D2 = (4, 1)                  # sub.w d3,d2
+
+# --- the AWARD_SCALE_LEVEL != 0 tail (00BBF0-00BC1C), game.pickups._scaled_box_result -------------
+_PK_SCALE_PUSH_D2 = (8, 1)              # move.w d2,-(a7)                              (00BBF0)
+_PK_SCALE_SUB_D3_D2 = (4, 1)            # sub.w d3,d2                                  (00BBF2)
+_PK_SCALE_MOVEQ3 = (4, 1)               # moveq #3,d5                                  (00BBF4)
+_PK_SCALE_SUB_LEVEL = (12, 1)           # sub.w AWARD_SCALE_LEVEL,d5                   (00BBF6)
+_PK_SCALE_BPL_TAKEN, _PK_SCALE_BPL_NOTTAKEN = (10, 1), (8, 1)   # bpl.b                (00BBFA)
+_PK_SCALE_MOVEQ0 = (4, 1)               # moveq #0,d5 (only when bpl not taken)        (00BBFC)
+_PK_SCALE_PUSH_D3 = (8, 1)              # move.w d3,-(a7)                              (00BBFE)
+_PK_SCALE_CMP_POP = (8, 1)              # cmp.w (a7)+,d3                               (00BC02)
+_PK_SCALE_BNE_TAKEN, _PK_SCALE_BNE_NOTTAKEN = (10, 1), (8, 1)   # bne.b                (00BC04)
+# move.w d3,d5; lsr.w #1,d3; sub.w d3,d5; asr.w #1,d5; add.w d5,d3 (only when bne not taken)
+_PK_SCALE_CORRECT = (4 + 8 + 4 + 8 + 4, 5)                                            # (00BC06-00BC0E)
+_PK_SCALE_POP_D5 = (8, 1)               # move.w (a7)+,d5                              (00BC10)
+_PK_SCALE_ADD_D3_D2 = (4, 1)            # add.w d3,d2                                  (00BC12)
+_PK_SCALE_BMI_TAKEN, _PK_SCALE_BMI_NOTTAKEN = (10, 1), (8, 1)   # bmi.b                (00BC14)
+_PK_SCALE_BEQ_TAKEN, _PK_SCALE_BEQ_NOTTAKEN = (10, 1), (8, 1)   # beq.b                (00BC16)
+_PK_SCALE_SUB_D2_D5 = (4, 1)            # sub.w d2,d5 (positive branch only)           (00BC18)
+_PK_SCALE_MOVE_D5_D3 = (4, 1)           # move.w d5,d3                                 (00BC1A)
+_PK_SCALE_BRA = (10, 1)                 # bra.b $bc4e                                  (00BC1C)
+
+
+def _pk_scale_lsr_cost(count):
+    """68000 LSR.w Dx,Dy register-shift timing: 6+2n, n the count actually used (masked to 6 bits,
+    as game.pickups._lsr_word applies it)."""
+    return (6 + 2 * (count & 0x3F), 1)
+
+
+def _pk_scale_cost(scaled):
+    """The AWARD_SCALE_LEVEL != 0 tail's own cost (00BBEA-00BC1C), from ``scaled``
+    (``game.pickups._scaled_box_result``'s own result: which branches were taken)."""
+    cycles, instructions = _add(_PK_TST_EF46, _PK_BEQ_EF46_NOTTAKEN, _PK_SCALE_PUSH_D2, _PK_SCALE_SUB_D3_D2,
+                                _PK_SCALE_MOVEQ3, _PK_SCALE_SUB_LEVEL)
+    if scaled['bpl_taken']:
+        c, i = _PK_SCALE_BPL_TAKEN
+    else:
+        c, i = _add(_PK_SCALE_BPL_NOTTAKEN, _PK_SCALE_MOVEQ0)
+    cycles += c
+    instructions += i
+    c, i = _add(_PK_SCALE_PUSH_D3, _pk_scale_lsr_cost(scaled['shift']), _PK_SCALE_CMP_POP)
+    cycles += c
+    instructions += i
+    if scaled['same']:
+        c, i = _add(_PK_SCALE_BNE_NOTTAKEN, _PK_SCALE_CORRECT)
+    else:
+        c, i = _PK_SCALE_BNE_TAKEN
+    cycles += c
+    instructions += i
+    c, i = _add(_PK_SCALE_POP_D5, _PK_SCALE_ADD_D3_D2)
+    cycles += c
+    instructions += i
+    if scaled['branch'] == 'cue':
+        if scaled['box_result_negative']:
+            c, i = _PK_SCALE_BMI_TAKEN
+        else:
+            c, i = _add(_PK_SCALE_BMI_NOTTAKEN, _PK_SCALE_BEQ_TAKEN)
+        return cycles + c, instructions + i
+    c, i = _add(_PK_SCALE_BMI_NOTTAKEN, _PK_SCALE_BEQ_NOTTAKEN, _PK_SCALE_SUB_D2_D5, _PK_SCALE_MOVE_D5_D3,
+               _PK_SCALE_BRA)
+    return cycles + c, instructions + i
 _PK_BMI_RESULT_TAKEN, _PK_BMI_RESULT_NOTTAKEN = (10, 1), (8, 1)     # bmi.b $bc24
 _PK_BNE_RESULT_TAKEN, _PK_BNE_RESULT_NOTTAKEN = (10, 1), (8, 1)     # bne.b $bc4e
 _PK_STORE_F3D4 = (12, 1)                # move.w d2,RESULT_WORD
@@ -2862,8 +2928,12 @@ def pickup_check_plan(machine, registers):
                                      **a4_exit},
                           last_pc=PICKUP_CHECK_CLEAN_LAST_PC)
 
-    if arm in ('found-special-timer', 'found-message', 'found-code-unrecovered'):
+    if arm in ('found-special-timer', 'found-code-unrecovered'):
         raise UnsupportedCandidate(f'pickup check {arm} arm not witnessed by a recording')
+    scaled = result.get('scaled')
+    if scaled is not None and result['scale_level'] not in WITNESSED_SCALE_LEVELS:
+        raise UnsupportedCandidate(
+            f"pickup check award-scale level {result['scale_level']} not witnessed by a recording")
 
     collect_result = result['collect']
     c, i = _add(_PK_PUSH_D2, _PK_JSR_AWARD, _pickup_award_cost(read, collect_result), _PK_POP_D2, _PK_READ_AWARD,
@@ -2884,7 +2954,10 @@ def pickup_check_plan(machine, registers):
         c, i = _add(_PK_BEQ_D4_NOTTAKEN, _PK_SPECIAL_TIMER_SUB, _PK_BPL_TIMER_TAKEN)
     cycles += c
     instructions += i
-    c, i = _add(_PK_TST_EF46, _PK_BEQ_EF46_TAKEN, _PK_SUB_D3_D2)
+    if scaled is None:
+        c, i = _add(_PK_TST_EF46, _PK_BEQ_EF46_TAKEN, _PK_SUB_D3_D2)
+    else:
+        c, i = _pk_scale_cost(scaled)
     cycles += c
     instructions += i
     # a1 at this point is the SCAN's own jump-table entry address (set at 00BB84-00BB90), not the
@@ -2894,6 +2967,16 @@ def pickup_check_plan(machine, registers):
     _pk_push(order, sp - 44, [registers['d2']])          # move.l d2,-(a7)
     _pk_push(order, sp - 48, [0x00BBD4])                 # jsr $13264.l's own return address
     _pk_push(order, sp - 52, [scan_a1])                  # 013264's own move.l a1,-(a7)
+    if scaled is not None:
+        # 00BBF0/00BBFE push d2 then d3 (both words), CHRONOLOGICALLY AFTER 013264's own call above
+        # (whose "move.l d2,-(a7)" already wrote the same two addresses, sp-48..45, as one long): both
+        # are popped again (00BC02/00BC10) but nothing overwrites the bytes afterward, so these two
+        # later, real word writes are the ones that survive to the final RAM residue.
+        _ram_span('pickup check award-scale transient frame', sp - 48, 4)
+        for a, b in _bytes((sp - 46) & 0xFFFFFF, scaled['d2_orig'], 2):
+            order[a] = b
+        for a, b in _bytes((sp - 48) & 0xFFFFFF, scaled['d3_orig'], 2):
+            order[a] = b
     # collect_result['stores'] is NOT re-applied here: result['stores'] (seeded into order at the top
     # of this function) already carries it, merged by pickup_check() in the ROM's own order -- 013264's
     # own award cue (SOUND_CUE=0x38) first, then this routine's own cue store (0x3C/0x4F) overwriting
@@ -2926,7 +3009,12 @@ def pickup_check_plan(machine, registers):
 
     if arm == 'found-sound':
         box_result = result['box_result']
-        if pickups._signed_word(box_result) < 0:
+        if scaled is not None:
+            # The scaled path's own bmi.b/beq.b pair (00BC14/00BC16) already reached 00BC24 directly;
+            # its cost is inside _pk_scale_cost above. The unscaled bmi.b/bne.b pair (00BC20/00BC22)
+            # never executes on this path.
+            c, i = _PK_CUE_TST
+        elif pickups._signed_word(box_result) < 0:
             c, i = _add(_PK_BMI_RESULT_TAKEN, _PK_CUE_TST)
         else:
             c, i = _add(_PK_BMI_RESULT_NOTTAKEN, _PK_BNE_RESULT_NOTTAKEN, _PK_CUE_TST)
@@ -2944,9 +3032,11 @@ def pickup_check_plan(machine, registers):
         c, i = _add(*pieces)
         cycles += c
         instructions += i
-        # moveq #$ff,d2 sets N=1/Z=V=C=0 but never touches X: X survives from the sub.w d3,d2 that
-        # produced box_result, untouched by every MOVE/TST/movem between here and there.
-        x_bit = _sub_sr(sr, result['d2_before_award'], result['d3'], 2) & 0x10
+        # moveq #$ff,d2 sets N=1/Z=V=C=0 but never touches X: X survives from the last flag-setting
+        # instruction that produced box_result -- sub.w d3,d2 (00BC1E) on the unscaled path, or
+        # add.w d3,d2 (00BC12) on the scaled one -- result['x_op'] names which, from game.pickups.
+        op, left, right = result['x_op']
+        x_bit = (_add_sr if op == 'add' else _sub_sr)(sr, left, right, 2) & 0x10
         return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                           registers={'d2': 0xFFFFFFFF, 'a7': (sp32 + 4) & 0xFFFFFFFF,
                                      'pc': _return(machine, sp), 'sr': 0x08 | x_bit, **a4_exit},
@@ -2954,16 +3044,21 @@ def pickup_check_plan(machine, registers):
 
     if arm == 'found-bare':
         # box_result != 0 (bne taken, RESULT_WORD already stored) but the award itself is zero
-        # (beq.b $bc44 taken): a bare restore-and-return, no further calls.
-        c, i = _add(_PK_BMI_RESULT_NOTTAKEN, _PK_BNE_RESULT_TAKEN, _PK_STORE_F3D4, _PK_TST_D3, _PK_BEQ_D3_TAKEN,
+        # (beq.b $bc44 taken): a bare restore-and-return, no further calls.  The scaled path's own
+        # bra.b $bc4e (00BC1C) already reached here without the unscaled bmi.b/bne.b pair (00BC20/
+        # 00BC22) running at all -- its cost is inside _pk_scale_cost above.
+        head = () if scaled is not None else (_PK_BMI_RESULT_NOTTAKEN, _PK_BNE_RESULT_TAKEN)
+        c, i = _add(*head, _PK_STORE_F3D4, _PK_TST_D3, _PK_BEQ_D3_TAKEN,
                    _PK_EFFECT_RESTORE_A0A2, _PK_EFFECT_RESTORE_D0D7, _PK_RTS)
         cycles += c
         instructions += i
         for a, b in _bytes(pickups.RESULT_WORD & 0xFFFFFF, result['box_result'], 2):
             order[a] = b
-        # tst.w d3 (d3=0) is the last flag-setter: N=0/Z=1/V=C=0; X survives from the sub.w d3,d2 that
-        # produced box_result (nothing between there and here touches it).
-        x_bit = _sub_sr(sr, result['d2_before_award'], result['d3'], 2) & 0x10
+        # tst.w d3 (d3=0) is the last flag-setter: N=0/Z=1/V=C=0; X survives from the last flag-setting
+        # instruction that produced box_result (sub.w d3,d2 at 00BC1E, or add.w d3,d2 at 00BC12 on the
+        # scaled path -- result['x_op'] names which), untouched by every MOVE/TST/movem since.
+        op, left, right = result['x_op']
+        x_bit = (_add_sr if op == 'add' else _sub_sr)(sr, left, right, 2) & 0x10
         exit_sr = (_logic_sr(sr, result['d3'], 2) & ~0x10) | x_bit
         return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                           registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr,
@@ -2972,7 +3067,10 @@ def pickup_check_plan(machine, registers):
     if arm != 'found-effect':
         raise UnsupportedCandidate(f'pickup check unknown arm {arm}')
 
-    c, i = _add(_PK_BMI_RESULT_NOTTAKEN, _PK_BNE_RESULT_TAKEN, _PK_STORE_F3D4, _PK_TST_D3, _PK_BEQ_D3_NOTTAKEN)
+    # As in found-bare: the scaled path's own bra.b $bc4e already reached here, its cost already
+    # inside _pk_scale_cost above; the unscaled bmi.b/bne.b pair (00BC20/00BC22) never runs on it.
+    head = () if scaled is not None else (_PK_BMI_RESULT_NOTTAKEN, _PK_BNE_RESULT_TAKEN)
+    c, i = _add(*head, _PK_STORE_F3D4, _PK_TST_D3, _PK_BEQ_D3_NOTTAKEN)
     cycles += c
     instructions += i
     for a, b in _bytes(pickups.RESULT_WORD & 0xFFFFFF, result['box_result'], 2):

@@ -123,10 +123,17 @@ def collect(read, after_code):
 # residue exceeds the award and the award is nonzero, an effect is queued:
 # two draws from the random table (``next_random``, ``014A3C``) jitter the
 # spawn position on each axis, then ``effect_pool_add`` (``00932C``) adds it
-# to the shared pool.  Sub-arms this routine's own census never enters
-# (the special-1 pickup's own further call, the message/digit-split tail,
-# the award-zero bare exit, either jitter draw's own default-mask branch)
-# are named but not modelled further: the boundary declines them.
+# to the shared pool.  ``AWARD_SCALE_LEVEL`` nonzero (00BBEA onward, formerly
+# read as an unwitnessed "message" tail) is not a call into any message
+# system at all: it is a second, RAM-only way to derive the SAME (box
+# residue, award) pair the arms above already consume, an award shift by
+# ``3 - AWARD_SCALE_LEVEL`` (or a halving correction when the shift removes
+# no bits) before rejoining the shared found-sound/found-bare/found-effect
+# tail at its own entry points (00BC12/00BC18) -- see ``_scaled_box_result``.
+# Sub-arms this routine's own census never enters (the special-1 pickup's
+# own further call, the award-zero bare exit, either jitter draw's own
+# default-mask branch) are named but not modelled further: the boundary
+# declines them.
 
 CAMERA_X, CAMERA_Y = 0xFFFFF3EE, 0xFFFFF3F0
 BOX_COPY_X, BOX_COPY_Y = 0xFFFFF392, 0xFFFFF394        # the working copy of HALF_WIDTH/HALF_HEIGHT
@@ -136,12 +143,70 @@ ZONE_CUE_SOUND_OFF, ZONE_CUE_SOUND_ON = 0x3C, 0x4F
 ARRAY_GATE = 0xFFFFEF8A                                # bit15 clear appends into the array below (common: 30/33 witnessed on 7251bbd0ecf7)
 ARRAY_CURSOR = 0xFFFFF1E8                              # long: the array's own write cursor, advanced by 6 (three words) per append
 ARRAY_COUNT = 0xFFFFF1E2                               # word: incremented once per append
-MESSAGE_FLAG = 0xFFFFEF46                              # nonzero selects the unwitnessed digit-split tail
+AWARD_SCALE_LEVEL = 0xFFFFEF46                         # nonzero re-derives (box_result, d3) by an award shift
 RESULT_WORD = 0xFFFFF3D4
 PICKUP_GRID_ROW = 0x30                                 # matches PICKUP_GRID's own 48-byte row stride
 NEAR_LIMIT = 0xFFF0                                    # -16: both axes near-wrap at or below this
 X_FAR_LIMIT, Y_FAR_LIMIT = 0x150, 0xD0                 # far thresholds (the X test compares the raw position,
                                                         # the Y test compares position+size -- the ROM's own asymmetry)
+
+
+def _lsr_word(value, count):
+    """68000 LSR.w Dx,Dy: the count register is masked to 6 bits; 16 or more zeroes a word."""
+    count &= 0x3F
+    value &= 0xFFFF
+    if count == 0:
+        return value
+    if count >= 16:
+        return 0
+    return value >> count
+
+
+def _asr_word(value, count):
+    """68000 ASR.w #n,Dy: arithmetic (sign-extending) shift; n here is always the immediate 1."""
+    value = _signed_word(value)
+    if count >= 16:
+        return 0xFFFF if value < 0 else 0
+    return (value >> count) & 0xFFFF
+
+
+def _scaled_box_result(d2_orig, d3_orig, level):
+    """00BBF0-00BC1C: the AWARD_SCALE_LEVEL-nonzero derivation of (box_result, d3), an alternate
+    front end for the SAME found-sound/found-bare/found-effect tail the unscaled path reaches at
+    00BC24/00BC44/00BC56.  ``d2_orig`` is the box's own D2 residue before the award subtraction
+    (``d2_after_zone``), ``d3_orig`` the award ``collect()`` just stored.
+
+    Returns the tail's own ``box_result``, the ``d3`` it should test for bare-vs-effect, which of
+    the two branches back at 00BC14/00BC16 was taken, and the (op, left, right) of the last
+    flag-setting instruction before that branch -- ``pickup_check`` threads this through as
+    ``result['x_op']`` so the boundary derives the exit X bit from the real ROM instruction
+    instead of assuming the unscaled path's own ``sub.w d3,d2``.
+    """
+    d2_minus_d3 = (d2_orig - d3_orig) & 0xFFFF                    # 00BBF2: sub.w d3,d2
+    shift_raw = (3 - level) & 0xFFFF                              # 00BBF4/00BBF6: moveq #3,d5; sub.w level,d5
+    bpl_taken = not (shift_raw & 0x8000)                          # 00BBFA: bpl.b $bbfe
+    shift = shift_raw if bpl_taken else 0                         # 00BBFC: moveq #0,d5 (only when not taken)
+    shifted = _lsr_word(d3_orig, shift)                           # 00BC00: lsr.w d5,d3
+    same = shifted == (d3_orig & 0xFFFF)                          # 00BC02/00BC04: cmp.w (a7)+,d3; bne.b
+    if same:
+        half = _lsr_word(d3_orig, 1)                              # 00BC06/00BC08: move.w d3,d5; lsr.w #1,d3
+        remainder = (d3_orig - half) & 0xFFFF                     # 00BC0A: sub.w d3,d5
+        remainder = _asr_word(remainder, 1)                       # 00BC0C: asr.w #1,d5
+        d3_final = (half + remainder) & 0xFFFF                    # 00BC0E: add.w d5,d3
+    else:
+        d3_final = shifted
+    box_result = (d2_minus_d3 + d3_final) & 0xFFFF                # 00BC12: add.w d3,d2
+    common = {'shift': shift, 'same': same, 'shift_raw': shift_raw, 'bpl_taken': bpl_taken,
+              # 00BBF0/00BBFE push d2 then d3 (both words) below the routine's own live frame, popped
+              # at 00BC02/00BC10 but never overwritten again: transient RAM residue the boundary must
+              # write too (game.boundary._pk_scale_transient_writes).
+              'd2_orig': d2_orig & 0xFFFF, 'd3_orig': d3_orig & 0xFFFF}
+    if _signed_word(box_result) <= 0:                             # 00BC14/00BC16: bmi.b / beq.b -> 00BC24
+        return {**common, 'box_result': box_result, 'd3': d3_final, 'branch': 'cue',
+                'x_op': ('add', d2_minus_d3, d3_final), 'box_result_negative': _signed_word(box_result) < 0}
+    d3_new = (d2_orig - box_result) & 0xFFFF                      # 00BC18/00BC1A: sub.w d2,d5; move.w d5,d3
+    return {**common, 'box_result': box_result, 'd3': d3_new, 'branch': 'positive',
+            'x_op': ('sub', d2_orig, box_result)}
 
 
 def _axis_clamp(read, size_address, raw, far_limit, far_uses_combined):
@@ -254,7 +319,6 @@ def pickup_check(read, d0, d1, d2):
     # of what this routine's own tail below does with the result -- apply them unconditionally, the
     # way the ROM's own control flow already has by the time it reaches the tst.w d4 that follows.
     stores.update(collected['stores'])
-    result['d2_before_award'] = d2_after_zone   # the sub.w d3,d2 left operand, for the boundary's own X/C
     d3 = collected['stores'].get(AWARD, (read(AWARD, 2), 2))[0]     # AWARD, just stored by collect()
 
     if collected['arm'] == 'unrecovered':
@@ -279,14 +343,23 @@ def pickup_check(read, d0, d1, d2):
         if _signed_word(new_timer) < 0:
             return {**result, 'arm': 'found-special-timer', 'd3': d3}   # jsr 011540: unrecovered, unwitnessed
 
-    if read(MESSAGE_FLAG, 2) != 0:
-        return {**result, 'arm': 'found-message', 'd3': d3}           # the digit-split tail: unwitnessed
-
-    box_result = (d2_after_zone - d3) & 0xFFFF
+    scale_level = read(AWARD_SCALE_LEVEL, 2)
+    if scale_level != 0:
+        # 00BBEA/00BBEE: an alternate, RAM-only derivation of (box_result, d3) -- not a call into any
+        # message system (the ROM here is straight-line arithmetic, no bsr/jsr at all) -- that rejoins
+        # the SAME found-sound/found-bare/found-effect tail below at its own entry points.
+        scaled = _scaled_box_result(d2_after_zone, d3, scale_level)
+        result['scale_level'], result['scaled'] = scale_level, scaled
+        box_result, d3, x_op = scaled['box_result'], scaled['d3'], scaled['x_op']
+    else:
+        box_result = (d2_after_zone - d3) & 0xFFFF
+        x_op = ('sub', d2_after_zone, d3)
+    result['x_op'] = x_op
     # bmi.b $bc24 (box_result<0), when NOT taken, falls straight into bne.b $bc4e (box_result!=0);
     # when THAT is also not taken (box_result==0) execution falls through to the very next instruction
     # in memory, which is $bc24 itself -- box_result<=0 is one arm, not two: the ROM's own fall-through
-    # reaches the sound-cue code either way.
+    # reaches the sound-cue code either way.  The scaled path reaches the very same 00BC24 (or 00BC44/
+    # 00BC56 through 00BC4E) by its own bmi.b/beq.b pair at 00BC14/00BC16 -- same test, same targets.
     if _signed_word(box_result) <= 0:
         cue = ZONE_CUE_SOUND_OFF if read(CHECK_SOUND_ON, 2) == 0 else ZONE_CUE_SOUND_ON
         stores[CHECK_SOUND_CUE & 0xFFFFFF] = (cue, 2)

@@ -161,6 +161,83 @@ def test_found_sound_leaves_the_check_own_cue_not_the_award_own_cue():
     assert result['stores'][pickups.SOUND_CUE] == (pickups.ZONE_CUE_SOUND_ON, 2)
 
 
+# --- AWARD_SCALE_LEVEL != 0 (00BBEA onward): not a message-system call, a second RAM-only way to
+# derive (box_result, d3), rejoining the SAME found-sound/found-bare/found-effect tail -----------
+
+def test_scaled_box_result_matches_the_rom_arithmetic_on_the_only_witnessed_level():
+    # Level 1 (the only value any of the eight recordings ever shows, 104 times, all on 7251bbd0ecf7):
+    # shift = 3-1 = 2. d3=7 (the fixture this shape was found from, artifacts/gods/evidence/
+    # census-00BA8E-fresh-7251bbd0ecf7-wide/00BA8E-entry-p294.state): 7>>2=1, not equal to 7 (bne
+    # taken), so d3_final is the shifted value directly, no 'same' correction.
+    scaled = pickups._scaled_box_result(2, 7, 1)
+    assert scaled == {'shift': 2, 'same': False, 'shift_raw': 2, 'bpl_taken': True, 'd2_orig': 2, 'd3_orig': 7,
+                      'box_result': (2 - 7 + 1) & 0xFFFF, 'd3': 1, 'branch': 'cue',
+                      'x_op': ('add', (2 - 7) & 0xFFFF, 1), 'box_result_negative': True}
+
+
+def test_scaled_box_result_positive_branch_recomputes_d3_from_the_original_d2():
+    # d2_orig=200, d3_orig=1 (award=1, shift=2 clears it to 0 -- 1>>2=0, not equal to 1: bne taken):
+    # box_result = (200-1)+0 = 199 > 0, the positive branch: d3 becomes d2_orig-box_result = 1.
+    scaled = pickups._scaled_box_result(200, 1, 1)
+    assert scaled['branch'] == 'positive'
+    assert scaled['box_result'] == 199
+    assert scaled['d3'] == 1
+    assert scaled['x_op'] == ('sub', 200, 199)
+
+
+def test_scaled_box_result_same_branch_runs_the_halving_correction_when_no_bits_shift_out():
+    # d3_orig=0: 0>>2 == 0 == d3_orig, so the 'same' correction (halve, halve again, add) runs -- and
+    # leaves d3_final at 0, since every step of the correction is 0 when the input is 0.  d2_orig=5,
+    # box_result=5+0=5>0: the positive branch, d3 recomputed as d2_orig-box_result=0.
+    scaled = pickups._scaled_box_result(5, 0, 1)
+    assert scaled['same'] is True
+    assert scaled['branch'] == 'positive'
+    assert scaled['box_result'] == 5
+    assert scaled['d3'] == 0
+
+
+def test_pickup_check_routes_the_scaled_arm_into_the_ordinary_found_sound_tail():
+    # Reproduces the real fixture (00BA8E-entry-p294.state, 7251bbd0ecf7): AWARD_SCALE_LEVEL=1 is not
+    # a call into any message system (the ROM here has no bsr/jsr at all) -- 'found-message' never
+    # existed as a real arm, just an unread name for this RAM-only alternate derivation.
+    d0, d1, d2 = 100, 100, 5
+    half = 0x40
+    raw = (d0 + 4) & 0xFFF8
+    cell_x = raw >> 3
+    base = (pickups.PICKUP_GRID + cell_x + (raw & 0xFFF8) * 6) & 0xFFFFFF
+    record = 0xFFF600
+    world = {(zones.HOLD_FLAG & 0xFFFFFF, 2): 0x8000, (pickups.CAMERA_X & 0xFFFFFF, 2): 0,
+            (pickups.CAMERA_Y & 0xFFFFFF, 2): 0, (zones.HALF_WIDTH & 0xFFFFFF, 2): half,
+            (zones.HALF_HEIGHT & 0xFFFFFF, 2): half, (pickups.ARRAY_GATE & 0xFFFFFF, 2): 0x8000,
+            (base, 1): 1, (pickups.GROUP_TABLES[0] & 0xFFFFFF, 2): 0,
+            (pickups.ITEM_RECORDS & 0xFFFFFF, 4): record, (record + pickups.ITEM_VALUE, 2): 0,
+            (pickups.SOUND_ON & 0xFFFFFF, 2): 0, (pickups.CHECK_SOUND_ON & 0xFFFFFF, 2): 0,
+            (pickups.AWARD_SCALE_LEVEL & 0xFFFFFF, 2): 1}
+    result = pickups.pickup_check(_reader(world), d0, d1, d2)
+    assert result['scale_level'] == 1
+    assert result['scaled'] is not None
+    assert result['arm'] in ('found-sound', 'found-bare', 'found-effect')
+    assert 'x_op' in result
+
+
+@needs_check_census
+def test_pickup_check_plan_declines_an_unwitnessed_award_scale_level():
+    candidates = [f for f in CHECK_FIXTURES if f.name == '00BA8E-entry-p294.state']
+    if not candidates:
+        pytest.skip('no local census-00BA8E-fresh-7251bbd0ecf7-wide/00BA8E-entry-p294.state fixture')
+    state = candidates[0].read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        pc = machine.info['pc']
+        machine.gates([pc])
+        assert machine.run(instructions=1) == 'gate'
+        # A level other than the only witnessed one (1) must decline, not silently admit.
+        assert machine.atomic(target=machine.info['tick'] + 1_000_000, cycles=1, instructions=1, last_pc=pc,
+                              writes=[(0xFFEF46, 0x00), (0xFFEF47, 0x02)], registers=machine.registers())
+        with pytest.raises(boundary.UnsupportedCandidate, match='award-scale level'):
+            boundary.pickup_check_plan(machine, machine.registers())
+
+
 # --- 013316: the grid inverse and debris burst, 013264's own code -4-and-below continuation -------
 #
 # No separate gate (013316 has no other caller): boundary._grid_inverse_award_plan composes it into
