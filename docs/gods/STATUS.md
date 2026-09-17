@@ -100,16 +100,24 @@ states 0 and 1 both call, is recovered too (`game.movement.
 box_overlap_scan`) -- but its own result is discarded at both call
 sites (no conditional branch reads it), so, like `tile_trigger_scan`
 before `0075D6` existed, it is not yet its own gate: it waits to be
-composed.  States 1 and 0 (`007282`/`006FFE`, falling
-through into state 5's own entry `00746A`) reach `008222`/`012DA0`
-directly too but are larger bodies (~150 instructions each) still to
-be composed; they are the next bite.
+composed.  State 1 (`007282`) is recovered (18 Sep): a ~130-instruction
+decision tree over the grid cell, the contact search and a shared
+movement cascade, ending at `0075D6` (or, on a contact-search-found
+result, a deterministic hand-off into state 5's own dispatch read,
+`0074A8`-`0074B4`) -- every arm the main history witnesses, including a
+STATE_COUNTER already above 7 reaching the cascade's own reset; only the
+box-overlap scan (`0072D8`) declines, unrecovered.  State 0 (`006FFE`,
+the same shape, its own constants) and state 5's own table-dispatch
+entry (`00746A`, which falls back into state 1's own body on one arm --
+"one region, two gates, one planner") are the next bites; state 14
+(`006DA6`) is the same size and shape again, confirmed but undisassembled
+past its own head.
 
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with forty gates armed, the camera follow step `002806`, the
+  original with forty-two gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -151,7 +159,8 @@ be composed; they are the next bite.
   `achievement-slot-dispatch`, `slot-scan`, `record-id-scan`,
   `action-reset-elapsed`, `action-clear-group`, `player-tail`,
   `contact-search`, `contact-consume-primary`,
-  `contact-consume-secondary`, `state-24` and `state-25` arm each alone.
+  `contact-consume-secondary`, `state-24`, `state-25`, `trail-check` and
+  `state-1` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -287,7 +296,10 @@ ids, never to `main`:
 | `state-24` reproduces the original on `fb408bc75597…`: **PASS, 153 hits of 153 gates, 0 fallbacks**; `state-25`: **PASS, 52 hits of 52 gates, 0 fallbacks**; `camera-sprites` (all forty gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,100,252 hits, 14,169 fallbacks (13 at the two new gates, all exact adapter refusals), tree bit-exact** | `history-verify fb408bc75597 --candidate state-24`; `--candidate state-25`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-state-24-fb408bc75597`, `artifacts/gods/verify-state-25-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18h` |
 | both negative controls diverge essentially at the first frame each region is exercised (frame 2,736 vs first occurrence 2,733; frame 3,236 vs 3,233) | `--candidate state-24-mutant-result`, `--candidate state-25-mutant-result` | `artifacts/gods/verify-state-24-mutant`, `artifacts/gods/verify-state-25-mutant` |
 | **`00722C` box-overlap scan**: a bounded 200-entry scan against a box around the player's own tracked position, stopping on the first entry whose own box contains it; fully witnessed (every skip/fail/found/exhausted shape), no declines -- but its own result is discarded at both witnessed call sites (states 0 and 1), so it is not yet its own gated candidate (no mutant the game can see until composed) | `factcheck check` on every fixture | `tests/games/gods/test_box_overlap_scan.py` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 46 s | 4,393 tests (9 skipped) | — |
+| **`007282` state 1**: the player state machine's own dispatch table entry 1, a ~130-instruction decision tree over the already-recovered grid cell, contact search and shared tail; every arm the main history witnesses recovered (two wall transitions, a jump-start to state 9, the movement cascade with its own grid tests and shared sub-body, a contact-search-found hand-off into state 5's own dispatch read, and a STATE_COUNTER already above 7 at the cascade's own reset, witnessed 8 times); only the box-overlap scan (`0072D8`) declines, unrecovered | `factcheck check` on all 1,171 retained fixtures (1,164 MATCH, 7 correctly DECLINE) | `tests/games/gods/test_state1.py` |
+| `state-1` reproduces the original on `fb408bc75597…`: **PASS, 3,152 hits, 29 fallbacks (20 z80 bank guard, 7 box-overlap declines, 2 observation deadline)**; `camera-sprites` (all forty-two gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,105,568 hits, 6,703 fallbacks (99 at the new gate, all exact or declined), tree bit-exact** | `history-verify fb408bc75597 --candidate state-1`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-state-1-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18m` |
+| the negative control (d7 off by one -- the generic "flip the last write" mutant crashes the machine on two arms whose own semantic stores are empty) diverges at frame 2,284, the first frame the region is exercised | `--candidate state-1-mutant-result` | `artifacts/gods/verify-state-1-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 63 s | 5,646 tests (9 skipped) | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a

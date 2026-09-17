@@ -4891,24 +4891,19 @@ def _cs_subpass_cost(sub_index, result):
     return cycles, instructions
 
 
-def contact_search_plan(machine, registers):
-    """008222 (with its helper 00837E): the movement-cluster contact search.
-
-    Witnessed across all eight recordings (271 retained path classes, `--max-classes 400`): the
-    guard busy; each sub-pass's own 'skip' (count negative), 'not-found' (every attempt occupied,
-    or the retry budget ran out) and 'found'; and, on sub-pass 2 only, ITEM_CONTACT_WORD == 1 on a
-    find (96 of the 271 fixtures) -- the latch-test code runs, but the latch is always still clear
-    at that point (sub-pass 1's own item never has ITEM_CONTACT_WORD == 1, so it never sets the
-    latch), so the store always goes through.  Declined, unwitnessed by any recording: a sub-pass
-    2/3 whose own ITEM_CONTACT_WORD comes back negative ('skip-negative'), sub-pass 1 itself ever
-    having ITEM_CONTACT_WORD == 1 (its own latch-set arm), and the latch actually being set when a
-    sub-pass 2/3 find tests it (the 'gated' arm) -- the second half of the whole latch mechanism.
+def _contact_search_resolve(machine, read, registers, entry_sp):
+    """Everything 008222 (with 00837E) does once entered, relative to its OWN entry a7 (``entry_sp``)
+    -- shared by the standalone gate (``entry_sp = registers['a7']``) and a composing caller's own
+    BSR (``entry_sp = registers['a7'] - 4``, the BSR's own push already accounted for by the caller,
+    the shape `_cc_resolve` proved for the contact-consume family).  Returns (cycles, instructions,
+    order, exit_registers, result) where ``exit_registers`` carries every register this routine's
+    own code touches except a7/pc (the caller's own concern) and ``result`` is
+    ``game.pickups.contact_search``'s own return, for the caller's own further branching (state 1's
+    own `0073DC tst.w d0` reads exactly ``result['d0']``).  Raises UnsupportedCandidate exactly as
+    the standalone planner already did.
     """
     from .game import pickups
-    if registers['pc'] != CONTACT_SEARCH_ENTRY:
-        raise UnsupportedCandidate('contact search planner needs the machine parked at 008222')
     sr = registers['sr']
-    read = _reader(machine)
     result = pickups.contact_search(read)
     if result['arm'] != 'busy':
         for sub_index, sub_result in enumerate(result['subpasses']):
@@ -4928,11 +4923,8 @@ def contact_search_plan(machine, registers):
         # moveq #1,d0 sets N=0/Z=0/V=0/C=0 (a positive one-word value); tst/bne/rts touch no flag at
         # all, and MOVEQ itself never touches X, so X survives from entry unchanged.
         exit_sr = sr & ~0x0F
-        return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
-                          registers={'d0': (registers['d0'] & 0xFFFF0000) | 1,
-                                     'a7': (registers['a7'] + 4) & 0xFFFFFFFF,
-                                     'pc': _return(machine, registers['a7'] & 0xFFFFFF), 'sr': exit_sr},
-                          last_pc=0x008390)
+        exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | 1, 'sr': exit_sr}
+        return cycles, instructions, order, exit_registers, result
 
     cycles, instructions = _CS_HEAD
     last_return = None
@@ -4946,7 +4938,7 @@ def contact_search_plan(machine, registers):
     cycles += c
     instructions += i
     if last_return is not None:
-        sp = registers['a7'] & 0xFFFFFF
+        sp = entry_sp & 0xFFFFFF
         for a, b in _bytes((sp - 4) & 0xFFFFFF, last_return, 4):
             order[a] = b
 
@@ -4964,9 +4956,7 @@ def contact_search_plan(machine, registers):
     # a nonzero upper half, so d0/d3/d5 always exit with upper=0, never the caller's own entry value
     # (found on fixture p34, whose caller's own d0 upper half was 0xFFFF, exposing the earlier bug).
     # d4/d6 have no such MOVEQ of their own: their upper half genuinely survives from entry.
-    exit_registers = {'d0': result['d0'], 'd3': result['d0'],
-                      'a7': (registers['a7'] + 4) & 0xFFFFFFFF,
-                      'pc': _return(machine, registers['a7'] & 0xFFFFFF), 'sr': exit_sr}
+    exit_registers = {'d0': result['d0'], 'd3': result['d0'], 'sr': exit_sr}
     if result['a2_exit'] is not None:
         exit_registers['a2'] = result['a2_exit'] & 0xFFFFFFFF
     if result['d4_exit'] is not None:
@@ -4981,8 +4971,425 @@ def contact_search_plan(machine, registers):
     exit_registers['a3'] = (pickups.GROUP_TABLES[2] + pickups.CONTACT_ENTRY_BASE_OFFSET
                             + 0x18 * max(0, len(sp3_attempts) - 1)) & 0xFFFFFFFF
 
+    return cycles, instructions, order, exit_registers, result
+
+
+def contact_search_plan(machine, registers):
+    """008222 (with its helper 00837E): the movement-cluster contact search.
+
+    Witnessed across all eight recordings (271 retained path classes, `--max-classes 400`): the
+    guard busy; each sub-pass's own 'skip' (count negative), 'not-found' (every attempt occupied,
+    or the retry budget ran out) and 'found'; and, on sub-pass 2 only, ITEM_CONTACT_WORD == 1 on a
+    find (96 of the 271 fixtures) -- the latch-test code runs, but the latch is always still clear
+    at that point (sub-pass 1's own item never has ITEM_CONTACT_WORD == 1, so it never sets the
+    latch), so the store always goes through.  Declined, unwitnessed by any recording: a sub-pass
+    2/3 whose own ITEM_CONTACT_WORD comes back negative ('skip-negative'), sub-pass 1 itself ever
+    having ITEM_CONTACT_WORD == 1 (its own latch-set arm), and the latch actually being set when a
+    sub-pass 2/3 find tests it (the 'gated' arm) -- the second half of the whole latch mechanism.
+    """
+    if registers['pc'] != CONTACT_SEARCH_ENTRY:
+        raise UnsupportedCandidate('contact search planner needs the machine parked at 008222')
+    read = _reader(machine)
+    sp32 = registers['a7']
+    cycles, instructions, order, exit_registers, result = _contact_search_resolve(machine, read, registers, sp32)
+    exit_registers['a7'] = (sp32 + 4) & 0xFFFFFFFF
+    exit_registers['pc'] = _return(machine, sp32 & 0xFFFFFF)
+    last_pc = 0x008390 if result['arm'] == 'busy' else CONTACT_SEARCH_LAST_PC
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
-                      registers=exit_registers, last_pc=CONTACT_SEARCH_LAST_PC)
+                      registers=exit_registers, last_pc=last_pc)
+
+
+# --- 007282: state 1 (game.player.state1_step / state1_cascade / state1_handoff) -----------------
+#
+# Costed one instruction-block at a time from the tracer, the way 008222 and the contact-consume
+# family already are: `docs/gods/blockers/2026-09-17-008222.md`'s "18 September (continued)"
+# addendum transcribes the whole decision tree and the traces each block below comes from (eleven
+# `factcheck.py facts --path` traces plus targeted `branches --vary` sweeps, all on
+# `census-007282/007282-entry-p0.state` and `-p245.state`).  The plan ends with `pc = 0x0075D6` on
+# every arm but the contact-search-found hand-off, which ends at `pc = 0x0075DA` (skipping the
+# tail's own first instruction, already done) -- the same "one gate hands off to a separately-armed
+# gate" shape `movement_hit_state`'s own states 24/25 already use for the SAME tail
+# (`recovery.Candidate` arms `0x0075D6` as its own gate, 'player-tail').  One arm declines by name:
+# the box-overlap scan (`0072D8`, `FFFFEA1E == 1`, 7 of 3,181 occurrences on the main history --
+# `game.movement.box_overlap_scan` is recovered but not yet composed here).
+STATE1_ENTRY = 0x007282
+
+_S1_BSR_GRID = (18, 1)                    # 007282 bsr.w $63fa
+_S1_GATE_TEST = (16, 1)                   # 007286 cmpi.b #1,$180(a0)
+_S1_GATE_BEQ = {True: (10, 1), False: (8, 1)}        # 00728C beq.b -- taken: arm A; not taken: the low-bits test
+_S1_LOW_HEAD = (12 + 8 + 8, 3)            # 00728E move.w f18c,d0; 007292 andi #$1e; 007296 cmpi #8
+_S1_LOW_BLT = {True: (10, 1), False: (8, 1)}         # 00729A blt.b -- taken: wall directly
+_S1_WALL_TEST2 = (16, 1)                  # 00729C cmpi.b #1,$181(a0)
+_S1_WALL_BEQ = {True: (10, 1), False: (8, 1)}        # 0072A2 beq.b -- taken: arm A; not taken: wall
+_S1_WALL_TAIL = (16 + 4 + 16 + 16 + 16 + 10, 6)      # 0072A4..0072B8: state=$c, d7=0, f194/f1a0/f198=0
+_S1_EA20_TEST = (12, 1)                   # 0072BC tst.w ea20
+_S1_EA20_BPL = {True: (10, 1), False: (8, 1)}        # 0072C0 bpl.b -- taken: arm A2; not taken: negative
+_S1_NEG_TAIL = (16 + 4 + 10, 3)           # 0072C2..0072CA: state=3, d7=2
+_S1_EA1E_TEST = (16, 1)                   # 0072CE cmpi.w #1,ea1e
+_S1_EA1E_BNE = {True: (10, 1), False: (12, 1)}       # 0072D4 bne.w -- taken: arm A3; not taken: box-overlap
+_S1_BIT0_TEST = (16, 1)                   # 00734C btst.b #0,ea23
+_S1_BIT0_BEQ = {True: (10, 1), False: (12, 1)}       # 007352 beq.w -- taken: arm A4; not taken: jump-start
+_S1_JS_TEST = (12, 1)                     # 007356 tst.w ea20 (>= 0 already established; zero or positive)
+_S1_JS_BEQ = {True: (10, 1), False: (8, 1)}          # 00735A beq.b -- taken: f196=0; not taken: f196=4
+_S1_JS_ZERO_HEAD = (16 + 10, 2)           # 007380 clr.w f196; 007384 bra.b (taken)
+_S1_JS_NONZERO_HEAD = _add((8, 1), (16, 1))          # 00735C bmi.b (not taken, ea20 already >= 0); 00735E move.w #4,f196
+_S1_JS_TAIL = (16 + 20 + 4 + 16 + 16 + 10, 6)        # 007364..00737C: state=9, f19a=x, d7=0, f19c=0, fdf6=$30
+_S1_BIT2_TEST = (16, 1)                   # 0073D0 btst.b #2,ea23
+_S1_BIT2_BEQ = {True: (10, 1), False: (8, 1)}        # 0073D6 beq.b -- taken: cascade directly; not taken: bsr 8222
+_S1_SEARCH_BSR = (18, 1)                  # 0073D8 bsr.w $8222
+_S1_SEARCH_TST = (4, 1)                   # 0073DC tst.w d0
+_S1_SEARCH_BNE = {True: (10, 1), False: (8, 1)}      # 0073DE bne.b -- taken (not found): cascade; not taken (found): hand-off
+_S1_HANDOFF_BRA = (10, 1)                 # 0073E0 bra.w $749a
+
+_S1_CASCADE_TEST = (12, 1)                # 0073E4 tst.w f182
+_S1_CASCADE_BNE = {True: (10, 1), False: (12, 1)}    # 0073E8 bne.w -- taken: f182-set; not taken: continue
+_S1_F182_TAIL = (16 + 16 + 4 + 8 + 10, 5)            # 007458..007466: f182=0, x+=4, d7=(d7+1)&7
+_S1_EA20ONE_TEST = (16, 1)                # 0073EC cmpi.w #1,ea20
+_S1_EA20ONE_BNE = {True: (10, 1), False: (12, 1)}    # 0073F2 bne.w -- taken: shared sub-body; not taken: grid tests
+_S1_GRIDHEAD = (12 + 8 + 8, 3)            # 0073F6 move.w f18c,d0; 0073FA andi #$1f; 0073FE cmpi #8
+_S1_GRID_BGE = {True: (10, 1), False: (8, 1)}        # 007402 bge.b -- taken: low5 >= 8 (skip grid tests)
+_S1_GRID_TEST = (16, 1)                   # cmpi.b #1,offset(a0), each of the three positions
+_S1_GRID_BEQ = {True: (10, 1), False: (12, 1)}       # beq.w -- taken: immediate exit; not taken: next test / advance
+_S1_ADVANCE_HEAD = (16, 1)                # 007422 addq.w #4,f18c
+_S1_D7_2_TEST = (8, 1)                    # 007426 cmpi.w #2,d7
+_S1_D7_2_BNE = {True: (10, 1), False: (8, 1)}        # 00742A bne.b -- not taken (d7==2): write sound $48 first
+_S1_SOUND_WRITE = (16, 1)                 # move.w #imm,fdf6.w ($48 at 00742C or $49 at 007438)
+_S1_D7_6_TEST = (8, 1)                    # 007432 cmpi.w #6,d7
+_S1_D7_6_BNE = {True: (10, 1), False: (8, 1)}        # 007436 bne.b -- not taken (d7==6): write sound $49
+_S1_ADVANCE_MID = (16, 1)                 # 00743E clr.w f182
+_S1_D7_7_TEST = (8, 1)                    # 007442 cmpi.w #7,d7
+_S1_D7_7_BLE = {True: (10, 1), False: (8, 1)}        # 007446 ble.b -- taken (d7<=7); not taken: overflow reset
+_S1_OVERFLOW_RESET = (4 + 16, 2)          # 007448 moveq #7,d7; 00744A subq.w #4,f18c (undoes the +4 above)
+_S1_ADVANCE_TAIL = (4 + 8 + 10, 3)        # 00744E addq.w #1,d7; 007450 andi.w #7,d7; 007454 bra.w
+
+_S1_SHARED_TEST = (12, 1)                 # 007208 tst.w ea1e
+_S1_SHARED_BPL = {True: (10, 1), False: (12, 1)}     # 00720C bpl.w -- taken: d7 test; not taken: negative tail
+_S1_SHARED_NEG_TAIL = (4 + 16 + 16 + 10, 4)          # 007210..00721C: d7=1, state=$1a, f24a=0
+_S1_SHARED_D7_TEST = (4, 1)               # 007220 tst.w d7
+_S1_SHARED_D7_BEQ = {True: (10, 1), False: (12, 1)}  # 007222 beq.w -- taken: unchanged; not taken: reset tail
+_S1_SHARED_RESET_TAIL = (4 + 10, 2)       # 007226 moveq #$2d,d7; 007228 bra.w
+
+_S1_HANDOFF_HEAD = (16 + 10, 2)           # 00749A move.w #5,f192; 0074A0 bra.b (taken)
+_S1_HANDOFF_TAIL = (4 + 12 + 4 + 14 + 10, 5)         # 0074A8..0074B4: d7=0, f190=0, table read, bra.w
+
+
+def _state1_grid_cost(result):
+    """0073F6-007422: the low-bits gate (0073FE/007402) then, when `low5 < 8`, `result['checked']`
+    row-stride grid tests in program order (`+1`/`+0x81`/`+0x101`) -- the LAST one only 'taken' (a
+    match) on the `'grid-block'` arm, every earlier one and a `low5 >= 8` skip 'not taken'.  Uses
+    `game.player.state1_cascade`'s own `low5`/`checked` rather than re-reading the grid bytes."""
+    cycles, instructions = _S1_GRIDHEAD
+    c, i = _S1_GRID_BGE[result['low5'] >= 8]
+    cycles += c
+    instructions += i
+    blocked = result['arm'] == 'grid-block'
+    for index in range(result['checked']):
+        c, i = _S1_GRID_TEST
+        cycles += c
+        instructions += i
+        matched = blocked and index == result['checked'] - 1
+        c, i = _S1_GRID_BEQ[matched]
+        cycles += c
+        instructions += i
+    return cycles, instructions
+
+
+def _state1_cascade_cost(read, sr, d7, position_x, address):
+    """0073E4-0075D6: the cascade's own cost and exit facts, shared by `state1_plan`'s own
+    `EA23` bit-2-clear arm and its contact-search 'not found' continuation."""
+    from .game import player
+    result = player.state1_cascade(read, d7, position_x, address)
+    cycles, instructions = _S1_CASCADE_TEST
+    if result['arm'] == 'f182-set':
+        c, i = _add(_S1_CASCADE_BNE[True], _S1_F182_TAIL)
+        cycles += c
+        instructions += i
+        last_pc = 0x007466
+        # 007462 andi.w #7,d7 is the last N/Z/V/C setter (X untouched by ANDI); X itself is whatever
+        # 007460's own addq.w #1,d7 left (the entry d7 is at most 7 here, so the add never carries).
+        add_x_sr = _add_sr(sr, d7, 1, 2)
+        exit_sr = (_logic_sr(sr, result['d7'], 2) & ~0x10) | (add_x_sr & 0x10)
+        return cycles, instructions, result, last_pc, exit_sr
+    c, i = _S1_CASCADE_BNE[False]
+    cycles += c
+    instructions += i
+    c, i = _S1_EA20ONE_TEST
+    cycles += c
+    instructions += i
+    if result['arm'] not in ('grid-block', 'position-advance'):
+        c, i = _S1_EA20ONE_BNE[True]
+        cycles += c
+        instructions += i
+        c, i = _S1_SHARED_TEST
+        cycles += c
+        instructions += i
+        if result['arm'] == 'ea1e-negative':
+            c, i = _add(_S1_SHARED_BPL[False], _S1_SHARED_NEG_TAIL)
+            cycles += c
+            instructions += i
+            last_pc = 0x00721C
+            exit_sr = _logic_sr(sr, 0, 2)            # 007218 clr.w f24a is the last flag-setter (Z=1)
+            return cycles, instructions, result, last_pc, exit_sr
+        c, i = _S1_SHARED_BPL[True]
+        cycles += c
+        instructions += i
+        c, i = _S1_SHARED_D7_TEST
+        cycles += c
+        instructions += i
+        if result['arm'] == 'shared-unchanged':
+            c, i = _S1_SHARED_D7_BEQ[True]
+            cycles += c
+            instructions += i
+            last_pc = 0x007222
+            exit_sr = _cmp_sr(sr, d7, 0, 2)        # 007220 tst.w d7 is the last (and only) flag-setter
+            return cycles, instructions, result, last_pc, exit_sr
+        c, i = _add(_S1_SHARED_D7_BEQ[False], _S1_SHARED_RESET_TAIL)
+        cycles += c
+        instructions += i
+        last_pc = 0x007228
+        exit_sr = _cmp_sr(sr, d7, 0, 2)            # moveq/bra set nothing; tst.w d7 (not-equal) stands
+        return cycles, instructions, result, last_pc, exit_sr
+    c, i = _S1_EA20ONE_BNE[False]
+    cycles += c
+    instructions += i
+    grid_cycles, grid_instructions = _state1_grid_cost(result)
+    if result['arm'] == 'grid-block':
+        cycles += grid_cycles
+        instructions += grid_instructions
+        # The matching cmpi.b #1,offset(a0) is the last (and only) flag-setter on this arm: the byte
+        # equals 1, so the compare's own result is 0 (Z=1, N=V=C=0); X is untouched by CMP.  D0 holds
+        # POSITION_X's own low 5 bits (0073F6/0073FA), read regardless of which position matched.
+        exit_sr = _cmp_sr(sr, 1, 1, 1)
+        return cycles, instructions, result, result['last_pc'], exit_sr
+    cycles += grid_cycles
+    instructions += grid_instructions
+    c, i = _S1_ADVANCE_HEAD
+    cycles += c
+    instructions += i
+    c, i = _S1_D7_2_TEST
+    cycles += c
+    instructions += i
+    c, i = _S1_D7_2_BNE[d7 != 2]
+    cycles += c
+    instructions += i
+    if d7 == 2:
+        c, i = _S1_SOUND_WRITE
+        cycles += c
+        instructions += i
+    c, i = _S1_D7_6_TEST
+    cycles += c
+    instructions += i
+    c, i = _S1_D7_6_BNE[d7 != 6]
+    cycles += c
+    instructions += i
+    if d7 == 6:
+        c, i = _S1_SOUND_WRITE
+        cycles += c
+        instructions += i
+    c, i = _add(_S1_ADVANCE_MID, _S1_D7_7_TEST)
+    cycles += c
+    instructions += i
+    if result.get('overflow'):
+        c, i = _add(_S1_D7_7_BLE[False], _S1_OVERFLOW_RESET, _S1_ADVANCE_TAIL)
+    else:
+        c, i = _add(_S1_D7_7_BLE[True], _S1_ADVANCE_TAIL)
+    cycles += c
+    instructions += i
+    last_pc = 0x007454
+    # 007450 andi.w #7,d7 is the last flag-setter (N/Z from the masked result, V=C=0, X untouched);
+    # X itself is whatever 00744E's own addq.w #1,d7 left (the entry d7 is at most 7 here, so the
+    # add never carries: X=0 always on this arm).
+    add_x_sr = _add_sr(sr, d7, 1, 2)
+    exit_sr = (_logic_sr(sr, result['d7'], 2) & ~0x10) | (add_x_sr & 0x10)
+    return cycles, instructions, result, last_pc, exit_sr
+
+
+def _s1_gate_cost(head):
+    """007286-0072A2: the cost to reach either 'wall' (0072A4) or arm A (0072BC), covering all three
+    routes `state1_step` can take there -- `$180(a0) == 1` directly, or `$180(a0) != 1` and then
+    either the low-bits test alone (`low < 8`, always wall) or both it and `$181(a0)`'s own compare
+    (`low >= 8`: wall when `$181(a0) != 1`, arm A when it is 1)."""
+    if head['gate_direct']:
+        return _S1_GATE_BEQ[True]
+    cycles, instructions = _add(_S1_GATE_BEQ[False], _S1_LOW_HEAD)
+    if head['low_lt_8']:
+        c, i = _S1_LOW_BLT[True]
+        return cycles + c, instructions + i
+    c, i = _add(_S1_LOW_BLT[False], _S1_WALL_TEST2, _S1_WALL_BEQ[head['arm'] != 'wall'])
+    return cycles + c, instructions + i
+
+
+def state1_plan(machine, registers):
+    """007282 (state 1): the player state machine's own dispatch table entry 1, composed over the
+    already-recovered grid cell (`0063FA`), contact search (`008222`) and the shared tail (`0075D6`,
+    a separately-armed gate this plan hands off to by ending at `pc = 0x0075D6`).  See the module
+    note above for the shape and where every block's cost comes from."""
+    from .game import player
+    if registers['pc'] != STATE1_ENTRY:
+        raise UnsupportedCandidate('state 1 planner needs the machine parked at 007282')
+    sr = registers['sr']
+    read = _reader(machine)
+    d7 = registers['d7'] & 0xFFFF
+    head = player.state1_step(read, d7)
+    # 006408 asl.w #3,d1 (inside the composed grid_cell call) is the last flag-setter before 007286's
+    # own cmpi.b -- X survives from here through every later instruction that does not itself touch
+    # it, exactly as grid_cell_plan's own exit_sr threads it for a standalone caller.
+    sr = _asl_sr(sr, head['row_source'], 3, 2)
+    order = {}
+    for a, b in _bytes((registers['a7'] - 4) & 0xFFFFFF, 0x007286, 4):
+        order[a] = b
+    cycles, instructions = _add(_S1_BSR_GRID, GRID_CELL_COST, _S1_GATE_TEST)
+    # 00728E move.w f18c,d0; 007292 andi.w #$1e,d0 -- when $180(a0) != 1, the low-bits test overwrites
+    # grid_cell's own d0 (the column) with POSITION_X & 0x1E permanently; the ea20==1 grid-test block
+    # further down (0073F6, mask 0x1F) overwrites it again on the arms that reach it -- handled where
+    # `_state1_cascade_cost` returns its own 'd0'.
+    d0 = head['d0'] if head['gate_direct'] else (head['position_x'] & 0x1E)
+    exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | d0,
+                      'd1': (registers['d1'] & 0xFFFF0000) | head['d1'],
+                      'a0': head['address'] & 0xFFFFFFFF}
+
+    if head['arm'] == 'wall':
+        c, i = _add(_s1_gate_cost(head), _S1_WALL_TAIL)
+        cycles += c
+        instructions += i
+        for a, b in head['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = head['d7']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0, 2)   # 0072B4 clr.w f198 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0072B8)
+
+    if head['arm'] == 'negative':
+        c, i = _add(_s1_gate_cost(head), _S1_EA20_TEST, _S1_EA20_BPL[False], _S1_NEG_TAIL)
+        cycles += c
+        instructions += i
+        for a, b in head['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = head['d7']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 3, 2)   # 0072C2 move.w #3,f192 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0072CA)
+
+    if head['arm'] == 'box-overlap':
+        raise UnsupportedCandidate('state 1: the box-overlap scan (0072D8, FFFFEA1E == 1) is not composed here yet')
+
+    if head['arm'] == 'jump-start':
+        c, i = _add(_s1_gate_cost(head), _S1_EA20_TEST, _S1_EA20_BPL[True], _S1_EA1E_TEST, _S1_EA1E_BNE[True],
+                    _S1_BIT0_TEST, _S1_BIT0_BEQ[False], _S1_JS_TEST)
+        if head['f196'] == 0:
+            c2, i2 = _add(_S1_JS_BEQ[True], _S1_JS_ZERO_HEAD)
+        else:
+            c2, i2 = _add(_S1_JS_BEQ[False], _S1_JS_NONZERO_HEAD)
+        c3, i3 = _S1_JS_TAIL
+        cycles += c + c2 + c3
+        instructions += i + i2 + i3
+        for a, b in head['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = head['d7']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0x30, 2)   # 007376 move.w #$30,fdf6 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x00737C)
+
+    # head['arm'] == 'gate': the shared cascade, directly (EA23 bit 2 clear) or after a contact-search call.
+    c, i = _add(_s1_gate_cost(head), _S1_EA20_TEST, _S1_EA20_BPL[True], _S1_EA1E_TEST, _S1_EA1E_BNE[True],
+                _S1_BIT0_TEST, _S1_BIT0_BEQ[True], _S1_BIT2_TEST)
+    cycles += c
+    instructions += i
+    position_x = head['position_x']
+    address = head['address']
+
+    if not head['needs_search']:
+        c, i = _S1_BIT2_BEQ[True]
+        cycles += c
+        instructions += i
+        cc, ci, result, last_pc, exit_sr = _state1_cascade_cost(read, sr, d7, position_x, address)
+        cycles += cc
+        instructions += ci
+        if 'stores' in result:
+            for a, b in result['stores'].items():
+                for aa, bb in _bytes(a, b[0], b[1]):
+                    order[aa] = bb
+        if 'd7' in result:
+            exit_registers['d7'] = result['d7']
+        if 'd0' in result:
+            exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = exit_sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=last_pc)
+
+    # EA23 bit 2 set: call the already-recovered contact search (008222) internally, exactly the
+    # shape `_movement_hit_plan` already proved for a nested BSR into recovered code.
+    c, i = _S1_BIT2_BEQ[False]
+    cycles += c
+    instructions += i
+    sp32 = registers['a7']
+    c, i = _S1_SEARCH_BSR
+    cycles += c
+    instructions += i
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, 0x0073DC, 4):
+        order[a] = b
+    cs_cycles, cs_instructions, cs_order, cs_registers, cs_result = _contact_search_resolve(
+        machine, read, {**registers, 'pc': CONTACT_SEARCH_ENTRY, 'a7': sp32 - 4}, sp32 - 4)
+    cycles += cs_cycles
+    instructions += cs_instructions
+    order.update(cs_order)
+    exit_registers.update(cs_registers)
+    exit_registers['d0'] = cs_registers['d0']
+    c, i = _S1_SEARCH_TST
+    cycles += c
+    instructions += i
+    found = cs_result['d0'] == 0
+    c, i = _S1_SEARCH_BNE[not found]
+    cycles += c
+    instructions += i
+
+    if found:
+        c, i = _S1_HANDOFF_BRA
+        cycles += c
+        instructions += i
+        handoff = player.state1_handoff(read)
+        c, i = _add(_S1_HANDOFF_HEAD, _S1_HANDOFF_TAIL)
+        cycles += c
+        instructions += i
+        for a, b in handoff['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = handoff['d7']
+        exit_registers['pc'] = 0x0075DA
+        # 0074AA move.w d7,f190 is a plain MOVE (N/Z from the value, V=C=0), the last flag-setter; X is
+        # untouched by MOVE and by the PC-relative-indexed read after it, so it survives from whatever
+        # contact_search's own found-arm exit left (a MOVE too -- 00837E's own "move.l a3,slot").
+        exit_registers['sr'] = _logic_sr(cs_registers['sr'], handoff['d7'], 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0074B4)
+
+    cc, ci, result, last_pc, exit_sr = _state1_cascade_cost(read, cs_registers['sr'], d7, position_x, address)
+    cycles += cc
+    instructions += ci
+    if 'stores' in result:
+        for a, b in result['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+    if 'd7' in result:
+        exit_registers['d7'] = result['d7']
+    if 'd0' in result:
+        # The ea20==1 grid tests re-read POSITION_X into d0 (0073F6/0073FA), overwriting
+        # contact_search's own d0=1 (not found) residue; every other cascade arm leaves it.  The
+        # upper half comes from contact_search's OWN exit (already cleared there), not state 1's
+        # entry: `andi.w #$1f,d0` at 0073FA is a .w op, preserving whatever d0's upper half already
+        # was at that point in the SAME activation.
+        exit_registers['d0'] = (cs_registers['d0'] & 0xFFFF0000) | result['d0']
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = exit_sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=last_pc)
 
 
 # --- 012DA0/012E5A: the movement-cluster contact consumers (game/pickups.py: contact_consume) ---

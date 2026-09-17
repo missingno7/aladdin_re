@@ -324,3 +324,141 @@ def movement_hit_state(read, routine, state_counter):
     stores[GRID_Y] = (read(CONTACT_OVERRIDE_Y, 2), 2)
     return {'arm': 'transition', 'counter': new_counter, 'calls_consumer': False, 'stores': stores,
             'override_flag': bool(override_flag)}
+
+
+# --- 007282: state 1's own decision tree, up to the shared tail (0075D6) or the contact-search-
+# found hand-off into state 5's own dispatch read (0074A8-0074B4) -- `docs/gods/blockers/
+# 2026-09-17-008222.md`'s "18 September (continued)" addendum, where the whole tree is transcribed
+# from a recursive-descent disassembly and cross-checked against the tracer. -----------------------
+#
+# Reads the grid cell 0063FA already names (game.grid.grid_cell) at the player's own position, three
+# pad-intent words (FFFFEA1E/EA20/EA23, `game/player.py`'s own docstring already flags these as
+# unread pad-latch intents) and a movement flag (FFFFF182).  Ends with `pc = 0x0075D6` on every arm
+# but the contact-search-found hand-off, which ends at `pc = 0x0075DA` (skipping the tail's own first
+# instruction, already done by the hand-off's own `move.w d7,$f190.w`) -- the same "one gate hands off
+# to a separately-armed gate" shape `movement_hit_state`'s own states 24/25 already use for the SAME
+# tail.  One arm is real ROM code this session declines by name: `0072D8`'s own box-overlap scan
+# (`FFFFEA1E == 1`, 7 of 3,181 occurrences on the main history -- game.movement.box_overlap_scan is
+# already recovered but not yet composed here).  A STATE_COUNTER already above 7 reaching the main
+# cascade's own reset (`007448`) IS witnessed (8 of 3,181, always 0x2D -- the shared sub-body's own
+# `'shared-reset'` arm below is the only place that stores a counter this large) and is modelled: the
+# reset undoes the `POSITION_X` step already taken and masks the counter back to 0-7, net-neutral.
+STATE1_ENTRY = 0x007282
+STATE1_SHARED_SUB = 0x007208           # 0073F2's own target: a five-instruction sub-body only state 1 reaches
+STATE1_HANDOFF = 0x00749A              # the contact-search-found hand-off into state 5's own dispatch read
+STATE1_HANDOFF_TABLE = 0x0074B8        # 0074B0's own PC-relative table, always read at index 0 from here
+EA1E_WORD, EA20_WORD, EA23_WORD = 0xFFFFEA1E, 0xFFFFEA20, 0xFFFFEA23   # pad-intent words, game/player.py's own docstring
+F194, F196, F198, F19A, F19C, F1A0 = 0xFFFFF194, 0xFFFFF196, 0xFFFFF198, 0xFFFFF19A, 0xFFFFF19C, 0xFFFFF1A0
+F24A = 0xFFFFF24A
+MOVEMENT_FLAG = 0xFFFFF182              # word: gates the cascade's own f182-set arm (007458)
+STATE1_GRID_OFFSETS = ((1, 0x00740A), (0x81, 0x007414), (0x101, 0x00741E))   # +1/+0x81/+0x101, TILE_ROW_BYTES apart
+
+
+def _wall_stores():
+    return {STATE_INDEX: (0xC, 2), F194 & 0xFFFFFF: (0, 2), F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2)}
+
+
+def state1_step(read, d7):
+    """007282: state 1's own head, up to the shared tail, a contact-search call, or a named decline.
+
+    ``d7`` is ``STATE_COUNTER`` as the dispatcher's own entry left it (the tail writes it back later;
+    nothing before this routine's own tail-reaching branches touches it).  Every arm carries the grid
+    cell's own ``d0``/``d1``/``address`` (0063FA's own exit registers, `game.grid.grid_cell`) so the
+    boundary need not call it twice.  The ``'gate'`` arm is where the cascade begins: ``needs_search``
+    true means the boundary must call the already-recovered `game.pickups.contact_search` first (a
+    found result hands off via ``state1_handoff`` below; a not-found result, and the ``False`` case
+    directly, both continue into ``state1_cascade``).
+    """
+    from .grid import grid_cell
+    from .pickups import MOVEMENT_SOUND_CUE
+    cell = grid_cell(read)
+    address = cell['address']
+    position_x = read(POSITION_X, 2)
+    base = {'d0': cell['d0'], 'd1': cell['d1'], 'address': address, 'row_source': cell['row_source'],
+            'position_x': position_x}
+    gate_direct = read((address + 0x180) & 0xFFFFFF, 1) == 1
+    if gate_direct:
+        wall, low_lt_8 = False, None
+    else:
+        low_lt_8 = (position_x & 0x1E) < 8
+        wall = low_lt_8 or read((address + 0x181) & 0xFFFFFF, 1) != 1
+    base['gate_direct'] = gate_direct
+    base['low_lt_8'] = low_lt_8
+    if wall:
+        return {'arm': 'wall', 'd7': 0, 'stores': _wall_stores(), **base}
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    if ea20 < 0:
+        return {'arm': 'negative', 'd7': 2, 'stores': {STATE_INDEX: (3, 2)}, **base}
+    if read(EA1E_WORD, 2) == 1:
+        return {'arm': 'box-overlap', **base}
+    bit0 = read(EA23_WORD, 1) & 1
+    if bit0:
+        ea20_word = read(EA20_WORD, 2) & 0xFFFF
+        f196 = 0 if ea20_word == 0 else 4
+        stores = {STATE_INDEX: (9, 2), F196 & 0xFFFFFF: (f196, 2), F19A & 0xFFFFFF: (position_x, 2),
+                  F19C & 0xFFFFFF: (0, 2), MOVEMENT_SOUND_CUE & 0xFFFFFF: (0x30, 2)}
+        return {'arm': 'jump-start', 'd7': 0, 'f196': f196, 'stores': stores, **base}
+    bit2 = read(EA23_WORD, 1) & 4
+    return {'arm': 'gate', 'needs_search': bool(bit2), 'position_x': position_x, **base}
+
+
+def state1_cascade(read, d7, position_x, address):
+    """0073E4-0075D6: the cascade `state1_step`'s own `'gate'` arm reaches directly (`EA23` bit 2
+    clear) or a contact-search 'not found' result continues into.  `FFFFF182` first; when clear,
+    `FFFFEA20 == 1`'s own three grid tests (the SAME row-stride pattern `tile_trigger_scan` already
+    names, offsets `+1`/`+0x81`/`+0x101` from the grid pointer 0063FA leaves in `address`) or, when
+    not 1, the shared sub-body's own two arms.  A `d7` (STATE_COUNTER) already above 7 reaching the
+    grid-clear tail takes `007448`'s own reset (folded into the `'position-advance'` arm below, marked
+    `'overflow'`): the +4 just applied to `POSITION_X` is undone again and the counter is forced to 7
+    before the same +1/&7 tail every other sub-arm here uses, landing back at 0.
+    """
+    from .pickups import MOVEMENT_SOUND_CUE
+    if read(MOVEMENT_FLAG, 2) & 0xFFFF:
+        new_x = (position_x + 4) & 0xFFFF
+        return {'arm': 'f182-set', 'd7': (d7 + 1) & 7,
+                'stores': {MOVEMENT_FLAG & 0xFFFFFF: (0, 2), POSITION_X: (new_x, 2)}}
+    if (read(EA20_WORD, 2) & 0xFFFF) == 1:
+        low5 = position_x & 0x1F
+        d0 = low5   # 0073F6 move.w f18c,d0; 0073FA andi.w #$1f,d0 -- the low bits, left in D0 either way
+        checked = 0
+        if low5 < 8:
+            for offset, last_pc in STATE1_GRID_OFFSETS:
+                checked += 1
+                if read((address + offset) & 0xFFFFFF, 1) == 1:
+                    return {'arm': 'grid-block', 'last_pc': last_pc, 'low5': low5, 'checked': checked, 'd0': d0}
+            checked = 3
+        else:
+            checked = 0
+        if d7 > 7:
+            # 007448 moveq #7,d7; 00744A subq.w #4,f18c -- the +4 just below is undone again (net:
+            # POSITION_X unchanged), and d7 is forced to 7 before the SAME +1/&7 tail every other
+            # sub-arm here uses, landing back at 0.  d7 > 7 only reaches this state from the shared
+            # sub-body's own reset arm (0x2D, `'shared-reset'` below), the only place that stores a
+            # STATE_COUNTER this large -- witnessed 8 times on the main history.
+            return {'arm': 'position-advance', 'd7': 0, 'sound': False, 'low5': low5, 'checked': checked,
+                    'd0': d0, 'overflow': True,
+                    'stores': {MOVEMENT_FLAG & 0xFFFFFF: (0, 2), POSITION_X: (position_x, 2)}}
+        new_x = (position_x + 4) & 0xFFFF
+        stores = {MOVEMENT_FLAG & 0xFFFFFF: (0, 2), POSITION_X: (new_x, 2)}
+        if d7 == 2:
+            stores[MOVEMENT_SOUND_CUE & 0xFFFFFF] = (0x48, 2)
+        if d7 == 6:
+            stores[MOVEMENT_SOUND_CUE & 0xFFFFFF] = (0x49, 2)
+        return {'arm': 'position-advance', 'd7': (d7 + 1) & 7, 'sound': d7 in (2, 6), 'stores': stores,
+                'low5': low5, 'checked': checked, 'd0': d0}
+    ea1e = _signed_word(read(EA1E_WORD, 2))
+    if ea1e < 0:
+        return {'arm': 'ea1e-negative', 'd7': 1,
+                'stores': {STATE_INDEX: (0x1A, 2), F24A & 0xFFFFFF: (0, 2)}}
+    if d7 == 0:
+        return {'arm': 'shared-unchanged', 'd7': 0, 'stores': {}}
+    return {'arm': 'shared-reset', 'd7': 0x2D, 'stores': {}}
+
+
+def state1_handoff(read):
+    """00749A-0074B4: the contact-search-found hand-off -- fully deterministic, no branch: STATE_INDEX
+    forced to 5, STATE_COUNTER forced to 0, and a PC-relative table read always at index 0 (the ROM's
+    own `moveq #0,d7` immediately before it), landing one instruction into the shared tail (`pc =
+    0x0075DA`, skipping the tail's own first `move.w d7,$f190.w` -- already done here)."""
+    d7 = read(STATE1_HANDOFF_TABLE, 2)
+    return {'stores': {STATE_INDEX: (5, 2), STATE_COUNTER: (0, 2)}, 'd7': d7}
