@@ -615,3 +615,253 @@ def state0_shared_sub(read, d7):
     if d7 == 0:
         return {'arm': 'shared-unchanged', 'd7': 0, 'stores': {}}
     return {'arm': 'shared-reset', 'd7': 0x39, 'stores': {}}
+
+
+# --- 006DA6: state 14's own decision tree -- a vertical-movement dispatcher (states 0/1 are
+# horizontal), reached from the tick's own movement cascade the same way, but its own shape:
+# a `FFFFEF4A` gate (a flag this module has not otherwise named -- "inactive"/"grounded", read but
+# not written here), a STATE_COUNTER wraparound at 0x14 that hands off to the SAME "settle" tail
+# either fresh (counter reset to 0) or carried, a `FFFFEA20 == 1` fork into two near-mirror arms (A:
+# EA20 == 1, B: EA20's own sign, the SAME asymmetry state 0's own arm A already showed against state
+# 1's), and a contact-search gate (`006EC4`) shared by both arms whose own direction depends on
+# `FFFFF1A8`'s LIVE value -- set by whichever arm's own bit-2 test fired THIS activation, or else
+# whatever a PREVIOUS activation last left there (docs/gods/blockers/2026-09-17-008222.md's "18
+# September (continued)" addendum transcribes the whole tree; census `census-006DA6`,
+# `--classifier entry`, `--max-classes 4000`, 183 real path classes over 1,155 occurrences).
+STATE14_ENTRY = 0x006DA6
+FROZEN_LIKE_FLAG = 0xFFFFEF4A          # word: gates the whole routine; unnamed beyond what this reads
+F1A8, F1AA, F1AC, F1AE, F1B0, F1B2 = (0xFFFFF1A8, 0xFFFFF1AA, 0xFFFFF1AC, 0xFFFFF1AE, 0xFFFFF1B0, 0xFFFFF1B2)
+STATE14_WRAP = 0x14
+
+
+def state14_step(read, d7):
+    """006DA6-006DDA: state 14's own head, up to the EA20-based arm fork.  Returns `'frozen'` (exit
+    unchanged, `FFFFEF4A == 0`), `'settle'` (hand off to `state14_settle`, either freshly reset --
+    STATE_COUNTER wrapped past `0x14` -- or carrying the caller's own counter -- `FFFFEA1E < 0`), or
+    `'main'` (the EA20 == 1 fork, `state14_arm_a`/`state14_arm_b`)."""
+    if read(FROZEN_LIKE_FLAG, 2) & 0xFFFF == 0:
+        return {'arm': 'frozen'}
+    if d7 >= STATE14_WRAP:
+        return {'arm': 'settle', 'settle_d7': 0, 'reset': True}
+    stores = {F1B0 & 0xFFFFFF: (d7, 2)}
+    if _signed_word(read(EA1E_WORD, 2)) < 0:
+        return {'arm': 'settle', 'settle_d7': d7, 'reset': False, 'stores': stores}
+    ea20 = read(EA20_WORD, 2) & 0xFFFF
+    if ea20 == 0:
+        stores[F1A4 & 0xFFFFFF] = (0, 2)
+        stores[F1A6 & 0xFFFFFF] = (0, 2)
+    return {'arm': 'main', 'ea20_one': ea20 == 1, 'stores': stores}
+
+
+def state14_arm_a(read):
+    """006DDE-006E4C: state 14's own arm A (`FFFFEA20 == 1`).  Returns `'contact-gate'` (bit 2 set:
+    `FFFFF1A8` forced to 1) or `'contact-gate-plain'` (the f1a6 retry budget not yet exhausted:
+    `FFFFF1A8` untouched, left at whatever it already held) to hand off to `state14_contact`;
+    `'transition-9'`; or, when the grid tests run (`'cell'` then carries `game.grid.grid_cell`'s own
+    result, for the boundary's a0/d0/d1), `'transition-1'` (blocked or the low nibble zero) or
+    `'contact-gate'` again (a grid byte matched, `FFFFF1A8` still untouched -- the ROM's own
+    `beq.b $6e50` rejoins arm B's entry, whose own `tst.w ea20;bpl.w $6ec4` always takes the positive
+    branch here since EA20 is still 1).  `006DFA`'s own `clr.w f1a4.w` is UNCONDITIONAL (it runs
+    before the retry-budget compare even looks at its own result), so every arm past the bit-0 test
+    carries `FFFFF1A4 == 0` regardless of which branch fires next -- caught by a real trace where
+    F1A4 had accumulated a nonzero value from an EARLIER activation's own retries, not guessed.
+    `006E2A`'s own `move.w f18e,d0; andi.w #$f,d0` OVERWRITES D0 with the low nibble before EITHER
+    the nibble test or `'transition-1'`'s own body -- `'contact-gate-nibble'` carries a `'d0'`
+    override for this reason too (not grid_cell's own column), caught the same way."""
+    from .grid import grid_cell
+    bit2 = read(EA23_WORD, 1) & 4
+    if bit2:
+        return {'arm': 'contact-gate', 'stores': {F1A8 & 0xFFFFFF: (1, 2)}, 'f1a8_forced': 1}
+    bit0 = read(EA23_WORD, 1) & 1
+    if bit0:
+        from .pickups import MOVEMENT_SOUND_CUE
+        position_x = read(POSITION_X, 2)
+        stores = {STATE_INDEX: (9, 2), F196 & 0xFFFFFF: (4, 2), F19A & 0xFFFFFF: (position_x, 2),
+                  F19C & 0xFFFFFF: (0, 2), MOVEMENT_SOUND_CUE & 0xFFFFFF: (0x30, 2)}
+        return {'arm': 'transition-9', 'stores': stores, 'd7': 0xC}
+    f1a6 = (read(F1A6, 2) + 1) & 0xFFFF
+    if f1a6 <= 5:
+        return {'arm': 'contact-gate-f1a6', 'stores': {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (f1a6, 2)}}
+    cell = grid_cell(read)
+    address = cell['address']
+    for offset in (1, 0x81, 0x101):
+        if read((address + offset) & 0xFFFFFF, 1) == 1:
+            return {'arm': 'contact-gate-grid',
+                    'stores': {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}, 'cell': cell}
+    low_nibble = read(POSITION_Y, 2) & 0xF
+    if low_nibble != 0 and read((address + 0x181) & 0xFFFFFF, 1) == 1:
+        return {'arm': 'contact-gate-nibble', 'stores': {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)},
+                'cell': cell, 'nibble_tested': True, 'd0': low_nibble}
+    position_x = read(POSITION_X, 2)
+    stores = {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2), STATE_INDEX: (1, 2),
+              POSITION_X: ((position_x + 8) & 0xFFFF, 2), POSITION_Y: ((read(POSITION_Y, 2) - 4) & 0xFFFF, 2)}
+    return {'arm': 'transition-1', 'stores': stores, 'd7': 6, 'cell': cell, 'nibble_tested': low_nibble != 0,
+            'd0': low_nibble}
+
+
+def state14_arm_b(read):
+    """006E50-006EBC: state 14's own arm B (`FFFFEA20`'s own sign, the mirror of arm A's literal
+    compare).  Returns the same arm names as `state14_arm_a`, `'transition-0'` instead of
+    `'transition-1'` (state 0, not state 1); its own `+0x17F` nibble sub-test mirrors arm A's own
+    `+0x181` exactly (a matched byte reaches `'contact-gate-nibble'`, anything else -- INCLUDING the
+    low nibble already zero -- falls through to `'transition-0'` directly) -- an earlier survey
+    mis-read this as an unconditional decline (`'nibble-declined'`), missed because every witnessed
+    fb408bc75597 occurrence happened to take the low-nibble-zero shortcut; a tree recording outside
+    that single-history census exercised the nibble!=0 fallthrough and caught it.  `006EA0`'s own
+    `move.w f18e,d0; andi.w #$f,d0` OVERWRITES D0 with the low nibble before EITHER exit, exactly
+    like arm A's own `006E2A` mirror -- both `'contact-gate-nibble'` and `'transition-0'` carry a
+    `'d0'` override for this reason, not grid_cell's own column.  UNLIKE arm A, `006E74`'s own
+    `clr.w f1a6.w` (the OTHER counter) is the only unconditional clear here -- `FFFFF1A4` itself is
+    only ever INCREMENTED (`006E78 addq.w #1,f1a4.w`, real RAM, before the retry-budget compare even
+    looks at it) and never re-cleared past the budget (arm A's own mirror explicitly re-clears
+    `FFFFF1A6` at its own `006E0A` before the grid_cell call; arm B's `006E84 bsr.w $63fa` has no
+    such clear, real ROM bytes confirm), so every arm past the retry budget carries the INCREMENTED
+    `f1a4` forward, not zero -- caught by a real trace (`FFFFF1A5` held 6, not 0, at a `'transition-0'`
+    exit) where an EARLIER activation's own retries had already pushed the counter past the budget."""
+    from .grid import grid_cell
+    if _signed_word(read(EA20_WORD, 2)) >= 0:
+        return {'arm': 'contact-gate-immediate'}
+    bit2 = read(EA23_WORD, 1) & 4
+    if bit2:
+        return {'arm': 'contact-gate', 'stores': {F1A8 & 0xFFFFFF: (0xFFFF, 2)}, 'f1a8_forced': 0xFFFF}
+    bit0 = read(EA23_WORD, 1) & 1
+    if bit0:
+        from .pickups import MOVEMENT_SOUND_CUE
+        position_x = read(POSITION_X, 2)
+        stores = {STATE_INDEX: (8, 2), F196 & 0xFFFFFF: (0xFFFC, 2), F19A & 0xFFFFFF: (position_x, 2),
+                  F19C & 0xFFFFFF: (0, 2), MOVEMENT_SOUND_CUE & 0xFFFFFF: (0x30, 2)}
+        return {'arm': 'transition-8', 'stores': stores, 'd7': 0xD}
+    f1a4 = (read(F1A4, 2) + 1) & 0xFFFF
+    if f1a4 <= 5:
+        return {'arm': 'contact-gate-f1a4', 'stores': {F1A6 & 0xFFFFFF: (0, 2), F1A4 & 0xFFFFFF: (f1a4, 2)}}
+    cell = grid_cell(read)
+    address = cell['address']
+    for offset in (-1, 0x7F, 0xFF):
+        if read((address + offset) & 0xFFFFFF, 1) == 1:
+            return {'arm': 'contact-gate-grid',
+                    'stores': {F1A6 & 0xFFFFFF: (0, 2), F1A4 & 0xFFFFFF: (f1a4, 2)}, 'cell': cell}
+    low_nibble = read(POSITION_Y, 2) & 0xF
+    if low_nibble != 0 and read((address + 0x17F) & 0xFFFFFF, 1) == 1:
+        return {'arm': 'contact-gate-nibble', 'stores': {F1A6 & 0xFFFFFF: (0, 2), F1A4 & 0xFFFFFF: (f1a4, 2)},
+                'cell': cell, 'nibble_tested': True, 'd0': low_nibble}
+    position_x = read(POSITION_X, 2)
+    stores = {F1A6 & 0xFFFFFF: (0, 2), F1A4 & 0xFFFFFF: (f1a4, 2), STATE_INDEX: (0, 2),
+              POSITION_X: ((position_x - 8) & 0xFFFF, 2), POSITION_Y: ((read(POSITION_Y, 2) - 4) & 0xFFFF, 2)}
+    return {'arm': 'transition-0', 'stores': stores, 'd7': 6, 'cell': cell, 'nibble_tested': low_nibble != 0,
+            'd0': low_nibble}
+
+
+def state14_contact(read, routine, d7, f1a8_override=None):
+    """006EC4-006F24: the contact-search gate both arm A and arm B's own `'contact-gate'` (bit 2 set
+    THIS activation, forcing `FFFFF1A8` -- `f1a8_override` carries that forced value, since the real
+    ROM's own store has not reached RAM yet at this point in the SAME activation) and
+    `'contact-gate-*'` results reach -- `FFFFEA23` bit 2 (already tested by whichever arm got here)
+    then `FFFFF1A8`'s own sign selects which of two near-identical contact-search continuations
+    (state 24 for positive, state 25 for negative); zero, or a 'not found' result, falls through to
+    arm D (`state14_arm_d`).  `routine` mirrors `game.pickups.contact_consume`'s own convention (0
+    for the positive/state-24 body, 1 for negative/state-25) but is only used by the caller to
+    select which contact-search continuation ran; this function itself only decides WHETHER one runs.
+    """
+    bit2 = read(EA23_WORD, 1) & 4
+    if not bit2:
+        return {'arm': 'arm-d'}
+    f1a8 = _signed_word(read(F1A8, 2)) if f1a8_override is None else _signed_word(f1a8_override)
+    if f1a8 == 0:
+        return {'arm': 'arm-d'}
+    return {'arm': 'contact-search', 'negative': f1a8 < 0}
+
+
+def state14_contact_found(read, d7, negative):
+    """006EDE-006EFA (positive) / 006F08-006F24 (negative): a contact-search 'found' result's own
+    continuation -- state 24 for the positive body, 25 for the negative, both the SAME shape: track
+    the current position and STATE_COUNTER, halve POSITION_Y's own step when D7 is even."""
+    position_y = read(POSITION_Y, 2)
+    stores = {F1AA & 0xFFFFFF: (position_y, 2), F1AC & 0xFFFFFF: (d7 & 0xFFFF, 2)}
+    if d7 & 1 == 0:
+        position_y = (position_y - 4) & 0xFFFF
+        stores[POSITION_Y] = (position_y, 2)
+    stores[STATE_INDEX] = (0x19 if negative else 0x18, 2)
+    return {'stores': stores, 'd7': 0}
+
+
+def state14_arm_d(read):
+    """006F28-006F44: state 14's own arm D (the contact-search gate's own fall-through) --
+    `FFFFEA1E == 1` toggles `FFFFF1AE` and transitions to state 13; any other value exits unchanged,
+    exactly like state 1's own equivalent no-op decline."""
+    if read(EA1E_WORD, 2) != 1:
+        return {'arm': 'unchanged'}
+    f1ae = (~read(F1AE, 2)) & 0xFFFF
+    return {'arm': 'transition-13', 'stores': {F1AE & 0xFFFFFF: (f1ae, 2), STATE_INDEX: (0xD, 2),
+                                               F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}}
+
+
+def state14_settle(read, d7, f1ae_override=None):
+    """006F48-006F94: ONE pass through state 14's own "settle" head, reached either fresh
+    (STATE_COUNTER wrapped past 0x14) or carrying the caller's own counter (`FFFFEA1E < 0`), and
+    again on the rare `'loopback'` arm's own second pass (`006F94`'s own `bra.b $6f48`).
+    `FFFFEA20 != 0` hands control back to the main dispatch (`state14_step`'s own `'main'` arm, from
+    `006DD4` -- the boundary composes this, not this function); `FFFFEA20 == 0` clears F1A4/F1A6
+    again (redundant with `state14_step`'s own clear on the first pass, harmless, but genuinely
+    needed on a `'loopback'` pass) and forks on `FFFFF1AE`:
+
+    - `FFFFF1AE == 0` (the common case): bumps the counter and, only above 3, plays a sound and
+      toggles `FFFFF1AE` before handing off to `state14_settle_probe` (`'probe'`).
+    - `FFFFF1AE != 0` (real, witnessed on a real fraction of activations -- an ODD number of prior
+      sound triggers left it set): `006F84`'s own SINGLE `subq.w #1,d7` on the caller's own
+      UNMODIFIED counter (not bumped first) either continues straight to the probe with `d7 - 1`
+      (`'probe-f1ae'`, no sound) or, when the caller's own counter was exactly 1 (`d7 - 1 == 0`),
+      plays the sound, sets the counter back to 1 (`006F8E`'s own `addq.w #1,d7` reads the ALREADY-
+      decremented register, 0, not the caller's own original 1) and toggles `FFFFF1AE` back before
+      looping to `006F48` itself (`'loopback'`, `next_d7`) -- provably a SINGLE extra pass:
+      `FFFFF1AE` is now clear, so the second pass always takes the ordinary bump branch above
+      (`d7 = 1` there bumps to 2, `<= 3`, straight to the probe, no further sound or toggle).
+    """
+    if read(EA20_WORD, 2) & 0xFFFF != 0:
+        return {'arm': 'rejoin-main'}
+    stores = {F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}
+    f1ae = (read(F1AE, 2) & 0xFFFF) if f1ae_override is None else (f1ae_override & 0xFFFF)
+    from .pickups import MOVEMENT_SOUND_CUE
+    if f1ae != 0:
+        after = (d7 - 1) & 0xFFFF
+        if after != 0:
+            return {'arm': 'probe-f1ae', 'stores': stores, 'settle_d7': after, 'sound': False}
+        new_f1ae = (~f1ae) & 0xFFFF
+        stores[MOVEMENT_SOUND_CUE & 0xFFFFFF] = (0x6A, 2)
+        stores[F1AE & 0xFFFFFF] = (new_f1ae, 2)
+        # 006F8E's own addq.w #1,d7 operates on `after` (always 0 here, the loopback's own trigger
+        # condition), giving 1 -- not the caller's own original d7 (always 1 too, since after == 0
+        # means d7 - 1 == 0, but the ADDQ reads the register's CURRENT value, already decremented).
+        return {'arm': 'loopback', 'stores': stores, 'next_d7': (after + 1) & 0xFFFF, 'next_f1ae': new_f1ae}
+    bumped = (d7 + 1) & 0xFFFF
+    sound = bumped > 3
+    if sound:
+        settle_d7 = (bumped - 2) & 0xFFFF   # 006F82/006F84's own two SUBQ #1: net two decrements from `bumped`
+        stores[MOVEMENT_SOUND_CUE & 0xFFFFFF] = (0x6A, 2)
+        stores[F1AE & 0xFFFFFF] = ((~f1ae) & 0xFFFF, 2)
+    else:
+        settle_d7 = bumped
+    return {'arm': 'probe', 'stores': stores, 'settle_d7': settle_d7, 'sound': sound}
+
+
+def state14_settle_probe(read, settle_d7, f1b0_override=None):
+    """006F66-006FB4: the settle tail's own bounded grid probe -- saves POSITION_Y, steps it by -6,
+    calls the already-recovered grid cell, and tests `+0x80`/`-0x80`; either match exits immediately
+    with no further stores, a double miss restores STATE_COUNTER from F1B0 and POSITION_Y (F1B2)
+    before exiting.  `f1b0_override` carries F1B0's own just-stored value on the "carried counter"
+    settle route (`state14_step`'s own `006DBA move.w d7,f1b0.w`, not yet in real RAM at this point
+    in the SAME activation); `None` (the "freshly reset" route, F1B0 genuinely untouched this
+    activation) reads F1B0 live, whatever an EARLIER activation last left there."""
+    from .grid import grid_cell
+    position_y = read(POSITION_Y, 2)
+    new_y = (position_y - 6) & 0xFFFF
+    cell = grid_cell(lambda a, s: new_y if (a & 0xFFFFFF) == (POSITION_Y & 0xFFFFFF) else read(a, s))
+    address = cell['address']
+    if read((address + 0x80) & 0xFFFFFF, 1) == 2:
+        return {'arm': 'blocked', 'position_y': new_y, 'cell': cell,
+                'stores': {POSITION_Y: (new_y, 2), F1B2 & 0xFFFFFF: (position_y, 2)}}
+    if read((address - 0x80) & 0xFFFFFF, 1) == 2:
+        return {'arm': 'blocked', 'position_y': new_y, 'cell': cell,
+                'stores': {POSITION_Y: (new_y, 2), F1B2 & 0xFFFFFF: (position_y, 2)}}
+    restored_d7 = read(F1B0, 2) if f1b0_override is None else f1b0_override
+    return {'arm': 'exhausted', 'position_y': new_y, 'cell': cell, 'd7': restored_d7 & 0xFFFF,
+            'stores': {POSITION_Y: (position_y, 2), F1B2 & 0xFFFFFF: (position_y, 2)}}

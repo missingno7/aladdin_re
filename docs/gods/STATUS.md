@@ -115,17 +115,27 @@ analogue of; the cascade decrements POSITION_X against different grid
 offsets and a different low-bits threshold; the shared sub-body is its
 own physical copy whose negative-EA1E arm sign-extends d7 to the full
 register) -- `game/player.py`'s own module note above `state0_step`
-transcribes them.  State 5's own table-dispatch entry (`00746A`, which
+transcribes them.  State 14 (`006DA6`) is recovered too (18 Sep): a
+vertical-movement dispatcher over the same recovered pieces, its own
+settle tail composed with two real forks the original survey missed
+(`FFFFF1AE != 0` on entry, and `FFFFEA20 != 0` handing back to the SAME
+EA20 dispatch this plan already owns) -- no arm declines by name any
+more.  Four real bugs the milestone tree caught outside the single-history
+census (never guessed): arm B's own `+0x17F` nibble sub-test, wrongly
+declined as unwitnessed, actually mirrors arm A's `+0x181` test exactly;
+`FFFFF1A4`'s own unconditional clear was missing from three of arm A's
+downstream stores; arm B's own retry counter is never re-cleared past its
+budget (unlike arm A's mirror) and three of its stores wrongly hardcoded
+zero; and a D0 clobber (`move.w f18e,d0`) was missed on both arms' own
+nibble-tested exit.  State 5's own table-dispatch entry (`00746A`, which
 falls back into state 1's own body on one arm -- "one region, two gates,
-one planner") is the next bite; state 14 (`006DA6`) is the same size and
-shape again, confirmed but undisassembled
-past its own head.
+one planner") is the next bite.
 
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with forty-three gates armed, the camera follow step `002806`, the
+  original with forty-four gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -168,7 +178,7 @@ past its own head.
   `action-reset-elapsed`, `action-clear-group`, `player-tail`,
   `contact-search`, `contact-consume-primary`,
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
-  `state-1` and `state-0` arm each alone.
+  `state-1`, `state-0` and `state-14` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -310,7 +320,10 @@ ids, never to `main`:
 | **`006FFE` state 0**: the "move left" counterpart of state 1, NOT a byte-identical copy -- real differences the tracer found (arm A tests EA20 against the literal 1, not its sign; the bit-0 sub-arm's own EA20-positive case reaches its own three-way grid-byte dispatch state 1 has no analogue of; the cascade's own grid offsets, low-bits threshold and position step are mirrored, not identical; the shared sub-body is its own physical copy whose negative-EA1E arm sign-extends d7 to the full register). Every arm the main history witnesses recovered; only the box-overlap scan (`007056`) declines, unrecovered | `factcheck check` on all 879 retained fixtures (866 MATCH, 13 correctly DECLINE) | `tests/games/gods/test_state0.py` |
 | `state-0` reproduces the original on `fb408bc75597…`: **PASS, 2,114 hits, 30 fallbacks (16 z80 bank guard, 14 box-overlap declines)**; `camera-sprites` (all forty-three gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,105,086 hits, 6,812 fallbacks (116 at the new gate, all exact or declined), tree bit-exact** | `history-verify fb408bc75597 --candidate state-0`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-state-0-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18n` |
 | the negative control (d7 off by one, the same shape state 1's own mutant uses) diverges at frame 2,400, the first frame the region is exercised | `--candidate state-0-mutant-result` | `artifacts/gods/verify-state-0-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 63 s | 6,540 tests (9 skipped) | — |
+| **`006DA6` state 14**: the player state machine's own vertical-movement dispatcher, over the same recovered pieces as states 0/1 plus its own "settle" tail (a STATE_COUNTER wraparound at 0x14, fresh or carried); the settle tail forks on `FFFFF1AE != 0` (`'probe-f1ae'`/`'loopback'`, a real two-pass case an earlier survey wrongly declined by misapplying state 1's own `007386` dead-code argument) and on `FFFFEA20 != 0` (`'rejoin-main'`, handed back to the SAME EA20 arm dispatch via a shared `_state14_main_dispatch` helper, not re-declined). No arm declines by name. Four real bugs a milestone tree run caught outside the single-history census (204 fixtures, 0 mismatches) but a fresh census over each of the other seven recordings (622 more fixtures) exposed: arm B's own `+0x17F` nibble sub-test, thought unwitnessed (`'nibble-declined'`), actually mirrors arm A's own `+0x181` test exactly (a matched byte reaches `'contact-gate-nibble'`, anything else -- including the low nibble already zero -- falls through to `'transition-0'` directly); `FFFFF1A4`'s own unconditional clear (`006DFA`, runs before the retry-budget compare looks at its own result) was missing from three of arm A's own downstream stores; arm B's own retry counter is never re-cleared past its own budget (unlike arm A's own mirror re-clearing `FFFFF1A6`) and three of arm B's own downstream stores wrongly hardcoded zero instead of carrying the incremented value forward; `006E2A`/`006EA0`'s own `move.w f18e,d0;andi.w #$f,d0` overwrites D0 with the low nibble before either arm's own nibble-tested exit, missed on `'contact-gate-nibble'`; a rejoin-main exit left D7 unset instead of the settle head's own live value; and the settle probe's own 'exhausted' exit assumed grid_cell's own `asl.w` was the last flag-setter when two more MOVEs run afterward. All fixed the same way: a real trace outside the single-history census, never guessed | `factcheck check` on all 1,050 fixtures across all eight recordings (0 mismatches, 0 declines) | `tests/games/gods/test_state14.py` |
+| `state-14` reproduces the original on `fb408bc75597…`: **PASS, 1,146 hits, 9 fallbacks (all z80 bank guard)**; `camera-sprites` (all forty-four gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,106,820 hits, 6,827 fallbacks (29 at the new gate, all z80 bank guard), tree bit-exact** | `history-verify fb408bc75597 --candidate state-14`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-state-14-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18o` |
+| the negative control (d7 off by one, the same shape states 0/1's own mutants use) diverges at frame 2,688, the first frame the region is exercised | `--candidate state-14-mutant-result` | `artifacts/gods/verify-state-14-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 68 s | 6,772 tests (9 skipped) | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a

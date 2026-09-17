@@ -5804,6 +5804,594 @@ def state0_plan(machine, registers):
                       registers=exit_registers, last_pc=last_pc)
 
 
+# --- 006DA6: state 14 (game.player.state14_step / state14_arm_a / state14_arm_b /
+# state14_contact / state14_arm_d / state14_settle / state14_settle_probe) ------------------------
+#
+# Costed one instruction-block at a time from the tracer, the shape states 0/1 already established
+# for a branchy dispatcher; every block's own evidence is `census-006DA6/006DA6-entry-p*.state`
+# (204 `factcheck.py facts --path` traces, 183 real path classes) plus one `branches --vary` sweep
+# for the head's own EA20==0 clear.  `game.player`'s own module note transcribes the shape.  The
+# settle tail's own `FFFFF1AE != 0` continuation (`006F84` onward) IS witnessed -- a real fraction of
+# activations carry an odd prior sound-trigger count into settle -- and is fully composed as the
+# `'probe-f1ae'`/`'loopback'` arms (`_state14_settle_cost`'s own bounded, provably-at-most-two-pass
+# loop); an earlier survey wrongly declined this fork by misapplying state 1's own `007386` dead-code
+# argument to it (docs/gods/blockers/2026-09-17-008222.md's addendum records the error).  The settle
+# tail's own `FFFFEA20 != 0` fork (also witnessed, ~7% of the census) hands off to `state14_step`'s
+# own ARMSEL test at `006DD4` -- composed via the shared `_state14_main_dispatch` helper, reused
+# verbatim by both this handoff and the top-level 'main' path, rather than a second copy.  No arm
+# declines by name any more: arm B's own `+0x17F` nibble sub-test (once thought unwitnessed, a
+# `'nibble-declined'` stub) turns out to mirror arm A's own `+0x181` test exactly -- a matched byte
+# reaches `'contact-gate-nibble'`, anything else (including the low nibble already zero) falls
+# through to `'transition-0'` directly, exactly like arm A's `'transition-1'` -- the original survey
+# misread the disassembly; a tree recording outside the single-history census exercised the
+# fallthrough and caught it (`game.player.state14_arm_b`'s own module note records the fix).  Three
+# more real bugs the tree caught the same way, all fixed the same way (a real trace outside the
+# single-history census, never guessed): `FFFFF1A4`'s own unconditional clear in arm A (`006DFA`, it
+# runs before the retry-budget compare looks at its own result) was missing from three of arm A's own
+# downstream stores; arm B has NO such re-clear past its own retry budget (`FFFFF1A4` only ever
+# increments there, `006E78`, never re-zeroed the way arm A re-zeros `FFFFF1A6` at `006E0A`) -- three
+# of arm B's own downstream stores wrongly hardcoded zero instead of carrying the incremented value
+# forward; `006E2A`/`006EA0`'s own `move.w f18e,d0;andi.w #$f,d0` overwrites D0 with the low nibble
+# before EITHER arm's own nibble-tested exit, missed on `'contact-gate-nibble'` (both arms) the first
+# time; and `_S14B_NIBBLE_BEQ`'s own taken/not-taken costs were transcribed backwards.  The ARM
+# 8222-found continuation's own choice of which contact-search body ran is exact (no extra decline:
+# `state14_contact`'s own `negative` flag selects it, matching `pickups.contact_consume`'s own
+# routine convention).
+STATE14_ENTRY = 0x006DA6
+
+_S14_FROZEN_TEST = (12, 1)                   # 006DA6 tst.w ef4a
+_S14_FROZEN_BEQ = {True: (10, 1), False: (12, 1)}       # 006DAA beq.w -- taken: exit unchanged
+_S14_WRAP_TEST = (8, 1)                      # 006DAE cmpi.w #$14,d7
+_S14_WRAP_BLT = {True: (10, 1), False: (8, 1)}          # 006DB2 blt.b -- taken(d7<20): main path
+_S14_WRAP_RESET = (4 + 10, 2)                # 006DB4 moveq #0,d7; 006DB6 bra.w 6f48
+_S14_STORE_F1B0 = (12, 1)                    # 006DBA move.w d7,f1b0
+_S14_EA1E_TEST = (12, 1)                     # 006DBE tst.w ea1e
+_S14_EA1E_BMI = {True: (10, 1), False: (12, 1)}         # 006DC2 bmi.w -- taken: settle (carry d7)
+_S14_EA20_TEST0 = (12, 1)                    # 006DC6 tst.w ea20
+_S14_EA20_BNE0 = {True: (10, 1), False: (8, 1)}         # 006DCA bne.b -- taken(!=0): skip the clear
+_S14_CLEAR = (16 + 16, 2)                    # 006DCC clr f1a4; 006DD0 clr f1a6
+_S14_ARMSEL_TEST = (16, 1)                   # 006DD4 cmpi.w #1,ea20
+_S14_ARMSEL_BNE = {True: (10, 1), False: (12, 1)}       # 006DDA bne.w -- taken(!=1): arm B
+
+_S14A_BIT2 = (16, 1)                         # 006DDE btst #2,ea23
+_S14A_BIT2_BEQ = {True: (10, 1), False: (8, 1)}         # 006DE4 beq.b -- taken(clear): 6DF0
+_S14A_SET_F1A8 = (16, 1)                     # 006DE6 move.w #1,f1a8
+_S14A_BRA_C = (10, 1)                        # 006DEC bra.w 6ec4
+_S14A_BIT0 = (16, 1)                         # 006DF0 btst #0,ea23
+_S14A_BIT0_BNE = {True: (10, 1), False: (12, 1)}        # 006DF6 bne.w -- taken(set): transition-9
+_S14_TRANS_9_OR_8 = (16 + 16 + 4 + 20 + 16 + 16 + 10, 7)   # move state; f196; d7; f19a; f19c; fdf6; bra
+_S14A_HEAD2 = (16 + 16 + 16, 3)              # 006DFA clr f1a4; 006DFE addq.w #1,f1a6 (mem); 006E02 cmpi.w #5,f1a6 (mem)
+_S14A_F1A6_BLE = {True: (10, 1), False: (8, 1)}         # 006E08 ble.b -- taken(<=5): contact-gate-plain
+_S14A_GRIDSETUP = (16 + 18, 2)               # 006E0A clr f1a6; 006E0E bsr 63fa
+_S14_GRID_TEST = (16, 1)                     # cmpi.b #1,offset(a0)
+_S14_GRID_BEQ = {True: (10, 1), False: (8, 1)}          # beq.b -- taken: matched (detour/direct per arm)
+_S14_NIBBLE_HEAD = (12 + 8, 2)                # move f18e,d0; andi #$f,d0
+_S14A_NIBBLE_BEQ = {True: (10, 1), False: (8, 1)}       # 006E32 beq.b -- taken(==0): transition-1 directly
+_S14A_NIBBLE_TEST = (16, 1)                  # 006E34 cmpi.b #1,$181(a0)
+_S14A_NIBBLE_BEQ2 = {True: (10, 1), False: (8, 1)}      # 006E3A beq.b -- taken: detour to 6E50
+_S14_TRANS_1_OR_0 = (16 + 4 + 16 + 16 + 10, 5)   # move state; d7; position step x/y; bra
+_S14A_DETOUR = (12 + 10, 2)                  # 006E50 tst ea20; 006E54 bpl.w (always taken here: ea20==1)
+
+_S14B_EA20_TEST = (12, 1)                    # 006E50 tst.w ea20 (arm B's own entry)
+_S14B_EA20_BPL = {True: (10, 1), False: (12, 1)}        # 006E54 bpl.w -- taken(>=0): contact-gate-plain
+_S14B_BIT2 = (16, 1)                         # 006E58 btst #2,ea23
+_S14B_BIT2_BEQ = {True: (10, 1), False: (8, 1)}         # 006E5E beq.b -- taken(clear): 6E6A
+_S14B_SET_F1A8 = (16, 1)                     # 006E60 move.w #$ffff,f1a8
+_S14B_BRA_C = (10, 1)                        # 006E66 bra.w 6ec4
+_S14B_BIT0 = (16, 1)                         # 006E6A btst #0,ea23
+_S14B_BIT0_BNE = {True: (10, 1), False: (12, 1)}        # 006E70 bne.w -- taken(set): transition-8
+_S14B_HEAD2 = (16 + 16 + 16, 3)              # 006E74 clr f1a6; 006E78 addq.w #1,f1a4 (mem); 006E7C cmpi.w #5,f1a4 (mem)
+_S14B_F1A4_BLE = {True: (10, 1), False: (8, 1)}         # 006E82 ble.b -- taken(<=5): contact-gate-plain
+_S14B_GRIDSETUP = (18, 1)                    # 006E84 bsr 63fa (no extra clear -- head2 already cleared f1a6)
+_S14B_NIBBLE_BEQ = {True: (10, 1), False: (8, 1)}       # 006EA8 beq.b -- taken(==0): transition-0 directly
+_S14B_NIBBLE_TEST = (16, 1)                  # 006EAA cmpi.b #1,$17f(a0)
+_S14B_NIBBLE_BEQ2 = {True: (10, 1), False: (8, 1)}      # 006EB0 beq.b -- taken: contact-gate-nibble (lands on 006EC4 directly)
+
+_S14C_BIT2 = (16, 1)                         # 006EC4 btst #2,ea23
+_S14C_BIT2_BEQ = {True: (10, 1), False: (8, 1)}         # 006ECA beq.b -- taken(clear): arm D
+_S14C_F1A8_TEST = (12, 1)                    # 006ECC tst.w f1a8
+_S14C_F1A8_BEQ = {True: (10, 1), False: (8, 1)}         # 006ED0 beq.b -- taken(==0): arm D
+_S14C_F1A8_BMI = {True: (10, 1), False: (8, 1)}         # 006ED2 bmi.b -- taken(negative): the 25-body bsr
+_S14C_BSR = (18, 1)                          # bsr.w 8222
+_S14C_TST_D0 = (4, 1)                        # tst.w d0
+_S14C_BNE_D0 = {True: (10, 1), False: (12, 1)}          # bne.w -- taken(!=0, NOT FOUND): arm D
+_S14C_FOUND_HEAD = (20 + 12, 2)              # move f18e,f1aa; move d7,f1ac
+_S14C_FOUND_BTST = (10, 1)                   # btst #0,d7
+_S14C_FOUND_BNE = {True: (10, 1), False: (8, 1)}        # bne.b -- taken(odd, skip the subq)
+_S14C_FOUND_SUBQ = (16, 1)                   # subq.w #4,f18e (even d7 only)
+_S14C_FOUND_TAIL = (16 + 4 + 10, 3)          # move.w #imm,f192; moveq #0,d7; bra
+
+_S14D_EA1E_TEST = (16, 1)                    # 006F28 cmpi.w #1,ea1e
+_S14D_EA1E_BNE = {True: (10, 1), False: (12, 1)}        # 006F2E bne.w -- taken(!=1): exit unchanged
+_S14D_TRANS13 = (16 + 16 + 16 + 16 + 10, 5)  # not f1ae; state=d; clr f1a4; clr f1a6; bra
+
+_S14S_EA20_TEST = (12, 1)                    # 006F48 tst.w ea20
+_S14S_EA20_BNE = {True: (10, 1), False: (12, 1)}        # 006F4C bne.w -- taken(!=0): rejoin main at 6DD4
+_S14S_CLEAR = (16 + 16, 2)                   # 006F50 clr f1a4; 006F54 clr f1a6
+_S14S_F1AE_TEST = (12, 1)                    # 006F58 tst.w f1ae
+_S14S_F1AE_BNE = {True: (10, 1), False: (8, 1)}         # 006F5C bne.b -- taken(!=0): the F1AE fork
+_S14S_F1AE_SUBQ = (4, 1)                     # 006F84 subq.w #1,d7 (register form, the F1AE fork's own single decrement)
+_S14S_F1AE_BNE2 = {True: (10, 1), False: (8, 1)}        # 006F86 bne.b -- taken(!=0): probe; not taken(==0): loopback tail
+_S14S_LOOPBACK_TAIL = (16 + 4 + 16 + 10, 4)  # 006F88 fdf6=$6a; 006F8E addq #1,d7; 006F90 not f1ae; 006F94 bra.b 6f48
+_S14S_BUMP = (4 + 8, 2)                      # 006F5E addq #1,d7; 006F60 cmpi #3,d7
+_S14S_BUMP_BGT = {True: (10, 1), False: (8, 1)}         # 006F64 bgt.b -- taken(>3): sound route
+_S14S_SOUND = (16 + 16 + 4 + 4, 4)           # fdf6=$6a; not f1ae; subq #1,d7 (twice)
+_S14S_SOUND_BNE = (10, 1)                    # 006F86 bne.b -- always taken (d7 > 3 entering makes d7-1 >= 2)
+_S14S_PROBE_HEAD = (20 + 16 + 18, 3)         # move f18e,f1b2; subq #6,f18e; bsr 63fa
+_S14S_PROBE_BRA = (10, 1)                    # 006F74 bra.w 6f96
+_S14S_TEST1 = (16, 1)                        # 006F96 cmpi.b #2,$80(a0)
+_S14S_TEST1_BEQ = {True: (10, 1), False: (12, 1)}       # 006F9C beq.w -- taken: blocked, exit
+_S14S_TEST2 = (16, 1)                        # 006FA0 cmpi.b #2,-$80(a0)
+_S14S_TEST2_BEQ = {True: (10, 1), False: (12, 1)}       # 006FA6 beq.w -- taken: blocked, exit
+_S14S_EXHAUST_TAIL = (12 + 20 + 10, 3)       # move f1b0,d7; move f1b2,f18e; bra
+
+
+def _state14_contact_cost(read, sr, gate_result):
+    """006EC4-006F44: the contact-search gate both arm A and arm B's own `'contact-gate'`/
+    `'contact-gate-plain'` results reach, plus arm D's own fall-through -- shared cost logic since
+    both arms leave the SAME instructions to run from here."""
+    from .game import player
+    cycles, instructions = _S14C_BIT2
+    contact = player.state14_contact(read, 0, gate_result.get('d7', 0), gate_result.get('f1a8_forced'))
+    if contact['arm'] == 'arm-d':
+        # Either 006ECA's own beq (bit 2 clear) or 006ED0's own beq (f1a8 == 0) reached here; the
+        # semantics does not distinguish which test fired since both cost the SAME (16, 1) + a taken
+        # beq.b -- read which one directly to keep the cost exact.
+        bit2 = read(player.EA23_WORD, 1) & 4
+        if not bit2:
+            c, i = _S14C_BIT2_BEQ[True]
+        else:
+            c, i = _add(_S14C_BIT2_BEQ[False], _S14C_F1A8_TEST, _S14C_F1A8_BEQ[True])
+        cycles += c
+        instructions += i
+        return cycles, instructions, {'arm': 'arm-d'}, False
+    c, i = _add(_S14C_BIT2_BEQ[False], _S14C_F1A8_TEST, _S14C_F1A8_BEQ[False], _S14C_F1A8_BMI[contact['negative']],
+                _S14C_BSR)
+    cycles += c
+    instructions += i
+    return cycles, instructions, contact, True
+
+
+def _state14_arm_d_cost(read, sr):
+    """006F28-006F44: state 14's own arm D."""
+    from .game import player
+    result = player.state14_arm_d(read)
+    if result['arm'] == 'unchanged':
+        c, i = _add(_S14D_EA1E_TEST, _S14D_EA1E_BNE[True])
+        # 006F28 cmpi.w #1,ea1e is the last (and only) flag-setter; bne itself touches nothing.
+        exit_sr = _cmp_sr(sr, read(player.EA1E_WORD, 2), 1, 2)
+        return c, i, result, 0x006F2E, exit_sr
+    c, i = _add(_S14D_EA1E_TEST, _S14D_EA1E_BNE[False], _S14D_TRANS13)
+    # 006F32 not.w f1ae is NOT the last flag-setter here: 006F36's own move.w #$d,f192.w and then
+    # 006F3C/006F40's own clr.w f1a4.w / clr.w f1a6.w all run afterwards, and CLR unconditionally
+    # sets Z=1, N=V=C=0 (X untouched) -- 006F40 (the LAST of the two CLRs) is the true last setter.
+    exit_sr = _logic_sr(sr, 0, 2)
+    return c, i, result, 0x006F44, exit_sr
+
+
+def _state14_settle_cost(read, sr, settle_d7, sp32, f1b0_value):
+    """006F48-006FB4: state 14's own "settle" tail, reached from `state14_plan`'s own head with
+    `settle_d7` either freshly reset to 0 or carrying the caller's own STATE_COUNTER.  Almost always
+    one pass through `player.state14_settle`; the `'loopback'` arm (`FFFFF1AE != 0` on entry, the
+    caller's own counter exactly 1) takes a second pass with `FFFFF1AE` now clear -- provably the
+    only possible extra pass (`player.state14_settle`'s own module note), so the loop below is
+    capped at three passes purely as a defensive check, not a modelling choice."""
+    from .game import player
+    order = {}
+    cycles, instructions = (0, 0)
+    current_d7 = settle_d7
+    f1ae_override = None
+    for _ in range(3):
+        result = player.state14_settle(read, current_d7, f1ae_override)
+        for a, b in result.get('stores', {}).items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        c, i = _S14S_EA20_TEST
+        cycles += c
+        instructions += i
+        if result['arm'] == 'rejoin-main':
+            c, i = _S14S_EA20_BNE[True]
+            cycles += c
+            instructions += i
+            return cycles, instructions, order, None, None, None, 'rejoin-main', None
+        c, i = _add(_S14S_EA20_BNE[False], _S14S_CLEAR, _S14S_F1AE_TEST)
+        cycles += c
+        instructions += i
+        if result['arm'] == 'loopback':
+            c, i = _add(_S14S_F1AE_BNE[True], _S14S_F1AE_SUBQ, _S14S_F1AE_BNE2[False], _S14S_LOOPBACK_TAIL)
+            cycles += c
+            instructions += i
+            current_d7 = result['next_d7']
+            f1ae_override = result['next_f1ae']
+            continue
+        if result['arm'] == 'probe-f1ae':
+            # 006F84's own single subq.w #1,d7 (the caller's own UNMODIFIED counter) then 006F86's
+            # own bne.b TAKEN (the result is nonzero): straight to the probe, no bump, no sound.
+            c, i = _add(_S14S_F1AE_BNE[True], _S14S_F1AE_SUBQ, _S14S_F1AE_BNE2[True])
+            cycles += c
+            instructions += i
+            break
+        c, i = _add(_S14S_F1AE_BNE[False], _S14S_BUMP)
+        cycles += c
+        instructions += i
+        sound = result['sound']
+        c, i = _S14S_BUMP_BGT[sound]
+        cycles += c
+        instructions += i
+        if sound:
+            c, i = _add(_S14S_SOUND, _S14S_SOUND_BNE)
+            cycles += c
+            instructions += i
+        break
+    else:
+        raise UnsupportedCandidate('state 14 settle: more than two passes through 006F48 not witnessed by a recording')
+
+    settle_d7_final = result['settle_d7']
+    probe = player.state14_settle_probe(read, settle_d7_final, f1b0_value)
+    for a, b in probe.get('stores', {}).items():
+        for aa, bb in _bytes(a, b[0], b[1]):
+            order[aa] = bb
+    c, i = _S14S_PROBE_HEAD
+    cycles += c
+    instructions += i
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, 0x006F74, 4):
+        order[a] = b
+    c, i = GRID_CELL_COST
+    cycles += c
+    instructions += i
+    c, i = _S14S_PROBE_BRA
+    cycles += c
+    instructions += i
+    c, i = _S14S_TEST1
+    cycles += c
+    instructions += i
+    if probe['arm'] == 'blocked':
+        first_match = read((probe['cell']['address'] + 0x80) & 0xFFFFFF, 1) == 2
+        c, i = _S14S_TEST1_BEQ[first_match]
+        cycles += c
+        instructions += i
+        if first_match:
+            exit_sr = _cmp_sr(sr, 2, 2, 1)   # the matching cmpi.b #2,offset(a0): result 0, Z=1
+            return cycles, instructions, order, settle_d7_final, exit_sr, 0x006F9C, 'blocked', probe['cell']
+        c, i = _add(_S14S_TEST2, _S14S_TEST2_BEQ[True])
+        cycles += c
+        instructions += i
+        exit_sr = _cmp_sr(sr, 2, 2, 1)
+        return cycles, instructions, order, settle_d7_final, exit_sr, 0x006FA6, 'blocked', probe['cell']
+    c, i = _add(_S14S_TEST1_BEQ[False], _S14S_TEST2, _S14S_TEST2_BEQ[False], _S14S_EXHAUST_TAIL)
+    cycles += c
+    instructions += i
+    # _S14S_EXHAUST_TAIL is THREE instructions, not one: "move f1b0,d7; move f1b2,f18e; bra" -- the
+    # grid_cell call's own asl.w (inside PROBE_HEAD's own bsr) is long overwritten by the time this
+    # tail runs.  The LAST flag-setter is the SECOND move (f1b2,f18e), restoring the ORIGINAL
+    # (pre-probe) POSITION_Y that PROBE_HEAD's own "move f18e,f1b2" saved before the -6 step and
+    # grid_cell call -- caught by a real trace outside the single-history census (SR left unchanged
+    # at 0, not the asl.w's own nonzero result).
+    exit_sr = _logic_sr(sr, read(player.POSITION_Y, 2), 2)
+    return cycles, instructions, order, probe['d7'], exit_sr, 0x006FB4, 'exhausted', probe['cell']
+
+
+def _state14_main_dispatch(machine, read, registers, sr, order, exit_registers, cycles, instructions,
+                            ea20_one, d7):
+    """006DDE onward: state 14's own EA20-based arm dispatch (arm A/B, the shared contact-search
+    gate, arm D, and the contact-search 'found' continuation) -- shared between the top-level
+    'main' path (`state14_plan`'s own head) and the settle tail's own `'rejoin-main'` handoff
+    (`006F4C bne.w $6dd4` lands exactly at this dispatch's own ARMSEL test, `_S14_ARMSEL_TEST`,
+    already accounted for by each caller before this function is entered).  `d7` is the machine's
+    own live D7 at the moment this dispatch starts -- the outer entry D7 for the top-level path,
+    `head['settle_d7']` for the rejoin (provably the same register value: settle's own EA20 test
+    runs before any D7 bump/subq, per `game.player.state14_settle`'s own module note).  Set as the
+    baseline exit register here (every later arm that DOES change D7 -- the transitions, the found
+    continuation -- overwrites it below): arm D's own `'unchanged'` result leaves it unset, relying
+    on D7 already equalling this dispatch's own entry value, which is true for the top-level 'main'
+    path (nothing before it touches D7) but NOT for the rejoin, where a fresh-reset settle entry
+    already forced D7 to 0 before ever reaching here -- caught by a real trace on a tree recording
+    outside the single-history census (D7 left at the plan's own OUTER entry value, not 0)."""
+    from .game import player
+    exit_registers['d7'] = d7 & 0xFFFF
+    if ea20_one:
+        arm_result = player.state14_arm_a(read)
+    else:
+        arm_result = player.state14_arm_b(read)
+
+    if 'cell' in arm_result:
+        exit_registers['a0'] = arm_result['cell']['address'] & 0xFFFFFFFF
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | arm_result['cell']['d0']
+        exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | arm_result['cell']['d1']
+    if 'd0' in arm_result:
+        # 006E2A/006EA0's own "move.w f18e,d0; andi.w #$f,d0" overwrites grid_cell's own d0 (the
+        # column) with POSITION_Y's own low nibble on the transition-1/0 arms.
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | arm_result['d0']
+
+    if arm_result['arm'] in ('transition-9', 'transition-8'):
+        if ea20_one:
+            c, i = _add(_S14A_BIT2, _S14A_BIT2_BEQ[True], _S14A_BIT0, _S14A_BIT0_BNE[True], _S14_TRANS_9_OR_8)
+        else:
+            c, i = _add(_S14B_EA20_TEST, _S14B_EA20_BPL[False], _S14B_BIT2, _S14B_BIT2_BEQ[True], _S14B_BIT0,
+                        _S14B_BIT0_BNE[True], _S14_TRANS_9_OR_8)
+        cycles += c
+        instructions += i
+        for a, b in arm_result['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = arm_result['d7']
+        exit_registers['pc'] = 0x0075D6
+        # move.w #$30,fdf6 is the last flag-setter on both transitions (value 0x30, N=0, Z=0).
+        exit_registers['sr'] = _logic_sr(sr, 0x30, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006FF8 if ea20_one else 0x006FD6)
+
+    if arm_result['arm'] in ('transition-1', 'transition-0'):
+        if ea20_one:
+            for a, b in _bytes((registers['a7'] - 4) & 0xFFFFFF, 0x006E12, 4):
+                order[a] = b
+            c, i = _add(_S14A_BIT2, _S14A_BIT2_BEQ[True], _S14A_BIT0, _S14A_BIT0_BNE[False], _S14A_HEAD2,
+                        _S14A_F1A6_BLE[False], _S14A_GRIDSETUP, GRID_CELL_COST)
+            for offset in (1, 0x81, 0x101):
+                c, i = _add((c, i), _S14_GRID_TEST, _S14_GRID_BEQ[False])
+            c, i = _add((c, i), _S14_NIBBLE_HEAD, _S14A_NIBBLE_BEQ[not arm_result['nibble_tested']])
+            if arm_result['nibble_tested']:
+                c, i = _add((c, i), _S14A_NIBBLE_TEST, _S14A_NIBBLE_BEQ2[False])
+            c, i = _add((c, i), _S14_TRANS_1_OR_0)
+        else:
+            for a, b in _bytes((registers['a7'] - 4) & 0xFFFFFF, 0x006E88, 4):
+                order[a] = b
+            c, i = _add(_S14B_EA20_TEST, _S14B_EA20_BPL[False], _S14B_BIT2, _S14B_BIT2_BEQ[True], _S14B_BIT0,
+                        _S14B_BIT0_BNE[False], _S14B_HEAD2, _S14B_F1A4_BLE[False], _S14B_GRIDSETUP, GRID_CELL_COST)
+            for offset in (-1, 0x7F, 0xFF):
+                c, i = _add((c, i), _S14_GRID_TEST, _S14_GRID_BEQ[False])
+            c, i = _add((c, i), _S14_NIBBLE_HEAD, _S14B_NIBBLE_BEQ[not arm_result['nibble_tested']])
+            if arm_result['nibble_tested']:
+                c, i = _add((c, i), _S14B_NIBBLE_TEST, _S14B_NIBBLE_BEQ2[False])
+            c, i = _add((c, i), _S14_TRANS_1_OR_0)
+        cycles += c
+        instructions += i
+        for a, b in arm_result['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['d7'] = arm_result['d7']
+        exit_registers['pc'] = 0x0075D6
+        # 006E48/006EBC's own subq.w #4,POSITION_Y is the last flag-setter on both transitions.
+        exit_sr = _sub_sr(sr, read(player.POSITION_Y, 2), 4, 2)
+        exit_registers['sr'] = exit_sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006E4C if ea20_one else 0x006EC0)
+
+    # every remaining arm reaches the shared contact-search gate (006EC4); each name below is one
+    # exact ROM path (`game.player`'s own return contract names each one distinctly for this reason).
+    arm_name = arm_result['arm']
+    if ea20_one:
+        if arm_name == 'contact-gate':
+            c, i = _add(_S14A_BIT2, _S14A_BIT2_BEQ[False], _S14A_SET_F1A8, _S14A_BRA_C)
+        elif arm_name == 'contact-gate-f1a6':
+            c, i = _add(_S14A_BIT2, _S14A_BIT2_BEQ[True], _S14A_BIT0, _S14A_BIT0_BNE[False], _S14A_HEAD2,
+                        _S14A_F1A6_BLE[True], _S14A_DETOUR)
+        else:
+            # 'contact-gate-grid' (a grid byte matched) or 'contact-gate-nibble' (the +0x181 match):
+            # both run the full grid setup and at least the first grid test; 006E50's own tst+bpl
+            # re-fires (always taken here, EA20 == 1) before 006EC4 either way.
+            for a, b in _bytes((registers['a7'] - 4) & 0xFFFFFF, 0x006E12, 4):
+                order[a] = b
+            c, i = _add(_S14A_BIT2, _S14A_BIT2_BEQ[True], _S14A_BIT0, _S14A_BIT0_BNE[False], _S14A_HEAD2,
+                        _S14A_F1A6_BLE[False], _S14A_GRIDSETUP, GRID_CELL_COST)
+            if arm_name == 'contact-gate-grid':
+                address = arm_result['cell']['address']
+                matched_offset = next(o for o in (1, 0x81, 0x101) if read((address + o) & 0xFFFFFF, 1) == 1)
+                for offset in (1, 0x81, 0x101):
+                    c, i = _add((c, i), _S14_GRID_TEST, _S14_GRID_BEQ[offset == matched_offset])
+                    if offset == matched_offset:
+                        break
+            else:
+                for offset in (1, 0x81, 0x101):
+                    c, i = _add((c, i), _S14_GRID_TEST, _S14_GRID_BEQ[False])
+                c, i = _add((c, i), _S14_NIBBLE_HEAD, _S14A_NIBBLE_BEQ[False], _S14A_NIBBLE_TEST,
+                            _S14A_NIBBLE_BEQ2[True])
+            c, i = _add((c, i), _S14A_DETOUR)
+    else:
+        if arm_name == 'contact-gate-immediate':
+            c, i = _add(_S14B_EA20_TEST, _S14B_EA20_BPL[True])
+        elif arm_name == 'contact-gate':
+            c, i = _add(_S14B_EA20_TEST, _S14B_EA20_BPL[False], _S14B_BIT2, _S14B_BIT2_BEQ[False], _S14B_SET_F1A8,
+                        _S14B_BRA_C)
+        elif arm_name == 'contact-gate-f1a4':
+            c, i = _add(_S14B_EA20_TEST, _S14B_EA20_BPL[False], _S14B_BIT2, _S14B_BIT2_BEQ[True], _S14B_BIT0,
+                        _S14B_BIT0_BNE[False], _S14B_HEAD2, _S14B_F1A4_BLE[True])
+        else:
+            # 'contact-gate-grid' (a grid byte matched, -1/+0x7F/+0xFF) or 'contact-gate-nibble' (the
+            # +0x17F match): both run the full grid setup; either lands directly on 006EC4, no extra
+            # detour needed (unlike arm A's own mirror, arm B's own grid/nibble tests already target
+            # 006EC4 directly).
+            for a, b in _bytes((registers['a7'] - 4) & 0xFFFFFF, 0x006E88, 4):
+                order[a] = b
+            c, i = _add(_S14B_EA20_TEST, _S14B_EA20_BPL[False], _S14B_BIT2, _S14B_BIT2_BEQ[True], _S14B_BIT0,
+                        _S14B_BIT0_BNE[False], _S14B_HEAD2, _S14B_F1A4_BLE[False], _S14B_GRIDSETUP, GRID_CELL_COST)
+            if arm_name == 'contact-gate-grid':
+                address = arm_result['cell']['address']
+                matched_offset = next(o for o in (-1, 0x7F, 0xFF) if read((address + o) & 0xFFFFFF, 1) == 1)
+                for offset in (-1, 0x7F, 0xFF):
+                    c, i = _add((c, i), _S14_GRID_TEST, _S14_GRID_BEQ[offset == matched_offset])
+                    if offset == matched_offset:
+                        break
+            else:
+                for offset in (-1, 0x7F, 0xFF):
+                    c, i = _add((c, i), _S14_GRID_TEST, _S14_GRID_BEQ[False])
+                c, i = _add((c, i), _S14_NIBBLE_HEAD, _S14B_NIBBLE_BEQ[False], _S14B_NIBBLE_TEST,
+                            _S14B_NIBBLE_BEQ2[True])
+    cycles += c
+    instructions += i
+    for a, b in arm_result.get('stores', {}).items():
+        for aa, bb in _bytes(a, b[0], b[1]):
+            order[aa] = bb
+
+    gc, gi, contact, has_contact = _state14_contact_cost(read, sr, arm_result)
+    cycles += gc
+    instructions += gi
+
+    if not has_contact:
+        arm_d_c, arm_d_i, arm_d_result, arm_d_last_pc, arm_d_sr = _state14_arm_d_cost(read, sr)
+        cycles += arm_d_c
+        instructions += arm_d_i
+        for a, b in arm_d_result.get('stores', {}).items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = arm_d_sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=arm_d_last_pc)
+
+    sp32 = registers['a7']
+    return_pc = 0x006F02 if contact['negative'] else 0x006ED8
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, return_pc, 4):
+        order[a] = b
+    cs_cycles, cs_instructions, cs_order, cs_registers, cs_result = _contact_search_resolve(
+        machine, read, {**registers, 'pc': CONTACT_SEARCH_ENTRY, 'a7': sp32 - 4}, sp32 - 4)
+    cycles += cs_cycles
+    instructions += cs_instructions
+    order.update(cs_order)
+    exit_registers.update(cs_registers)
+    exit_registers['d0'] = cs_registers['d0']
+    c, i = _S14C_TST_D0
+    cycles += c
+    instructions += i
+    found = cs_result['d0'] == 0
+    c, i = _S14C_BNE_D0[not found]
+    cycles += c
+    instructions += i
+
+    if not found:
+        arm_d_c, arm_d_i, arm_d_result, arm_d_last_pc, arm_d_sr = _state14_arm_d_cost(read, cs_registers['sr'])
+        cycles += arm_d_c
+        instructions += arm_d_i
+        for a, b in arm_d_result.get('stores', {}).items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = arm_d_sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=arm_d_last_pc)
+
+    found_result = player.state14_contact_found(read, d7, contact['negative'])
+    c, i = _add(_S14C_FOUND_HEAD, _S14C_FOUND_BTST)
+    cycles += c
+    instructions += i
+    even = d7 & 1 == 0
+    c, i = _S14C_FOUND_BNE[not even]
+    cycles += c
+    instructions += i
+    if even:
+        c, i = _S14C_FOUND_SUBQ
+        cycles += c
+        instructions += i
+    c, i = _S14C_FOUND_TAIL
+    cycles += c
+    instructions += i
+    for a, b in found_result['stores'].items():
+        for aa, bb in _bytes(a, b[0], b[1]):
+            order[aa] = bb
+    exit_registers['d7'] = found_result['d7']
+    exit_registers['pc'] = 0x0075D6
+    # 006EF8/006F22's own moveq #0,d7 is the last flag-setter (Z=1, N=0, V=0, C=0; MOVEQ clears X's
+    # own bearing on later reads but does not itself touch X -- surviving from whatever the last
+    # arithmetic before it left, here the found-continuation's own conditional subq.w #4 or nothing).
+    exit_registers['sr'] = _logic_sr(cs_registers['sr'], 0, 2)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x006EFA if not contact['negative'] else 0x006F24)
+
+
+def state14_plan(machine, registers):
+    """006DA6 (state 14): the player state machine's own dispatch table entry 14, a vertical-
+    movement dispatcher composed over the already-recovered grid cell (0063FA) and contact search
+    (008222).  See `game.player`'s own module note above `state14_step` for the shape."""
+    from .game import player
+    if registers['pc'] != STATE14_ENTRY:
+        raise UnsupportedCandidate('state 14 planner needs the machine parked at 006DA6')
+    sr = registers['sr']
+    read = _reader(machine)
+    d7 = registers['d7'] & 0xFFFF
+    head = player.state14_step(read, d7)
+    order = {}
+    exit_registers = {}
+
+    if head['arm'] == 'frozen':
+        cycles, instructions = _add(_S14_FROZEN_TEST, _S14_FROZEN_BEQ[True])
+        exit_sr = _logic_sr(sr, 0, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
+                          registers={'pc': 0x0075D6, 'sr': exit_sr}, last_pc=0x006DAA)
+
+    cycles, instructions = _add(_S14_FROZEN_TEST, _S14_FROZEN_BEQ[False], _S14_WRAP_TEST)
+
+    if head['arm'] == 'settle':
+        c, i = _S14_WRAP_BLT[not head['reset']]
+        cycles += c
+        instructions += i
+        if head['reset']:
+            c, i = _S14_WRAP_RESET
+            cycles += c
+            instructions += i
+        else:
+            for a, b in head['stores'].items():
+                for aa, bb in _bytes(a, b[0], b[1]):
+                    order[aa] = bb
+            c, i = _add(_S14_STORE_F1B0, _S14_EA1E_TEST, _S14_EA1E_BMI[True])
+            cycles += c
+            instructions += i
+        sc, si, sorder, exit_d7, exit_sr, last_pc, arm, cell = _state14_settle_cost(read, sr, head['settle_d7'], registers['a7'], None if head['reset'] else head['settle_d7'])
+        cycles += sc
+        instructions += si
+        order.update(sorder)
+        if arm == 'rejoin-main':
+            # 006F4C's own bne.w lands exactly on 006DD4 (the ARMSEL test this dispatcher's own
+            # top-level 'main' path also uses) -- FFFFEA20 is unchanged by anything settle did (only
+            # F1A4/F1A6/F1AE/D7 are ever written there), so the live read below is exact, and the
+            # caller's own D7 at this point is `head['settle_d7']` (settle's own EA20 test runs
+            # before any bump/subq, per `game.player.state14_settle`'s own module note).
+            c, i = _S14_ARMSEL_TEST
+            cycles += c
+            instructions += i
+            ea20_one = read(player.EA20_WORD, 2) & 0xFFFF == 1
+            c, i = _S14_ARMSEL_BNE[not ea20_one]
+            cycles += c
+            instructions += i
+            return _state14_main_dispatch(machine, read, registers, sr, order, exit_registers, cycles,
+                                           instructions, ea20_one, head['settle_d7'])
+        if cell is not None:
+            exit_registers['a0'] = cell['address'] & 0xFFFFFFFF
+            exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell['d0']
+            exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cell['d1']
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = exit_sr
+        if exit_d7 is not None:
+            exit_registers['d7'] = exit_d7
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=last_pc)
+
+    # head['arm'] == 'main'
+    c, i = _add(_S14_WRAP_BLT[True], _S14_STORE_F1B0, _S14_EA1E_TEST, _S14_EA1E_BMI[False], _S14_EA20_TEST0)
+    cycles += c
+    instructions += i
+    for a, b in head['stores'].items():
+        for aa, bb in _bytes(a, b[0], b[1]):
+            order[aa] = bb
+    cleared = (0xFFFFF1A4 & 0xFFFFFF) in head['stores']
+    c, i = _S14_EA20_BNE0[not cleared]
+    cycles += c
+    instructions += i
+    if cleared:
+        c, i = _S14_CLEAR
+        cycles += c
+        instructions += i
+    c, i = _S14_ARMSEL_TEST
+    cycles += c
+    instructions += i
+    ea20_one = head['ea20_one']
+    c, i = _S14_ARMSEL_BNE[not ea20_one]
+    cycles += c
+    instructions += i
+
+    return _state14_main_dispatch(machine, read, registers, sr, order, exit_registers, cycles,
+                                   instructions, ea20_one, d7)
+
+
 # --- 012DA0/012E5A: the movement-cluster contact consumers (game/pickups.py: contact_consume) ---
 #
 # Costed the same way as 008222: one instruction-block at a time (every instruction's own cost
