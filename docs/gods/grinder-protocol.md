@@ -99,6 +99,13 @@ the region's own facts (`pathfacts.region_only`).  Such states are never
 planned by the candidate (the scheduler refuses a span with an interrupt
 due, a `scheduler admission` fallback), so they cost nothing to keep.
 
+A census whose summary line carries `overflow N` (and the WARNING under
+it) is incomplete: N occurrences fell into path classes beyond
+`--max-classes` and no fixture was retained for them.  Rerun with a larger
+cap (`--max-classes 400` is cheap) before any arm is declined as
+unwitnessed; on 17 September six arms of `00BA8E` had been declined
+because the default cap of 32 had discarded their classes.
+
 ## 4. Facts of every path
 
 ```powershell

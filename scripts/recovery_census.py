@@ -374,6 +374,10 @@ def main(argv=None):
                                             '  overflow %d' % cls['overflow'] if cls.get('overflow') else '')
         print('  %-16s %6d  fixtures %d%s%s' % (key, count, len(report['first'].get(key, [])),
               ('  parents %d' % len(report['parents'].get(key, []))) if parent is not None else '', extra))
+        if cls and cls.get('overflow'):
+            print('  WARNING: %d occurrences of %s fell into path classes beyond --max-classes and were NOT retained; '
+                  'this census is incomplete -- rerun with a larger --max-classes before declining any arm as unwitnessed'
+                  % (cls['overflow'], key))
     if not report['counts']:
         print('  no entry fired on this history')
     if report['signature_mismatches']:
