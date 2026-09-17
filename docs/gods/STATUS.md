@@ -78,6 +78,13 @@ are mapped in `tick-map.md`: the mass of a tick is the player state
 machine (`005700`, 29 states), the creature update (`00A772`, 8 kinds) and
 the world update (`0030CC`), the next three subsystems.
 
+`005700`'s own shared tail (`0075D6`) is recovered as a platform-tail
+seam (17 Sep); its own state handlers are blocked on a further
+subsystem, not yet named: every movement-cluster state examined
+(1, 0, 26) reaches a hit-list search (`008222`) or its own per-object-type
+consumers (`012DA0`/`012E5A`) on a real, frequently-witnessed fraction of
+its activations (`docs/gods/blockers/2026-09-17-008222.md`).
+
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.
