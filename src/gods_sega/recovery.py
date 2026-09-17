@@ -12,13 +12,15 @@ from dataclasses import dataclass, field
 
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
-from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY,
+from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
+                       ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
+                       action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
@@ -123,6 +125,8 @@ PLANNERS = {
     'achievement-slot-dispatch': {ACHIEVEMENT_DISPATCH_ENTRY: achievement_slot_dispatch_plan},
     'slot-scan': {SLOT_SCAN_ENTRY: slot_scan_plan},
     'record-id-scan': {RECORD_ID_SCAN_ENTRY: record_id_scan_plan},
+    'action-reset-elapsed': {ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan},
+    'action-clear-group': {ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -138,7 +142,8 @@ PLANNERS = {
                        MESSAGE_GATE_ENTRY: message_gate_plan, STRING_COPY_ENTRY: string_copy_plan,
                        ACHIEVEMENT_SLOT_RESET_ENTRY: achievement_slot_reset_plan,
                        ACHIEVEMENT_DISPATCH_ENTRY: achievement_slot_dispatch_plan,
-                       SLOT_SCAN_ENTRY: slot_scan_plan, RECORD_ID_SCAN_ENTRY: record_id_scan_plan},
+                       SLOT_SCAN_ENTRY: slot_scan_plan, RECORD_ID_SCAN_ENTRY: record_id_scan_plan,
+                       ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan, ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -205,7 +210,9 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # always achievement_slot_reset's own real semantic store (the ACHIEVEMENT_SLOTS array
              # entry, inserted last by achievement_slot_reset_plan itself); "flip the last write" is
              # blind on the far more common no-call arms (empty writes) but clean and safe on the seam.
-             'record-id-scan-mutant-result': ('record-id-scan', _mutate_result)}
+             'record-id-scan-mutant-result': ('record-id-scan', _mutate_result),
+             'action-reset-elapsed-mutant-result': ('action-reset-elapsed', _mutate_result),
+             'action-clear-group-mutant-result': ('action-clear-group', _mutate_result)}
 
 
 @dataclass

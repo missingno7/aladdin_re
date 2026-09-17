@@ -2564,6 +2564,98 @@ def record_id_scan_plan(machine, registers):
                guards=inner.guards, suffix=suffix, expect=inner.expect)
 
 
+# --- The trigger evaluator's action table (game/actions.py) -- part 3 of the trigger firing --------
+# subsystem blocker's Split: two admissible handlers, reached by 00462C's own firing tail through a
+# tail JUMP (jmp (a5), 0046CE) with no frame of its own -- exactly 0048B4's own shape, so a handler's
+# own entry PC needs no seam at all: its own rts returns straight past the whole evaluator activation
+# to whoever called it. The other action-table entries (004A0A, 004D04, 004E1C, 004E74, 0048EA,
+# 005024, 00772E; 004A74/005074 unwitnessed) call still-unrecovered helper routines (004AAA, 004926,
+# 004ECE/004D7E, 0050A4, 0077A8, 004F16) or write the level grid across several blocks, and stay
+# unrecovered until those callees are -- an ordinary decline, not a new mechanism.
+
+# --- 0048E4: reset the elapsed-seconds counter (ACTION_RESET_ELAPSED) ------------------------------
+ACTION_RESET_ELAPSED_ENTRY, ACTION_RESET_ELAPSED_LAST_PC = 0x0048E4, 0x0048E8
+_ARE_CLR = (24, 1)   # clr.l $f2aa.w
+_ARE_RTS = (16, 1)
+
+
+def action_reset_elapsed_plan(machine, registers):
+    """0048E4: clr.l ELAPSED; rts -- no branch, no caller input, no frame of its own."""
+    from .game import actions
+    if registers['pc'] != ACTION_RESET_ELAPSED_ENTRY:
+        raise UnsupportedCandidate('action reset elapsed planner needs the machine parked at 0048E4')
+    sp = registers['a7'] & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    address = actions.reset_elapsed(_reader(machine))
+    exit_pc = _return(machine, sp)
+    c, i = _add(_ARE_CLR, _ARE_RTS)
+    exit_sr = _logic_sr(registers['sr'], 0, 4)   # clr.l always sets Z, clears N/V/C; X retained
+    return AtomicPlan(cycles=c, instructions=i, writes=_bytes(address & 0xFFFFFF, 0, 4),
+                      registers={'a7': (registers['a7'] + 4) & 0xFFFFFFFF, 'pc': exit_pc, 'sr': exit_sr},
+                      last_pc=ACTION_RESET_ELAPSED_LAST_PC)
+
+
+# --- 004ACA: clear a matched pickup group's own active-id word (ACTION_CLEAR_GROUP) ----------------
+#
+# Each of the three (kind, argument) comparisons has ITS OWN rts (004ADA, 004AE8, 004AF6 -- not one
+# shared exit): a match against the first or second group stops there; a match against the third, or
+# a miss against all three, both end at 004AF6.
+ACTION_CLEAR_GROUP_ENTRY = 0x004ACA
+_ACTION_CLEAR_GROUP_LAST_PC = (0x004ADA, 0x004AE8, 0x004AF6)   # per matched index; a miss also ends at 004AF6
+WITNESSED_ACTION_CLEAR_GROUP_ARMS = (1,)   # which of the three group words has been witnessed to match; None (no match) is also witnessed
+_AC_MOVE_D2 = (12, 1)     # move.w $12(a1), d2
+_AC_CMP = (12, 1)         # cmp.w idN.w, d2
+_AC_BNE_TAKEN, _AC_BNE_NOTTAKEN = (10, 1), (8, 1)
+_AC_STORE = (16, 1)       # move.w #$ffff, idN.w
+_AC_RTS = (16, 1)
+
+
+def _action_clear_group_cost(read, a1, value, sr):
+    """004ACA: the (at most one) matched group's own index/address, cost, its own last_pc, and exit
+    SR along the branch the ROM actually takes (None, None on a miss against all three)."""
+    from .game import pickups
+    cycles, instructions = _AC_MOVE_D2
+    stored = None
+    for index, address in enumerate(pickups.GROUP_TABLES):
+        stored = read(address & 0xFFFFFF, 2) & 0xFFFF
+        c, i = _AC_CMP
+        cycles, instructions = cycles + c, instructions + i
+        if value == stored:
+            c, i = _AC_BNE_NOTTAKEN
+            cycles, instructions = cycles + c, instructions + i
+            c, i = _add(_AC_STORE, _AC_RTS)
+            return (index, address, cycles + c, instructions + i, _logic_sr(sr, 0xFFFF, 2),
+                    _ACTION_CLEAR_GROUP_LAST_PC[index])
+        c, i = _AC_BNE_TAKEN
+        cycles, instructions = cycles + c, instructions + i
+    c, i = _AC_RTS
+    return (None, None, cycles + c, instructions + i, _cmp_sr(sr, value, stored, 2),
+            _ACTION_CLEAR_GROUP_LAST_PC[-1])
+
+
+def action_clear_group_plan(machine, registers):
+    """004ACA: clear whichever of the three pickup groups' own active-id words matches $12(a1)."""
+    if registers['pc'] != ACTION_CLEAR_GROUP_ENTRY:
+        raise UnsupportedCandidate('action clear group planner needs the machine parked at 004ACA')
+    sp = registers['a7'] & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    a1 = registers['a1'] & 0xFFFFFFFF
+    sr = registers['sr']
+    value = read((a1 + 0x12) & 0xFFFFFF, 2) & 0xFFFF
+    index, address, cycles, instructions, exit_sr, last_pc = _action_clear_group_cost(read, a1, value, sr)
+    if index not in WITNESSED_ACTION_CLEAR_GROUP_ARMS:
+        raise UnsupportedCandidate(f'action clear group arm {index} not witnessed by a recording')
+    d2 = (registers['d2'] & 0xFFFF0000) | value
+    exit_pc = _return(machine, sp)
+    writes = _bytes(address & 0xFFFFFF, 0xFFFF, 2) if address is not None else ()
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'d2': d2, 'a7': (registers['a7'] + 4) & 0xFFFFFFFF, 'pc': exit_pc, 'sr': exit_sr},
+                      last_pc=last_pc)
+
+
 # --- 00F828: the proximity table search-and-add (game/hazard.py: proximity_search/proximity_add) ---
 #
 # Owns its own internal call into 00F86A the way 0049DA owns its calls into
