@@ -892,7 +892,102 @@ verified against every one of 406 retained fixtures
 a leaf with no durable effect at all (every register it touches is dead
 before the tail's own next instruction, and it writes no RAM) has no
 mutant the game can see, so it waits to be composed into whichever of the
-tail's own pieces is recovered first.
+tail's own pieces is recovered first.  **Superseded 17-18 September**: the
+supervisor's own Decision (below the blocker doc's "Decision" heading)
+found the tail is one region of a known shape, not a new subsystem -- a
+platform-tail seam, recovered as `player-tail` (see its own evidence rows
+above); with the tail admitted, the FIRST states composed over it (1, 0,
+14, plus the movement-cluster pair 24/25) are gated too.  `005700` itself
+is now the **family over `FFFFF192`** its own Decision predicted: a plain
+per-state composite, the same shape `achievement-slot-dispatch` already is
+over `0047DA`/`004800` -- see its own semantic-operation card below.
+
+### `005700` semantic-operation card
+
+Per `docs/common/recovery-process.md`'s own card fields, now that the
+dispatcher owns real persistent state, calls into several now-recovered
+subsystems and has become a genuine composite candidate boundary (not a
+small leaf):
+
+- **Semantic operation**: read the player's own `STATE_INDEX`
+  (`FFFFF192`) and `STATE_COUNTER` (`FFFFF190`, D7 on entry), dispatch
+  through the 29-entry ROM table `005618` to the correspondingly-indexed
+  state handler body, and -- for every witnessed state but 7 (a bare
+  `rts`, unwitnessed) -- fall through unconditionally into the shared
+  tail (`0075D6`, already its own recovered candidate, `player-tail`).
+- **Entry/exit boundary**: entry `005700` with the machine parked at the
+  dispatch's own read of `FFFFF192`, gated only while `FFFFF210`
+  (`ACTIVE_GATE`) is negative and `FFFFEECD` (`FROZEN_FLAG`) permits it.
+  Exit is either state 7's own bare `rts` (never witnessed) or a
+  `bra.w $75d6` into `player-tail`'s own already-armed gate -- the SAME
+  "one gate hands off to a separately-armed gate" composition every
+  recovered state (1, 0, 14, 24, 25) already draws.
+- **Persistent state**: `STATE_INDEX`/`STATE_COUNTER` themselves, plus
+  each handler's own state-specific fields (`POSITION_X`/`POSITION_Y`,
+  the vertical states' own `FFFFF1A4`/`F1A6`/`F1A8`/`F1AA`/`F1AC`/`F1AE`/
+  `F1B0`/`F1B2` retry/settle counters, the movement flag `FFFFF182`) --
+  all named per-state in `game/player.py`, none owned by the dispatch
+  itself. `FFFFEA1E`/`FFFFEA20`/`FFFFEA23` (pad-intent words) are READ by
+  every state but owned further up the input pipeline, not here.
+- **External observations**: none of its own. The dispatch and every
+  handler are RAM-only; the only platform interaction anywhere in the
+  family is inside the ALREADY-recovered shared tail's own ceded sprite
+  upload (`001312`) and whatever a raised tile-trigger event's own
+  still-unrecovered cascade eventually touches.
+- **Pending effects**: none synchronous. A handler's own transition
+  (`STATE_INDEX`/`STATE_COUNTER` written this tick) becomes durable the
+  next tick this SAME dispatch re-reads `FFFFF192` -- no request is left
+  pending across a commit boundary.
+- **Permitted interference**: not yet proven for the family as a whole.
+  Each recovered state's own negative-control mutant (a `STATE_COUNTER`
+  bit flip) is independently confirmed observable through the shared
+  tail's own unconditional store at `0075D6`'s own first instruction, but
+  no cross-state VBlank-slide-style proof has been attempted for the
+  dispatch itself (whether a handler could run one tick later or earlier
+  without changing the future) -- deferred, since no candidate needs it
+  yet (every recovered state is still gated as an exact L0 region).
+- **Proven movable events**: none -- a synchronous per-tick dispatch,
+  not an event queue; there is nothing here to reorder.
+- **Required ordering boundaries**: the dispatch's own read of
+  `FFFFF192`/`FFFFF190` must precede the handler body it selects; a
+  handler's own RAM writes must be visible to the SAME activation's own
+  tail composition, since several handlers (states 1/0's own
+  contact-search-found arms) hand off at `pc = 0x0075DA`, one instruction
+  INTO the tail, not a fresh `0075D6` activation -- the boundary a
+  handler's own plan draws must match exactly which of the tail's own
+  instructions it is skipping.
+- **Timing dependency**: none beyond the ordinary once-per-tick call
+  every recovered handler already costs from the tracer; no duration
+  model has been needed by any state composed so far.
+- **Evidence and scope**: a full-history `FFFFF192` tally (all eight
+  recordings, since `recovery_census.py`'s own path-signature classifier
+  explodes on this dispatcher, `docs/gods/blockers/2026-09-17-005700.md`'s
+  own "What was tried") names every state's own frequency on
+  `fb408bc75597…` (34,904 frames, 13,488 activations): 1 (3,086), 0
+  (2,024), 5 (1,492), 14 (1,155), 6 (950), 9 (796), 26 (634), 8 (601), 13
+  (476), 12 (321), 16 (254), 20 (194), 19 (190), 11 (169), 2 (167), 3
+  (167), 24 (153), 4 (150), 17 (145), 21 (137), 18 (63), 25 (52), 28
+  (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
+  any of the eight recordings. Gated so far: state-1, state-0, state-14,
+  state-24, state-25 -- 4,441 of 13,488 activations (33%) directly
+  reproduced by their own candidate, every remaining activation still
+  running the original but reaching the ALREADY-recovered `player-tail`
+  gate one level in.
+- **Remaining blocker**: none structural -- the 17 September escalation
+  was the shared tail itself, since resolved (`player-tail`).  What is
+  left is pure volume: state 5 (1,492, the next bite -- a real sibling of
+  state 1 sharing code both ways, `00746A`'s own `bra.w $7282` falling
+  back into state 1's own body, "one region, two gates, one planner"),
+  then the twenty-three remaining witnessed states in frequency order (6,
+  9, 26, 8, 13, 12, 16, 20, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23,
+  10), each needing the SAME per-arm survey/cost/verify recipe states
+  0/1/14 already established; states 7 and 15 decline by name
+  (unwitnessed) until a recording exercises them.  Once every witnessed
+  state has its own gated candidate, `005700` is complete as a plain
+  per-state composite, the same shape `achievement-slot-dispatch` already
+  is over `0047DA`/`004800` -- no further card revision needed unless a
+  later state surfaces persistent state or platform interaction this
+  card does not already cover.
 
 ## Open questions
 
