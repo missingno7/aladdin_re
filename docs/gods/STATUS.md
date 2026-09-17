@@ -2,7 +2,7 @@
 
 Current state only.  The per-region record is `ledger.md`; the iteration
 recipe is `grinder-protocol.md`; the worker prompt is `grinder-goal.md`.
-Last updated 16 September 2026.
+Last updated 17 September 2026.
 
 ## The cartridge
 
@@ -778,6 +778,31 @@ blocks with RAM work between them — a platform tail from its first block
 would recover 13 instructions).  Sound requests in Gods are RAM writes
 into the command block `FFFDEA` (`0F446C`); the transfer to the Z80 is the
 VBlank handler's, so a region that requests a sound is RAM-only here.
+
+**The player state machine** (`005700`, 29 states over `FFF192`, table
+`005618`; assigned 17 September as its own subsystem, `game/player.py`):
+named the record fields the dispatcher itself reads (`STATE_INDEX`
+`FFF192`, `STATE_COUNTER` `FFF190`/D7, `FROZEN_FLAG` `FFFFEECD`,
+`ACTIVE_GATE` `FFFFF210` -- dispatch runs only while this is negative) and
+all 29 handler addresses, and found that every witnessed activation
+(every state but 7 and 15, unwitnessed on all eight recordings) falls
+into a SHARED TAIL (`0075D6`) that is itself an unrecovered subsystem:
+the tile trigger scan (`00773A`/`0077A8`, characterised as semantics-only
+below -- a leaf when it finds nothing, 43% of occurrences, cascading into
+deep unrecovered creature/spawn code otherwise), a camera-relative window
+clamp (`FFFFF3EE`/`FFFFF3F0`, not yet disassembled past its own branches),
+and a SECOND, distinct inline sprite/tile-upload seam (`001312`,
+`0018C8`'s own shape with its own descriptor convention, reached by a
+platform-tail `jmp` after the window clamp re-indexes `STATE_TABLE` a
+second time).  No state's own composition is admissible until this tail
+is: escalated `NEW_GODS_SUBSYSTEM`, `docs/gods/blockers/
+2026-09-17-005700.md`.  `tile_trigger_scan` (00773A's own clean arm) is
+verified against every one of 406 retained fixtures
+(`tests/games/gods/test_player.py`) but not registered as a candidate --
+a leaf with no durable effect at all (every register it touches is dead
+before the tail's own next instruction, and it writes no RAM) has no
+mutant the game can see, so it waits to be composed into whichever of the
+tail's own pieces is recovered first.
 
 ## Open questions
 
