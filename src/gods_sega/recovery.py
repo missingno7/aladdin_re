@@ -20,7 +20,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
-                       WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
+                       TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, camera_follow_plan,
                        collision_gate_plan, contact_consume_primary_plan, contact_consume_secondary_plan, contact_search_plan,
@@ -29,7 +29,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_tail_plan, proximity_plan,
                        record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, string_copy_plan, table_reset_plan,
-                       walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
+                       trail_check_plan, walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
 
 def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
@@ -171,6 +171,7 @@ PLANNERS = {
     'contact-consume-secondary': {CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan},
     'state-24': {STATE24_ENTRY: movement_hit_primary_plan},
     'state-25': {STATE25_ENTRY: movement_hit_secondary_plan},
+    'trail-check': {TRAIL_CHECK_ENTRY: trail_check_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -191,7 +192,8 @@ PLANNERS = {
                        PLAYER_TAIL_ENTRY: player_tail_plan, CONTACT_SEARCH_ENTRY: contact_search_plan,
                        CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan,
                        CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan,
-                       STATE24_ENTRY: movement_hit_primary_plan, STATE25_ENTRY: movement_hit_secondary_plan},
+                       STATE24_ENTRY: movement_hit_primary_plan, STATE25_ENTRY: movement_hit_secondary_plan,
+                       TRAIL_CHECK_ENTRY: trail_check_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -279,7 +281,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # STATE_INDEX drives the very next tick's own dispatch, and GRID_Y feeds the
              # already-recovered camera follow step, both quickly observable.
              'state-24-mutant-result': ('state-24', _mutate_result),
-             'state-25-mutant-result': ('state-25', _mutate_result)}
+             'state-25-mutant-result': ('state-25', _mutate_result),
+             'trail-check-mutant-result': ('trail-check', _mutate_result)}
 
 
 @dataclass

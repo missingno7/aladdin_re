@@ -152,9 +152,17 @@ EVENT_RECORD_INDEX_OFFSET = 2      # the SAME EVENT_STATUS_WORDS entry's own +2 
                                     # when the status word itself (+0) was read; unread by any other kind.
 
 
+def tile_row(y):
+    """00773C-00774A: (y & TILE_Y_MASK) << 3, left in D1 by the scan's own head and NEVER touched
+    again before any raise this module composes (0077A8's own status check and the raiser's own
+    dispatch preamble both leave D1 alone) -- so this is also the low word every raise's own entry D1
+    carries, for as long as no condition predicate (kind 9/10) overwrites it."""
+    return ((y & TILE_Y_MASK) << 3) & 0xFFFF
+
+
 def _tile_cell(x, y):
     column = (_signed_word((x + TILE_X_BIAS) & 0xFFFF) >> 5) & 0xFFFF
-    row = ((y & TILE_Y_MASK) << 3) & 0xFFFF
+    row = tile_row(y)
     return (TILE_TABLE + _signed_word(column) + _signed_word(row)) & 0xFFFFFFFF
 
 

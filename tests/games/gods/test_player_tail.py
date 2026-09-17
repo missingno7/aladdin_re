@@ -151,9 +151,9 @@ def test_plan_reproduces_every_fact_of_the_original_on_each_retained_path_or_dec
             assert scan['fires'] or 'unwitnessed' in str(error)
             return
     assert isinstance(plan, boundary.Seam)
-    # Every fired check, if any, must be an admitted kind-3 (00462C) event: a decline for any other
-    # reason would have raised above instead of returning a plan.
-    assert all(fire['arm'] == 'event' and fire['handler'] == 0x00462C for fire in scan['fires'])
+    # Every fired check, if any, must be an admitted kind-3 (00462C) or kind-6 (0044C0) event: a
+    # decline for any other reason would have raised above instead of returning a plan.
+    assert all(fire['arm'] == 'event' and fire['handler'] in (0x00462C, 0x0044C0) for fire in scan['fires'])
     check_seam(plan, state)
 
 

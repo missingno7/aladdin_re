@@ -45,13 +45,16 @@ dispatch itself) raise an event index `d0` (1–11) through the table at
 `004494` — `0045D0`, `00457A`, `00462C` (the trigger evaluator; its
 non-firing arm is composed into the tail's own raise, `player-tail`, 18
 September, reusing `evaluator_plan`'s own `_evaluator_resolve`; its firing
-arm stays open), `0094D0`, `009514`, `0044C0`, `00FB28`/`2C`/`30`/`34`,
-`00D2BA` — raised from the tile trigger scan `00773A`/`0077A8` (a tile at
-the camera-relative cell of `00885E` with a byte > 2) and from the player
-state machine (`005700` → `0075DC` → `00773A`), which continues the scan
-after each admitted raise (up to six per activation).  The trigger
-evaluator's call stack on every witnessed firing: `001FD0 jsr 005700` →
-`0075E0` → `007768` → `007876 jsr (a1)` → `00462C`.
+arm stays open), `0094D0`, `009514`, `0044C0` (the trail check, `game/
+trail.py`; its 'found' arm composed the same way the same day, reusing
+`_trail_check_resolve`; its 'exhausted' arm, real code through `007B4C`,
+stays open), `00FB28`/`2C`/`30`/`34`, `00D2BA` — raised from the tile
+trigger scan `00773A`/`0077A8` (a tile at the camera-relative cell of
+`00885E` with a byte > 2) and from the player state machine (`005700` →
+`0075DC` → `00773A`), which continues the scan after each admitted raise
+(up to six per activation).  The trigger evaluator's call stack on every
+witnessed firing: `001FD0 jsr 005700` → `0075E0` → `007768` → `007876 jsr
+(a1)` → `00462C`.
 
 ## What this says about the frontier
 
