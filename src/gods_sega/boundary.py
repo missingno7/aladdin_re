@@ -1991,6 +1991,112 @@ def string_copy_plan(machine, registers):
     return AtomicPlan(cycles=c, instructions=i, writes=writes, registers=exit_registers, last_pc=STRING_COPY_LAST_PC)
 
 
+# --- 0047DA: the achievement slot reset (game/achievements.py) -- a platform tail via bsr --------
+#
+# Aladdin's "one native call inside the branch" shape (recipe 6b's platform
+# tail), reproduced with Gods' own device convention: the prefix is 0047DA's
+# own RAM-only head (its d1/d2/a0 frame, the slot store, the D1 derivation),
+# ending at the bsr itself with the return address pushed and every register
+# 001648 reads in place; the ceded block is all of 001648 (whichever of its
+# own two fill arms the ROM takes); the resume is 0047FA, and the suffix is
+# 0047DA's own frame restore + rts, entirely RAM-only.  Cost from the tracer
+# (artifacts/gods/evidence/census-0047DA-fresh-*).
+ACHIEVEMENT_SLOT_RESET_ENTRY = 0x0047DA
+ACHIEVEMENT_SLOT_RESET_CALL_LAST_PC = 0x0047F6    # the bsr instruction itself: the prefix's own last_pc
+ACHIEVEMENT_SLOT_RESET_RESUME = 0x0047FA          # right after the bsr returns
+ACHIEVEMENT_SLOT_RESET_LAST_PC = 0x0047FE         # the routine's own rts
+ACHIEVEMENT_ICON_UPLOAD_ENTRY = 0x001648
+ACHIEVEMENT_SLOT_RESET_FRAME = 12                 # movem.l d1-d2/a0,-(a7)
+_ASR_FRAME_PUSH = (32, 1)               # movem.l d1-d2/a0,-(a7)
+_ASR_MOVE_D0_D1 = (4, 1)                # move.w d0,d1
+_ASR_DOUBLE_D1 = (4, 1)                 # add.w d1,d1
+_ASR_LEA = (8, 1)                       # lea.l $f22e.w,a0
+_ASR_MOVEQ_FF = (4, 1)                  # moveq #$ff,d2
+_ASR_STORE_SLOT = (14, 1)               # move.w d2,(a0,d1.w)
+_ASR_MOVEQ_0 = (4, 1)                   # moveq #0,d1
+_ASR_CMP_HIGHLIGHT = (12, 1)            # cmp.w HIGHLIGHT_ID,d0
+_ASR_BNE_TAKEN, _ASR_BNE_NOTTAKEN = (10, 1), (8, 1)
+_ASR_MOVEQ_1 = (4, 1)                   # moveq #1,d1 (only when bne not taken, i.e. highlighted)
+_ASR_BSR = (18, 1)                      # bsr.w $1648
+_ASR_RESTORE = (36, 1)                  # movem.l (a7)+,d1-d2/a0 (the suffix)
+_ASR_RTS = (16, 1)
+
+
+def achievement_slot_reset_plan(machine, registers):
+    """0047DA: mark a tracked-id slot empty, then call 001648 (the icon upload) as a seam -- D2 is
+    fixed at -1 on every path through this routine, so only 001648's own 'clear' arm is ever reached
+    from here (its real-descriptor upload belongs to a different, unidentified caller)."""
+    from .game import achievements
+    if registers['pc'] != ACHIEVEMENT_SLOT_RESET_ENTRY:
+        raise UnsupportedCandidate('achievement slot reset planner needs the machine parked at 0047DA')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    if registers['a6'] != 0xC00000:
+        raise UnsupportedCandidate('achievement slot reset planner needs a6 = C00000 (the VDP data port)')
+    d0 = registers['d0'] & 0xFFFF
+    if d0 not in achievements.WITNESSED_ICON_SLOTS:
+        raise UnsupportedCandidate(f'achievement icon slot {d0} not witnessed by a recording')
+    read = _reader(machine)
+    result = achievements.achievement_slot_reset(read, d0)
+    # The return-address write goes into `order` FIRST and the semantic slot store LAST, so a generic
+    # "flip the last write" mutant (_mutate_result) corrupts an observable game byte, never the return
+    # address 001648's own rts reads (a one-off return address is an odd fetch, an M68000 address
+    # error, not a clean divergence).
+    order = {}
+    frame = ('achievement slot reset frame', sp - ACHIEVEMENT_SLOT_RESET_FRAME, ACHIEVEMENT_SLOT_RESET_FRAME + 4)
+    _ram_span(*frame)
+    for index, name in enumerate(('d1', 'd2', 'a0')):
+        for a, b in _bytes((sp - ACHIEVEMENT_SLOT_RESET_FRAME + 4 * index) & 0xFFFFFF, registers[name], 4):
+            order[a] = b
+    return_slot = (sp - ACHIEVEMENT_SLOT_RESET_FRAME - 4) & 0xFFFFFF
+    for a, b in _bytes(return_slot, ACHIEVEMENT_SLOT_RESET_RESUME, 4):
+        order[a] = b
+    for address, (value, size) in result['stores'].items():
+        for a, b in _bytes(address, value, size):
+            order[a] = b
+    if result['highlighted']:
+        c, i = _add(_ASR_FRAME_PUSH, _ASR_MOVE_D0_D1, _ASR_DOUBLE_D1, _ASR_LEA, _ASR_MOVEQ_FF, _ASR_STORE_SLOT,
+                   _ASR_MOVEQ_0, _ASR_CMP_HIGHLIGHT, _ASR_BNE_NOTTAKEN, _ASR_MOVEQ_1, _ASR_BSR)
+    else:
+        c, i = _add(_ASR_FRAME_PUSH, _ASR_MOVE_D0_D1, _ASR_DOUBLE_D1, _ASR_LEA, _ASR_MOVEQ_FF, _ASR_STORE_SLOT,
+                   _ASR_MOVEQ_0, _ASR_CMP_HIGHLIGHT, _ASR_BNE_TAKEN, _ASR_BSR)
+    # cmp.w HIGHLIGHT_ID,d0 is the last flag-setter on the not-highlighted path (bne taken skips
+    # moveq #1,d1 entirely); on the highlighted path moveq #1,d1 runs AFTER it and -- unlike a MOVE.w
+    # into a scratch register elsewhere in this file -- MOVEQ does set N/Z/V/C (X only is unaffected),
+    # so it is the real last flag-setter there, not the cmp.
+    exit_sr = _logic_sr(sr, 1, 4) if result['highlighted'] else _cmp_sr(sr, d0, read(achievements.HIGHLIGHT_ID, 2), 2)
+    prefix = AtomicPlan(
+        cycles=c, instructions=i, writes=tuple(order.items()),
+        # moveq sign-extends to the full 32-bit register (D1 <- 0 or 1, D2 <- -1): neither of the two
+        # entry values' own upper halves survives, unlike a .w move.
+        registers={'d1': result['icon_d1'], 'd2': 0xFFFFFFFF,
+                   'a0': 0xFFFFF22E, 'a7': (sp32 - ACHIEVEMENT_SLOT_RESET_FRAME - 4) & 0xFFFFFFFF,
+                   'pc': ACHIEVEMENT_ICON_UPLOAD_ENTRY, 'sr': exit_sr},
+        last_pc=ACHIEVEMENT_SLOT_RESET_CALL_LAST_PC)
+    return Seam(prefix=prefix, resume_pc=ACHIEVEMENT_SLOT_RESET_RESUME,
+                stack_basis=(sp32 - ACHIEVEMENT_SLOT_RESET_FRAME) & 0xFFFFFFFF,
+                # the frame plus the 4 bytes just above it: 0047DA's OWN return address (pushed by its
+                # caller before this activation began, still unreturned -- 0018C8's own guard shape).
+                guards=((sp - ACHIEVEMENT_SLOT_RESET_FRAME, ACHIEVEMENT_SLOT_RESET_FRAME + 4),),
+                suffix=achievement_slot_reset_suffix)
+
+
+def achievement_slot_reset_suffix(machine, registers):
+    """0047FA after the icon upload returns: the d1/d2/a0 frame back into the registers, then rts."""
+    if registers['pc'] != ACHIEVEMENT_SLOT_RESET_RESUME:
+        raise UnsupportedCandidate('achievement slot reset suffix needs the machine parked at 0047FA')
+    base = registers['a7']
+    restored = {name: int.from_bytes(machine.peek_ram((base + 4 * index) & 0xFFFF, 4), 'big')
+                for index, name in enumerate(('d1', 'd2', 'a0'))}
+    sp = (base + ACHIEVEMENT_SLOT_RESET_FRAME) & 0xFFFFFFFF
+    restored.update(a7=(sp + 4) & 0xFFFFFFFF, pc=_return(machine, sp))
+    c, i = _add(_ASR_RESTORE, _ASR_RTS)
+    return AtomicPlan(cycles=c, instructions=i, writes=(), registers=restored,
+                      last_pc=ACHIEVEMENT_SLOT_RESET_LAST_PC)
+
+
 # --- 00F828: the proximity table search-and-add (game/hazard.py: proximity_search/proximity_add) ---
 #
 # Owns its own internal call into 00F86A the way 0049DA owns its calls into

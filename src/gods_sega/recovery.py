@@ -12,12 +12,13 @@ from dataclasses import dataclass, field
 
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
-from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
+from .boundary import (ACHIEVEMENT_SLOT_RESET_ENTRY, ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY,
+                       CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
-                       WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
+                       WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_reset_plan, animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, proximity_plan,
@@ -117,6 +118,7 @@ PLANNERS = {
     'effect-pool-add': {EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan},
     'pickup-check': {PICKUP_CHECK_ENTRY: pickup_check_plan},
     'pickup-probe': {PICKUP_PROBE_ENTRY: pickup_probe_plan},
+    'achievement-slot-reset': {ACHIEVEMENT_SLOT_RESET_ENTRY: achievement_slot_reset_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -129,7 +131,8 @@ PLANNERS = {
                        NEXT_RANDOM_ENTRY: next_random_plan, EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan,
                        PICKUP_CHECK_ENTRY: pickup_check_plan, PICKUP_PROBE_ENTRY: pickup_probe_plan, WALKER_RESUME_ENTRY: walker_resume_plan,
                        LAUNCH_ENTRY: launch_plan, PROJECTILE_RESUME_ENTRY: walker_resume_projectile_plan,
-                       MESSAGE_GATE_ENTRY: message_gate_plan, STRING_COPY_ENTRY: string_copy_plan},
+                       MESSAGE_GATE_ENTRY: message_gate_plan, STRING_COPY_ENTRY: string_copy_plan,
+                       ACHIEVEMENT_SLOT_RESET_ENTRY: achievement_slot_reset_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -174,7 +177,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # the caller with the wrong (unset) record field, a clean and safe divergence.
              'pickup-probe-mutant-result': ('pickup-probe', _mutate_outcome),
              'projectile-launch-mutant-result': ('projectile-launch', _mutate_launch),
-             'projectile-resume-mutant-result': ('projectile-resume', _mutate_walk)}
+             'projectile-resume-mutant-result': ('projectile-resume', _mutate_walk),
+             'achievement-slot-reset-mutant-result': ('achievement-slot-reset', _mutate_result)}
 
 
 @dataclass

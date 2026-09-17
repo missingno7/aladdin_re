@@ -77,7 +77,7 @@ into work RAM only); it is not changed by this baseline.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with twenty-eight gates armed, the camera follow step `002806`, the
+  original with twenty-nine gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -89,14 +89,15 @@ into work RAM only); it is not changed by this baseline.
   `013264`, the next-random draw `014A3C`, the effect pool add `00932C`, the
   pickup check `00BA8E`, the pickup probe `010CD2`, the line walker's object
   resume `00FFF0`, the projectile launch `0091BC`, the line walker's
-  projectile resume `0093D2`, the message display gate `007986` and the
-  string copy `0079DC`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
+  projectile resume `0093D2`, the message display gate `007986`, the
+  string copy `0079DC` and the achievement slot reset `0047DA` (a seam over
+  the collected-item icon upload `001648`); `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
   `particle-emit`, `hazard-tick`, `score-convert`, `evaluator`,
   `proximity`, `next-random`, `effect-pool-add`, `pickup-check`,
   `pickup-probe`, `walker`, `projectile-launch`, `projectile-resume`,
-  `message-gate` and `string-copy` arm each alone.
+  `message-gate`, `string-copy` and `achievement-slot-reset` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -206,7 +207,9 @@ ids, never to `main`:
 | `projectile-resume` reproduces the original on `fb408bc7…`: **PASS, 34,904 frames, 628 hits of 630 calls (2 exact adapter refusals)**; `camera-sprites` (twenty-six gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,049,180 hits, 6,597 fallbacks, tree bit-exact** | `history-verify fb408bc75597 --candidate projectile-resume`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-projectile-resume-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17c` |
 | the projectile resume's negative control (the re-armed x one off) diverges at frame 12,971, the frame after the tree's first entry (12,970) | `--candidate projectile-resume-mutant-result` | `artifacts/gods/verify-projectile-resume-mutant` |
 | the walker's own review-gate VBlank-slide check (`scripts/gods/vblank_slide.py --ticks 20`) on a retained gameplay-tick fixture: **DIFFERS** at every placement tried, but only in the global VBlank counter and its own elapsed-field mirror (both off by exactly one, the tool's documented artifact of a large burn shifting which tick boundary the interrupt lands inside) -- every live RAM byte, register and the sound block agree; not a byte the region and the handler share, so `00FFF0`'s own admission (proven through the full ladder) is not reopened | `scripts/gods/vblank_slide.py census-00FFF0/00FFF0-entry-p0.state --ticks 20` | ledger.md 2026-09-17 |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 47 s | 2,804 tests (1 skipped) | — |
+| **`0047DA` achievement slot reset** (`game/achievements.py`, the trigger firing subsystem blocker's own part 2, first bite): a platform-tail seam (Aladdin's "one native call inside the branch" shape) over the collected-item icon upload `001648` (disassembled fresh: a VDP command from the table at `0016C2` indexed by D0, then a tile-descriptor stream through `0B5D04`/`0B5E04` or -- the only arm reachable from this caller, since D2 is fixed at -1 on every call -- an 8-longword fill of `FFFFFFFF`/`DDDDDDDD` by D1); D0 (0/1/3 witnessed, 2 declined) selects one of 001648's own four VRAM icon slots | `factcheck check` on every fixture | `tests/games/gods/test_achievements.py` |
+| `achievement-slot-reset` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 12 hits (6 seam entries/completions), 1 fallback (icon slot 2, the one real occurrence)**; segment_verify at boundary-6000/12000 PASS, 0/0 hits (too rare for a 300-frame window); mutant DIVERGENCE at frame 20,282 | `history-verify fb408bc75597 --candidate achievement-slot-reset` | `artifacts/gods/verify-achievement-slot-reset-fb408bc75597`, `artifacts/gods/verify-achievement-slot-reset-mutant2` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 47 s | 2,818 tests (2 skipped) | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
