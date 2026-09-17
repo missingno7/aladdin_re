@@ -50,15 +50,50 @@ def test_low_x_bits_at_or_above_0x10_widen_to_a_second_column():
 
 
 def test_a_byte_over_the_threshold_triggers_at_its_own_index():
-    reads = {(0xFF885E, 1): 0, (0xFF885E + 0x80, 1): 3, (0xFF885E + 0x100, 1): 0}
+    reads = {(0xFF885E, 1): 0, (0xFF885E + 0x80, 1): 3, (0xFF885E + 0x100, 1): 0,
+             (player.EVENT_STATUS_WORDS, 2): 0}   # status 0 at index (3 - bias) = 0: declines, no event
     result = player.tile_trigger_scan(_reader(reads), x=0x00, y=0)
     assert result['arm'] == 'trigger' and result['trigger_index'] == 1
+    assert result['checks'] == [{'index': 1, 'value': 3, 'arm': 'declined', 'status': 0}]
+    assert result['fires'] == []
 
 
 def test_the_threshold_itself_does_not_trigger():
     reads = {(0xFF885E, 1): player.TILE_THRESHOLD, (0xFF885E + 0x80, 1): 0, (0xFF885E + 0x100, 1): 0}
     result = player.tile_trigger_scan(_reader(reads), x=0x00, y=0)
     assert result['arm'] == 'clean'
+
+
+# --- 0077A8's own status check (event_status) and the scan's fuller resolution ------------------------
+
+def test_event_status_declines_on_a_negative_or_zero_status_word():
+    negative = player.event_status(_reader({(player.EVENT_STATUS_WORDS + 4 * 7, 2): 0xFFFF}), tile_value=10)
+    assert negative == {'arm': 'declined', 'status': 0xFFFF}
+    zero = player.event_status(_reader({(player.EVENT_STATUS_WORDS + 4 * 7, 2): 0}), tile_value=10)
+    assert zero == {'arm': 'declined', 'status': 0}
+
+
+def test_event_status_fires_the_event_table_entry_on_a_positive_status_word():
+    result = player.event_status(_reader({(player.EVENT_STATUS_WORDS + 4 * 0, 2): 3}), tile_value=3)
+    assert result == {'arm': 'event', 'status': 3, 'kind': 3, 'handler': 0x00462C}
+    assert player.EVENT_HANDLERS[2] == 0x00462C  # kind 3: the trigger evaluator, already recovered
+
+
+def test_a_triggered_cell_that_declines_lets_the_scan_continue_to_the_next_one():
+    # Two triggered cells (index 0 and 1): the first's own status word is zero (declines, matching
+    # 0077A8's own bsr-returns-to-try-the-next-cell shape), the second's is genuinely never checked
+    # because it never exceeds TILE_THRESHOLD -- only the FIRST cell's own decline is under test here.
+    reads = {(0xFF885E, 1): 5, (0xFF885E + 0x80, 1): 0, (0xFF885E + 0x100, 1): 0,
+             (player.EVENT_STATUS_WORDS + 4 * (5 - player.EVENT_STATUS_INDEX_BIAS), 2): 0}
+    result = player.tile_trigger_scan(_reader(reads), x=0x00, y=0)
+    assert result['arm'] == 'trigger' and result['checks'][0]['arm'] == 'declined' and result['fires'] == []
+
+
+def test_a_triggered_cell_that_fires_is_reported_in_fires():
+    reads = {(0xFF885E, 1): 5, (0xFF885E + 0x80, 1): 0, (0xFF885E + 0x100, 1): 0,
+             (player.EVENT_STATUS_WORDS + 4 * (5 - player.EVENT_STATUS_INDEX_BIAS), 2): 3}
+    result = player.tile_trigger_scan(_reader(reads), x=0x00, y=0)
+    assert result['arm'] == 'trigger' and len(result['fires']) == 1 and result['fires'][0]['kind'] == 3
 
 
 @needs_census

@@ -109,32 +109,43 @@ def _signed_word(value):
 # three rows each (the cell at the player's own row, +0x80, +0x100 -- the
 # same work-RAM grid game.grid.GRID_TABLE/0063FA/00FDB8/010CBC all index,
 # 128 bytes per row) are tested in program order against TILE_THRESHOLD.
-# The first cell whose byte exceeds it calls 0077A8 (a caller-record status
-# lookup through the SAME STATUS_WORDS table game.conditions.py's own kinds
-# 5/6 index, then -- unless that status is negative or zero -- ten
-# hard-coded flag clears and a jsr through the event table at 004494,
-# reaching further unrecovered code, e.g. creature/solid spawn logic
-# through 00FB2C); every check but the scan's own LAST one reaches 0077A8
-# by ``bsr`` (returns to try the next cell), while the last one tail-
-# branches there instead (``bra.b``, since no further cell follows) --
-# 0077A8 is not recovered, so a scan that finds a cell over the threshold
-# declines the WHOLE activation, not just this call.  A
-# scan that finds nothing (43% of 13,519 occurrences on fb408bc75597, per
-# the 00773A-only census) is a leaf: no store, no branch outside the
-# routine, and every register it touches (d0, d1, a0) is dead -- overwritten
-# by the tail's own very next instructions -- before the tail's first
-# durable effect.  Verified against the tracer (docs/gods/blockers/
-# 2026-09-17-005700.md); not registered as its own recovery candidate,
-# since a leaf with no durable effect at all has no mutant the game can
-# see (recovery-process.md's own gate) -- it is meant to be composed into
-# a parent (the tail itself, or eventually a full state) whose own writes
-# give a real one, the way game.grid.grid_cell_at is 0063FA's own
-# arithmetic without a gate of its own.
+# Every check but the scan's own LAST one reaches 0077A8 by ``bsr`` (returns
+# to try the next cell if this one declines), while the last one tail-
+# branches there instead (``bra.b``, since no further cell follows).
+#
+# 0077A8 itself is now characterised in full (18 Sep, disassembly of
+# 0077A8-007878): it reads the cell's OWN byte as a record kind, looks up
+# ``EVENT_STATUS_WORDS`` (the SAME table game.conditions.py's own kinds 5/6
+# index, ``STATUS_WORDS``) at ``kind - 3``, and, when that status word is
+# zero or negative, does nothing durable at all and returns -- the checked
+# cell raised nothing, and the scan (called by ``bsr``) tries the next cell
+# exactly as if this one had never exceeded the threshold.  Only a
+# STRICTLY POSITIVE status word clears ten hard-coded flag words (real
+# code, not modelled: no recording has ever been seen with any of them set)
+# and dispatches through the event table at ``004494``, indexed by
+# ``status - 1`` (``EVENT_HANDLERS``, 1-11) -- kind 3 is the trigger
+# evaluator ``00462C``, already recovered (``game.triggers``); the rest
+# (``0045D0``, ``00457A``, ``0044C0``, ``0094D0``, ``009514``, ``00D2BA``,
+# ``00FB28``-``00FB34``) are separate routines of their own.  This is the
+# actual "found an event" arm (``docs/gods/blockers/2026-09-17-005700.md``);
+# a cell merely exceeding ``TILE_THRESHOLD`` is not by itself unmodelled --
+# most such cells decline at the status check and the activation composes
+# exactly as if the scan had found nothing (43% of 13,519 occurrences on
+# fb408bc75597 never even call 0077A8; a further, larger fraction call it
+# one or more times but every call declines -- see the ledger).  Every
+# register 0077A8 touches on a decline (d0, a0) is dead by the tail's own
+# next durable effect, same as for a scan that finds nothing at all.
 TILE_TABLE = 0xFFFF885E            # the same work-RAM grid 0063FA/00FDB8/010CBC index
 TILE_ROW_BYTES = 0x80
 TILE_X_BIAS = 0x10
 TILE_Y_MASK = 0xFFF0
-TILE_THRESHOLD = 2                 # a cell's byte > 2 raises an event through 0077A8
+TILE_THRESHOLD = 2                 # a cell's byte > 2 calls 0077A8
+
+EVENT_STATUS_WORDS = 0xFFFF502A    # == game.conditions.STATUS_WORDS; entry at base + 4 * (kind - 3)
+EVENT_STATUS_INDEX_BIAS = 3
+EVENT_TABLE = 0x004494             # one long per event, indexed by (status - 1)
+EVENT_HANDLERS = (0x0045D0, 0x00457A, 0x00462C, 0x0094D0, 0x009514, 0x0044C0,
+                  0x00FB28, 0x00FB2C, 0x00FB30, 0x00FB34, 0x00D2BA)
 
 
 def _tile_cell(x, y):
@@ -143,13 +154,37 @@ def _tile_cell(x, y):
     return (TILE_TABLE + _signed_word(column) + _signed_word(row)) & 0xFFFFFFFF
 
 
+def event_status(read, tile_value):
+    """0077A8's own status check for a cell whose byte exceeded ``TILE_THRESHOLD``.
+
+    ``tile_value`` is read again from ``EVENT_STATUS_WORDS`` at ``tile_value
+    - EVENT_STATUS_INDEX_BIAS`` (a word, the SAME table's 4-byte stride
+    ``game.conditions.STATUS_WORDS`` uses): zero or negative declines (the
+    module docstring above); a strictly positive value is the 1-11 index
+    into ``EVENT_TABLE`` (``EVENT_HANDLERS[value - 1]``) after the ten
+    unmodelled flag clears.
+    """
+    index = (tile_value - EVENT_STATUS_INDEX_BIAS) & 0xFFFF
+    status = read((EVENT_STATUS_WORDS + 4 * index) & 0xFFFFFFFF, 2)
+    signed = _signed_word(status)
+    if signed <= 0:
+        return {'arm': 'declined', 'status': status}
+    handler = EVENT_HANDLERS[signed - 1] if signed <= len(EVENT_HANDLERS) else None
+    return {'arm': 'event', 'status': status, 'kind': signed, 'handler': handler}
+
+
 def tile_trigger_scan(read, x, y):
-    """What 00773A does at the player's own position (x, y): see the module docstring above.
+    """What 00773A/0077A8 does at the player's own position (x, y): see the module docstring above.
 
     Returns the checked cell addresses and byte values, whether the scan
-    widened to a second column, and the arm (``'clean'``: every checked
-    byte is at or below ``TILE_THRESHOLD``; ``'trigger'``: the index of the
-    first cell that exceeds it, real code this module does not model).
+    widened to a second column, ``checks`` (one entry per cell whose byte
+    exceeded ``TILE_THRESHOLD``, in scan order, each carrying its own
+    ``event_status`` result), ``fires`` (the sub-list of ``checks`` whose
+    arm is ``'event'`` -- real code this module does not model further),
+    and, for backward compatibility with callers that only care whether
+    0077A8 was ever reached, ``arm`` (``'clean'``: no cell exceeded the
+    threshold; ``'trigger'``: at least one did, whether or not any of them
+    actually fired an event) and ``trigger_index`` (the first such cell).
     """
     base = _tile_cell(x, y)
     cells = [base, (base + TILE_ROW_BYTES) & 0xFFFFFFFF, (base + 2 * TILE_ROW_BYTES) & 0xFFFFFFFF]
@@ -158,9 +193,16 @@ def tile_trigger_scan(read, x, y):
         left = (base - 1) & 0xFFFFFFFF
         cells += [left, (left + TILE_ROW_BYTES) & 0xFFFFFFFF, (left + 2 * TILE_ROW_BYTES) & 0xFFFFFFFF]
     values = [read(cell & 0xFFFFFF, 1) for cell in cells]
-    trigger = next((index for index, value in enumerate(values) if value > TILE_THRESHOLD), None)
+    checks = []
+    for index, value in enumerate(values):
+        if value <= TILE_THRESHOLD:
+            continue
+        checks.append({'index': index, 'value': value, **event_status(read, value)})
+    trigger = checks[0]['index'] if checks else None
+    fires = [check for check in checks if check['arm'] == 'event']
     return {'cells': cells, 'values': values, 'widen': widen,
-            'arm': 'clean' if trigger is None else 'trigger', 'trigger_index': trigger}
+            'arm': 'clean' if trigger is None else 'trigger', 'trigger_index': trigger,
+            'checks': checks, 'fires': fires}
 
 
 # --- The shared tail's own state-table re-index (ROM 007670-0076AA) --------------------------------

@@ -142,10 +142,37 @@ def test_plan_reproduces_every_fact_of_the_original_on_each_retained_path_or_dec
         try:
             plan = boundary.player_tail_plan(machine, registers)
         except boundary.UnsupportedCandidate as error:
-            assert scan['arm'] == 'trigger' or 'unwitnessed' in str(error)
+            # A cell exceeding TILE_THRESHOLD is not itself the decline: most such cells decline at
+            # 0077A8's own status check and compose exactly as a clean scan (18 Sep, player.event_status).
+            # Only an actual fired event (scan['fires']) declines this way; the other declines are the
+            # follow-point/EF4E arms named 'unwitnessed'.
+            assert scan['fires'] or 'unwitnessed' in str(error)
             return
-    assert isinstance(plan, boundary.Seam) and scan['arm'] == 'clean'
+    assert isinstance(plan, boundary.Seam) and not scan['fires']
     check_seam(plan, state)
+
+
+@needs_census
+def test_the_y_decrease_bands_own_moveq_clears_d3s_upper_half():
+    # 007654-00765A: `moveq #$20,d3` sign-extends to the FULL 32-bit register (unlike the increase
+    # band's `move.w #$d0,d3` / `move.w d1,d3`, both plain .w moves that leave d3's own upper half
+    # alone).  Found 18 Sep on a real occurrence the original 'clean'-only admission never exercised
+    # (node ca2b703b6fd5, tree frame 9661: the candidate wrote d3 = 0x4B460004, the original left
+    # 0x00000004) -- a nonzero d3 upper half at entry must not survive into the exit register when
+    # the y band decreases.
+    fixture = next(f for f in FIXTURES if f.name == 'parent-00773A-entry-p10.state')
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(fixture.read_bytes())
+        registers = machine.registers()
+        assert registers['pc'] == boundary.PLAYER_TAIL_ENTRY
+        read = boundary._reader(machine)
+        scan = player.tile_trigger_scan(read, read(player.POSITION_X, 2), read(player.POSITION_Y, 2))
+        follow = camera.follow_point_step(lambda a: read(a, 2), read(player.POSITION_X, 2), read(player.POSITION_Y, 2))
+        assert not scan['fires'] and follow['y_branch'] == 'decrease'
+        poked = {**registers, 'd3': 0x12340000 | (registers['d3'] & 0xFFFF)}
+        plan = boundary.player_tail_plan(machine, poked)
+    assert isinstance(plan, boundary.Seam)
+    assert plan.prefix.registers['d3'] & 0xFFFF0000 == 0
 
 
 @needs_census
@@ -181,8 +208,9 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverge
     report = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=300, candidate='player-tail',
                                   reference=EVIDENCE)
     assert report['status'] == 'PASS', report
-    assert set(report['fallback_reasons']) <= (recovery.ADAPTER_REFUSALS | {
-        'unsupported domain: shared tail: the tile trigger scan found an event (007850), unwitnessed here'})
+    other = {reason for reason in report['fallback_reasons'] if reason not in recovery.ADAPTER_REFUSALS}
+    assert all(reason.startswith('unsupported domain: shared tail: the tile trigger scan found an event')
+              for reason in other), other
     mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=300,
                                   candidate='player-tail-mutant-result', reference=EVIDENCE)
     assert mutant['status'] in ('PASS', 'DIVERGENCE')   # a 'hold'/'hold' window can pass blind; the history tier is decisive

@@ -4165,8 +4165,83 @@ PLAYER_TAIL_UPLOAD_RTS = 0x0013CE       # the ceded upload's own rts: the seam's
 PLAYER_TAIL_LAST_PC = 0x0076AA          # jmp $1312.l: the prefix's own last instruction
 
 _PT_HEAD = _add((12, 1), (12, 1), (18, 1), (12, 1))     # 0075D6 store; 0075DA push d7; 0075DC bsr; 0075E0 pop d7
-_PT_TILE_SCAN_NARROW = (224, 22)        # 00773A entry to its own rts, three cells (from the tracer, clean arm)
-_PT_TILE_SCAN_WIDE = (312, 31)          # ... six cells (widen: x & 0x1f >= 0x10)
+
+# 00773A's own cost, generalised (18 Sep) from the two fixed clean-arm constants it replaces
+# (224,22 narrow / 312,31 wide, still exactly reproduced by _tile_scan_cost when scan['checks'] is
+# empty -- see test_player_tail.py) to every triggered cell whose own event_status declines: each
+# such cell adds 0077A8's own call overhead (bsr, or bra for the scan's absolute last position, only
+# reachable when widen) and its decline body (0077A8's head through its own bmi/beq-taken rts --
+# game.player.event_status arm == 'declined').  A cell that FIRES (arm == 'event') is not modelled
+# here; player_tail_plan raises before calling this for a scan with any scan['fires'].
+_TC_TEST = (12, 1)                      # cmpi.b #2,(a0)
+_TC_SKIP = (10, 1)                      # bls.b taken: not triggered
+_TC_CALL_MID = (8 + 18, 1 + 1)          # bls.b not taken (8,1) + bsr.b $77a8 (18,1)
+_TC_CALL_LAST = (8 + 10, 1 + 1)         # bls.b not taken (8,1) + bra.b $77a8 (10,1) -- position 5 only
+_TC_ADV = (8, 1)                        # lea.l $80(a0),a0
+_TC_ADV3 = (8, 1)                       # lea.l -$101(a0),a0 (the column switch, position 2->3)
+_TC_WIDEN_NARROW = (12 + 8 + 8 + 10, 4)    # move.w;andi;cmpi;blt TAKEN (not widen: ends at position 2)
+_TC_WIDEN_WIDE = (12 + 8 + 8 + 8, 4)       # move.w;andi;cmpi;blt NOT taken (widen: continues to position 3)
+_TC_FINAL_RTS = (16, 1)                 # 0077A6 rts
+_TC_POSITION_RETURN = (0x00775C, 0x007768, 0x007774, 0x00778E, 0x00779A)   # positions 0-4's own bsr
+_TC_HEAD = _add((4, 1), (12, 1), (12, 1), (8, 1), (16, 1), (12, 1), (8, 1), (8, 1), (8, 1))
+# 00773A..007752: moveq; add.w F18C; move.w F18E; andi; asr; asl; lea 885E; adda d0; adda d1
+
+# 0077A8's own head (move.l a0,-(a7) through move.w (a0),d0 -- the status word read) plus one of its
+# two decline tails (bmi taken: status < 0; bmi not-taken + beq taken: status == 0), both ending at
+# 00787A's own rts.  A status > 0 (event_status arm == 'event') continues past both instead: not
+# modelled by these two constants.
+_ES_HEAD = _add((12, 1), (4, 1), (8, 1), (4, 1), (12, 1), (4, 1), (4, 1), (8, 1), (8, 1))
+_ES_DECLINE_NEG = _add((10, 1), (12, 1), (16, 1))          # bmi taken; movea (a7)+,a0; rts
+_ES_DECLINE_ZERO = _add((8, 1), (10, 1), (12, 1), (16, 1))  # bmi not taken; beq taken; movea; rts
+
+
+def _tc_position(check, *, bra=False):
+    """One of 00773A's own six candidate positions: the test, then a skip (not triggered) or a call
+    into 0077A8 (``check``, the corresponding entry of ``scan['checks']``, or ``None``) -- ``bra`` for
+    the scan's own absolute last position (widen only), which tail-branches instead of calling, so a
+    triggered position 5 leaves control in 0077A8's own rts rather than returning here at all."""
+    cycles, instructions = _TC_TEST
+    if check is None:
+        c, i = _TC_SKIP
+        return cycles + c, instructions + i, False
+    c, i = _TC_CALL_LAST if bra else _TC_CALL_MID
+    cycles, instructions = cycles + c, instructions + i
+    decline = check['status'] - 0x10000 if check['status'] & 0x8000 else check['status']
+    body = _ES_DECLINE_NEG if decline < 0 else _ES_DECLINE_ZERO
+    cycles += _ES_HEAD[0] + body[0]
+    instructions += _ES_HEAD[1] + body[1]
+    return cycles, instructions, bra
+
+
+def _tile_scan_cost(scan):
+    """00773A's own total cost (cycles, instructions) for a scan whose triggered cells (if any) all
+    decline (``scan['fires']`` empty -- the caller checks this first).  Reduces to the two constants
+    this replaces when ``scan['checks']`` is empty (the fully clean arm)."""
+    by_index = {c['index']: c for c in scan['checks']}
+    widen = scan['widen']
+    cycles, instructions = _TC_HEAD
+    for position in (0, 1):
+        c, i, _ = _tc_position(by_index.get(position))
+        cycles, instructions = cycles + c, instructions + i
+        cycles, instructions = cycles + _TC_ADV[0], instructions + _TC_ADV[1]
+    c, i, _ = _tc_position(by_index.get(2))
+    cycles, instructions = cycles + c, instructions + i
+    widen_cost = _TC_WIDEN_WIDE if widen else _TC_WIDEN_NARROW
+    cycles, instructions = cycles + widen_cost[0], instructions + widen_cost[1]
+    if not widen:
+        return cycles + _TC_FINAL_RTS[0], instructions + _TC_FINAL_RTS[1]
+    cycles, instructions = cycles + _TC_ADV3[0], instructions + _TC_ADV3[1]
+    for position in (3, 4):
+        c, i, _ = _tc_position(by_index.get(position))
+        cycles, instructions = cycles + c, instructions + i
+        cycles, instructions = cycles + _TC_ADV[0], instructions + _TC_ADV[1]
+    c, i, ended = _tc_position(by_index.get(5), bra=True)
+    cycles, instructions = cycles + c, instructions + i
+    if not ended:
+        cycles, instructions = cycles + _TC_FINAL_RTS[0], instructions + _TC_FINAL_RTS[1]
+    return cycles, instructions
+
+
 _PT_FOLLOW_HEAD = _add((12, 1), (12, 1), (12, 1), (12, 1), (12, 1), (10, 1))   # 0075E2..0075F6 (taken: EF4E==0)
 
 # The x band (007600-00762B): a fixed step of four, clamped to 0/0xEC0.
@@ -4263,8 +4338,10 @@ def player_tail_plan(machine, registers):
     d7 = registers['d7'] & 0xFFFF
     position_x, position_y = read(player.POSITION_X, 2), read(player.POSITION_Y, 2)
     scan = player.tile_trigger_scan(read, position_x, position_y)
-    if scan['arm'] != 'clean':
-        raise UnsupportedCandidate('shared tail: the tile trigger scan found an event (007850), unwitnessed here')
+    if scan['fires']:
+        kinds = ', '.join(str(fire['kind']) for fire in scan['fires'])
+        raise UnsupportedCandidate(f'shared tail: the tile trigger scan found an event (007850), kind {kinds}, '
+                                    'unwitnessed here')
     if read(player.SHARED_TAIL_ALT_GATE, 2) & 0xFFFF:
         raise UnsupportedCandidate('shared tail: the FFFFEF4E cutscene-tracker arm (00755A) is unwitnessed '
                                    'by any of the eight recordings')
@@ -4284,7 +4361,7 @@ def player_tail_plan(machine, registers):
     reindex = player.state_table_reindex(read, state_index, d7)
 
     cycles, instructions = _PT_HEAD
-    tile_cost = _PT_TILE_SCAN_WIDE if scan['widen'] else _PT_TILE_SCAN_NARROW
+    tile_cost = _tile_scan_cost(scan)
     cycles, instructions = cycles + tile_cost[0], instructions + tile_cost[1]
     fh_c, fh_i = _PT_FOLLOW_HEAD
     cycles, instructions = cycles + fh_c, instructions + fh_i
@@ -4315,6 +4392,28 @@ def player_tail_plan(machine, registers):
         order[a] = b
     for a, b in _bytes((sp - 8) & 0xFFFFFF, 0x0075E0, 4):
         order[a] = b
+    if scan['checks']:
+        # Every triggered-and-declined cell's own 0077A8 call (bsr for positions 0-4, bra for the
+        # scan's absolute last position, 5, which pushes no return address of its own) nets the stack
+        # pointer back to its own entry depth by the time it returns -- but each one's own push
+        # abandons residue at sp-12 (the bsr's return address, or position 5's own pushed a0, since a
+        # bra pushes nothing of its own) and sp-16 (the pushed a0 of a bsr call only), twelve/sixteen
+        # bytes below THIS routine's own entry sp, one bsr-frame below the tile scan's own call at
+        # sp-8 above.  Positions 0-4 share both slots (only the LAST one among them survives); position
+        # 5 (bra, only reachable when widen) shares only sp-12 with them -- it never touches sp-16, so
+        # an earlier bsr position's own cell address left there survives untouched if position 5 is
+        # the only -- or the last -- one to decline.
+        bsr_checks = [c for c in scan['checks'] if c['index'] != 5]
+        if bsr_checks:
+            last_bsr = bsr_checks[-1]
+            for a, b in _bytes((sp - 16) & 0xFFFFFF, scan['cells'][last_bsr['index']] & 0xFFFFFFFF, 4):
+                order[a] = b
+            if not any(c['index'] == 5 for c in scan['checks']):
+                for a, b in _bytes((sp - 12) & 0xFFFFFF, _TC_POSITION_RETURN[last_bsr['index']], 4):
+                    order[a] = b
+        if any(c['index'] == 5 for c in scan['checks']):
+            for a, b in _bytes((sp - 12) & 0xFFFFFF, scan['cells'][5] & 0xFFFFFFFF, 4):
+                order[a] = b
     for a, b in _bytes(player.STATE_COUNTER & 0xFFFFFF, d7, 2):
         order[a] = b
     for address, value in follow['stores'].items():
@@ -4339,7 +4438,15 @@ def player_tail_plan(machine, registers):
     exit_registers = {'d0': high('d0') | position_x, 'd1': (reindex['mask'] & 0xFFFF0000) | position_y,
                       'd2': d2, 'a0': 0x00005618, 'a7': sp32, 'pc': PLAYER_TAIL_UPLOAD_ENTRY, 'sr': exit_sr}
     if follow['d3'] is not None:
-        exit_registers['d3'] = high('d3') | follow['d3']
+        # The y-decrease band's own d3 setter is `moveq #$20,d3` (007654-0076
+        # 5A) -- MOVEQ sign-extends to the FULL 32-bit register, clearing d3's
+        # own upper half, unlike the increase band's `move.w #$d0,d3` (007612)
+        # or `move.w d1,d3` (007632), both plain .w moves that leave it alone.
+        # Found 18 Sep on a fixture the original 'clean'-only admission never
+        # exercised (a nonzero d3 upper half at entry, decrease/decrease): the
+        # candidate wrote 0x4B460004 where the original left 0x00000004.
+        d3_high = 0 if follow['y_branch'] in ('decrease', 'decrease-clamped') else high('d3')
+        exit_registers['d3'] = d3_high | follow['d3']
     prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                         registers=exit_registers, last_pc=PLAYER_TAIL_LAST_PC)
 
