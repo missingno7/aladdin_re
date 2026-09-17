@@ -79,22 +79,26 @@ machine (`005700`, 29 states), the creature update (`00A772`, 8 kinds) and
 the world update (`0030CC`), the next three subsystems.
 
 `005700`'s own shared tail (`0075D6`) is recovered as a platform-tail
-seam (17 Sep); its own state handlers still need the states themselves
-composed before they can be planned: every movement-cluster state
-examined (1, 0, 24) reaches a hit-list search (`008222`, recovered
-18 Sep as `contact-search`) or its own per-object-type consumers
-(`012DA0`/`012E5A`, recovered the same day as `contact-consume-primary`/
-`contact-consume-secondary` -- the supervisor's Decision on
-`docs/gods/blockers/2026-09-17-008222.md` named its own data,
-`pickups.ITEM_RECORDS`, for both) on a real, frequently-witnessed
-fraction of its activations; the movement states themselves (1, 0, 24),
-composed over these recovered pieces, are the next bite.
+seam (17 Sep); its own state handlers reach a hit-list search (`008222`,
+recovered 18 Sep as `contact-search`) or its own per-object-type
+consumers (`012DA0`/`012E5A`, recovered the same day as
+`contact-consume-primary`/`contact-consume-secondary` -- the
+supervisor's Decision on `docs/gods/blockers/2026-09-17-008222.md`
+named its own data, `pickups.ITEM_RECORDS`, for both) on a real,
+frequently-witnessed fraction of activations.  The first two
+movement-cluster states are composed over these recovered pieces the
+same day: state 24 (`006AD8`) and state 25 (`006B14`), a 3-tick shape
+that calls the consumer once and transitions to state 14 -- fully
+witnessed, no declines.  States 1 and 0 (`007282`/`006FFE`, falling
+through into state 5's own entry `00746A`) reach `008222`/`012DA0`
+directly too but are larger bodies (~150 instructions each) still to
+be composed; they are the next bite.
 
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with thirty-eight gates armed, the camera follow step `002806`, the
+  original with forty gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -121,9 +125,11 @@ composed over these recovered pieces, are the next bite.
   over a second inline upload, `001312`, with no suffix beyond its own
   `rts`: the tile trigger scan's clean arm, the follow-point step, the
   state-table re-index), the movement-cluster contact search `008222`
-  (with its own helper `00837E`), and its own two consumers `012DA0`
+  (with its own helper `00837E`), its own two consumers `012DA0`
   (with `012E32`) and `012E5A` (with `012EE6`), the family over the item
-  type `pickups.ITEM_RECORDS` names; `camera`,
+  type `pickups.ITEM_RECORDS` names, and the first two movement-cluster
+  states composed over that family, `006AD8` (state 24) and `006B14`
+  (state 25); `camera`,
   `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
@@ -133,8 +139,8 @@ composed over these recovered pieces, are the next bite.
   `message-gate`, `string-copy`, `achievement-slot-reset`,
   `achievement-slot-dispatch`, `slot-scan`, `record-id-scan`,
   `action-reset-elapsed`, `action-clear-group`, `player-tail`,
-  `contact-search`, `contact-consume-primary` and
-  `contact-consume-secondary` arm each alone.
+  `contact-search`, `contact-consume-primary`,
+  `contact-consume-secondary`, `state-24` and `state-25` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -264,7 +270,10 @@ ids, never to `main`:
 | **`012DA0`/`012E5A` movement-cluster contact consumers** (the family over the item type `pickups.ITEM_RECORDS` names): once `contact_search` has populated a slot, these two near-identical siblings re-read the SAME list's own count word, look the item record up again and dispatch through a second ROM table (`012C3E`) by its own type field (`ITEM_TYPE_PRIMARY` +0x14 for 012DA0, `ITEM_TYPE_SECONDARY` +0x10 for 012E5A) into a per-type handler -- every witnessed type (1/3/7/9 for 012DA0, 0/2/6 for 012E5A) reduces to a small header plus one of two shared bounded-append bodies (up to three quadruples into the hit record's own three status groups, one shape also filling a pool table); the active-selector override and every other type (real ROM code, seen on the tree's own other seven recordings: 8/10/11/14/15) decline, unwitnessed by the census this session ran | `factcheck check` on every fixture | `tests/games/gods/test_contact_consume.py` |
 | `contact-consume-primary` reproduces the original on `fb408bc75597…`: **PASS, 401 hits of 402 gates, 1 fallback (z80 bank guard, exact, 0 unsupported domain)**; `contact-consume-secondary`: **PASS, 243 hits of 246 gates, 3 fallbacks (z80 bank guard, exact, 0 unsupported domain)**; `camera-sprites` (all thirty-eight gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,099,857 hits, 14,156 fallbacks (138 at the two new gates, all exact or declined types, tree bit-exact)** | `history-verify fb408bc75597 --candidate contact-consume-primary`; `--candidate contact-consume-secondary`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-contact-consume-primary-fb408bc75597`, `artifacts/gods/verify-contact-consume-secondary-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18g` |
 | both negative controls (the generic "flip the last write") diverge on the full history but DELAYED -- frame 11,306/11,764 of 34,904, not the region's own first activation (~2,625): every consumer of a hit record's own status groups is itself still-unrecovered ROM, so a corrupted byte is not guaranteed to become video/PCM-observable within a short window; recorded, not solved | `--candidate contact-consume-primary-mutant-result`, `--candidate contact-consume-secondary-mutant-result` | `artifacts/gods/verify-contact-consume-primary-mutant`, `artifacts/gods/verify-contact-consume-secondary-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 58 s | 4,336 tests (9 skipped) | — |
+| **`006AD8` (state 24) / `006B14` (state 25) movement-cluster hit states**: the first two movement-cluster states composed over the contact-consume family -- a 3-tick shape (STATE_COUNTER) that calls the already-recovered consumer once on tick 1, falls into the shared tail on ticks 1-2, and transitions to state 14 (copying a tracked position into `grid.GRID_Y`) on tick 3; fully witnessed, no declines | `factcheck check` on every fixture | `tests/games/gods/test_movement_states.py` |
+| `state-24` reproduces the original on `fb408bc75597…`: **PASS, 153 hits of 153 gates, 0 fallbacks**; `state-25`: **PASS, 52 hits of 52 gates, 0 fallbacks**; `camera-sprites` (all forty gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,100,252 hits, 14,169 fallbacks (13 at the two new gates, all exact adapter refusals), tree bit-exact** | `history-verify fb408bc75597 --candidate state-24`; `--candidate state-25`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-state-24-fb408bc75597`, `artifacts/gods/verify-state-25-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18h` |
+| both negative controls diverge essentially at the first frame each region is exercised (frame 2,736 vs first occurrence 2,733; frame 3,236 vs 3,233) | `--candidate state-24-mutant-result`, `--candidate state-25-mutant-result` | `artifacts/gods/verify-state-24-mutant`, `artifacts/gods/verify-state-25-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 48 s | 4,371 tests (9 skipped) | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a

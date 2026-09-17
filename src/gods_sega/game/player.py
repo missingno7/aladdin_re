@@ -260,3 +260,47 @@ def state_table_reindex(read, state_index, state_counter):
         descriptor |= 0x8000
     return {'high': high, 'index': index, 'mask_table': mask_table, 'mask': mask, 'flip': flip,
             'descriptor': descriptor}
+
+
+# --- 006AD8 (state 24) / 006B14 (state 25): the contact-consume family's own callers ------------
+#
+# Two near-identical handlers -- 24 calls the already-recovered 012DA0 (game.pickups.contact_consume,
+# routine 0), 25 calls 012E5A (routine 1) -- differing only in which consumer they call and
+# CONTACT_DIRECTION's own sign (+1/-1, unconditional on entry; what reads it back is not traced
+# here).  A 3-tick sequence over STATE_COUNTER (D7, incremented unconditionally on entry): tick 1
+# (the counter becomes 1) calls the consumer once and falls into the shared tail; tick 2 (becomes 2)
+# just falls into the tail; tick 3 (reaches 3) transitions to state 14 (STATE_INDEX = 0xE) --
+# CONTACT_OVERRIDE_FLAG's own bit 0 clear reloads the counter from CONTACT_OVERRIDE_COUNTER instead
+# of leaving it at 3 -- and copies CONTACT_OVERRIDE_Y into grid.GRID_Y unconditionally, before
+# falling into the tail the same way.  STATE_COUNTER itself is not written here: the shared tail's
+# own prefix (0075D6, already recovered as 'player-tail') writes it back from D7 unconditionally,
+# exactly as every other state handler's own counter update does.
+CONTACT_DIRECTION = 0xFFFFF1A8
+CONTACT_OVERRIDE_FLAG = 0xFFFFF1AD      # byte: bit 0 set keeps the counter at 3 on transition
+CONTACT_OVERRIDE_COUNTER = 0xFFFFF1AC   # word: the counter's own alternate value when bit 0 is clear
+CONTACT_OVERRIDE_Y = 0xFFFFF1AA         # word: copied into grid.GRID_Y unconditionally on transition
+CONTACT_HIT_TRANSITION_STATE = 0xE      # state 14
+CONTACT_HIT_DIRECTION = {0: 1, 1: 0xFFFF}   # routine 0 (state 24) / 1 (state 25) -- CONTACT_DIRECTION's own value
+CONTACT_HIT_RESET_COUNTER = {0: 3, 1: 1}    # the counter's own reset value on transition, when the override flag is set
+
+
+def movement_hit_state(read, routine, state_counter):
+    """006AD8 (routine 0, state 24) / 006B14 (routine 1, state 25): the shared 3-tick shape.
+
+    Returns the arm ('call' -- ticks 1, also calls the consumer; 'wait' -- tick 2; 'transition' --
+    tick 3), the new STATE_COUNTER (for the caller to compose into its own D7, not stored here),
+    whether the consumer is called this tick, and the transition's own stores.
+    """
+    from .grid import GRID_Y
+    counter = (state_counter + 1) & 0xFFFF
+    calls_consumer = counter == 1
+    stores = {CONTACT_DIRECTION & 0xFFFFFF: (CONTACT_HIT_DIRECTION[routine], 2)}
+    if counter < 3:
+        return {'arm': 'call' if calls_consumer else 'wait', 'counter': counter,
+                'calls_consumer': calls_consumer, 'stores': stores}
+    override_flag = read(CONTACT_OVERRIDE_FLAG, 1) & 1
+    new_counter = CONTACT_HIT_RESET_COUNTER[routine] if override_flag else read(CONTACT_OVERRIDE_COUNTER, 2)
+    stores[STATE_INDEX] = (CONTACT_HIT_TRANSITION_STATE, 2)
+    stores[GRID_Y] = (read(CONTACT_OVERRIDE_Y, 2), 2)
+    return {'arm': 'transition', 'counter': new_counter, 'calls_consumer': False, 'stores': stores,
+            'override_flag': bool(override_flag)}

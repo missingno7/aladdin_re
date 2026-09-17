@@ -4800,12 +4800,17 @@ def _cc_slot_cost(routine, slot_index, result, is_bsr):
     return cycles, instructions
 
 
-def _contact_consume_plan(machine, registers, routine, entry_pc):
+def _cc_resolve(machine, read, registers, routine, entry_sp):
+    """Everything 012DA0/012E5A do once entered, relative to their OWN entry a7 (``entry_sp``) --
+    shared by the standalone gate (``entry_sp = registers['a7']``) and a composing caller's own JSR
+    (``entry_sp = registers['a7'] - 4``, the JSR's own push already accounted for by the caller).
+    Returns (cycles, instructions, order, exit_registers) where ``exit_registers`` carries every
+    register THIS routine's own code touches except a7/pc (the caller's own concern -- a plain rts
+    for the standalone gate, nothing at all for a composing caller's own JSR/rts pair, which is net
+    neutral on a7 and leaves pc for the caller's own next instruction).  Raises UnsupportedCandidate
+    exactly as the standalone planners already did.
+    """
     from .game import pickups
-    if registers['pc'] != entry_pc:
-        raise UnsupportedCandidate('contact consume planner needs the machine parked at its own entry')
-    sr = registers['sr']
-    read = _reader(machine)
     # The active-selector override is unwitnessed on every retained fixture of either routine; a
     # slot whose own index matches it must decline before any of its own cost or stores are trusted.
     for slot_index, slot_addr in enumerate(pickups.CONTACT_SLOTS):
@@ -4861,7 +4866,7 @@ def _contact_consume_plan(machine, registers, routine, entry_pc):
         c, i = _CC_TAIL_RTS
         cycles += c
         instructions += i
-    # Slots 0/1's own bsr pushes a return address at (entry a7 - 4); the callee's own rts pops it
+    # Slots 0/1's own bsr pushes a return address at (entry_sp - 4); the callee's own rts pops it
     # straight back before the caller continues, so only the LAST bsr actually made (slot 1's own,
     # if it ran at all; otherwise slot 0's) leaves residue there -- neither ran at all if both are
     # empty, and slot 2's own tail jump never pushes anything.
@@ -4872,15 +4877,10 @@ def _contact_consume_plan(machine, registers, routine, entry_pc):
     else:
         last_return = None
     if last_return is not None:
-        sp = registers['a7'] & 0xFFFFFF
-        for a, b in _bytes((sp - 4) & 0xFFFFFF, last_return, 4):
+        for a, b in _bytes((entry_sp - 4) & 0xFFFFFF, last_return, 4):
             order[a] = b
 
-    # a3 (empty prefix, or the last found slot's own advanced cursor) is always known; the caller's
-    # own return address is at the entry sp, exactly as for every other leaf here.
-    sp32 = registers['a7']
-    exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp32 & 0xFFFFFF),
-                      'a3': exit_a3}
+    exit_registers = {'a3': exit_a3}
     if exit_a1 is not None:
         exit_registers['a1'] = exit_a1
     if exit_a0 is not None:
@@ -4899,6 +4899,19 @@ def _contact_consume_plan(machine, registers, routine, entry_pc):
         exit_registers['d6'] = (registers['d6'] & 0xFFFF0000) | exit_d6
     if exit_a5 is not None:
         exit_registers['a5'] = exit_a5
+    return cycles, instructions, order, exit_registers, last_slot
+
+
+def _contact_consume_plan(machine, registers, routine, entry_pc):
+    from .game import pickups
+    if registers['pc'] != entry_pc:
+        raise UnsupportedCandidate('contact consume planner needs the machine parked at its own entry')
+    sr = registers['sr']
+    read = _reader(machine)
+    sp32 = registers['a7']
+    cycles, instructions, order, exit_registers, last_slot = _cc_resolve(machine, read, registers, routine, sp32)
+    exit_registers['a7'] = (sp32 + 4) & 0xFFFFFFFF
+    exit_registers['pc'] = _return(machine, sp32 & 0xFFFFFF)
 
     # The last flag-setting instruction is a MOVE-class one on every path (SUBQ only when a body
     # stops before its own third, unrolled group -- MOVE/CLR set N/Z from the value, V=C=0; SUBQ's
@@ -4910,7 +4923,7 @@ def _contact_consume_plan(machine, registers, routine, entry_pc):
     # by MOVE/CLR/SUBQ alike here (SUBQ's own X does update, but nothing after it reads X on any
     # witnessed path), so X simply survives from entry.
     if last_slot['arm'] == 'empty':
-        empty_addr = pickups.CONTACT_SLOTS[len(slots) - 1]
+        empty_addr = pickups.CONTACT_SLOTS[2]   # contact_consume always processes all three slots
         last_value = read(empty_addr, 4) & 0xFFFFFFFF
         width = 4
     elif routine == 0 and last_slot['type'] == 9:
@@ -4950,3 +4963,109 @@ def contact_consume_primary_plan(machine, registers):
 def contact_consume_secondary_plan(machine, registers):
     """012E5A: the movement-cluster contact consumer over ITEM_TYPE_SECONDARY (types 0, 2)."""
     return _contact_consume_plan(machine, registers, 1, CONTACT_CONSUME_SECONDARY_ENTRY)
+
+
+# --- 006AD8 (state 24) / 006B14 (state 25): game.player.movement_hit_state -----------------------
+#
+# A leaf composing an internal JSR into the already-recovered contact-consume family (`_cc_resolve`,
+# the shape `0049DA` calling `001164` already proved) plus its own small 3-tick head/tail; cost from
+# the tracer (artifacts/gods/evidence/census-006AD8-entry), one instruction-block at a time exactly
+# like its own callee.
+STATE24_ENTRY, STATE24_CMPI_PC = 0x006AD8, 0x006AEC
+STATE25_ENTRY, STATE25_CMPI_PC = 0x006B14, 0x006B28
+_MH_HEAD = (16 + 4 + 8, 3)              # move.w #imm,CONTACT_DIRECTION; addq.w #1,d7; cmpi.w #1,d7
+_MH_BNE_NOTTAKEN = (8, 1)               # counter == 1: falls into the jsr
+_MH_BNE_TAKEN = (10, 1)                 # counter != 1: skips the call
+_MH_JSR = (20, 1)                       # jsr 12da0.l / 12e5a.l (counter == 1 only)
+_MH_CMPI3 = (8, 1)                      # cmpi.w #3,d7
+_MH_BLT_TAKEN = (10, 1)                 # counter < 3: 'call'/'wait'
+_MH_BLT_NOTTAKEN = (12, 1)              # counter >= 3: 'transition'
+_MH_TRANSITION_HEAD = {0: (20 + 4, 2), 1: (16 + 4, 2)}   # move.w #$e,STATE_INDEX (ABS.L for 24, ABS.W for 25); moveq
+_MH_BTST = (16, 1)
+_MH_BTST_NOTTAKEN = (8, 1)              # bit clear: the override read follows
+_MH_BTST_TAKEN = (10, 1)                # bit set: no override read
+_MH_OVERRIDE_READ = (12, 1)             # move.w CONTACT_OVERRIDE_COUNTER,d7
+_MH_TAIL = (20 + 10, 2)                 # move.w CONTACT_OVERRIDE_Y,grid.GRID_Y; bra.w 0075D6
+_MH_TRANSITION_LAST_PC = {0: 0x006B10, 1: 0x006B4A}   # the transition arm's own bra.w, per routine
+
+
+def _movement_hit_plan(machine, registers, routine, entry_pc, cmpi_pc):
+    from .game import player
+    if registers['pc'] != entry_pc:
+        raise UnsupportedCandidate('movement hit state planner needs the machine parked at its own entry')
+    sr = registers['sr']
+    read = _reader(machine)
+    state_counter = registers['d7'] & 0xFFFF
+    result = player.movement_hit_state(read, routine, state_counter)
+    order = {}
+    for address, (value, size) in result['stores'].items():
+        for a, b in _bytes(address, value, size):
+            order[a] = b
+
+    cycles, instructions = _add(_MH_HEAD, _MH_BNE_NOTTAKEN if result['calls_consumer'] else _MH_BNE_TAKEN)
+    exit_registers = {}
+    if result['calls_consumer']:
+        c, i = _MH_JSR
+        cycles += c
+        instructions += i
+        sp32 = registers['a7']
+        # The jsr itself pushes ITS OWN return address (cmpi_pc, the instruction right after it) at
+        # (entry a7 - 4) -- one level up from 012DA0/012E5A's own internal bsr residue, which
+        # _cc_resolve already places relative to ITS OWN entry a7 (sp32 - 4 here).
+        for a, b in _bytes((sp32 - 4) & 0xFFFFFF, cmpi_pc, 4):
+            order[a] = b
+        cc_cycles, cc_instructions, cc_order, cc_registers, _ = _cc_resolve(machine, read, registers, routine, sp32 - 4)
+        cycles += cc_cycles
+        instructions += cc_instructions
+        order.update(cc_order)
+        exit_registers.update(cc_registers)
+    c, i = _MH_CMPI3
+    cycles += c
+    instructions += i
+
+    if result['arm'] != 'transition':
+        c, i = _MH_BLT_TAKEN
+        cycles += c
+        instructions += i
+        # cmpi.w #3,d7 is the last flag-setter: a plain CMP of the counter (post-increment, pre-any
+        # call -- the call's own internal flags are overwritten here regardless).
+        exit_sr = (_cmp_sr(sr, result['counter'], 3, 2) & ~0x10) | (sr & 0x10)
+        last_pc = cmpi_pc + 4   # the blt.w itself
+    else:
+        c, i = _add(_MH_BLT_NOTTAKEN, _MH_TRANSITION_HEAD[routine], _MH_BTST)
+        cycles += c
+        instructions += i
+        c, i = _MH_BTST_NOTTAKEN if not result['override_flag'] else _MH_BTST_TAKEN
+        cycles += c
+        instructions += i
+        if not result['override_flag']:
+            c, i = _MH_OVERRIDE_READ
+            cycles += c
+            instructions += i
+        c, i = _MH_TAIL
+        cycles += c
+        instructions += i
+        # The routine's own last instruction, "move.w CONTACT_OVERRIDE_Y,GRID_Y", is the last
+        # flag-setter on both transition sub-arms (a plain MOVE; X untouched, as by every
+        # instruction after the head's own addq.w #1,d7 -- confirmed empirically, below).
+        from .game import player as _player
+        y_value = read(_player.CONTACT_OVERRIDE_Y, 2)
+        exit_sr = (_logic_sr(sr, y_value, 2) & ~0x10) | (sr & 0x10)
+        last_pc = _MH_TRANSITION_LAST_PC[routine]   # the bra.w itself
+
+    exit_registers['d7'] = result['counter'] if result['arm'] == 'transition' else \
+        (registers['d7'] & 0xFFFF0000) | result['counter']
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = exit_sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=last_pc)
+
+
+def movement_hit_primary_plan(machine, registers):
+    """006AD8 (state 24): the contact-consume-primary family's own caller."""
+    return _movement_hit_plan(machine, registers, 0, STATE24_ENTRY, STATE24_CMPI_PC)
+
+
+def movement_hit_secondary_plan(machine, registers):
+    """006B14 (state 25): the contact-consume-secondary family's own caller."""
+    return _movement_hit_plan(machine, registers, 1, STATE25_ENTRY, STATE25_CMPI_PC)
