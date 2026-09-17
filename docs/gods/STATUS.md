@@ -73,6 +73,11 @@ read-only study and a candidate narrower rule
 (`research/z80-bank-guard-2026-09-16.md`, R1: refuse a *completed* bank
 into work RAM only); it is not changed by this baseline.
 
+The tick's phases, with what each costs and what is recovered inside,
+are mapped in `tick-map.md`: the mass of a tick is the player state
+machine (`005700`, 29 states), the creature update (`00A772`, 8 kinds) and
+the world update (`0030CC`), the next three subsystems.
+
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.
