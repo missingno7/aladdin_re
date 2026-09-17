@@ -14,7 +14,8 @@ from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
                        ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY,
-                       COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
+                       COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
+                       CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
@@ -22,7 +23,8 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, camera_follow_plan,
-                       collision_gate_plan, contact_search_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
+                       collision_gate_plan, contact_consume_primary_plan, contact_consume_secondary_plan, contact_search_plan,
+                       countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_tail_plan, proximity_plan,
                        record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, string_copy_plan, table_reset_plan,
@@ -164,6 +166,8 @@ PLANNERS = {
     'action-clear-group': {ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
     'player-tail': {PLAYER_TAIL_ENTRY: player_tail_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
+    'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
+    'contact-consume-secondary': {CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -181,7 +185,9 @@ PLANNERS = {
                        ACHIEVEMENT_DISPATCH_ENTRY: achievement_slot_dispatch_plan,
                        SLOT_SCAN_ENTRY: slot_scan_plan, RECORD_ID_SCAN_ENTRY: record_id_scan_plan,
                        ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan, ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan,
-                       PLAYER_TAIL_ENTRY: player_tail_plan, CONTACT_SEARCH_ENTRY: contact_search_plan},
+                       PLAYER_TAIL_ENTRY: player_tail_plan, CONTACT_SEARCH_ENTRY: contact_search_plan,
+                       CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan,
+                       CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -259,7 +265,12 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # walker's and pickup-probe's own mutants already had to route around).  Not the generic
              # register mutant either (a blind '+1' on D0's own 0/1 outcome can stay nonzero either
              # way): see `_mutate_contact_outcome`.
-             'contact-search-mutant-result': ('contact-search', _mutate_contact_outcome)}
+             'contact-search-mutant-result': ('contact-search', _mutate_contact_outcome),
+             # the last write is a status-group field (a position, an index or a small type tag)
+             # inside the hit record itself, or the pool table's own sentinel -- none of them a
+             # pointer another region dereferences, unlike contact_search's own found slots.
+             'contact-consume-primary-mutant-result': ('contact-consume-primary', _mutate_result),
+             'contact-consume-secondary-mutant-result': ('contact-consume-secondary', _mutate_result)}
 
 
 @dataclass

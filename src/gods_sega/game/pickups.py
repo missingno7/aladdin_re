@@ -735,3 +735,179 @@ def contact_search(read):
     d0 = 0 if any_stored else 1
     return {'arm': 'ran', 'd0': d0, 'stores': stores, 'subpasses': subpasses, 'found': any_stored,
             'a2_exit': a2_exit, 'd4_exit': d4_exit, 'd5_exit': d5_exit, 'd6_exit': d6_exit, 'last_x': last_x}
+
+
+# --- 012DA0/012E5A: the movement-cluster contact consumers (the item type dispatch) -------------
+#
+# Once contact_search has populated up to three of its own CONTACT_SLOTS, these two near-identical
+# siblings consume them, one call per movement-cluster state activation (not necessarily the SAME
+# tick contact_search ran: a slot's own value persists in FFFFF374/F378/F37C until overwritten by
+# a later search or consumed here -- an ordering fact, not modelled further).  For each populated
+# slot, in order: re-read the SAME list's own count word (it may have changed since the search
+# ran), look up the item record it names (through ITEM_RECORDS, exactly as contact_search's own
+# sub-passes 2/3 do) and its own type field -- offset 0x14 for 012DA0 (ITEM_TYPE_PRIMARY), 0x10 for
+# 012E5A (ITEM_TYPE_SECONDARY) -- then jump through a second ROM table (012C3E) into a per-type
+# handler.  Slots 1 and 2 (FFFFF374/F378) are reached by ``bsr``: the handler's own `rts` lands back
+# after it, continuing to the next slot.  Slot 3 (FFFFF37C) is reached by a tail JUMP with no bsr,
+# so the handler's own `rts` ends the WHOLE activation directly (0048B4's shape, one level further
+# removed) -- a clean 'skip3' arm (rts immediately) only when slot 3 is itself empty.
+#
+# Every witnessed type handler (012DA0: 1, 3, 7, 9; 012E5A: 0, 2 -- census over fb408bc75597,
+# --classifier entry, no overflow at 10/8 real path classes) reduces to a common position
+# computation (the slot's own default grid-relative pair, or a caller-tracked one when
+# CONTACT_ACTIVE_SELECTOR names this slot) plus one of two small bodies: the ordinary bounded
+# append (up to three (d4,d3,d5,const) quadruples into the hit record's own three status groups --
+# the SAME offsets contact_search's own probe tested -- plus the item record's own claim flag), or
+# the SAME append with an extra per-attempt write into CONTACT_POOL_TABLE; 012DA0's own bodies
+# always use the constants (1, 0, 2) and claim flag 1, 012E5A's own always (4, 3, 5) and -1 --
+# a fact of which ORIGINAL routine reached the body, not of the type value.  Type 9 (012DA0 only)
+# is a wholly separate single-write handler, its own small state block armed once.  Every OTHER
+# type (real ROM code behind the same 012C3E table) is unwitnessed by any recording and declines
+# by its own numeric type value.
+ITEM_RANGE_LOW = 0x6                                     # record field: the group count's low end (ITEM_VALUE, +8, is the high end)
+ITEM_TYPE_PRIMARY, ITEM_TYPE_SECONDARY = 0x14, 0x10       # record fields: 012DA0's own and 012E5A's own dispatch selector
+ITEM_CLAIM_FLAG = 0xE                                     # record field: set to the body's own claim value once appended
+CONTACT_ACTIVE_SELECTOR = 0xFFFFF154                      # word: 0/1/2 -- which slot gets the tracked position instead of the grid one
+CONTACT_TRACK_X, CONTACT_TRACK_Y = 0xFFFFF148, 0xFFFFF14A  # words: the tracked position the active slot uses instead of the grid one
+CONTACT_POOL_INDEX_BASE = 0xFFFFF380                      # word: subtracted from the contact index (FFFF36E et al) for the pool table slot
+CONTACT_POOL_TABLE = 0xFFFF0436                           # words: one sentinel (0xFFFA) per append, the pool body's own arm
+MOVEMENT_SOUND_CUE = 0xFFFFFDF6                            # word: two bytes past SOUND_COMMAND/SOUND_CUE -- a separate field of the same block
+CONTACT_BODY_CUE = 0x35                                    # the ordinary bodies' own sound cue
+TYPE9_CUE = 0x5F                                           # type 9's own sound cue
+TYPE9_FLAG, TYPE9_COUNT, TYPE9_CURSOR = 0xFFFFF35E, 0xFFFFF35C, 0xFFFFF360  # type 9's own small state block
+
+# Per originating routine (0 = 012DA0, 1 = 012E5A): the bounded body's own three group constants
+# and the claim value written to the matched item record's own ITEM_CLAIM_FLAG.
+_BODY_CONSTS = {0: (1, 0, 2), 1: (4, 3, 5)}
+_BODY_CLAIM = {0: 1, 1: 0xFFFF}
+
+# (type value -> (d3_delta, d5_delta, pooled)) for each originating routine's own witnessed types;
+# d3_delta/d5_delta are the type's own header adjustment (the shared body itself always subtracts 6
+# from d5 first when pooled=True, on top of these).  Type 9 (routine 0 only) is not in this table:
+# it is a standalone shape, handled separately.
+TYPE_HEADERS = {
+    0: {1: (0x10, -0xC, False), 7: (0, -4, False), 3: (0, 0, True)},
+    1: {0: (0, -0xC, False), 2: (0x10, 0, True), 6: (-0x18, -4, False)},
+}
+
+
+def _consume_position(read, active_index):
+    """012DA0/012E5A's own shared per-slot head: the default is a fixed grid-relative pair
+    (GRID_X, GRID_Y + 0x18); when CONTACT_ACTIVE_SELECTOR names this slot (0/1/2), it is the
+    tracked position instead (8 + CONTACT_TRACK_X, 0x10 + CONTACT_TRACK_Y)."""
+    from .grid import GRID_X, GRID_Y
+    default_x = read(GRID_X, 2)
+    default_y = (read(GRID_Y, 2) + 0x18) & 0xFFFF
+    if read(CONTACT_ACTIVE_SELECTOR, 2) == active_index:
+        return (8 + read(CONTACT_TRACK_X, 2)) & 0xFFFF, (0x10 + read(CONTACT_TRACK_Y, 2)) & 0xFFFF
+    return default_x, default_y
+
+
+def _item_lookup(read, list_table):
+    """Both consumers' own shared head, per populated slot: re-read the list's own count word and
+    look the item record up through ITEM_RECORDS -- exactly contact_search's own sub-passes 2/3."""
+    count = read(list_table & 0xFFFFFF, 2)
+    pointer_addr = (ITEM_RECORDS + _signed_word((count * 4) & 0xFFFF)) & 0xFFFFFF
+    record = read(pointer_addr, 4) & 0xFFFFFFFF
+    return count, record
+
+
+def _append_groups(read, a3, d3, d5, d4, record, consts, claim, pooled):
+    """The shared bounded body (012DA0: 0131D2/012F0E; 012E5A: 013222/012F6E): up to three
+    (d4, d3, d5, const) quadruples into the hit record's own three status groups (offsets 0/8/0x10,
+    contact_search's own probe offsets), the item record's own claim flag set once, and -- pooled
+    bodies only -- one CONTACT_POOL_TABLE sentinel write per group, indexed by (d4 - the group's own
+    running index) relative to CONTACT_POOL_INDEX_BASE.
+
+    Returns the stores, the groups actually written (1-3) and the final d4/d6 (for cost/registers).
+    """
+    stores = {MOVEMENT_SOUND_CUE & 0xFFFFFF: (CONTACT_BODY_CUE, 2)}
+    count = (read((record + ITEM_VALUE) & 0xFFFFFF, 2) - read((record + ITEM_RANGE_LOW) & 0xFFFFFF, 2) + 1) & 0xFFFF
+    groups = []
+    d6 = count
+    for index, const in enumerate(consts):
+        entry = (a3 + 8 * index) & 0xFFFFFFFF
+        stores[entry & 0xFFFFFF] = (d4 & 0xFFFF, 2)
+        stores[(entry + 2) & 0xFFFFFF] = (d3 & 0xFFFF, 2)
+        stores[(entry + 4) & 0xFFFFFF] = (d5 & 0xFFFF, 2)
+        stores[(entry + 6) & 0xFFFFFF] = (const & 0xFFFF, 2)
+        pool_addr = None
+        if pooled:
+            pool_index = ((d4 - read(CONTACT_POOL_INDEX_BASE, 2) - 1) & 0xFFFF) * 2
+            pool_addr = (CONTACT_POOL_TABLE + _signed_word(pool_index)) & 0xFFFFFF
+            stores[pool_addr] = (0xFFFA, 2)
+        groups.append({'entry': entry, 'd4': d4 & 0xFFFF, 'const': const, 'pool_addr': pool_addr})
+        if index == 0:
+            stores[(record + ITEM_CLAIM_FLAG) & 0xFFFFFF] = (claim & 0xFFFF, 2)
+        if index == len(consts) - 1:
+            break   # the ROM's own last unrolled group has no decrement/test after it at all
+        d6 = (d6 - 1) & 0xFFFF
+        if d6 == 0:
+            break
+        d4 = (d4 + 1) & 0xFFFF
+    return stores, groups, d4 & 0xFFFF, d6
+
+
+def _type9_handler(read, a3, d3, d5, d4):
+    """012DA0's own type 9 (013194): a standalone single write, no loop, no claim flag -- its own
+    small state block (TYPE9_FLAG cleared, TYPE9_COUNT set to 4, TYPE9_CURSOR set to -1) armed
+    unconditionally first."""
+    d3 = (d3 + 0x10) & 0xFFFF
+    d5 = ((d5 - 0x20) & 0xFFFF) & 0xFFFC
+    stores = {TYPE9_FLAG & 0xFFFFFF: (0, 2), TYPE9_COUNT & 0xFFFFFF: (4, 2), TYPE9_CURSOR & 0xFFFFFF: (0xFFFF, 2),
+              MOVEMENT_SOUND_CUE & 0xFFFFFF: (TYPE9_CUE, 2),
+              a3 & 0xFFFFFF: (d4 & 0xFFFF, 2), (a3 + 2) & 0xFFFFFF: (d3, 2), (a3 + 4) & 0xFFFFFF: (d5, 2),
+              (a3 + 6) & 0xFFFFFF: (0x2F, 2)}
+    return stores, d3, d5
+
+
+def _consume_slot(read, routine, slot_index, list_table, slot_addr, index_word, type_field):
+    """One of the up to three slots either consumer's own head processes.  Returns the arm
+    ('empty', 'found' or 'unrecovered'), the type dispatched (when found) and the stores."""
+    entry = read(slot_addr & 0xFFFFFF, 4) & 0xFFFFFFFF
+    if entry == 0:
+        return {'arm': 'empty', 'stores': {}, 'type': None}
+    d4 = read(index_word & 0xFFFFFF, 2)
+    d3, d5 = _consume_position(read, slot_index)
+    count, record = _item_lookup(read, list_table)
+    type_value = read((record + type_field) & 0xFFFFFF, 4) & 0xFFFFFFFF
+    if routine == 0 and type_value == 9:
+        stores, d3, d5 = _type9_handler(read, entry, d3, d5, d4)
+        return {'arm': 'found', 'type': 9, 'stores': stores, 'entry': entry, 'record': record,
+                'd3': d3, 'd5': d5, 'd4': d4, 'pooled': False, 'groups': None, 'cue': TYPE9_CUE}
+    header = TYPE_HEADERS.get(routine, {}).get(type_value)
+    if header is None:
+        return {'arm': 'unrecovered', 'stores': {}, 'type': type_value}
+    d3_delta, d5_delta, pooled = header
+    d3 = (d3 + d3_delta) & 0xFFFF
+    d5 = (d5 + d5_delta) & 0xFFFF
+    if pooled:
+        d5 = (d5 - 6) & 0xFFFF
+    consts, claim = _BODY_CONSTS[routine], _BODY_CLAIM[routine]
+    stores, groups, d4_final, d6_final = _append_groups(read, entry, d3, d5, d4, record, consts, claim, pooled)
+    return {'arm': 'found', 'type': type_value, 'stores': stores, 'entry': entry, 'record': record,
+            'd3': d3, 'd5': d5, 'd4': d4_final, 'pooled': pooled, 'groups': groups, 'cue': CONTACT_BODY_CUE,
+            'd6': d6_final}
+
+
+def contact_consume(read, routine):
+    """012DA0 (routine 0) / 012E5A (routine 1): the movement-cluster contact consumer.
+
+    Processes CONTACT_SLOTS 1 and 2 (returning normally after each) then slot 3 (ending the whole
+    activation, a tail jump with no bsr).  Returns the three slots' own results and which one (if
+    any) ended the activation via the tail jump.
+    """
+    lists = (GROUP_TABLES[0], GROUP_TABLES[1], GROUP_TABLES[2])
+    slots = (CONTACT_SLOTS[0], CONTACT_SLOTS[1], CONTACT_SLOTS[2])
+    indices = (CONTACT_INDEX_WORDS[0], CONTACT_INDEX_WORDS[1], CONTACT_INDEX_WORDS[2])
+    type_field = ITEM_TYPE_PRIMARY if routine == 0 else ITEM_TYPE_SECONDARY
+    results = []
+    for slot_index in range(3):
+        result = _consume_slot(read, routine, slot_index, lists[slot_index], slots[slot_index],
+                                indices[slot_index], type_field)
+        results.append(result)
+        if slot_index == 2:
+            break
+        if result['arm'] == 'unrecovered':
+            break
+    return {'slots': results, 'tail_slot': len(results) - 1}

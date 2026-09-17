@@ -4683,3 +4683,270 @@ def contact_search_plan(machine, registers):
 
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=CONTACT_SEARCH_LAST_PC)
+
+
+# --- 012DA0/012E5A: the movement-cluster contact consumers (game/pickups.py: contact_consume) ---
+#
+# Costed the same way as 008222: one instruction-block at a time (every instruction's own cost
+# confirmed data-independent against the tracer, artifacts/gods/evidence/census-012DA0-entry,
+# census-012E5A-entry).  Slot 3's own tail jump ends the whole activation with no bsr; slots 1/2
+# return normally (the shared body's own `rts` lands back after the bsr).  The active-selector
+# override (CONTACT_ACTIVE_SELECTOR naming this slot) is unwitnessed by every one of the 18
+# retained fixtures across both routines -- declined, alongside any type outside
+# ``pickups.TYPE_HEADERS`` (and 9, for 012DA0 only).
+CONTACT_CONSUME_PRIMARY_ENTRY = 0x012DA0      # last_pc varies by which slot ends the activation
+CONTACT_CONSUME_SECONDARY_ENTRY = 0x012E5A
+_CC_SLOT_TEST_SKIP = (16 + 10, 2)                # tst.l slot; beq taken
+_CC_SLOT_TEST_CONTINUE = (16 + 8, 2)             # tst.l slot; beq not taken
+_CC_SLOT_HEAD = (16 + 12 + 8 + 12 + 4 + 12, 6)   # movea a3; move d4; lea a1; move d3; moveq d5; add d5
+_CC_SELECTOR_TEST_WORD = (12, 1)                 # tst.w f154 (slot 1 only)
+_CC_SELECTOR_TEST_CMPI = (16, 1)                 # cmpi.w #imm,f154 (slots 2/3)
+_CC_SELECTOR_SKIP = (10, 1)                      # bne taken -- the only witnessed outcome (keep the default position)
+_CC_BSR = (18, 1)                                # bsr.b into 012E32/012EE6 (slots 1/2 only)
+_CC_LOOKUP = (16 + 8 + 4 + 4 + 8 + 18 + 16 + 8 + 4 + 4 + 18 + 8, 12)   # move#$35,fdf6 .. jmp (a0)
+_CC_TAIL_RTS = (16, 1)                           # the clean rts (012E58/012F0C) when slot 3 is empty
+_CC_TYPE1_HEADER = (8 + 8, 2)                    # addi d3,#$10; subi d5,#$c
+_CC_TYPE7_HEADER = (4 + 10, 2)                   # subq d5,#4; bra taken
+_CC_TYPE0_HEADER = (8, 1)                        # subi d5,#$c
+_CC_TYPE2_HEADER = (8, 1)                        # addi d3,#$10 (baked into the body's own start)
+_CC_TYPE6_HEADER = (8 + 4 + 10, 3)               # subi d3,#$18; subq d5,#4; bra taken
+_CC_TYPE9_FULL = (8 + 16 + 16 + 16 + 16 + 8 + 8 + 8 + 8 + 8 + 12 + 16, 12)   # the whole standalone body
+_CC_BODY_SOUND = (16, 1)                         # move.w #$35,fdf6.w
+_CC_BODY_POOL_SETUP = (4 + 4 + 12 + 4 + 4 + 12 + 8, 7)   # subq d5,#6 .. adda d6,a5 (pooled bodies only)
+_CC_BODY_COUNT = (12 + 12 + 4, 3)                # move $8(a1),d6; sub $6(a1),d6; addq d6,#1
+_CC_BODY_GROUP = (8 + 8 + 8 + 12, 4)             # move d4,(a3)+; d3,(a3)+; d5,(a3)+; #const,(a3)+  (clr costs the same as move#imm)
+_CC_BODY_POOL_WRITE = (12, 1)                    # move.w #$fffa,(a5)+  (pooled bodies only, once per group)
+_CC_BODY_CLAIM = (16, 1)                         # move.w #imm,$e(a1)  (once, after group 0)
+_CC_BODY_DEC_STOP = (4 + 10, 2)                  # subq d6,#1; beq taken (this group was the last one written)
+_CC_BODY_DEC_CONTINUE = (4 + 8, 2)               # subq d6,#1; beq not taken
+_CC_BODY_ADVANCE = (4, 1)                        # addq d4,#1  (before group 2/3)
+_CC_BODY_RTS = (16, 1)
+# Slot 0's and slot 1's own bsr return addresses, per routine (0 = 012DA0, 1 = 012E5A) -- the
+# instruction right after each bsr.b, exactly as game.pickups.CONTACT_SLOTS orders the slots.
+_CC_RETURN_ADDRESSES = {0: (0x012DD0, 0x012E02), 1: (0x012E88, 0x012EB8)}
+_CC_GROUP2_CONST = {0: 2, 1: 5}   # the third, unrolled group's own constant, per routine
+
+
+def _cc_body_cost(pooled, num_groups):
+    cycles, instructions = _add(_CC_BODY_SOUND, _CC_BODY_POOL_SETUP if pooled else (0, 0), _CC_BODY_COUNT)
+    for index in range(num_groups):
+        c, i = _CC_BODY_GROUP
+        cycles += c
+        instructions += i
+        if pooled:
+            c, i = _CC_BODY_POOL_WRITE
+            cycles += c
+            instructions += i
+        if index == 0:
+            c, i = _CC_BODY_CLAIM
+            cycles += c
+            instructions += i
+        if index < num_groups - 1:
+            c, i = _add(_CC_BODY_DEC_CONTINUE, _CC_BODY_ADVANCE)
+        elif index < 2:
+            c, i = _CC_BODY_DEC_STOP
+        else:
+            c, i = (0, 0)
+        cycles += c
+        instructions += i
+    c, i = _CC_BODY_RTS
+    return cycles + c, instructions + i
+
+
+_TYPE_HEADER_COST = {(0, 1): _CC_TYPE1_HEADER, (0, 7): _CC_TYPE7_HEADER, (0, 3): (0, 0),
+                     (1, 0): _CC_TYPE0_HEADER, (1, 2): _CC_TYPE2_HEADER, (1, 6): _CC_TYPE6_HEADER}
+
+
+def _cc_slot_cost(routine, slot_index, result, is_bsr):
+    """One slot's own cost, from its own tst.l test through whichever tail (skip / rts-after-bsr /
+    the handler's own rts) it reaches.  ``is_bsr`` is true for slots 0/1 (the caller-side bsr and
+    the selector test are part of THIS slot's own cost); slot 2 has neither -- the selector test
+    still runs, but the call is a tail jmp already inside ``_CC_LOOKUP``, and no bsr precedes it."""
+    cycles, instructions = 0, 0
+    if result['arm'] == 'empty':
+        c, i = _CC_SLOT_TEST_SKIP
+        return c, i
+    c, i = _CC_SLOT_TEST_CONTINUE
+    cycles += c
+    instructions += i
+    c, i = _CC_SLOT_HEAD
+    cycles += c
+    instructions += i
+    c, i = _CC_SELECTOR_TEST_WORD if slot_index == 0 else _CC_SELECTOR_TEST_CMPI
+    cycles += c
+    instructions += i
+    c, i = _CC_SELECTOR_SKIP
+    cycles += c
+    instructions += i
+    if is_bsr:
+        c, i = _CC_BSR
+        cycles += c
+        instructions += i
+    c, i = _CC_LOOKUP
+    cycles += c
+    instructions += i
+    type_value = result['type']
+    if routine == 0 and type_value == 9:
+        c, i = _CC_TYPE9_FULL
+        cycles += c
+        instructions += i
+        return cycles, instructions
+    c, i = _TYPE_HEADER_COST[(routine, type_value)]
+    cycles += c
+    instructions += i
+    c, i = _cc_body_cost(result['pooled'], len(result['groups']))
+    cycles += c
+    instructions += i
+    return cycles, instructions
+
+
+def _contact_consume_plan(machine, registers, routine, entry_pc):
+    from .game import pickups
+    if registers['pc'] != entry_pc:
+        raise UnsupportedCandidate('contact consume planner needs the machine parked at its own entry')
+    sr = registers['sr']
+    read = _reader(machine)
+    # The active-selector override is unwitnessed on every retained fixture of either routine; a
+    # slot whose own index matches it must decline before any of its own cost or stores are trusted.
+    for slot_index, slot_addr in enumerate(pickups.CONTACT_SLOTS):
+        if read(slot_addr, 4) != 0 and read(pickups.CONTACT_ACTIVE_SELECTOR, 2) == slot_index:
+            raise UnsupportedCandidate(f'contact consume slot {slot_index} active-selector override not witnessed by a recording')
+    result = pickups.contact_consume(read, routine)
+    slots = result['slots']
+    last_slot = slots[-1]
+    if last_slot['arm'] == 'unrecovered':
+        raise UnsupportedCandidate(f"contact consume type {last_slot['type']} not witnessed by a recording")
+
+    order = {}
+    cycles = instructions = 0
+    exit_a1 = exit_a0 = exit_d0 = exit_a5 = None
+    exit_d3 = exit_d4 = exit_d5 = exit_d6 = None
+    exit_a3 = registers['a3'] & 0xFFFFFFFF
+    for slot_index, slot_result in enumerate(slots):
+        is_bsr = slot_index < 2
+        c, i = _cc_slot_cost(routine, slot_index, slot_result, is_bsr)
+        cycles += c
+        instructions += i
+        for address, (value, size) in slot_result['stores'].items():
+            for a, b in _bytes(address, value, size):
+                order[a] = b
+        if slot_result['arm'] != 'found':
+            continue
+        record = slot_result['record']
+        type_value = slot_result['type']
+        exit_a1 = record & 0xFFFFFFFF
+        # "move.l $14(a1),d0" (012DA0) / "$10(a1),d0" (012E5A) is a LONGWORD read of the type
+        # field into d0 -- it clears d0's own upper half on every found slot (every witnessed
+        # type value's own record field has a zero upper half too), unlike every register whose
+        # own upper half survives untouched here (d3/d4/d6, word ops throughout).
+        exit_d0 = (type_value * 4) & 0xFFFF
+        num_groups = 1 if type_value == 9 else len(slot_result['groups'])
+        exit_a3 = (slot_result['entry'] + 8 * num_groups) & 0xFFFFFFFF
+        exit_d3, exit_d4, exit_d5 = slot_result['d3'], slot_result['d4'], slot_result['d5']
+        if routine == 0 and type_value == 9:
+            exit_a0 = 0x013194
+            exit_d6 = None   # type 9 never touches d6
+        else:
+            exit_a0 = int.from_bytes(machine.peek_rom((0x012C3E + 4 * type_value) & 0xFFFFFF, 4), 'big')
+            exit_d6 = slot_result.get('d6')
+            if slot_result['pooled']:
+                # a5 is computed once (lea + adda) from the FIRST group's own d4, then merely
+                # post-incremented by 2 per pool write; the last group's own pool_addr + 2 is
+                # exactly that running value (pickups._append_groups already derives it per group).
+                exit_a5 = 0xFFFF0000 | ((slot_result['groups'][-1]['pool_addr'] + 2) & 0xFFFF)
+
+    if last_slot['arm'] == 'empty':
+        # Slot 3 empty after an earlier slot's own bsr already returned: 012E58/012F0C's own bare
+        # rts is one more instruction no per-slot cost above accounts for.
+        c, i = _CC_TAIL_RTS
+        cycles += c
+        instructions += i
+    # Slots 0/1's own bsr pushes a return address at (entry a7 - 4); the callee's own rts pops it
+    # straight back before the caller continues, so only the LAST bsr actually made (slot 1's own,
+    # if it ran at all; otherwise slot 0's) leaves residue there -- neither ran at all if both are
+    # empty, and slot 2's own tail jump never pushes anything.
+    if slots[1]['arm'] == 'found':
+        last_return = _CC_RETURN_ADDRESSES[routine][1]
+    elif slots[0]['arm'] == 'found':
+        last_return = _CC_RETURN_ADDRESSES[routine][0]
+    else:
+        last_return = None
+    if last_return is not None:
+        sp = registers['a7'] & 0xFFFFFF
+        for a, b in _bytes((sp - 4) & 0xFFFFFF, last_return, 4):
+            order[a] = b
+
+    # a3 (empty prefix, or the last found slot's own advanced cursor) is always known; the caller's
+    # own return address is at the entry sp, exactly as for every other leaf here.
+    sp32 = registers['a7']
+    exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp32 & 0xFFFFFF),
+                      'a3': exit_a3}
+    if exit_a1 is not None:
+        exit_registers['a1'] = exit_a1
+    if exit_a0 is not None:
+        exit_registers['a0'] = exit_a0
+    if exit_d0 is not None:
+        exit_registers['d0'] = exit_d0
+    if exit_d3 is not None:
+        exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | exit_d3
+    if exit_d4 is not None:
+        exit_registers['d4'] = (registers['d4'] & 0xFFFF0000) | exit_d4
+    if exit_d5 is not None:
+        # moveq #$18,d5 (part of every found slot's own head) clears the WHOLE register first;
+        # nothing after it ever restores a nonzero upper half (word ops only), unlike d0/d3/d4/d6.
+        exit_registers['d5'] = exit_d5
+    if exit_d6 is not None:
+        exit_registers['d6'] = (registers['d6'] & 0xFFFF0000) | exit_d6
+    if exit_a5 is not None:
+        exit_registers['a5'] = exit_a5
+
+    # The last flag-setting instruction is a MOVE-class one on every path (SUBQ only when a body
+    # stops before its own third, unrolled group -- MOVE/CLR set N/Z from the value, V=C=0; SUBQ's
+    # own N/Z come from the decremented result, itself always exactly 0 when it is the reason the
+    # body stopped there): the 'all empty' path's last tst.l; a body that wrote all three groups
+    # (no decrement follows its own third one at all) ends on that group's own last store -- the
+    # pool sentinel 0xFFFA for a pooled body, the third group's own constant otherwise; any body
+    # that stopped at one or two groups ends on the SUBQ that found d6 exactly 0.  X is untouched
+    # by MOVE/CLR/SUBQ alike here (SUBQ's own X does update, but nothing after it reads X on any
+    # witnessed path), so X simply survives from entry.
+    if last_slot['arm'] == 'empty':
+        empty_addr = pickups.CONTACT_SLOTS[len(slots) - 1]
+        last_value = read(empty_addr, 4) & 0xFFFFFFFF
+        width = 4
+    elif routine == 0 and last_slot['type'] == 9:
+        last_value, width = 0x2F, 2
+    else:
+        num_groups = len(last_slot['groups'])
+        if num_groups < 3:
+            last_value = 0
+        elif last_slot['pooled']:
+            last_value = 0xFFFA
+        else:
+            last_value = _CC_GROUP2_CONST[routine]
+        width = 2
+    exit_sr = (_logic_sr(sr, last_value, width) & ~0x10) | (sr & 0x10)
+    exit_registers['sr'] = exit_sr
+
+    if last_slot['arm'] == 'empty':
+        last_pc = 0x012E58 if routine == 0 else 0x012F0C
+    else:
+        last_pc = _CC_TYPE_LAST_PC[(routine, last_slot['type'])]
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=last_pc)
+
+
+# The handler's own rts, per (routine, witnessed type) -- the activation's own last instruction on
+# every non-empty tail (0131D2/012F0E share 013210/012F6C's own rts respectively; 013222/012F6E
+# likewise 013262/012FD2; type 9 is the only one with its own, 0131C0).
+_CC_TYPE_LAST_PC = {(0, 1): 0x013210, (0, 7): 0x013210, (0, 3): 0x012F6C, (0, 9): 0x0131C0,
+                    (1, 0): 0x013262, (1, 2): 0x012FD2, (1, 6): 0x013262}
+
+
+def contact_consume_primary_plan(machine, registers):
+    """012DA0: the movement-cluster contact consumer over ITEM_TYPE_PRIMARY (types 1, 3, 7, 9)."""
+    return _contact_consume_plan(machine, registers, 0, CONTACT_CONSUME_PRIMARY_ENTRY)
+
+
+def contact_consume_secondary_plan(machine, registers):
+    """012E5A: the movement-cluster contact consumer over ITEM_TYPE_SECONDARY (types 0, 2)."""
+    return _contact_consume_plan(machine, registers, 1, CONTACT_CONSUME_SECONDARY_ENTRY)
