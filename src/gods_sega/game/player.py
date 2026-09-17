@@ -1280,3 +1280,159 @@ def state26_tail(read, d7):
                 'd7': STATE26_TO_STATE9_D7}
     calls_consumer = d7 == STATE26_CONSUME_COUNTER
     return {'arm': 'consume' if calls_consumer else 'wait', 'calls_consumer': calls_consumer}
+
+
+# --- 00648C: state 8 -- state 9's own sibling, sharing the SAME jump-arc table (STATE9_FALL_TABLE)
+# and the SAME two row-gate leaves (006442/006468, `_row_gate_open`) verbatim, not copied
+# (`factcheck.py facts --path` on real fixtures over `census-00648C-*` covering every witnessed arm,
+# 18 September).  NOT a byte-identical copy of state 9's own shape overall, but two of its own five
+# arms ARE byte-identical to state 9's own ROM code (confirmed against the ROM, not assumed): arm A
+# ('landing-14', EA1E < 0) is byte-for-byte the SAME instructions as state9_step's own arm A, and arm
+# B ('landing-13', EA1E == 1) is byte-for-byte the same too but for its own final branch's own
+# displacement -- both literal ROM duplicates, not a shared subroutine (each has its own physical
+# copy at a different address).  Four real differences: (1) the head's own resting value is 6 (not
+# state 9's 5) and its own addq target is 5 (not 4) -- otherwise the SAME four-arm shape
+# (`_state8_head`); (2) the block test gates on low5 == 0 (not state 9's low5 < 8) and checks offsets
+# -1/0x7F/0xFF (not state 9's +1/+0x81/+0x101) -- the LEFT neighbour, not the right, and with one
+# fewer instruction in its own gate (no `cmpi.w #$8,d0`, just a direct `bne` on the `andi` result);
+# (3) the ground/landed/trigger targets are states 17/11/21 (not state 9's 16/12/20), and the
+# re-check ground-ahead probe (after the fall step) uses its own gate, 0x12 (not state 9's own
+# STATE9_TRIGGER_GATE, 0x16, which the FIRST, before-the-fall probe still uses) -- the same NUMERIC
+# value `STATE26_RECHECK_GATE` uses, coincidentally or not, but state 8's own constant, not state
+# 26's; (4) arm B ('landing-13') IS witnessed here (one real occurrence, `f40d7bcc9dda…`) where state
+# 9's own is declined -- recovered, not declined.
+STATE8_ENTRY = 0x00648C
+STATE8_GROUND_INDEX = 0x11         # ground-before/ground-after: state 17 (not state 9's 16)
+STATE8_LANDED_INDEX = 0xB          # landed / terminal: state 11 (not state 9's 12)
+STATE8_TRIGGER_INDEX = 0x15        # trigger: state 21 (not state 9's 20)
+STATE8_RECHECK_GATE = 0x12         # the re-check ground-ahead probe's own threshold
+
+
+def _state8_head(read, d7):
+    """00648C-0064B6: the SAME shape `_state9_head` uses (see its own docstring), with state 8's own
+    resting value (6, not 5) and addq target (5, not 4)."""
+    f19c = read(F19C, 2)
+    if d7 == 0xD:
+        if f19c >= STATE9_ADVANCE_GATE:
+            return 6, 'moveq'
+        return d7, 'untouched'
+    if d7 == 6:
+        return d7, 'untouched'
+    if d7 == 0:
+        if f19c >= STATE9_ADVANCE_GATE:
+            return 5, 'addq'
+        return d7, 'untouched'
+    return 6, 'moveq'
+
+
+def state8_step(read, d7):
+    """00648C-006662: state 8's own decision tree.  `d7` is STATE_COUNTER as the dispatcher's own
+    entry left it.  Returns one of: 'landing-14' (transitions to state 14, a byte-identical copy of
+    state9_step's own arm A), 'landing-13' (transitions to state 13, a byte-identical copy of
+    state9_step's own arm B -- WITNESSED here, unlike state 9's own), 'ground-before' /
+    'ground-after' (both transition to state `STATE8_GROUND_INDEX`, `_state8_ground_stores`),
+    'landed' (state `STATE8_LANDED_INDEX`), or 'fall-tail' (the caller composes a contact-search call
+    and calls `state8_fall_tail` below).  See the module note above for the shape."""
+    from .grid import grid_cell
+    d7, source = _state8_head(read, d7)
+    cell = grid_cell(read)
+    address = cell['address']
+    position_x = read(POSITION_X, 2)
+    low5 = position_x & 0x1F
+    base = {'d7': d7, 'source': source, 'cell1': cell}
+    blocked = False
+    if low5 == 0:
+        for offset in (-1, 0x7F, 0xFF):
+            if read((address + offset) & 0xFFFFFF, 1) == 1:
+                blocked = True
+                break
+    advanced = False
+    if not blocked:
+        f19c = read(F19C, 2)
+        if f19c >= STATE9_ADVANCE_GATE:
+            step = read(F196, 2)
+            position_x = (position_x + step) & 0xFFFF
+            advanced = True
+    base['blocked'], base['advanced'] = blocked, advanced
+    if advanced:
+        def _read_after_advance(a, s, _position_x=position_x):
+            return _position_x if (a & 0xFFFFFF) == (POSITION_X & 0xFFFFFF) else read(a, s)
+        cell2 = grid_cell(_read_after_advance)
+    else:
+        cell2 = grid_cell(read)
+    address2 = cell2['address']
+    base['cell2'] = cell2
+
+    ea1e = _signed_word(read(EA1E_WORD, 2))
+    tracked_x = read(F19A, 2)
+    if ea1e < 0:
+        # Byte-identical to state9_step's own arm A (confirmed against the ROM).
+        f196 = read(F196, 2)
+        landing_blocked = f196 != 0 and position_x == tracked_x
+        if not landing_blocked and (position_x & 0x1F) == 0 and read(address2 & 0xFFFFFF, 1) == 2:
+            return {'arm': 'landing-14', 'stores': {
+                POSITION_X: (position_x & 0xFFE0, 2), POSITION_Y: (read(POSITION_Y, 2) & 0xFFF8, 2),
+                F1A8 & 0xFFFFFF: (0, 2), STATE_INDEX: (0xE, 2), F1AE & 0xFFFFFF: (0, 2),
+                F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}, **base}
+    elif ea1e == 1:
+        # Byte-identical to state9_step's own arm B but for its own final branch's own displacement
+        # (confirmed against the ROM) -- and, unlike state 9's own, WITNESSED (one real occurrence).
+        if position_x != tracked_x and (position_x & 0x1F) == 0 and \
+                (read(address2 & 0xFFFFFF, 1) == 2 or read((address2 + 0x80) & 0xFFFFFF, 1) == 2):
+            return {'arm': 'landing-13', 'stores': {
+                POSITION_X: (position_x & 0xFFE0, 2), POSITION_Y: (read(POSITION_Y, 2) & 0xFFF8, 2),
+                F1A8 & 0xFFFFFF: (0, 2), STATE_INDEX: (0xD, 2), F1AE & 0xFFFFFF: (0, 2),
+                F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}, **base}
+
+    f19c = read(F19C, 2)
+    if f19c >= STATE9_TRIGGER_GATE and _row_gate_open(read, address2, position_x, 0x180):
+        return {'arm': 'ground-before', 'stores': _state8_ground_stores(read(POSITION_Y, 2)), **base}
+
+    if f19c > STATE9_FALL_TABLE_LIMIT:
+        raise ValueError('state 8 fall table index past its own last entry')
+    step = _signed_word(read((STATE9_FALL_TABLE + f19c) & 0xFFFFFF, 2))
+    new_y = (read(POSITION_Y, 2) - step) & 0xFFFF
+    if read(F19E, 2) != 0:
+        raise ValueError('state 8 doubled fall step (FFFFF19E != 0) not witnessed by a recording')
+
+    def _read_after_fall(a, s, _new_y=new_y):
+        return _new_y if (a & 0xFFFFFF) == (POSITION_Y & 0xFFFFFF) else read(a, s)
+    address3 = grid_cell(_read_after_fall)['address']
+    base['new_y'] = new_y
+    if _row_gate_open(read, address3, position_x, 0):
+        new_y_aligned = (new_y & 0xFFF0) + 0x10
+        return {'arm': 'landed', 'stores': {
+            POSITION_Y: (new_y_aligned & 0xFFFF, 2), STATE_INDEX: (STATE8_LANDED_INDEX, 2),
+            F198 & 0xFFFFFF: (0, 2), F1A0 & 0xFFFFFF: (0, 2), F194 & 0xFFFFFF: (0, 2)}, **base}
+
+    if f19c >= STATE8_RECHECK_GATE and _row_gate_open(read, address3, position_x, 0x180):
+        return {'arm': 'ground-after', 'stores': _state8_ground_stores(new_y), **base}
+
+    needs_search = f19c >= STATE9_ADVANCE_GATE and bool(read(EA23_WORD, 1) & 4)
+    base['needs_search'] = needs_search
+    return {'arm': 'fall-tail', **base}
+
+
+def _state8_ground_stores(position_y):
+    """006598-0065AA: the SAME shape `_state9_ground_stores` uses (STATE_INDEX forced, POSITION_Y
+    rounded down to a tile boundary, D7 cleared, F1B8 cleared, the SAME 0x39 sound cue queued),
+    targeting state `STATE8_GROUND_INDEX` (17, not state 9's 16)."""
+    from .pickups import MOVEMENT_SOUND_CUE
+    return {STATE_INDEX: (STATE8_GROUND_INDEX, 2), POSITION_Y: (position_y & 0xFFF0, 2),
+            F1B8 & 0xFFFFFF: (0, 2), MOVEMENT_SOUND_CUE & 0xFFFFFF: (0x39, 2)}
+
+
+def state8_fall_tail(read, found, f19c, new_y):
+    """006640-006662 (no trigger) / 00662A-00663C (trigger): the SAME shape `state9_fall_tail` uses,
+    targeting state `STATE8_TRIGGER_INDEX` (21, not state 9's 20) on a trigger and state
+    `STATE8_LANDED_INDEX` (11, not state 9's 12 -- the SAME value `state8_step`'s own 'landed' arm
+    already uses) on the terminal landing."""
+    if found and f19c < STATE9_TRIGGER_CAP:
+        return {'arm': 'trigger', 'stores': {
+            STATE_INDEX: (STATE8_TRIGGER_INDEX, 2), F1BA & 0xFFFFFF: (1, 2), F19C: ((f19c + 2) & 0xFFFF, 2)}, 'd7': 1}
+    new_f19c = (f19c + 2) & 0xFFFF
+    if new_f19c >= STATE9_COUNTDOWN_CAP:
+        return {'arm': 'terminal', 'stores': {
+            STATE_INDEX: (STATE8_LANDED_INDEX, 2), F194 & 0xFFFFFF: (0, 2), F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2),
+            F19C: (new_f19c, 2)}, 'd7': 0}
+    return {'arm': 'countdown', 'stores': {F19C: (new_f19c, 2)}}
