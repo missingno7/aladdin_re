@@ -265,8 +265,8 @@ worker's observations of the last original-vs-original PASS of that history
 ## 10. Fresh-process verification of one history — the region seal
 
 ```powershell
-& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate> --timeout-seconds 900 --output artifacts\godserify-<candidate>-<NODE>
-& $py scriptserify_status.py artifacts\godserify-<candidate>-<NODE>
+& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate> --timeout-seconds 900 --output artifacts\gods\verify-<candidate>-<NODE>
+& $py scripts\verify_status.py artifacts\gods\verify-<candidate>-<NODE>
 ```
 
 About 7 s per 1,000 frames (`fb408bc7…`, 34,904 frames: ~4 min; `f0ac1973…`,
@@ -283,7 +283,7 @@ history; `DIVERGENCE` names the first differing frame — inspect it with
 ## 11. Negative control
 
 ```powershell
-& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate>-mutant-result --timeout-seconds 900 --output artifacts\godserify-<candidate>-mutant
+& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate>-mutant-result --timeout-seconds 900 --output artifacts\gods\verify-<candidate>-mutant
 ```
 
 Must be `DIVERGENCE` at the first frame that enters the region (or the
@@ -297,8 +297,8 @@ field the next invocation reads) and record the fault in the ledger.
 
 ```powershell
 & $py scriptsun_tests.py gods
-& $py scripts	ree_verify.py --game gods --candidate <candidate> --output artifacts\godserify-<candidate>-leaves-<date>
-& $py scriptserify_status.py artifacts\godserify-<candidate>-leaves-<date>
+& $py scripts\tree_verify.py --game gods --candidate <candidate> --output artifacts\gods\verify-<candidate>-leaves-<date>
+& $py scripts\verify_status.py artifacts\gods\verify-<candidate>-leaves-<date>
 ```
 
 `tree_verify.py` verifies every leaf of the tree as its own cold run from
