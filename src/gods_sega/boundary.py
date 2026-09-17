@@ -2195,6 +2195,375 @@ def achievement_slot_dispatch_suffix(machine, registers):
                       last_pc=ACHIEVEMENT_DISPATCH_LAST_PC)
 
 
+# --- 00475E: the slot scan (game/achievements.py) -- up to three independent calls into 004790 ----
+#
+# Gates on bit 7 of the caller's own record ($10(a1)); when set, checks three independent flag
+# words in turn ((a1), $4(a1), $8(a1), each tested against 1) and, for whichever is 1, calls the
+# already-recovered achievement_slot_dispatch (004790) with a pointer two bytes past the flag --
+# 0049DA's own "calls to already-recovered code" shape, up to three times in one activation.  Every
+# witnessed occurrence across all eight recordings has at most one flag true; the third (0x08) is
+# real ROM code no recording ever sets, and only the first position's call is ever witnessed to
+# match a tracked id (the second, when true, is always a plain miss).  A match composes one level up
+# from achievement_slot_dispatch_plan exactly as that planner composes one level up from
+# achievement_slot_reset_plan (the whole of 0047DA/001648 stays one opaque ceded block; only the
+# resume PC -- already one of 004790's own _AD_RESUME_ADDRESSES -- is gated).  genesis_re.seam
+# cannot express a second independent seam inside the same activation's suffix, so a witnessed match
+# followed by another independent match later in the same activation (never seen) declines there --
+# an honest, safe fallback, not a guess.
+SLOT_SCAN_ENTRY, SLOT_SCAN_LAST_PC = 0x00475E, 0x00478E
+_SS_CHECKS = (
+    (0x00, 0x02, (12, 1), 0x004772),   # (a1) == 1   -> a1+2,    resumes at 004772
+    (0x04, 0x06, (16, 1), 0x004780),   # $4(a1) == 1 -> a1+6,    resumes at 004780
+    (0x08, 0x0A, (16, 1), 0x00478E),   # $8(a1) == 1 -> a1+0xA,  resumes at 00478E (the rts itself)
+)
+_SS_BTST = (16, 1)                      # btst.b #7, $10(a1)
+_SS_GATE_TAKEN, _SS_GATE_NOTTAKEN = (10, 1), (8, 1)
+_SS_BNE_TAKEN, _SS_BNE_NOTTAKEN = (10, 1), (8, 1)
+_SS_LEA = (8, 1)
+_SS_BSR = (18, 1)
+_SS_RTS = (16, 1)
+
+
+def _slot_scan_tail(read, a1, start):
+    """The cost of the checks from ``start`` to the end (2) that the ROM always still runs, on the
+    witnessed assumption that none of them are true -- the only shape any recording exercises past a
+    first true check; a true flag here is declined, not guessed."""
+    cycles = instructions = 0
+    for j in range(start, 3):
+        _, _, cmp_cost, _ = _SS_CHECKS[j]
+        if read((a1 + _SS_CHECKS[j][0]) & 0xFFFFFF, 2) & 0xFFFF == 1:
+            raise UnsupportedCandidate(
+                f'slot scan: a second independent check (position {j}) true in one activation, unwitnessed')
+        c, i = _add(cmp_cost, _SS_BNE_TAKEN)
+        cycles += c
+        instructions += i
+    return cycles, instructions
+
+
+def slot_scan_plan(machine, registers):
+    """00475E: the slot scan, up to three independent calls into 004790."""
+    from .game import achievements
+    if registers['pc'] != SLOT_SCAN_ENTRY:
+        raise UnsupportedCandidate('slot scan planner needs the machine parked at 00475E')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    a1 = registers['a1'] & 0xFFFFFFFF
+    exit_pc = _return(machine, sp)
+    if not (read((a1 + 0x10) & 0xFFFFFF, 1) & 0x80):
+        c, i = _add(_SS_BTST, _SS_GATE_TAKEN, _SS_RTS)
+        # btst sets only Z (the tested bit was clear); N/V/C/X are retained from the entry SR.
+        return AtomicPlan(cycles=c, instructions=i, writes=(),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': exit_pc, 'sr': sr | 0x04},
+                          last_pc=SLOT_SCAN_LAST_PC)
+    cycles, instructions = _add(_SS_BTST, _SS_GATE_NOTTAKEN)
+    index = None
+    for j in range(3):
+        offset, id_offset, cmp_cost, resume_after = _SS_CHECKS[j]
+        c, i = cmp_cost
+        cycles += c
+        instructions += i
+        if read((a1 + offset) & 0xFFFFFF, 2) & 0xFFFF == 1:
+            index = j
+            break
+        c, i = _SS_BNE_TAKEN
+        cycles += c
+        instructions += i
+    if index is None:
+        # all three flags false: the routine's own straight-line bare exit
+        c, i = _SS_RTS
+        cycles += c
+        instructions += i
+        exit_sr = _cmp_sr(sr, read((a1 + _SS_CHECKS[2][0]) & 0xFFFFFF, 2) & 0xFFFF, 1, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': exit_pc, 'sr': exit_sr},
+                          last_pc=SLOT_SCAN_LAST_PC)
+    if index not in achievements.WITNESSED_SLOT_SCAN_CALLS:
+        raise UnsupportedCandidate(f'slot scan call position {index} not witnessed by a recording')
+    offset, id_offset, cmp_cost, resume_after = _SS_CHECKS[index]
+    c, i = _add(_SS_BNE_NOTTAKEN, _SS_LEA, _SS_BSR)
+    cycles += c
+    instructions += i
+    order = {}
+    return_slot = (sp - 4) & 0xFFFFFF
+    _ram_span('slot scan return slot', return_slot, 4)
+    for a, b in _bytes(return_slot, resume_after, 4):
+        order[a] = b
+    virtual = dict(registers)
+    virtual.update(pc=ACHIEVEMENT_DISPATCH_ENTRY, a2=(a1 + id_offset) & 0xFFFFFFFF,
+                   a7=(sp32 - 4) & 0xFFFFFFFF, sr=_cmp_sr(sr, 1, 1, 2))
+    inner = achievement_slot_dispatch_plan(machine, virtual)
+    if isinstance(inner, Seam):
+        if index not in achievements.WITNESSED_SLOT_SCAN_MATCHES:
+            raise UnsupportedCandidate(f'slot scan match at position {index} not witnessed by a recording')
+        for a, b in inner.prefix.writes:
+            order[a] = b
+        prefix_registers = dict(inner.prefix.registers)
+        prefix_registers['a2'] = (a1 + id_offset) & 0xFFFFFFFF
+        prefix = AtomicPlan(cycles=cycles + inner.prefix.cycles, instructions=instructions + inner.prefix.instructions,
+                            writes=tuple(order.items()), registers=prefix_registers,
+                            last_pc=inner.prefix.last_pc)
+        matched_index = index
+
+        def suffix(machine, live_registers):
+            tail = achievement_slot_dispatch_suffix(machine, live_registers)
+            read2 = _reader(machine)
+            tail_cycles, tail_instructions = _slot_scan_tail(read2, a1, matched_index + 1)
+            base_sr = tail.registers['sr'] if 'sr' in tail.registers else live_registers['sr']
+            exit_registers = dict(tail.registers)
+            if matched_index < 2:
+                exit_registers['sr'] = _cmp_sr(base_sr, read2((a1 + _SS_CHECKS[2][0]) & 0xFFFFFF, 2) & 0xFFFF, 1, 2)
+            else:
+                exit_registers['sr'] = base_sr
+            exit_registers['pc'] = _return(machine, sp)
+            exit_registers['a7'] = (tail.registers['a7'] + 4) & 0xFFFFFFFF
+            rc, ri = _SS_RTS
+            return AtomicPlan(cycles=tail.cycles + tail_cycles + rc, instructions=tail.instructions + tail_instructions + ri,
+                              writes=(), registers=exit_registers, last_pc=SLOT_SCAN_LAST_PC)
+
+        return Seam(prefix=prefix, resume_pc=inner.resume_pc, stack_basis=inner.stack_basis,
+                   guards=inner.guards, suffix=suffix, expect=inner.expect)
+    # no-match: fold the call's own cost/writes/registers, then the remaining checks (witnessed false)
+    for a, b in inner.writes:
+        order[a] = b
+    tail_cycles, tail_instructions = _slot_scan_tail(read, a1, index + 1)
+    exit_sr = inner.registers.get('sr', sr)
+    if index < 2:
+        exit_sr = _cmp_sr(exit_sr, read((a1 + _SS_CHECKS[2][0]) & 0xFFFFFF, 2) & 0xFFFF, 1, 2)
+    rc, ri = _SS_RTS
+    registers = dict(inner.registers)
+    registers.update(a2=(a1 + id_offset) & 0xFFFFFFFF, a7=(sp32 + 4) & 0xFFFFFFFF, pc=exit_pc, sr=exit_sr)
+    return AtomicPlan(cycles=cycles + inner.cycles + tail_cycles + rc,
+                      instructions=instructions + inner.instructions + tail_instructions + ri,
+                      writes=tuple(order.items()), registers=registers, last_pc=SLOT_SCAN_LAST_PC)
+
+
+# --- 004800: the record id scan (game/achievements.py) -- the trigger firing subsystem blocker's ---
+# own part 2, last caller: up to three independent calls into 0048B4 (achievement_slot_dispatch's own
+# id-compare tail, reached without a status gate) ---------------------------------------------------
+#
+# Gates on d5 = ($10(a1)) & 0x7fff being one of {2,3,4,7,8}; when it is, checks the same three (flag,
+# id) field pairs 00475E's own slot scan does, but a witnessed pair calls 0048B4 through a tail JUMP
+# straight into 0047DA (D0 the matched slot).  A bra.w pushes nothing, so 0047DA's own rts returns
+# directly to whichever of 004800's own bsr sites made the call: the composition reuses
+# achievement_slot_reset_plan/_suffix exactly as if 0048B4's own match were 0047DA's own direct
+# caller, needing no 004790-style resume-and-continue layer of its own -- only 0048B4's own id-compare
+# body (identical in shape to achievement_slot_dispatch's own tail, but ending in a bra.w, not a bsr)
+# has to be charged explicitly before reaching 0047DA.  Every witnessed call (either the first or
+# second position) is a match; the third position, and a miss from either witnessed one, are both
+# real ROM code no recording enters -- declined, not guessed, exactly as 00475E's own unwitnessed
+# combinations are.
+RECORD_ID_SCAN_ENTRY, RECORD_ID_SCAN_LAST_PC = 0x004800, 0x0048B2
+RECORD_ID_SCAN_GATE_LAST_PC = 0x004820   # the gate's own separate rts (d5 outside {2,3,4,7,8})
+_RIS_MOVE_D5 = (12, 1)                  # move.w $10(a1), d5
+_RIS_ANDI = (8, 1)                      # andi.w #$7fff, d5
+_RIS_CMP = (8, 1)                       # cmpi.w #n, d5
+_RIS_BCC_TAKEN, _RIS_BCC_NOTTAKEN = (10, 1), (8, 1)
+_RIS_RTS = (16, 1)
+_RIS_FLAG_MOVE = ((8, 1), (12, 1), (12, 1))    # move.w (a1)/$4(a1)/$8(a1), d5 -- per position
+_RIS_FLAG_CMP = (8, 1)                         # cmpi.w #1, d5
+_RIS_FLAG_BNE_TAKEN, _RIS_FLAG_BNE_NOTTAKEN = (10, 1), (8, 1)
+_RIS_RANGE_CMP = (16, 1)                       # cmpi.w #n, N(a1) -- same cost for all four bounds
+_RIS_RANGE_BCC_TAKEN, _RIS_RANGE_BCC_NOTTAKEN = (10, 1), (8, 1)
+_RIS_MOVE_D6 = (12, 1)                         # move.w N(a1), d6
+_RIS_BSR = (18, 1)
+_RIT_CMP_ID = (12, 1)                          # 0048B4's own cmp.w idN, d6
+_RIT_BNE_TAKEN, _RIT_BNE_NOTTAKEN = (10, 1), (8, 1)
+_RIT_MOVEQ = (4, 1)                            # moveq #slot, d0
+_RIT_BRA = (10, 1)                             # bra.w $47da (a tail jump, not a bsr)
+_RIS_RESUME = (0x004852, 0x004882, 0x0048B2)   # 004800's own three continuation addresses, per position
+
+
+def _record_id_scan_gate_cost(d5):
+    """004800's own gate walk (0x4800-0x4820): accepted or not, its cost, and the value the LAST
+    comparison it made (on a reject) compares d5 against -- the exit SR's own source."""
+    cycles, instructions = _add(_RIS_MOVE_D5, _RIS_ANDI, _RIS_CMP)
+    if d5 < 2:
+        c, i = _add(_RIS_BCC_TAKEN, _RIS_RTS)
+        return False, cycles + c, instructions + i, 2
+    c, i = _add(_RIS_BCC_NOTTAKEN, _RIS_CMP)
+    cycles, instructions = cycles + c, instructions + i
+    if d5 <= 4:
+        c, i = _RIS_BCC_TAKEN
+        return True, cycles + c, instructions + i, 4
+    c, i = _add(_RIS_BCC_NOTTAKEN, _RIS_CMP)
+    cycles, instructions = cycles + c, instructions + i
+    if d5 == 7:
+        c, i = _RIS_BCC_TAKEN
+        return True, cycles + c, instructions + i, 7
+    c, i = _add(_RIS_BCC_NOTTAKEN, _RIS_CMP)
+    cycles, instructions = cycles + c, instructions + i
+    if d5 == 8:
+        c, i = _RIS_BCC_TAKEN
+        return True, cycles + c, instructions + i, 8
+    c, i = _add(_RIS_BCC_NOTTAKEN, _RIS_RTS)
+    return False, cycles + c, instructions + i, 8
+
+
+def _record_id_scan_range_cost(value, sr):
+    """0048B4's own two id ranges (0x12-0x17, then 0x7f-0x81): accepted or not, cost, exit SR."""
+    cycles, instructions = _RIS_RANGE_CMP
+    if value < 0x12:
+        c, i = _RIS_RANGE_BCC_TAKEN
+        return False, cycles + c, instructions + i, _cmp_sr(sr, value, 0x12, 2)
+    c, i = _add(_RIS_RANGE_BCC_NOTTAKEN, _RIS_RANGE_CMP)
+    cycles, instructions = cycles + c, instructions + i
+    if value <= 0x17:
+        c, i = _RIS_RANGE_BCC_TAKEN
+        return True, cycles + c, instructions + i, _cmp_sr(sr, value, 0x17, 2)
+    c, i = _add(_RIS_RANGE_BCC_NOTTAKEN, _RIS_RANGE_CMP)
+    cycles, instructions = cycles + c, instructions + i
+    if value < 0x7F:
+        c, i = _RIS_RANGE_BCC_TAKEN
+        return False, cycles + c, instructions + i, _cmp_sr(sr, value, 0x7F, 2)
+    c, i = _add(_RIS_RANGE_BCC_NOTTAKEN, _RIS_RANGE_CMP)
+    cycles, instructions = cycles + c, instructions + i
+    if value > 0x81:
+        c, i = _RIS_RANGE_BCC_TAKEN
+        return False, cycles + c, instructions + i, _cmp_sr(sr, value, 0x81, 2)
+    c, i = _RIS_RANGE_BCC_NOTTAKEN
+    return True, cycles + c, instructions + i, _cmp_sr(sr, value, 0x81, 2)
+
+
+def _record_id_scan_check(read, a1, position, sr):
+    """One of the three independent (flag, id) checks: whether it calls 0048B4, the id value if so,
+    the cost along whichever branch the ROM took, its own exit SR, and the flag word itself (d5's own
+    final value comes from whichever position last ran -- always the third, since all three always
+    run regardless of an earlier match)."""
+    from .game import achievements
+    flag_offset, id_offset = achievements.SLOT_SCAN_CHECKS[position]
+    cycles, instructions = _RIS_FLAG_MOVE[position]
+    c, i = _RIS_FLAG_CMP
+    cycles, instructions = cycles + c, instructions + i
+    flag_value = read((a1 + flag_offset) & 0xFFFFFF, 2) & 0xFFFF
+    if flag_value != 1:
+        c, i = _RIS_FLAG_BNE_TAKEN
+        return False, None, cycles + c, instructions + i, _cmp_sr(sr, flag_value, 1, 2), flag_value
+    c, i = _RIS_FLAG_BNE_NOTTAKEN
+    cycles, instructions = cycles + c, instructions + i
+    value = read((a1 + id_offset) & 0xFFFFFF, 2) & 0xFFFF
+    accepted, rc, ri, range_sr = _record_id_scan_range_cost(value, sr)
+    cycles, instructions = cycles + rc, instructions + ri
+    if not accepted:
+        return False, None, cycles, instructions, range_sr, flag_value
+    c, i = _add(_RIS_MOVE_D6, _RIS_BSR)
+    return True, value, cycles + c, instructions + i, range_sr, flag_value
+
+
+def _id_tail_cost(slot):
+    """0048B4's own body: up to four id compares against 0047DA's own tracked ids, then moveq #slot,d0
+    and a tail bra.w straight into 0047DA (no bsr, no rts of 0048B4's own)."""
+    cycles = instructions = 0
+    for _ in range(slot):
+        c, i = _add(_RIT_CMP_ID, _RIT_BNE_TAKEN)
+        cycles, instructions = cycles + c, instructions + i
+    c, i = _add(_RIT_CMP_ID, _RIT_BNE_NOTTAKEN, _RIT_MOVEQ, _RIT_BRA)
+    return cycles + c, instructions + i
+
+
+def _record_id_scan_tail(read, a1, sr, start):
+    """The checks from ``start`` to the end (2) the ROM always still runs, on the witnessed
+    assumption that none of them call 0048B4 -- the only shape any recording exercises past a first
+    match; a call here is declined, not guessed (genesis_re.seam cannot chain a second seam)."""
+    cycles = instructions = 0
+    exit_sr = sr
+    flag_value = 0
+    for j in range(start, 3):
+        matched, _, c, i, exit_sr, flag_value = _record_id_scan_check(read, a1, j, sr)
+        cycles += c
+        instructions += i
+        if matched:
+            raise UnsupportedCandidate(
+                f'record id scan: a second independent check (position {j}) true in one activation, unwitnessed')
+    return cycles, instructions, exit_sr, flag_value
+
+
+def record_id_scan_plan(machine, registers):
+    """004800: the record id scan, up to three independent calls into 0048B4."""
+    from .game import achievements
+    if registers['pc'] != RECORD_ID_SCAN_ENTRY:
+        raise UnsupportedCandidate('record id scan planner needs the machine parked at 004800')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    a1 = registers['a1'] & 0xFFFFFFFF
+    exit_pc = _return(machine, sp)
+    # 004800's own first instruction loads d5 fresh from the record ($10(a1)) -- the entry register is
+    # scratch, exactly as 00475E's own checks always read their fields from (a1), never from a register.
+    d5_masked = read((a1 + 0x10) & 0xFFFFFF, 2) & 0x7FFF
+    accepted, cycles, instructions, last_cmp = _record_id_scan_gate_cost(d5_masked)
+    if not accepted:
+        exit_sr = _cmp_sr(sr, d5_masked, last_cmp, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
+                          registers={'d5': (registers['d5'] & 0xFFFF0000) | d5_masked,
+                                     'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': exit_pc, 'sr': exit_sr},
+                          last_pc=RECORD_ID_SCAN_GATE_LAST_PC)
+    index = match_value = None
+    last_flag_value = 0
+    last_check_sr = sr
+    for j in range(3):
+        matched, value, c, i, check_sr, flag_value = _record_id_scan_check(read, a1, j, sr)
+        cycles += c
+        instructions += i
+        last_flag_value, last_check_sr = flag_value, check_sr
+        if matched:
+            index, match_value = j, value
+            break
+    if index is None:
+        c, i = _RIS_RTS
+        registers_out = {'d5': (registers['d5'] & 0xFFFF0000) | last_flag_value,
+                         'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': exit_pc, 'sr': last_check_sr}
+        return AtomicPlan(cycles=cycles + c, instructions=instructions + i, writes=(),
+                          registers=registers_out, last_pc=RECORD_ID_SCAN_LAST_PC)
+    if index not in achievements.WITNESSED_RECORD_ID_SCAN_CALLS:
+        raise UnsupportedCandidate(f'record id scan call position {index} not witnessed by a recording')
+    match = achievements.match_tracked_id(read, match_value)
+    if match is None:
+        raise UnsupportedCandidate('record id scan: a miss from 0048B4 is not witnessed by a recording')
+    tail_c, tail_i = _id_tail_cost(match)
+    cycles += tail_c
+    instructions += tail_i
+    resume_after = _RIS_RESUME[index]
+    order = {}
+    return_slot = (sp - 4) & 0xFFFFFF
+    _ram_span('record id scan return slot', return_slot, 4)
+    for a, b in _bytes(return_slot, resume_after, 4):
+        order[a] = b
+    virtual = dict(registers)
+    virtual.update(pc=ACHIEVEMENT_SLOT_RESET_ENTRY, d0=match, a7=(sp32 - 4) & 0xFFFFFFFF, sr=last_check_sr)
+    inner = achievement_slot_reset_plan(machine, virtual)
+    for a, b in inner.prefix.writes:
+        order[a] = b
+    prefix_registers = dict(inner.prefix.registers)
+    prefix_registers['d0'] = match           # moveq sign-extends to the full 32-bit register (0047DA's own lesson)
+    prefix_registers['d6'] = (registers['d6'] & 0xFFFF0000) | match_value   # move.w only touches the low word
+    prefix_registers['d5'] = (registers['d5'] & 0xFFFF0000) | 1   # the checked flag word itself, still 1 at this point
+    prefix = AtomicPlan(cycles=cycles + inner.prefix.cycles, instructions=instructions + inner.prefix.instructions,
+                        writes=tuple(order.items()), registers=prefix_registers, last_pc=inner.prefix.last_pc)
+    matched_index = index
+
+    def suffix(machine, live_registers):
+        tail = achievement_slot_reset_suffix(machine, live_registers)
+        read2 = _reader(machine)
+        tail_cycles, tail_instructions, tail_sr, tail_flag = _record_id_scan_tail(
+            read2, a1, live_registers['sr'], matched_index + 1)
+        exit_registers = dict(tail.registers)
+        exit_registers['d5'] = (registers['d5'] & 0xFFFF0000) | tail_flag
+        exit_registers['sr'] = tail_sr
+        exit_registers['pc'] = _return(machine, sp)
+        exit_registers['a7'] = (tail.registers['a7'] + 4) & 0xFFFFFFFF
+        rc, ri = _RIS_RTS
+        return AtomicPlan(cycles=tail.cycles + tail_cycles + rc, instructions=tail.instructions + tail_instructions + ri,
+                          writes=(), registers=exit_registers, last_pc=RECORD_ID_SCAN_LAST_PC)
+
+    return Seam(prefix=prefix, resume_pc=inner.resume_pc, stack_basis=inner.stack_basis,
+               guards=inner.guards, suffix=suffix, expect=inner.expect)
+
+
 # --- 00F828: the proximity table search-and-add (game/hazard.py: proximity_search/proximity_add) ---
 #
 # Owns its own internal call into 00F86A the way 0049DA owns its calls into

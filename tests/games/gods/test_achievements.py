@@ -190,3 +190,153 @@ def test_dispatch_candidate_matches_the_reference_over_real_frames_and_its_mutan
     mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
                                   candidate='achievement-slot-dispatch-mutant-result', reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00475E: the slot scan (game/achievements.py) -- up to three independent calls into 004790 ----
+#
+# Gates on bit 7 of the caller's own record's $10 byte; checks three independent flag words in turn
+# and, for whichever is 1, calls the already-recovered achievement_slot_dispatch with a pointer two
+# bytes past the flag.  Every witnessed occurrence has at most one flag true; only the first position
+# is ever witnessed to match a tracked id.
+
+SCAN_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00475E-*/00475E-entry-*.state'))
+needs_scan_census = pytest.mark.skipif(not SCAN_FIXTURES or not GODS.rom_path.is_file(),
+                                       reason='no local census of 00475E')
+
+
+def test_slot_scan_gate_is_bit_7_of_the_record_own_0x10_byte():
+    assert achievements.slot_scan_gate(_reader({(5 + 0x10, 1): 0x80}), 5)
+    assert not achievements.slot_scan_gate(_reader({(5 + 0x10, 1): 0x7F}), 5)
+
+
+def test_slot_scan_flag_tests_each_position_against_1():
+    world = {(5 + 0x00, 2): 1, (5 + 0x04, 2): 0, (5 + 0x08, 2): 2}
+    read = _reader(world)
+    assert achievements.slot_scan_flag(read, 5, 0)
+    assert not achievements.slot_scan_flag(read, 5, 1)
+    assert not achievements.slot_scan_flag(read, 5, 2)
+
+
+def test_witnessed_slot_scan_calls_and_matches():
+    # position 2 (0x08(a1)) is real code no recording ever sets to 1; only position 0 ever matches.
+    assert achievements.WITNESSED_SLOT_SCAN_CALLS == (0, 1)
+    assert achievements.WITNESSED_SLOT_SCAN_MATCHES == (0,)
+
+
+@needs_scan_census
+@pytest.mark.parametrize('fixture', SCAN_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_slot_scan_plan_reproduces_every_fact_of_the_original_or_declines_an_unwitnessed_arm(fixture):
+    state = fixture.read_bytes()
+    meta = json.loads(fixture.with_suffix('.json').read_text(encoding='utf-8'))
+    assert meta['entry'] == boundary.SLOT_SCAN_ENTRY
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.slot_scan_plan(machine, registers)
+        except boundary.UnsupportedCandidate:
+            return
+    if isinstance(plan, boundary.Seam):
+        _check_seam(plan, state)
+        return
+    facts = pathfacts.trace(state, game=GODS)
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_slot_scan_candidate_names_are_explicit():
+    assert recovery.Candidate('slot-scan').gate_pcs == (boundary.SLOT_SCAN_ENTRY,)
+    assert boundary.SLOT_SCAN_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('slot-scan-mutant-result').mutation is recovery._mutate_register
+
+
+@needs_reference
+def test_slot_scan_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverges():
+    report = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
+                                  candidate='slot-scan', reference=EVIDENCE)
+    assert report['status'] == 'PASS', report
+    if report['candidate_hits'] == 0:
+        pytest.skip('slot-scan never hits in this window')
+    mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
+                                  candidate='slot-scan-mutant-result', reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 004800: the record id scan (game/achievements.py) -- up to three independent calls into 0048B4
+#
+# A second, independent gate over the same caller-supplied record: d5 = ($10(a1)) & 0x7fff must be
+# one of {2,3,4,7,8}; when it is, checks the same three (flag, id) field pairs 00475E's own slot scan
+# does, but with a range test instead of an ==1 test on the id word.  Every witnessed call is a match.
+
+SCAN2_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-004800-*/004800-entry-*.state'))
+needs_scan2_census = pytest.mark.skipif(not SCAN2_FIXTURES or not GODS.rom_path.is_file(),
+                                        reason='no local census of 004800')
+
+
+def test_record_id_scan_gate_is_2_3_4_7_or_8():
+    for value in (2, 3, 4, 7, 8):
+        assert achievements.record_id_scan_gate(value)
+    for value in (0, 1, 5, 6, 9, 100):
+        assert not achievements.record_id_scan_gate(value)
+
+
+def test_id_in_range_covers_both_windows():
+    for value in (0x12, 0x15, 0x17, 0x7F, 0x80, 0x81):
+        assert achievements.id_in_range(value)
+    for value in (0x11, 0x18, 0x50, 0x7E, 0x82):
+        assert not achievements.id_in_range(value)
+
+
+def test_record_id_scan_check_needs_both_flag_and_range():
+    world = {(5 + 0x00, 2): 1, (5 + 0x02, 2): 0x15}
+    assert achievements.record_id_scan_check(_reader(world), 5, 0) == (True, 0x15)
+    world = {(5 + 0x00, 2): 0, (5 + 0x02, 2): 0x15}
+    assert achievements.record_id_scan_check(_reader(world), 5, 0) == (False, None)
+    world = {(5 + 0x00, 2): 1, (5 + 0x02, 2): 0x50}
+    assert achievements.record_id_scan_check(_reader(world), 5, 0) == (False, 0x50)
+
+
+def test_witnessed_record_id_scan_calls():
+    # position 2 ($8(a1)/$A(a1)) is real code no recording ever satisfies.
+    assert achievements.WITNESSED_RECORD_ID_SCAN_CALLS == (0, 1)
+
+
+@needs_scan2_census
+@pytest.mark.parametrize('fixture', SCAN2_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_record_id_scan_plan_reproduces_every_fact_of_the_original_or_declines_an_unwitnessed_arm(fixture):
+    state = fixture.read_bytes()
+    meta = json.loads(fixture.with_suffix('.json').read_text(encoding='utf-8'))
+    assert meta['entry'] == boundary.RECORD_ID_SCAN_ENTRY
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.record_id_scan_plan(machine, registers)
+        except boundary.UnsupportedCandidate:
+            return
+    if isinstance(plan, boundary.Seam):
+        _check_seam(plan, state)
+        return
+    facts = pathfacts.trace(state, game=GODS)
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_record_id_scan_candidate_names_are_explicit():
+    assert recovery.Candidate('record-id-scan').gate_pcs == (boundary.RECORD_ID_SCAN_ENTRY,)
+    assert boundary.RECORD_ID_SCAN_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('record-id-scan-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_reference
+def test_record_id_scan_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverges():
+    report = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
+                                  candidate='record-id-scan', reference=EVIDENCE)
+    assert report['status'] == 'PASS', report
+    if report['candidate_hits'] == 0:
+        pytest.skip('record-id-scan never hits in this window')
+    mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
+                                  candidate='record-id-scan-mutant-result', reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
