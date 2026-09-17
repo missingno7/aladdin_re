@@ -249,9 +249,13 @@ original runs them; the segment tier (below).
 
 ```powershell
 & $py scripts\run_tests.py gods -- -k <concern>
-foreach ($f in Get-ChildItem artifacts\gods\evidence\census-<PC>*\*-p*.state) { & $py scripts\factcheck.py check $f.FullName gods_sega.boundary:<region>_plan --game gods }
+& $py scripts\factcheck.py check "artifacts\gods\evidence\census-<PC>*\*-p*.state" gods_sega.boundary:<region>_plan --game gods
 ```
 
+`check` takes many fixtures (quoted globs, several paths) in one process:
+a line per fixture and a summary, ~15 ms a fixture — a thousand fixtures
+across the recordings in seconds, where a shell loop paid 0.2 s of
+process start-up each.  `--verbose` prints the full comparison of each.
 Every fixture must print `MATCH`.  `MISMATCH` names the wrong fact: fix the
 plan.  `DECLINED` on a claimed arm: the guard is wrong.  Never touch the
 fixture.  For a seam, `check` compares the prefix against the trace up to

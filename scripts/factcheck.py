@@ -41,6 +41,9 @@ Only one native machine may be live per process; every command here opens
 and closes its own.
 """
 import argparse
+import contextlib
+import glob
+import io
 import importlib
 import itertools
 import sys
@@ -125,6 +128,54 @@ def command_segments(args):
 
 
 def command_check(args):
+    """One fixture, or many in one process (a glob or several paths): a line per fixture, the worst status.
+
+    Process start-up (the library, the ROM, the imports) is ~0.2 s; a region
+    with a thousand fixtures across the recordings checks in seconds this
+    way instead of minutes through a shell loop.  With more than one fixture
+    the per-fixture output is kept to its verdict line unless --verbose.
+    """
+    fixtures = _fixtures(args.fixture)
+    if len(fixtures) == 1:
+        args.fixture = fixtures[0]
+        return _check_one(args)
+    counts = {'MATCH': 0, 'MISMATCH': 0, 'DECLINED': 0}
+    worst = 0
+    quiet = not args.verbose
+    for fixture in fixtures:
+        args.fixture = fixture
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer) if quiet else contextlib.nullcontext():
+            status = _check_one(args)
+        verdict = {0: 'MATCH', 1: 'MISMATCH', 2: 'DECLINED'}[status]
+        counts[verdict] += 1
+        worst = max(worst, status)
+        detail = ''
+        if quiet:
+            lines = [line for line in buffer.getvalue().splitlines() if line.startswith(('MISMATCH', 'DECLINED', '  '))]
+            detail = ('  ' + ' | '.join(line.strip() for line in lines[:4])) if status else ''
+        print('%-9s %s%s' % (verdict, _short(fixture), detail))
+    print('summary: %d fixtures, MATCH %d, MISMATCH %d, DECLINED %d' % (
+        len(fixtures), counts['MATCH'], counts['MISMATCH'], counts['DECLINED']))
+    return worst
+
+
+def _fixtures(patterns):
+    out = []
+    for pattern in patterns:
+        matched = sorted(glob.glob(pattern)) if any(ch in pattern for ch in '*?[') else [pattern]
+        if not matched:
+            raise SystemExit('no fixture matches %s' % pattern)
+        out.extend(matched)
+    return out
+
+
+def _short(path):
+    parts = _Path(path).parts
+    return '/'.join(parts[-2:]) if len(parts) >= 2 else path
+
+
+def _check_one(args):
     state = _load(args)
     worst = 0
     for writes in _combinations(args.vary):
@@ -240,9 +291,12 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='command', required=True)
     for name in ('facts', 'check', 'branches', 'segments'):
         p = sub.add_parser(name)
-        p.add_argument('fixture')
         if name == 'check':
+            p.add_argument('fixture', nargs='+', help='one or more .state files, or globs (quoted on PowerShell)')
             p.add_argument('planner', help='module:function, e.g. aladdin_sega.boundary:begin_contact_family_type55')
+            p.add_argument('--verbose', action='store_true', help='full per-fixture output when checking many')
+        else:
+            p.add_argument('fixture')
         p.add_argument('--game', type=select_game, required=True)
         p.add_argument('--park', type=parse_pc, default=None)
         p.add_argument('--stop', type=parse_pc, default=None)
@@ -252,6 +306,9 @@ def main(argv=None):
         if name in ('branches', 'check'):
             p.add_argument('--vary', action='append')
     args = parser.parse_args(argv)
+    if args.command == 'check' and args.planner is not None and ':' not in args.planner and ':' in args.fixture[-1]:
+        # `check FIXTURE... PLANNER`: argparse gives the greedy positional the planner; put it back.
+        args.fixture, args.planner = args.fixture[:-1] + [args.planner], args.fixture[-1]
     return {'facts': command_facts, 'check': command_check, 'branches': command_branches,
             'segments': command_segments}[args.command](args)
 
