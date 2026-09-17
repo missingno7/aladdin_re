@@ -74,8 +74,28 @@ def _worker_error(report):
 
 
 def classify(directory, pid=None):
-    """Return ``(status, reason)`` for one verification output directory."""
+    """Return ``(status, reason)`` for one verification output directory.
+
+    A ``tree.json`` (scripts/tree_verify.py: one cold run per leaf, concurrently)
+    is the set of its leaf directories: PASS only when every leaf classifies as
+    PASS with current receipts; otherwise the first leaf's other status.
+    """
     directory = Path(directory)
+    tree = directory / 'tree.json'
+    if tree.exists() and not (directory / 'comparison.json').exists():
+        summary = json.loads(tree.read_text(encoding='utf-8'))
+        statuses = [(leaf['leaf'][:12], classify(leaf['directory'])) for leaf in summary['leaves']]
+        failing = [(leaf, status, reason) for leaf, (status, reason) in statuses if status != 'PASS']
+        if failing:
+            leaf, status, reason = failing[0]
+            return status, 'leaf %s: %s' % (leaf, reason)
+        fallbacks = 0
+        for leaf in summary['leaves']:
+            report = json.loads((Path(leaf['directory']) / 'comparison.json').read_text(encoding='utf-8'))
+            stats = (report.get('candidate_receipt') or {}).get('candidate_stats') or {}
+            fallbacks += stats.get('fallbacks', 0) or 0
+        return 'PASS', 'frames %s, %d leaves cold, fallbacks %d, %s s, current receipts' % (
+            summary.get('executed_frames'), len(summary['leaves']), fallbacks, summary.get('seconds'))
     comparison = directory / 'comparison.json'
     if not comparison.exists():
         if pid_alive(pid):

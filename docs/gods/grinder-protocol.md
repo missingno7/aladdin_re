@@ -262,41 +262,80 @@ worker's observations of the last original-vs-original PASS of that history
 (`f0ac19738f19…`); if you retain states from another history, verify it with
 `--candidate original` first and keep its `reference.json` beside them.
 
-## 10. Fresh-process verification of the whole history
+## 10. Fresh-process verification of one history — the region seal
 
 ```powershell
-& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate> --timeout-seconds 900 --output artifacts\gods\verify-<candidate>-<NODE>
-& $py scripts\verify_status.py artifacts\gods\verify-<candidate>-<NODE>
+& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate> --timeout-seconds 900 --output artifacts\godserify-<candidate>-<NODE>
+& $py scriptserify_status.py artifacts\godserify-<candidate>-<NODE>
 ```
 
-About 60 s per 15,000 frames with parallel workers; give 20 s of timeout per
-1,000 frames.  Read the result only through `verify_status.py`.  `PASS` with
-hits > 0 is the qualification; `NOT_EXERCISED` means the region never ran on
-that history; `DIVERGENCE` names the first differing frame — inspect it with
+About 7 s per 1,000 frames (`fb408bc7…`, 34,904 frames: ~4 min; `f0ac1973…`,
+15,148 frames: ~1.7 min); give 20 s of timeout per 1,000 frames.  Pick the
+**shortest leaf that exercises the region** (the census prints the
+occurrences per node); a longer leaf adds prefix replay, not evidence, once
+every witnessed path class has its fixture MATCH.  Launch the negative
+control (step 11) **concurrently** in a second shell — they share nothing.
+Read the result only through `verify_status.py`.  `PASS` with hits > 0 is
+the qualification; `NOT_EXERCISED` means the region never ran on that
+history; `DIVERGENCE` names the first differing frame — inspect it with
 `facts` from a retained state near it before changing anything.
 
 ## 11. Negative control
 
 ```powershell
-& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate>-mutant-result --timeout-seconds 900 --output artifacts\gods\verify-<candidate>-mutant
+& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate>-mutant-result --timeout-seconds 900 --output artifacts\godserify-<candidate>-mutant
 ```
 
 Must be `DIVERGENCE` at the first frame that enters the region (or the
 segment check must diverge at the first frame after the fixture).  A PASS
-here is a `FACTORY_DEFECT` escalation.
+here is a `FACTORY_DEFECT` escalation.  A mutant that faults the machine
+(an address error, a cartridge write) is a finding about the game, not a
+control: choose a mutation the game consumes (a stored position, a record
+field the next invocation reads) and record the fault in the ledger.
 
 ## 12. Milestone: the tree, the suite, the record
 
 ```powershell
-& $py scripts\run_tests.py gods
-& $py scripts\dev.py history-verify main --game gods --candidate <candidate> --tree --timeout-seconds 1800 --output artifacts\gods\verify-<candidate>-tree-<date>
+& $py scriptsun_tests.py gods
+& $py scripts	ree_verify.py --game gods --candidate <candidate> --output artifacts\godserify-<candidate>-leaves-<date>
+& $py scriptserify_status.py artifacts\godserify-<candidate>-leaves-<date>
 ```
 
-The tree verifies every recorded branch (about 2 s per 1,000 frames of tree
-edges with parallel workers).  Then: one line in `ledger.md`, the region and
-the next bites in `STATUS.md`, commit (`Gods: recover <PC> <region> (<shape>)`
-with hits and fallbacks in the body), push.  Between milestones commit
-locally once steps 8–11 pass.
+`tree_verify.py` verifies every leaf of the tree as its own cold run from
+power-on, all leaves at once (five for Gods: ten worker processes; about
+4 min, the longest leaf's time, against 13 min for the single-process
+`--tree` walk with restores).  It makes the same claim — every recorded
+branch, every frame — without a restore anywhere.  Then: one line in
+`ledger.md`, the region and the next bites in `STATUS.md`, commit, push.
+
+## The three tiers, and when each runs
+
+Expensive linear-in-history work is a seal, not the inner loop.
+
+**FAST** (while planning an arm or a path class; seconds): `factcheck
+check` on the fixtures of the affected classes; the region's own test
+module (`run_tests.py gods -- -k <module>`); one `segment_verify` from a
+retained fixture of the class (300 frames, ~2 s).  Iterate here until the
+plan MATCHes.
+
+**REGION SEAL** (before a region's commit; ~5 min, mostly concurrent):
+every retained fixture MATCH (the test module); the full `run_tests.py
+gods`; the segment tier from the boundary states; the shortest exercising
+leaf's `history-verify` and the mutant, launched together.  Commit locally.
+
+**MILESTONE SEAL** (before a push; ~5 min): `tree_verify.py` on the exact
+commit + the full suite.  A milestone is up to **five** sealed regions of
+one subsystem, or ninety minutes, or a subsystem boundary moving upward
+(a family composed, a parent's declines removed), whichever first; a tree
+that fails names the region by its first differing frame, and the last
+five commits are small enough to bisect in one run each.  A change to a
+shared module (`recovery.py`'s dispatcher, `boundary.py`'s helpers, a
+`game/` module several plans read) is a milestone by itself.
+
+What no tier skips: the strict witness on every retained fixture (the
+32-bit register file, the CCR, every write, the cost) before a region is
+called recovered; a fresh-process cold run with hits before its commit; a
+mutant the game can see; the tree with current receipts before a push.
 
 ## Candidate selection rules
 
