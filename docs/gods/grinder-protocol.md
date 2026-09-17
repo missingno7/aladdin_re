@@ -81,15 +81,30 @@ the reason as the first line of the session notes.
 & $py scripts\recovery_census.py artifacts\gods\evidence\census-<PC> --game gods --classifier entry --entry <PC> --node <NODE>
 ```
 
+Or, and this is the default now, every leaf at once:
+
+```powershell
+& $py scripts\census_all.py --game gods --entry <PC> --max-classes 400
+```
+
+(`artifacts\gods\evidence\census-<PC>-<leaf12>` per leaf, ~2 min for all
+five, the longest leaf's time).  A region planned from one recording's
+classes can MATCH every fixture and still diverge on another recording —
+state 14 on 18 September: five real defects on a recording never
+censused, found only by the tree.  The fixture set over every recording
+is the cheap instrument for that class: the test module globs
+`census-<PC>*` and `factcheck check` sees every witnessed class on every
+recording in the FAST tier.
+
 `--classifier entry` carries no game knowledge (`kind` is Aladdin's
 object-table convention).  A dispatcher whose selector arrives in a
 register is censused per selector value with `--classifier reg:d5.w`
 (the trigger conditions `00470C`: one class per kind in D5, fixtures named
 `00470C-d5-0007-p0.state`); the class counts are then the kinds' own.  The report lists the executed path
 classes with counts, and retains one entry state per class plus one per
-exit CCR (`<PC>-entry-p<N>[-ccr<XX>].state` + `.json`).  Run it on the
-longest history; if another recording reaches the routine in situations the
-first does not, run it there too into a separate directory.  `cut > 0` means
+exit CCR (`<PC>-entry-p<N>[-ccr<XX>].state` + `.json`).  Run it on
+every leaf (`census_all.py`); a single-recording census is only for a
+quick look.  `cut > 0` means
 an occurrence ran past the frame deadline: those states are classified
 offline and are fine as fixtures, but note them.  A VBlank that lands
 inside an activation does not make a new class: the tracer marks the
