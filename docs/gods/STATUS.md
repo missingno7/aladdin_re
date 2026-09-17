@@ -77,7 +77,7 @@ into work RAM only); it is not changed by this baseline.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with twenty-six gates armed, the camera follow step `002806`, the
+  original with twenty-eight gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -88,14 +88,15 @@ into work RAM only); it is not changed by this baseline.
   proximity table search-and-add `00F828`/`00F86A`, the pickup award
   `013264`, the next-random draw `014A3C`, the effect pool add `00932C`, the
   pickup check `00BA8E`, the pickup probe `010CD2`, the line walker's object
-  resume `00FFF0`, the projectile launch `0091BC` and the line walker's
-  projectile resume `0093D2`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
+  resume `00FFF0`, the projectile launch `0091BC`, the line walker's
+  projectile resume `0093D2`, the message display gate `007986` and the
+  string copy `0079DC`; `camera`, `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
   `particle-emit`, `hazard-tick`, `score-convert`, `evaluator`,
   `proximity`, `next-random`, `effect-pool-add`, `pickup-check`,
-  `pickup-probe`, `walker`, `projectile-launch` and `projectile-resume`
-  arm each alone.
+  `pickup-probe`, `walker`, `projectile-launch`, `projectile-resume`,
+  `message-gate` and `string-copy` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -188,6 +189,8 @@ ids, never to `main`:
 | **`00BA8E` pickup check**: a composition over the already-recovered zone check, pickup award, next-random and effect-pool-add; the plan reproduces every fact on 665 retained fixtures over all eight recordings (the clean arm's own near/far/none/bail sub-arms per axis, the array-append side effect, found-sound, found-bare, found-effect including both jitter axes' own default-mask arm and the second jitter's own negative branch, the effect pool's own full arm, and code -4-and-below's own cascade into 013316 composed inline the way the direct 013264 gate already does); only the special-1 pickup's own further decrement going negative (`jsr 011540`, unrecovered), the digit-split message tail and 013316's own sound-on/pool-exhausted arms decline as unwitnessed by any of the eight recordings (17 Sep: re-censused with `--max-classes 400` on `fb408bc75597…` after the default 32-class cap was found to silently discard rarer real classes -- 400 real path classes, not 32) | `factcheck check` on every fixture | `tests/games/gods/test_pickup_check.py` |
 | `pickup-check` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 4,320 hits, 31 fallbacks (all z80 bank guard)** -- up from 4,260 hits/91 fallbacks, every previously-declined arm but the three above now admits; `camera-sprites` (all twenty-three gates, tree still fold `pickup-probe` in) on the tree of all eight recordings: **PASS, 107,519 frames, 1,046,640 hits, 5,845 fallbacks (4,218 z80 bank guard, 443 seam deadline, 345 observation deadline, 304 vblank in span, 189 evaluator firing/disabled, 97 hazard tick trigger, 76 proximity trigger, 27 machine admission, 146 pickup check declines (145 found-message, 1 found-special-timer) -- down from 13,151 fallbacks, tree bit-exact** | `history-verify f0ac19738f19 --candidate pickup-check`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-pickup-check2-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17e` |
 | the pickup check's negative control diverges at the first found award | `--candidate pickup-check-mutant-result` | `artifacts/gods/verify-pickup-check2-mutant` |
+| **`007986` message display gate + `0079DC` string copy** (`game/messages.py`, the trigger firing subsystem blocker's own part 1): `0079DC` is a plain byte copy bounded by the string's own length (the NUL is read but not written -- the caller's own `clr.b (a1)+` supplies it); `007986` gates a message of priority D7 (negated first when negative, clearing `MESSAGE_BOUND`/`MESSAGE_PENDING`) against the display buffer -- empty, or occupied with a sufficient stored priority (through `MESSAGE_BUFFER_ALT` instead), are both `'ready'`; a stored bound of exactly 0 while occupied (skips the compare outright) is real code no recording enters.  Re-censused `007986` over all eight recordings with `--max-classes 100` (the default 32-class cap already shown this session to discard real classes) to catch the one occupied-buffer occurrence the original two-recording census missed entirely | `factcheck check` on every fixture | `tests/games/gods/test_messages.py` |
+| `message-gate` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 31 hits, 0 fallbacks**; `string-copy`: **PASS, 34,904 frames, 69 hits, 9 fallbacks (all z80 bank guard)**; both mutants DIVERGENCE at frame 2,328; `camera-sprites` (all twenty-eight gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,046,975 hits, 5,681 fallbacks, tree bit-exact** | `history-verify fb408bc75597 --candidate message-gate`; `history-verify fb408bc75597 --candidate string-copy`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-message-gate-fb408bc75597`, `artifacts/gods/verify-string-copy-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17g` |
 | **`010CD2` pickup probe**: a caller-supplied record's own camera-relative call into the already-recovered pickup check, composed by calling `pickup_check_plan` itself with a synthetic register file for the point `00BA8E` is entered (one level deeper than the `0049DA`-calls-`001164` shape); the plan reproduces every fact on all 33 retained fixtures, none declined (was 32, one DECLINED) | `factcheck check` on every fixture | `tests/games/gods/test_pickup_check.py` |
 | `pickup-probe` reproduces the original on `f0ac1973…`: **PASS, 15,148 frames, 3,283 hits, 23 fallbacks (all z80 bank guard)** -- up from 3,248 hits/58 fallbacks, the pickup-check found-jitter-y-negative decline is gone; `camera-sprites` (all twenty-three gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,046,640 hits, 5,845 fallbacks, tree bit-exact** (same cold run as the row above) | `history-verify f0ac19738f19 --candidate pickup-probe`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-pickup-probe2-f0ac1973`, `artifacts/gods/verify-camera-sprites-tree-2026-09-17e` |
 | the pickup probe's negative control (result-byte and register mutants either crash the 68000 on an unrecovered coroutine's own record read, or are blind on a scratch register) diverges at frame 469 by dropping all writes instead | `--candidate pickup-probe-mutant-result` | `artifacts/gods/verify-pickup-probe-mutant3` |

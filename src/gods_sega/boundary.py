@@ -1870,6 +1870,127 @@ def evaluator_plan(machine, registers):
                       last_pc=EVALUATOR_LAST_PC)
 
 
+# --- 007986/0079DC: the message display gate and string copy (game/messages.py) ---------------------
+#
+# Shared utilities (007986 has real callers well outside the trigger firing
+# arm this session was asked to compose, e.g. 005BC6 and 0086B6); recovered
+# on their own merits, each its own gate.  A fresh census of 007986 over all
+# eight recordings (--max-classes 100) found only two real path classes,
+# both reaching the SAME "buffer already empty" tail -- the only difference
+# is whether the caller's own D7 needed negating first (which also clears
+# MESSAGE_BOUND/PENDING).  The "buffer occupied" arm (a stored-priority
+# compare, then MESSAGE_BUFFER_ALT or failure) is real code no recording
+# has ever entered.
+MESSAGE_GATE_ENTRY, MESSAGE_GATE_READY_LAST_PC = 0x007986, 0x0079B0
+_MG_TST_D7 = (4, 1)                     # tst.w d7
+_MG_BPL_TAKEN, _MG_BPL_NOTTAKEN = (10, 1), (8, 1)       # bpl.b $7994
+_MG_NEGATE = (4 + 16 + 16, 3)           # neg.w d7; clr.w MESSAGE_BOUND; clr.w MESSAGE_PENDING
+_MG_BUFFER = (16, 1)                    # movea.l MESSAGE_BUFFER,a1
+_MG_TST_BUFFER = (8, 1)                 # tst.b (a1)
+_MG_BEQ_TAKEN, _MG_BEQ_NOTTAKEN = (10, 1), (8, 1)       # beq.b $79aa (the primary buffer's own test)
+_MG_READ_STORED = (12, 1)               # move.w MESSAGE_BOUND,d0 (the buffer's own occupant)
+_MG_BEQ_STORED_NOTTAKEN = (8, 1)        # beq.b $79a6, not taken (stored bound != 0, the only witnessed case)
+_MG_CMP = (4, 1)                        # cmp.w d0,d7
+_MG_BGT_TAKEN, _MG_BGT_NOTTAKEN = (10, 1), (8, 1)       # bgt.b $79b2 (insufficient priority: 'blocked')
+_MG_ALT_BUFFER = (16, 1)                # movea.l MESSAGE_BUFFER_ALT,a1
+_MG_STORE_BOUND = (12, 1)               # move.w d7,MESSAGE_BOUND
+_MG_MOVEQ_D0 = (4, 1)                   # moveq #$0,d0
+_MG_FAIL_MOVEQ = (4, 1)                 # moveq #$ff,d0
+_MG_RTS = (16, 1)
+MESSAGE_GATE_BLOCKED_LAST_PC = 0x0079B4
+
+
+def message_gate_plan(machine, registers):
+    """007986: gate a message of priority D7 against the display buffer -- the primary buffer
+    already empty, or occupied with a sufficient stored priority (MESSAGE_BUFFER_ALT instead), are
+    both 'ready'; an occupied buffer with a stored bound of exactly 0 (skips the compare outright) is
+    not witnessed by any recording."""
+    from .game import messages
+    if registers['pc'] != MESSAGE_GATE_ENTRY:
+        raise UnsupportedCandidate('message gate planner needs the machine parked at 007986')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    d7 = registers['d7'] & 0xFFFF
+    read = _reader(machine)
+    result = messages.message_gate(read, d7)
+    if result['arm'] == 'unrecovered':
+        raise UnsupportedCandidate(
+            'message gate: an occupied buffer with a zero stored bound is not witnessed by a recording')
+    cycles, instructions = _add(_MG_TST_D7, _MG_BPL_NOTTAKEN if result['negated'] else _MG_BPL_TAKEN)
+    if result['negated']:
+        c, i = _MG_NEGATE
+        cycles += c
+        instructions += i
+    c, i = _add(_MG_BUFFER, _MG_TST_BUFFER)
+    cycles += c
+    instructions += i
+    # A 'ready' result can be reached with the primary buffer either empty or occupied (then via
+    # MESSAGE_BUFFER_ALT): distinguish them by re-reading the same byte the semantics already checked.
+    primary_empty = read(messages.MESSAGE_BUFFER, 4) & 0xFFFFFFFF
+    primary_empty = read(primary_empty & 0xFFFFFF, 1) == 0
+    if primary_empty:
+        c, i = _add(_MG_BEQ_TAKEN, _MG_STORE_BOUND, _MG_MOVEQ_D0, _MG_RTS)
+        cycles += c
+        instructions += i
+    else:
+        c, i = _add(_MG_BEQ_NOTTAKEN, _MG_READ_STORED, _MG_BEQ_STORED_NOTTAKEN, _MG_CMP)
+        cycles += c
+        instructions += i
+        if result['arm'] == 'blocked':
+            c, i = _add(_MG_BGT_TAKEN, _MG_FAIL_MOVEQ, _MG_RTS)
+            cycles += c
+            instructions += i
+            writes = tuple(pair for address, (value, size) in result['stores'].items()
+                          for pair in _bytes(address, value, size))
+            # moveq #$ff,d0 is the last flag-setter (N=1 always); X survives as for the 'ready' arm.
+            x_bit = 0x10 if result['negated'] else (sr & 0x10)
+            exit_sr = (_logic_sr(sr, 0xFFFFFFFF, 4) & ~0x10) | x_bit
+            exit_registers = {'d0': 0xFFFFFFFF, 'd7': (registers['d7'] & 0xFFFF0000) | result['bound'],
+                              'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+            return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                              last_pc=MESSAGE_GATE_BLOCKED_LAST_PC)
+        c, i = _add(_MG_BGT_NOTTAKEN, _MG_ALT_BUFFER, _MG_STORE_BOUND, _MG_MOVEQ_D0, _MG_RTS)
+        cycles += c
+        instructions += i
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # moveq #$0,d0 is the last flag-setter (Z=1 always); X survives from neg.w d7 when negated
+    # (a nonzero operand always borrows: X=1) or is untouched otherwise.
+    x_bit = 0x10 if result['negated'] else (sr & 0x10)
+    exit_sr = (_logic_sr(sr, 0, 2) & ~0x10) | x_bit
+    # moveq #$0,d0 sign-extends into the WHOLE register: no entry-value preservation.
+    exit_registers = {'d0': 0, 'd7': (registers['d7'] & 0xFFFF0000) | result['bound'],
+                      'a1': result['buffer'], 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                      'pc': _return(machine, sp), 'sr': exit_sr}
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=MESSAGE_GATE_READY_LAST_PC)
+
+
+STRING_COPY_ENTRY, STRING_COPY_LAST_PC = 0x0079DC, 0x0079E4
+_STRCPY_BYTE = (8 + 8 + 8 + 10, 4)      # move.b (a2)+,d1; beq nottaken; move.b d1,(a1)+; bra taken -- per copied byte
+_STRCPY_TAIL = (8 + 10 + 16, 3)         # move.b (a2)+,d1; beq taken; rts -- the terminating NUL
+
+
+def string_copy_plan(machine, registers):
+    """0079DC: copy bytes from A2 to A1 until a NUL (itself read but not written -- the caller's own
+    clr.b (a1)+ supplies the terminator); the loop is bounded by the string's own length."""
+    if registers['pc'] != STRING_COPY_ENTRY:
+        raise UnsupportedCandidate('string copy planner needs the machine parked at 0079DC')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a1, a2 = registers['a1'] & 0xFFFFFFFF, registers['a2'] & 0xFFFFFFFF
+    from .game import messages
+    read = _reader(machine)
+    result = messages.copy_message(read, a2)
+    copied = result['bytes'][:-1]              # every byte but the trailing NUL: what actually gets written
+    _ram_span('string copy destination', a1 & 0xFFFFFF, len(copied))
+    writes = tuple(pair for index, value in enumerate(copied) for pair in _bytes((a1 + index) & 0xFFFFFF, value, 1))
+    c, i = _add(*([_STRCPY_BYTE] * len(copied)), _STRCPY_TAIL)
+    exit_registers = {'d1': registers['d1'] & 0xFFFFFF00, 'a1': (a1 + len(copied)) & 0xFFFFFFFF,
+                      'a2': (a2 + result['length']) & 0xFFFFFFFF, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                      'pc': _return(machine, sp), 'sr': _logic_sr(sr, 0, 1)}
+    return AtomicPlan(cycles=c, instructions=i, writes=writes, registers=exit_registers, last_pc=STRING_COPY_LAST_PC)
+
+
 # --- 00F828: the proximity table search-and-add (game/hazard.py: proximity_search/proximity_add) ---
 #
 # Owns its own internal call into 00F86A the way 0049DA owns its calls into

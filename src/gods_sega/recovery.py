@@ -14,13 +14,14 @@ from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY, COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
-                       LAUNCH_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY, PICKUP_PROBE_ENTRY,
-                       PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY, SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY,
-                       STATIC_EMIT_ENTRY, TABLE_RESET_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
+                       LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
+                       PICKUP_PROBE_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, SCORE_CONVERT_ENTRY, SOLID_DRAW_ENTRY,
+                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
+                       WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, animation_step_plan, camera_follow_plan,
                        collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
-                       footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, next_random_plan,
-                       particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, proximity_plan,
-                       score_convert_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, table_reset_plan,
+                       footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
+                       next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, proximity_plan,
+                       score_convert_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, string_copy_plan, table_reset_plan,
                        walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
 
@@ -110,6 +111,8 @@ PLANNERS = {
     'score-convert': {SCORE_CONVERT_ENTRY: score_convert_plan},
     'evaluator': {EVALUATOR_ENTRY: evaluator_plan},
     'proximity': {PROXIMITY_ENTRY: proximity_plan},
+    'message-gate': {MESSAGE_GATE_ENTRY: message_gate_plan},
+    'string-copy': {STRING_COPY_ENTRY: string_copy_plan},
     'next-random': {NEXT_RANDOM_ENTRY: next_random_plan},
     'effect-pool-add': {EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan},
     'pickup-check': {PICKUP_CHECK_ENTRY: pickup_check_plan},
@@ -125,7 +128,8 @@ PLANNERS = {
                        EVALUATOR_ENTRY: evaluator_plan, PROXIMITY_ENTRY: proximity_plan, PICKUP_AWARD_ENTRY: pickup_award_plan,
                        NEXT_RANDOM_ENTRY: next_random_plan, EFFECT_POOL_ADD_ENTRY: effect_pool_add_plan,
                        PICKUP_CHECK_ENTRY: pickup_check_plan, PICKUP_PROBE_ENTRY: pickup_probe_plan, WALKER_RESUME_ENTRY: walker_resume_plan,
-                       LAUNCH_ENTRY: launch_plan, PROJECTILE_RESUME_ENTRY: walker_resume_projectile_plan},
+                       LAUNCH_ENTRY: launch_plan, PROJECTILE_RESUME_ENTRY: walker_resume_projectile_plan,
+                       MESSAGE_GATE_ENTRY: message_gate_plan, STRING_COPY_ENTRY: string_copy_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -154,6 +158,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'score-convert-mutant-result': ('score-convert', _mutate_result),
              'evaluator-mutant-outcome': ('evaluator', _mutate_outcome),
              'proximity-mutant-result': ('proximity', _mutate_result),
+             'message-gate-mutant-result': ('message-gate', _mutate_result),
+             'string-copy-mutant-result': ('string-copy', _mutate_result),
              # a register (the drawn word), not the stored cursor: the generic "flip the last write"
              # mutation corrupts the cursor itself, which can wrap onto an odd address and fault the
              # 68000 on its own next read -- a real crash, not the clean divergence a control needs.
