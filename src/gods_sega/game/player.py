@@ -476,6 +476,72 @@ def state0_handoff(read):
     return _handoff(read, 6)
 
 
+# --- 00746A: state 5's own table-dispatch entry -- "one region, two gates, one planner"
+# (`docs/gods/blockers/2026-09-17-005700.md`'s Decision; confirmed by a full disassembly and cross-
+# checked against eleven `factcheck.py facts --path` traces, 18 September).  Reached both by
+# STATE_TABLE's own slot 5 (a fresh dispatch with STATE_INDEX already 5) and by a `bra.w` fallthrough
+# from inside state 1's own body (`0073E0`, the contact-search-found hand-off's OTHER destination --
+# `state1_handoff` reaches `00749A` instead, one instruction further in, so the two never collide).
+# Its own counter increment (unconditional) feeds three outcomes: a counter that lands under 5 always
+# takes the SAME deterministic table hand-off `state1_handoff`/`state0_handoff` reach at `0074A8`, but
+# through the LIVE counter as the table's own index (not forced to 0) and without touching
+# STATE_INDEX at all -- this activation is already state 5's own, nothing to re-select; a counter that
+# becomes exactly 3 additionally calls the already-recovered contact-consume primary routine (`012DA0`,
+# `game.pickups.contact_consume` routine 0 -- the SAME consumer state 24's own `006AD8` calls) first,
+# its own result read by nothing here; a counter of 5 or more gates on `FFFFEA23` bit 2 exactly like
+# state 1's own 'gate' arm -- clear, or a contact-search (`008222`) 'not found' result, falls all the
+# way OUT of state 5's own body into state 1's own gate (`STATE_INDEX` forced to 1, `d7` reset to 2,
+# `pc = 0x007282` -- the boundary hands off to state 1's own SEPARATELY ARMED candidate exactly the
+# way every other state hands off to the shared tail's own gate); a contact-search 'found' result
+# takes the counter-under-5 arm's own hand-off instead, but through the table's own index-0 entry
+# (its own `moveq #0,d7` first, `00748A`-`0074A8`, byte-identical to `state1_handoff`'s own shape).
+STATE5_ENTRY = 0x00746A
+STATE5_CONSUME_COUNTER = 3        # the post-increment counter that calls 012DA0 (contact_consume routine 0)
+STATE5_HANDOFF_LIMIT = 5          # post-increment counter under this: the deterministic table hand-off, no gate
+STATE5_FALLBACK_STATE_INDEX = 1   # forced onto FFFFF192 before handing off to state 1's own gate
+STATE5_FALLBACK_COUNTER = 2       # the caller's own D7 on the fallback hand-off (not stored to RAM here)
+STATE5_FALLBACK_PC = 0x007282     # state 1's own entry -- the second of "one region, two gates, one planner"
+
+
+def state5_step(read, d7):
+    """00746A-007496: state 5's own head, up to the deterministic table hand-off, the contact-search
+    gate, or the fallback into state 1's own gate.  `d7` is STATE_COUNTER as the dispatcher's own
+    entry (or state 1's own `bra.w`) left it.  Returns `'handoff'` (counter under 5: the boundary
+    reads `state5_handoff(read, counter)`), `'gate'` (counter >= 5, `FFFFEA23` bit 2 set: the boundary
+    must call the already-recovered `game.pickups.contact_search` -- a 'found' result takes
+    `state5_handoff(read, 0)`, 'not found' takes the fallback), or `'fallback'` (counter >= 5, bit 2
+    clear: straight to state 1's own gate, `state5_fallback_stores()`).  Every arm's own
+    `calls_consumer` says whether the boundary must also compose the internal `jsr 012DA0` first
+    (`counter == STATE5_CONSUME_COUNTER`, independent of which of the three arms follows it -- the ROM
+    tests the counter against 5 the SAME way whether or not it just called the consumer)."""
+    counter = (d7 + 1) & 0xFFFF
+    calls_consumer = counter == STATE5_CONSUME_COUNTER
+    if counter < STATE5_HANDOFF_LIMIT:
+        return {'arm': 'handoff', 'counter': counter, 'calls_consumer': calls_consumer}
+    bit2 = read(EA23_WORD, 1) & 4
+    if not bit2:
+        return {'arm': 'fallback', 'counter': counter, 'calls_consumer': calls_consumer}
+    return {'arm': 'gate', 'counter': counter, 'calls_consumer': calls_consumer}
+
+
+def state5_handoff(read, index):
+    """0074AA-0074B4 (`'handoff'`, `index` the live counter) or 0074A8-0074B4 (`'gate'`'s own 'found'
+    continuation, `index` forced to 0 by its own `moveq` first): the SAME deterministic table read
+    `state1_handoff`/`state0_handoff` use (`STATE1_HANDOFF_TABLE`), storing the SAME index it reads by
+    into STATE_COUNTER and landing one instruction into the shared tail (`pc = 0x0075DA`) -- but,
+    unlike `state1_handoff`/`state0_handoff`, never touching STATE_INDEX (this activation is already
+    state 5's own; nothing here re-selects it)."""
+    return {'stores': {STATE_COUNTER: (index, 2)}, 'd7': read(STATE1_HANDOFF_TABLE + 2 * index, 2)}
+
+
+def state5_fallback_stores():
+    """00748E-007490: STATE_INDEX forced to 1 (`FFFFF192`) before the `bra.w $7282` that ends the
+    activation at state 1's own gate; the caller's own D7 (`STATE5_FALLBACK_COUNTER`, 2) is not stored
+    to RAM here -- state 1's own eventual hand-off to the shared tail (`0075D6`) writes STATE_COUNTER
+    from D7 unconditionally, exactly as it does for a fresh state-1 dispatch."""
+    return {STATE_INDEX: (STATE5_FALLBACK_STATE_INDEX, 2)}
+
+
 # --- 006FFE: state 0's own decision tree -- the "move left" mirror of state 1, NOT a byte-identical
 # copy: real differences confirmed by the tracer, not assumed by symmetry (docs/gods/blockers/
 # 2026-09-17-008222.md's "18 September (continued)" addendum, extended when state 0 was recovered).

@@ -5392,6 +5392,172 @@ def state1_plan(machine, registers):
                       registers=exit_registers, last_pc=last_pc)
 
 
+# --- 00746A: state 5 (game.player.state5_step / state5_handoff / state5_fallback_stores) -----------
+#
+# "One region, two gates, one planner" (`docs/gods/blockers/2026-09-17-005700.md`'s Decision):
+# state 5's own 'fallback' arm ends at state 1's own gate (STATE1_ENTRY, a SEPARATELY ARMED candidate
+# this plan hands off to, not inlined here), so this planner never re-derives state 1's own body.
+# Costed one instruction-block at a time from a fresh disassembly (00746A-0074C2) cross-checked
+# against `factcheck.py facts --path` on four real fixtures over `census-00746A-fb408bc75597`
+# (entry d7 = 0, 2, 4-with-a-search-find, 4-with-a-search-miss), 18 September.
+STATE5_ENTRY = 0x00746A
+STATE5_CONSUME_RETURN_PC = 0x007478     # jsr 12da0.l's own return site (cmpi.w #5,d7)
+STATE5_SEARCH_RETURN_PC = 0x00748A      # bsr.w 8222's own return site (tst.w d0)
+
+_S5_ADDQ = (4, 1)                           # 00746A addq.w #1,d7
+_S5_CMPI3 = (8, 1)                          # 00746C cmpi.w #3,d7
+_S5_BNE3 = {True: (10, 1), False: (8, 1)}   # 007470 bne.b -- taken (!=3): skip the call; not taken (==3): the jsr
+_S5_JSR_CONSUME = (20, 1)                   # 007472 jsr $12da0.l
+_S5_CMPI5 = (8, 1)                          # 007478 cmpi.w #5,d7
+_S5_BLT5 = {True: (10, 1), False: (8, 1)}   # 00747C blt.b -- taken (<5): the table hand-off; not taken: the search gate
+_S5_BTST2 = (16, 1)                         # 00747E btst.b #2,ea23
+_S5_BEQ_BIT2 = {True: (10, 1), False: (8, 1)}   # 007484 beq.b -- taken (bit2 clear): fallback directly; not taken: bsr 8222
+_S5_BSR_SEARCH = (18, 1)                    # 007486 bsr.w $8222
+_S5_TST_D0 = (4, 1)                         # 00748A tst.w d0
+_S5_BEQ_FOUND = {True: (10, 1), False: (8, 1)}  # 00748C beq.b -- taken (found): the handoff's own moveq path; not taken: fallback
+_S5_FALLBACK_TAIL = (4 + 16 + 10, 3)        # 00748E moveq #2,d7; 007490 move.w #1,f192.w; 007496 bra.w $7282
+_S5_HANDOFF_MOVEQ = (4, 1)                  # 0074A8 moveq #0,d7 (the search-found continuation only)
+_S5_HANDOFF_STORE = (12, 1)                 # 0074AA move.w d7,f190.w
+_S5_HANDOFF_DOUBLE = (4, 1)                 # 0074AE add.w d7,d7
+_S5_HANDOFF_TABLE_READ = (14, 1)            # 0074B0 move.w 74b8(pc,d7.w),d7
+_S5_HANDOFF_BRA = (10, 1)                   # 0074B4 bra.w $75da
+
+
+def _state5_handoff_stores_and_cost(read, order, index, with_moveq):
+    from .game import player
+    handoff = player.state5_handoff(read, index)
+    for a, b in _bytes(player.STATE_COUNTER, handoff['stores'][player.STATE_COUNTER][0], 2):
+        order[a] = b
+    parts = (_S5_HANDOFF_MOVEQ,) if with_moveq else ()
+    cycles, instructions = _add(*parts, _S5_HANDOFF_STORE, _S5_HANDOFF_DOUBLE, _S5_HANDOFF_TABLE_READ, _S5_HANDOFF_BRA)
+    return cycles, instructions, handoff['d7']
+
+
+def state5_plan(machine, registers):
+    """00746A (state 5): the player state machine's own dispatch table entry 5, ALSO reached by a
+    `bra.w` fallthrough from inside state 1's own body (`0073E0`).  Composed over the already-
+    recovered contact-consume primary (`012DA0`) and contact search (`008222`); its own 'fallback' arm
+    ends at state 1's own gate (`pc = 0x007282`) instead of inlining state 1's body -- see the module
+    note above."""
+    from .game import player
+    if registers['pc'] != STATE5_ENTRY:
+        raise UnsupportedCandidate('state 5 planner needs the machine parked at 00746A')
+    read = _reader(machine)
+    d7 = registers['d7'] & 0xFFFF
+    head = player.state5_step(read, d7)
+    order = {}
+    sp32 = registers['a7']
+    # 00746A addq.w #1,d7 is the first X-setter in this plan; nothing before it.
+    sr = _add_sr(registers['sr'], d7, 1, 2)
+    cycles, instructions = _add(_S5_ADDQ, _S5_CMPI3)
+    exit_registers = {}
+
+    if head['calls_consumer']:
+        c, i = _S5_BNE3[False]
+        cycles += c
+        instructions += i
+        c, i = _S5_JSR_CONSUME
+        cycles += c
+        instructions += i
+        for a, b in _bytes((sp32 - 4) & 0xFFFFFF, STATE5_CONSUME_RETURN_PC, 4):
+            order[a] = b
+        cc_cycles, cc_instructions, cc_order, cc_registers, _ = _cc_resolve(machine, read, registers, 0, sp32 - 4)
+        cycles += cc_cycles
+        instructions += cc_instructions
+        order.update(cc_order)
+        exit_registers.update(cc_registers)
+    else:
+        c, i = _S5_BNE3[True]
+        cycles += c
+        instructions += i
+    c, i = _S5_CMPI5
+    cycles += c
+    instructions += i
+
+    if head['arm'] == 'handoff':
+        c, i = _S5_BLT5[True]
+        cycles += c
+        instructions += i
+        hc, hi, new_d7 = _state5_handoff_stores_and_cost(read, order, head['counter'], with_moveq=False)
+        cycles += hc
+        instructions += hi
+        exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | new_d7
+        exit_registers['pc'] = 0x0075DA
+        add_sr = _add_sr(sr, head['counter'], head['counter'], 2)   # 0074AE add.w d7,d7
+        exit_registers['sr'] = _logic_sr(add_sr, new_d7, 2)         # 0074B0 move.w ...,d7 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0074B4)
+
+    # head['arm'] in ('fallback', 'gate'): counter >= 5.
+    c, i = _S5_BLT5[False]
+    cycles += c
+    instructions += i
+    c, i = _S5_BTST2
+    cycles += c
+    instructions += i
+
+    if head['arm'] == 'fallback':
+        c, i = _S5_BEQ_BIT2[True]
+        cycles += c
+        instructions += i
+        c, i = _S5_FALLBACK_TAIL
+        cycles += c
+        instructions += i
+        for a, b in _bytes(player.STATE_INDEX, player.STATE5_FALLBACK_STATE_INDEX, 2):
+            order[a] = b
+        exit_registers['d7'] = player.STATE5_FALLBACK_COUNTER   # moveq #2,d7: a full 32-bit clear, not a .w merge
+        exit_registers['pc'] = player.STATE5_FALLBACK_PC
+        exit_registers['sr'] = _logic_sr(sr, player.STATE5_FALLBACK_STATE_INDEX, 2)   # 007490's own move.w is last
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x007496)
+
+    # head['arm'] == 'gate': call the already-recovered contact search internally, exactly the shape
+    # state1_plan already proved for a nested BSR into recovered code.
+    c, i = _S5_BEQ_BIT2[False]
+    cycles += c
+    instructions += i
+    c, i = _S5_BSR_SEARCH
+    cycles += c
+    instructions += i
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, STATE5_SEARCH_RETURN_PC, 4):
+        order[a] = b
+    cs_cycles, cs_instructions, cs_order, cs_registers, cs_result = _contact_search_resolve(
+        machine, read, {**registers, 'pc': CONTACT_SEARCH_ENTRY, 'a7': sp32 - 4, 'sr': sr}, sp32 - 4)
+    cycles += cs_cycles
+    instructions += cs_instructions
+    order.update(cs_order)
+    exit_registers.update(cs_registers)
+    c, i = _S5_TST_D0
+    cycles += c
+    instructions += i
+    found = cs_result['d0'] == 0
+    c, i = _S5_BEQ_FOUND[found]
+    cycles += c
+    instructions += i
+
+    if found:
+        hc, hi, new_d7 = _state5_handoff_stores_and_cost(read, order, 0, with_moveq=True)
+        cycles += hc
+        instructions += hi
+        exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | new_d7
+        exit_registers['pc'] = 0x0075DA
+        add_sr = _add_sr(cs_registers['sr'], 0, 0, 2)   # 0074AE add.w d7,d7 with d7 forced to 0 by 0074A8's moveq
+        exit_registers['sr'] = _logic_sr(add_sr, new_d7, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0074B4)
+
+    c, i = _S5_FALLBACK_TAIL
+    cycles += c
+    instructions += i
+    for a, b in _bytes(player.STATE_INDEX, player.STATE5_FALLBACK_STATE_INDEX, 2):
+        order[a] = b
+    exit_registers['d7'] = player.STATE5_FALLBACK_COUNTER   # moveq #2,d7: a full 32-bit clear
+    exit_registers['pc'] = player.STATE5_FALLBACK_PC
+    exit_registers['sr'] = _logic_sr(cs_registers['sr'], player.STATE5_FALLBACK_STATE_INDEX, 2)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x007496)
+
+
 # --- 006FFE: state 0 (game.player.state0_step / state0_cascade / state0_shared_sub) ---------------
 #
 # Costed one instruction-block at a time from the tracer the same way state 1 is; every block below
@@ -6557,7 +6723,12 @@ def _cc_resolve(machine, read, registers, routine, entry_sp):
         exit_d3, exit_d4, exit_d5 = slot_result['d3'], slot_result['d4'], slot_result['d5']
         if routine == 0 and type_value == 9:
             exit_a0 = 0x013194
-            exit_d6 = None   # type 9 never touches d6
+            # type 9 never touches d6 -- leave `exit_d6` exactly as an EARLIER found slot left it
+            # (still `None`, the caller's own entry value, if this is the only found slot so far;
+            # a real defect, caught on state 5's own fixtures, once reset this to `None`
+            # unconditionally and discarded an earlier slot's own real d6 whenever a later slot's own
+            # type happened to be 9 -- witnessed when slot 0 is found (its own `_append_groups` sets
+            # d6) and slot 1 is ALSO found as type 9).
         else:
             exit_a0 = int.from_bytes(machine.peek_rom((0x012C3E + 4 * type_value) & 0xFFFFFF, 4), 'big')
             exit_d6 = slot_result.get('d6')
