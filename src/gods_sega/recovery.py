@@ -19,7 +19,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
-                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE14_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
+                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE9_ENTRY, STATE14_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, camera_follow_plan,
@@ -28,7 +28,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_tail_plan, proximity_plan,
-                       record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state5_plan, state6_plan, state14_plan, static_emit_plan, string_copy_plan, table_reset_plan,
+                       record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state5_plan, state6_plan, state9_plan, state14_plan, static_emit_plan, string_copy_plan, table_reset_plan,
                        trail_check_plan, walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
 
@@ -207,6 +207,7 @@ PLANNERS = {
     'state-0': {STATE0_ENTRY: state0_plan},
     'state-5': {STATE5_ENTRY: state5_plan},
     'state-6': {STATE6_ENTRY: state6_plan},
+    'state-9': {STATE9_ENTRY: state9_plan},
     'state-14': {STATE14_ENTRY: state14_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
@@ -230,7 +231,8 @@ PLANNERS = {
                        CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan,
                        STATE24_ENTRY: movement_hit_primary_plan, STATE25_ENTRY: movement_hit_secondary_plan,
                        TRAIL_CHECK_ENTRY: trail_check_plan, STATE1_ENTRY: state1_plan, STATE0_ENTRY: state0_plan,
-                       STATE5_ENTRY: state5_plan, STATE6_ENTRY: state6_plan, STATE14_ENTRY: state14_plan},
+                       STATE5_ENTRY: state5_plan, STATE6_ENTRY: state6_plan, STATE9_ENTRY: state9_plan,
+                       STATE14_ENTRY: state14_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -335,6 +337,13 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # state re-enters).
              'state-5-mutant-result': ('state-5', _mutate_outcome),
              'state-6-mutant-result': ('state-6', _mutate_outcome),
+             # the same reasoning as states 5/6's own mutant: the 'countdown' arm's own exit D7
+             # (whichever of 4/5/untouched the head normalized it to) feeds the shared tail's own
+             # state-table re-index the same unbounded way; every terminal arm's own transition
+             # writes STATE_INDEX safely, but F19C (the fall timer) also feeds this candidate's own
+             # fall-table read next activation -- dropping the writes is the one shape safe on
+             # every arm at once.
+             'state-9-mutant-result': ('state-9', _mutate_outcome),
              'state-14-mutant-result': ('state-14', _mutate_state14_counter)}
 
 

@@ -971,3 +971,200 @@ def state14_settle_probe(read, settle_d7, f1b0_override=None):
     restored_d7 = read(F1B0, 2) if f1b0_override is None else f1b0_override
     return {'arm': 'exhausted', 'position_y': new_y, 'cell': cell, 'd7': restored_d7 & 0xFFFF,
             'stores': {POSITION_Y: (position_y, 2), F1B2 & 0xFFFFFF: (position_y, 2)}}
+
+
+# --- 0066A8: state 9's own decision tree -- a falling/jump-arc physics dispatcher (states 8/9 are a
+# pair the same way 5/6 and 0/1 are, sharing a jump-arc velocity table and two small grid-probe
+# leaves, 006442/006468, at ROM addresses right before state 8's own entry 00648C -- confirmed by a
+# fresh disassembly, 0066A8-006886 where state 21's own entry begins, cross-checked against
+# factcheck.py facts --path on nine real fixtures over census-0066A8-* covering every witnessed
+# arm, 18 September).  Reads: STATE_COUNTER (D7, normalized by the head below, never incremented),
+# F19C (the fall timer, a byte offset directly into the jump-arc table STATE9_FALL_TABLE -- it
+# steps by exactly 2 every tick that does not transition out, so it always lands on one of the
+# table's own word boundaries), the grid cell (twice: once before any X move, once after -- a second
+# activation can shift POSITION_X between them), F196 (an X step applied once F19C reaches
+# STATE9_ADVANCE_GATE), F19A (a tracked X position, compared against the live one for the two landing
+# checks below), F19E (an unwitnessed "double the fall step" flag -- 0 on every one of the 1,287
+# retained fixtures across all five recordings; declined if ever seen nonzero), EA1E/EA23 (pad-latch
+# words game/player.py's own docstring already flags).
+#
+# The head (0066A8-0066D2) normalizes D7 into one of three values used from here on: 0xC stays 0xC
+# until F19C reaches STATE9_ADVANCE_GATE, then becomes 5 (a MOVEQ, full clear); 5 stays 5; 0 stays 0
+# until the same F19C gate, then becomes 4 (an ADDQ, the entry's own upper half survives); anything
+# else becomes 5 (a MOVEQ).  Two shared grid-probe leaves follow the SAME shape state1_step's own
+# gate test uses (_row_gate_open below, parameterised on the row bias): the first
+# (0066D6-00670C, inline, not a call) gates an X-advance by F196 the same way, tested at row bias
+# 0x180 (three rows down: +1/+0x81/+0x101, low5 < 8 skips it) -- found, or low5 >= 8, skips
+# the advance and any grid test entirely; not found and low5 < 8 with F19C past the gate applies the
+# X step.  A second grid_cell call (00670C) re-reads the cell (the X step may have moved it) before
+# the EA1E-gated landing checks: EA1E < 0 tests a "landing-a" shape (F196 != 0, the live X != F19A, X's
+# low 5 bits == 0, the cell's own byte == 2) that transitions to state 14; EA1E == 1 (not just >= 0 --
+# any other nonnegative value, or EA1E < 0 already declined above, falls straight through) tests a
+# near-identical "landing-b" shape (the SAME X/F19A/low-5 gate, either the cell's own byte or the row
+# above it == 2) that transitions to state 13 -- UNWITNESSED by any of the 1,287 retained fixtures,
+# declined by name.  Past both landing checks: a ground-ahead probe (_row_gate_open at row bias
+# 0x180, the SAME shape the X-advance step uses) once F19C reaches STATE9_TRIGGER_GATE, BEFORE the
+# fall step -- found transitions to state 16 ("ground-before"); not found (or F19C not there yet)
+# falls into the fall step itself: POSITION_Y -= the jump-arc table's own entry at F19C (doubled if
+# F19E is set -- unwitnessed, declined), then a near-row probe (_row_gate_open at row bias 0) at
+# the NEW position -- found transitions to state 12 ("landed-after-move"); not found re-tries the
+# SAME ground-ahead probe at the NEW position once F19C reaches STATE9_TRIGGER_GATE (real: F19C did
+# not change between the two tries, but POSITION_Y just did) -- found transitions to state 16 the
+# SAME way ("ground-after", reusing "ground-before"'s own tail); not found gates a trigger event
+# (F19C past STATE9_ADVANCE_GATE, EA23 bit 2 set, game.pickups.contact_search finds something,
+# F19C short of STATE9_TRIGGER_CAP) that transitions to state 20 with F19C advanced by 2 regardless;
+# failing THAT gate too, F19C simply advances by 2 and, short of STATE9_COUNTDOWN_CAP, the activation
+# ends unchanged (still state 9) -- reaching the cap forces a landing at state 12 regardless
+# ("terminal-velocity").
+STATE9_ENTRY = 0x0066A8
+F19E = 0xFFFFF19E
+F1B8 = 0xFFFFF1B8
+F1BA = 0xFFFFF1BA
+STATE9_FALL_TABLE = 0x006414       # byte-offset-indexed by F19C directly (F19C already steps by 2)
+STATE9_FALL_TABLE_LIMIT = 0x2C     # the table's own last valid F19C entry
+STATE9_COUNTDOWN_CAP = 0x2E        # F19C's own cap: reaching it (after the +2 below) forces a landing
+STATE9_TRIGGER_GATE = 0x16         # F19C at/after this: the ground-ahead probe runs
+STATE9_ADVANCE_GATE = 4            # F19C at/after this: the X-advance / trigger gates open
+STATE9_TRIGGER_CAP = 0x2C          # a trigger found at/after this F19C no longer fires
+
+
+def _row_gate_open(read, address, position_x, bias):
+    """006442 (bias = 0x180, three rows down -- "ahead") / 006468 (bias = 0, the current row --
+    "here"): the SAME shape state1_step's own gate test uses (0x180/0x181 there), returning
+    whether the probe's own D1 comes back 1 ("found"/open) rather than 0."""
+    if read((address + bias) & 0xFFFFFF, 1) == 1:
+        return True
+    if (position_x & 0x1E) < 8:
+        return False
+    return read((address + bias + 1) & 0xFFFFFF, 1) == 1
+
+
+def _state9_head(read, d7):
+    """0066A8-0066D2: normalizes D7; see the module note above.  `source` says how: 'untouched'
+    (nothing touches the register at all -- 0xC or 0 short of the F19C gate, or already 5), 'moveq'
+    (a full 32-bit clear to 5), or 'addq' (0 to 4, a word op -- the entry's own upper half survives)."""
+    f19c = read(F19C, 2)
+    if d7 == 0xC:
+        if f19c >= STATE9_ADVANCE_GATE:
+            return 5, 'moveq'
+        return d7, 'untouched'
+    if d7 == 5:
+        return d7, 'untouched'
+    if d7 == 0:
+        if f19c >= STATE9_ADVANCE_GATE:
+            return 4, 'addq'
+        return d7, 'untouched'
+    return 5, 'moveq'
+
+
+def state9_step(read, d7):
+    """0066A8-006882: state 9's own whole decision tree.  `d7` is STATE_COUNTER as the dispatcher's
+    own entry left it.  Returns one of: 'landing-14' (transitions to state 14, witnessed once),
+    'landing-13' (declined, unwitnessed), 'ground-before' / 'ground-after' (both transition to state
+    16, game.player._state9_ground_stores), 'landed' (state 12), 'fall-tail' (the caller composes a
+    contact-search call and calls state9_fall_tail below), or 'countdown' is folded into 'fall-tail'
+    too (the tail decides).  Carries d7/source from the head for the boundary's own upper-half
+    bookkeeping."""
+    from .grid import grid_cell
+    d7, source = _state9_head(read, d7)
+    cell = grid_cell(read)
+    address = cell['address']
+    position_x = read(POSITION_X, 2)
+    low5 = position_x & 0x1F
+    base = {'d7': d7, 'source': source, 'cell1': cell}
+    blocked = False
+    if low5 < 8:
+        for offset in (1, 0x81, 0x101):
+            if read((address + offset) & 0xFFFFFF, 1) == 1:
+                blocked = True
+                break
+    advanced = False
+    if not blocked:
+        f19c = read(F19C, 2)
+        if f19c >= STATE9_ADVANCE_GATE:
+            step = read(F196, 2)
+            position_x = (position_x + step) & 0xFFFF
+            advanced = True
+    base['blocked'], base['advanced'] = blocked, advanced
+    if advanced:
+        def _read_after_advance(a, s, _position_x=position_x):
+            return _position_x if (a & 0xFFFFFF) == (POSITION_X & 0xFFFFFF) else read(a, s)
+        cell2 = grid_cell(_read_after_advance)
+    else:
+        cell2 = grid_cell(read)
+    address2 = cell2['address']
+    base['cell2'] = cell2
+
+    ea1e = _signed_word(read(EA1E_WORD, 2))
+    tracked_x = read(F19A, 2)
+    if ea1e < 0:
+        # 00671E beq.b $6726: F196 == 0 does NOT decline -- it SKIPS the tracked-X test (below) and
+        # falls straight into the low-bits/cell test, exactly as a real trace outside the original
+        # survey caught (F196 == 0 still reaching a real landing, 18 September).
+        f196 = read(F196, 2)
+        blocked = f196 != 0 and position_x == tracked_x
+        if not blocked and (position_x & 0x1F) == 0 and read(address2 & 0xFFFFFF, 1) == 2:
+            return {'arm': 'landing-14', 'stores': {
+                POSITION_X: (position_x & 0xFFE0, 2), POSITION_Y: (read(POSITION_Y, 2) & 0xFFF8, 2),
+                F1A8 & 0xFFFFFF: (0, 2), STATE_INDEX: (0xE, 2), F1AE & 0xFFFFFF: (0, 2),
+                F1A4 & 0xFFFFFF: (0, 2), F1A6 & 0xFFFFFF: (0, 2)}, **base}
+    elif ea1e == 1:
+        if position_x != tracked_x and (position_x & 0x1F) == 0 and \
+                (read(address2 & 0xFFFFFF, 1) == 2 or read((address2 + 0x80) & 0xFFFFFF, 1) == 2):
+            return {'arm': 'landing-13', **base}
+
+    f19c = read(F19C, 2)
+    if f19c >= STATE9_TRIGGER_GATE and _row_gate_open(read, address2, position_x, 0x180):
+        return {'arm': 'ground-before', 'stores': _state9_ground_stores(read(POSITION_Y, 2)), **base}
+
+    if f19c > STATE9_FALL_TABLE_LIMIT:
+        raise ValueError('state 9 fall table index past its own last entry')
+    step = _signed_word(read((STATE9_FALL_TABLE + f19c) & 0xFFFFFF, 2))
+    new_y = (read(POSITION_Y, 2) - step) & 0xFFFF
+    if read(F19E, 2) != 0:
+        raise ValueError('state 9 doubled fall step (FFFFF19E != 0) not witnessed by a recording')
+
+    def _read_after_fall(a, s, _new_y=new_y):
+        return _new_y if (a & 0xFFFFFF) == (POSITION_Y & 0xFFFFFF) else read(a, s)
+    address3 = grid_cell(_read_after_fall)['address']
+    base['new_y'] = new_y
+    if _row_gate_open(read, address3, position_x, 0):
+        new_y_aligned = (new_y & 0xFFF0) + 0x10
+        return {'arm': 'landed', 'stores': {
+            POSITION_Y: (new_y_aligned & 0xFFFF, 2), STATE_INDEX: (0xC, 2), F194 & 0xFFFFFF: (0, 2),
+            F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2)}, **base}
+
+    if f19c >= STATE9_TRIGGER_GATE and _row_gate_open(read, address3, position_x, 0x180):
+        return {'arm': 'ground-after', 'stores': _state9_ground_stores(new_y), **base}
+
+    needs_search = f19c >= STATE9_ADVANCE_GATE and bool(read(EA23_WORD, 1) & 4)
+    base['needs_search'] = needs_search
+    return {'arm': 'fall-tail', **base}
+
+
+def _state9_ground_stores(position_y):
+    """0067B8-0067CA: STATE_INDEX forced to 0x10 (16), POSITION_Y rounded down to a tile boundary
+    (the ORIGINAL, pre-fall-step Y for 'ground-before'; the POST-fall-step `new_y` for
+    'ground-after' -- the caller passes the right one), D7 cleared (MOVEQ), F1B8 cleared and a sound
+    cue (0x39) queued -- the SAME stores either way, save for which Y."""
+    from .pickups import MOVEMENT_SOUND_CUE
+    return {STATE_INDEX: (0x10, 2), POSITION_Y: (position_y & 0xFFF0, 2), F1B8 & 0xFFFFFF: (0, 2),
+            MOVEMENT_SOUND_CUE & 0xFFFFFF: (0x39, 2)}
+
+
+def state9_fall_tail(read, found, f19c, new_y):
+    """00682A-006882: the fall step's own tail, reached when neither ground probe found anything.  A
+    trigger (F19C past STATE9_ADVANCE_GATE, FFFFEA23 bit 2 set, a contact-search found result
+    the caller composes, F19C short of STATE9_TRIGGER_CAP) transitions to state 20; otherwise F19C
+    simply advances by 2, and -- short of STATE9_COUNTDOWN_CAP -- the activation ends unchanged
+    (still state 9); reaching the cap forces a landing at state 12 instead.  `found` is `None` when
+    the gate itself never opened (no search was needed), else the composed contact-search result."""
+    if found and f19c < STATE9_TRIGGER_CAP:
+        return {'arm': 'trigger', 'stores': {
+            STATE_INDEX: (0x14, 2), F1BA & 0xFFFFFF: (1, 2), F19C: ((f19c + 2) & 0xFFFF, 2)}, 'd7': 1}
+    new_f19c = (f19c + 2) & 0xFFFF
+    if new_f19c >= STATE9_COUNTDOWN_CAP:
+        return {'arm': 'terminal', 'stores': {
+            STATE_INDEX: (0xC, 2), F194 & 0xFFFFFF: (0, 2), F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2),
+            F19C: (new_f19c, 2)}, 'd7': 0}
+    return {'arm': 'countdown', 'stores': {F19C: (new_f19c, 2)}}
