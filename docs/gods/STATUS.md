@@ -1015,10 +1015,18 @@ small leaf):
 - **Remaining blocker**: none structural -- the 17 September escalation
   was the shared tail itself, since resolved (`player-tail`).  What is
   left is pure volume: the remaining witnessed states in frequency order
-  (12, 16, 20, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10), each
+  (12, 16, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10) -- state 20
+  is already gated (a real STATE_TABLE reconstruction from `005700`'s own
+  dispatch code, 18 Sep, found `FFFFF192 == 20` reaches `0069AC`, the
+  entry the existing `'state-26'` candidate already owns end to end; the
+  candidate's own name is a misnomer left as a fact for a future session,
+  not acted on -- nothing it proves is wrong, since every gate, fixture
+  and test is keyed by the PC, not the name) -- each remaining state
   needing the SAME per-arm survey/cost/verify recipe states 0/1/14
   already established; states 7 and 15 decline by name (unwitnessed)
-  until a recording exercises them.
+  until a recording exercises them.  The full `STATE_TABLE` (`005618`,
+  8-byte entries, address at `+4`) is in `ledger.md`'s own 18 September
+  entry.
   Once every witnessed state has its own gated candidate, `005700` is
   complete as a plain per-state composite, the same shape
   `achievement-slot-dispatch` already is over `0047DA`/`004800` -- no
