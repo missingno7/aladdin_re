@@ -306,10 +306,13 @@ history; `DIVERGENCE` names the first differing frame — inspect it with
 ## 11. Negative control
 
 ```powershell
-& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate>-mutant-result --timeout-seconds 900 --output artifacts\gods\verify-<candidate>-mutant
+& $py scripts\dev.py history-verify <NODE> --game gods --candidate <candidate>-mutant-result --expect divergence --timeout-seconds 900 --output artifacts\gods\verify-<candidate>-mutant
 ```
 
-Must be `DIVERGENCE` at the first frame that enters the region (or the
+`--expect divergence` lets the control stop at its first differing frame
+when the history's oracle stream is cached (~12 s instead of the whole
+history; the verdict and the first difference are the same).  Must be
+`DIVERGENCE` at the first frame that enters the region (or the
 segment check must diverge at the first frame after the fixture).  A PASS
 here is a `FACTORY_DEFECT` escalation.  A mutant that faults the machine
 (an address error, a cartridge write) is a finding about the game, not a
