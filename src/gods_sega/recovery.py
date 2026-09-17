@@ -14,7 +14,7 @@ from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
                        ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY,
-                       COLLISION_GATE_ENTRY, CONDITION_ENTRY, COUNTDOWN_CHECK_ENTRY,
+                       COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
@@ -22,7 +22,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, camera_follow_plan,
-                       collision_gate_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
+                       collision_gate_plan, contact_search_plan, countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_tail_plan, proximity_plan,
                        record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, static_emit_plan, string_copy_plan, table_reset_plan,
@@ -68,6 +68,21 @@ def _mutate_launch(plan: AtomicPlan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions,
                       plan.writes[:11] + ((address, (value + 1) & 0xFF),) + plan.writes[12:],
                       plan.registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_contact_outcome(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for the contact search: D0/D3 (0 found / 1 not found, this routine's own
+    headline outcome) toggled, not nudged by one -- both are always exactly 0 or 1, so a blind '+1'
+    (the generic register mutant) can leave a 'not found' occurrence nonzero either way and pass
+    right through a caller's own tst/bne, blind on most of the routine's own activations (the very
+    first one in the whole game, frame 2283 of fb408bc75597, is itself 'not found').  XOR 1 flips
+    found and not-found into each other on every occurrence, not only the ones this candidate finds
+    something on."""
+    registers = dict(plan.registers)
+    for name in ('d0', 'd3'):
+        if name in registers:
+            registers[name] = registers[name] ^ 1
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
 def _mutate_register(plan: AtomicPlan) -> AtomicPlan:
@@ -148,6 +163,7 @@ PLANNERS = {
     'action-reset-elapsed': {ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan},
     'action-clear-group': {ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
     'player-tail': {PLAYER_TAIL_ENTRY: player_tail_plan},
+    'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
                        SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
@@ -165,7 +181,7 @@ PLANNERS = {
                        ACHIEVEMENT_DISPATCH_ENTRY: achievement_slot_dispatch_plan,
                        SLOT_SCAN_ENTRY: slot_scan_plan, RECORD_ID_SCAN_ENTRY: record_id_scan_plan,
                        ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan, ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan,
-                       PLAYER_TAIL_ENTRY: player_tail_plan},
+                       PLAYER_TAIL_ENTRY: player_tail_plan, CONTACT_SEARCH_ENTRY: contact_search_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -235,7 +251,15 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'record-id-scan-mutant-result': ('record-id-scan', _mutate_result),
              'action-reset-elapsed-mutant-result': ('action-reset-elapsed', _mutate_result),
              'action-clear-group-mutant-result': ('action-clear-group', _mutate_result),
-             'player-tail-mutant-result': ('player-tail', _mutate_follow_point)}
+             'player-tail-mutant-result': ('player-tail', _mutate_follow_point),
+             # a register, not the generic "flip the last write": a found sub-pass's own last store
+             # is the hit record's own ADDRESS (a long) into one of the three CONTACT_SLOTS, later
+             # dereferenced by the still-unrecovered 012DA0/012E5A family -- corrupting its low byte
+             # risks an odd-address fault there rather than a clean divergence (the same risk the
+             # walker's and pickup-probe's own mutants already had to route around).  Not the generic
+             # register mutant either (a blind '+1' on D0's own 0/1 outcome can stay nonzero either
+             # way): see `_mutate_contact_outcome`.
+             'contact-search-mutant-result': ('contact-search', _mutate_contact_outcome)}
 
 
 @dataclass

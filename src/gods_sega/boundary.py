@@ -4464,3 +4464,222 @@ def player_tail_plan(machine, registers):
 
     return Seam(prefix=prefix, resume_pc=PLAYER_TAIL_UPLOAD_RTS, stack_basis=sp32,
                guards=((sp, 4),), suffix=player_tail_suffix)
+
+
+# --- 008222/00837E: the movement-cluster contact search (game/pickups.py: contact_search) -------
+#
+# No save/restore frame at all (hazard_tick's own shape): only d0/d3/d4/d5/d6/a2/a3 are live
+# scratch, and a2 only changes once some sub-pass reaches its own item-record lookup.  Every
+# instruction's own cost is constant regardless of the data it operates on (confirmed across every
+# retained fixture, artifacts/gods/evidence/census-008222-entry*), so the routine is costed one
+# instruction-block at a time; the docstring on ``game.pickups.contact_search`` and its own helpers
+# name the shape these blocks follow.
+CONTACT_SEARCH_ENTRY, CONTACT_SEARCH_LAST_PC = 0x008222, 0x00837C
+
+_CS_BUSY = (12 + 10 + 4 + 16, 4)                     # tst f1a2 (taken); moveq #1,d0; rts
+_CS_HEAD = (12 + 12 + 16 + 16 + 8 + 24 + 4 + 4 + 4, 9)     # tst f1a2 (not taken) .. moveq #0,d0
+_CS_COUNT_SKIP = (12 + 10, 2)                        # tst.w -2(a3); bmi.b taken
+_CS_COUNT_CONTINUE = (12 + 8, 2)                     # tst.w -2(a3); bmi.b not taken
+_CS_SP1_LOOKUP = (12 + 14 + 4 + 4 + 4 + 4 + 8 + 14 + 4, 9)   # move.w -2(a3),d4 .. move.w d4,d6
+_CS_SP23_SETUP = (8 + 24 + 4, 3)                     # lea list,a3; clr.l slot; moveq #0,d0
+_CS_SP23_LOOKUP = (12 + 4 + 4 + 12 + 18 + 12 + 4, 7)         # move.w -2(a3),d5 .. move.w d4,d6
+_CS_SP23_BMI_SKIP = (10, 1)
+_CS_SP23_BMI_CONTINUE = (8, 1)
+_CS_SP23_INITIAL_INDEX = (4, 1)                      # moveq #imm,d5
+_CS_BSR = (18, 1)
+_CS_PROBE_OCC = {0: (8 + 10 + 4 + 16, 4), 8: (8 + 8 + 12 + 10 + 4 + 16, 6),
+                 0x10: (8 + 8 + 12 + 8 + 12 + 8 + 4 + 16, 8)}
+_CS_PROBE_FREE = (8 + 8 + 12 + 8 + 12 + 10 + 16, 7)
+_CS_CALLER_BEQ_MISS = (8, 1)
+_CS_CALLER_BEQ_FOUND = (10, 1)
+_CS_BUDGET_DEC_CONTINUE = (4 + 8, 2)                 # subq.w #1,d4; beq.b not taken
+_CS_BUDGET_DEC_ABORT = (4 + 10, 2)                   # subq.w #1,d4; beq.b taken
+_CS_RETRY_SETUP = (8 + 4 + 4, 3)                     # lea $18(a3),a3; moveq #0,d0; addq.w #3,d5
+_CS_LAST_MISS_BRA = (10, 1)                          # bra.b, unconditional, after the third unrolled attempt
+_CS_SP1_STORE_BASE = (16 + 12 + 4 + 8, 4)            # move.l a3,slot; move.w d5,index; clr.w d3; cmpi.w #1,d6
+_CS_SP1_STORE_NOLATCH = (10, 1)                      # bne.b taken (ITEM_CONTACT_WORD != 1)
+_CS_SP1_STORE_LATCH = (8 + 16, 2)                    # bne.b not taken; move.w #1,CONTACT_LATCH
+_CS_SP23_GATE_HEAD = (8, 1)                          # cmpi.w #1,d6
+_CS_SP23_STORE_IMMEDIATE = (10 + 16 + 12 + 4, 4)     # bne.b taken (!=1); move.l a3,slot; move.w d5,index; moveq #0,d3
+_CS_SP23_LATCH_TEST = (8 + 12, 2)                    # bne.b not taken (==1); tst.w CONTACT_LATCH
+_CS_SP23_LATCH_DISCARD = (10, 1)                     # bne.b taken: latch already set, no store
+_CS_SP23_LATCH_STORE = (8 + 16 + 12 + 4, 4)          # bne.b not taken: move.l a3,slot; move.w d5,index; moveq #0,d3
+_CS_TAIL = (4 + 16, 2)                               # move.w d3,d0; rts
+# Each bsr.w/bsr.b into 00837E pushes its own return address at (entry_sp - 4); 00837E's own rts
+# pops it straight back before the next one runs, so only the LAST call's own return address is
+# live there when the whole routine returns -- real stack residue, not dead scratch (docs/gods/
+# grinder-protocol.md's own "a routine that saves registers writes its whole frame" rule, one word).
+_CS_RETURN_ADDRESSES = ((0x008264, 0x008276, 0x008288), (0x0082D2, 0x0082E4, 0x0082F6), (0x008340, 0x008350, 0x008360))
+
+
+def _cs_attempts_cost(attempts):
+    """The bsr+probe+caller-beq for every attempt a sub-pass made, plus the retry setup or the
+    budget decrement between attempts (and the unconditional bra after the third, if reached)."""
+    cycles = instructions = 0
+    for index, step in enumerate(attempts):
+        c, i = _add(_CS_BSR, _CS_PROBE_OCC[step['stop_offset']] if step['result'] == 'occupied' else _CS_PROBE_FREE)
+        cycles += c
+        instructions += i
+        found = step['result'] == 'free'
+        c, i = _CS_CALLER_BEQ_FOUND if found else _CS_CALLER_BEQ_MISS
+        cycles += c
+        instructions += i
+        if found:
+            break
+        if index == 2:   # the third, unrolled attempt: a miss falls straight to the unconditional bra
+            c, i = _CS_LAST_MISS_BRA
+            cycles += c
+            instructions += i
+            break
+        c, i = _CS_BUDGET_DEC_ABORT if step['budget_after'] == 0 else _CS_BUDGET_DEC_CONTINUE
+        cycles += c
+        instructions += i
+        if step['budget_after'] == 0:
+            break
+        c, i = _CS_RETRY_SETUP
+        cycles += c
+        instructions += i
+    return cycles, instructions
+
+
+def _cs_subpass_cost(sub_index, result):
+    """The full cost of one of 008222's own three sub-passes, from its own count test to whichever
+    tail (skip / abandon / store / latch-gate) it reaches."""
+    cycles = instructions = 0
+    if sub_index != 0:
+        c, i = _CS_SP23_SETUP
+        cycles += c
+        instructions += i
+    if result['arm'] == 'skip':
+        c, i = _CS_COUNT_SKIP
+        cycles += c
+        instructions += i
+        return cycles, instructions
+    c, i = _CS_COUNT_CONTINUE
+    cycles += c
+    instructions += i
+    c, i = _CS_SP1_LOOKUP if sub_index == 0 else _CS_SP23_LOOKUP
+    cycles += c
+    instructions += i
+    if sub_index != 0:
+        c, i = _CS_SP23_BMI_SKIP if result['arm'] == 'skip-negative' else _CS_SP23_BMI_CONTINUE
+        cycles += c
+        instructions += i
+        if result['arm'] == 'skip-negative':
+            return cycles, instructions
+        c, i = _CS_SP23_INITIAL_INDEX
+        cycles += c
+        instructions += i
+    c, i = _cs_attempts_cost(result['attempts'])
+    cycles += c
+    instructions += i
+    if result['arm'] == 'not-found':
+        return cycles, instructions
+    if sub_index == 0:
+        c, i = _add(_CS_SP1_STORE_BASE, _CS_SP1_STORE_LATCH if result['sets_latch'] else _CS_SP1_STORE_NOLATCH)
+    else:
+        c, i = _CS_SP23_GATE_HEAD
+        if result['contact_word'] & 0xFFFF != 1:
+            ci, ii = _CS_SP23_STORE_IMMEDIATE
+        elif result['arm'] == 'gated':
+            ci, ii = _add(_CS_SP23_LATCH_TEST, _CS_SP23_LATCH_DISCARD)
+        else:
+            ci, ii = _add(_CS_SP23_LATCH_TEST, _CS_SP23_LATCH_STORE)
+        c, i = c + ci, i + ii
+    cycles += c
+    instructions += i
+    return cycles, instructions
+
+
+def contact_search_plan(machine, registers):
+    """008222 (with its helper 00837E): the movement-cluster contact search.
+
+    Witnessed across all eight recordings (271 retained path classes, `--max-classes 400`): the
+    guard busy; each sub-pass's own 'skip' (count negative), 'not-found' (every attempt occupied,
+    or the retry budget ran out) and 'found'; and, on sub-pass 2 only, ITEM_CONTACT_WORD == 1 on a
+    find (96 of the 271 fixtures) -- the latch-test code runs, but the latch is always still clear
+    at that point (sub-pass 1's own item never has ITEM_CONTACT_WORD == 1, so it never sets the
+    latch), so the store always goes through.  Declined, unwitnessed by any recording: a sub-pass
+    2/3 whose own ITEM_CONTACT_WORD comes back negative ('skip-negative'), sub-pass 1 itself ever
+    having ITEM_CONTACT_WORD == 1 (its own latch-set arm), and the latch actually being set when a
+    sub-pass 2/3 find tests it (the 'gated' arm) -- the second half of the whole latch mechanism.
+    """
+    from .game import pickups
+    if registers['pc'] != CONTACT_SEARCH_ENTRY:
+        raise UnsupportedCandidate('contact search planner needs the machine parked at 008222')
+    sr = registers['sr']
+    read = _reader(machine)
+    result = pickups.contact_search(read)
+    if result['arm'] != 'busy':
+        for sub_index, sub_result in enumerate(result['subpasses']):
+            if sub_result['arm'] == 'skip-negative':
+                raise UnsupportedCandidate(f'contact search sub-pass {sub_index} negative ITEM_CONTACT_WORD not witnessed by a recording')
+            if sub_result['arm'] == 'gated':
+                raise UnsupportedCandidate(f'contact search sub-pass {sub_index} latch-gated find not witnessed by a recording')
+            if sub_index == 0 and sub_result['sets_latch']:
+                raise UnsupportedCandidate('contact search sub-pass 0 ITEM_CONTACT_WORD == 1 (the latch set) not witnessed by a recording')
+    order = {}
+    for address, (value, size) in result['stores'].items():
+        for a, b in _bytes(address, value, size):
+            order[a] = b
+
+    if result['arm'] == 'busy':
+        cycles, instructions = _CS_BUSY
+        # moveq #1,d0 sets N=0/Z=0/V=0/C=0 (a positive one-word value); tst/bne/rts touch no flag at
+        # all, and MOVEQ itself never touches X, so X survives from entry unchanged.
+        exit_sr = sr & ~0x0F
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
+                          registers={'d0': (registers['d0'] & 0xFFFF0000) | 1,
+                                     'a7': (registers['a7'] + 4) & 0xFFFFFFFF,
+                                     'pc': _return(machine, registers['a7'] & 0xFFFFFF), 'sr': exit_sr},
+                          last_pc=0x008390)
+
+    cycles, instructions = _CS_HEAD
+    last_return = None
+    for sub_index, sub_result in enumerate(result['subpasses']):
+        c, i = _cs_subpass_cost(sub_index, sub_result)
+        cycles += c
+        instructions += i
+        if sub_result['attempts']:
+            last_return = _CS_RETURN_ADDRESSES[sub_index][len(sub_result['attempts']) - 1]
+    c, i = _CS_TAIL
+    cycles += c
+    instructions += i
+    if last_return is not None:
+        sp = registers['a7'] & 0xFFFFFF
+        for a, b in _bytes((sp - 4) & 0xFFFFFF, last_return, 4):
+            order[a] = b
+
+    # move.w d3,d0 is the last N/Z/V/C setter on every non-busy path: d3 (0 found / 1 not found)
+    # gives N=0 always, Z from whether it is 0; V=C=0 (MOVE always clears them).  X is untouched by
+    # MOVE: it survives from the last ADD/ADDQ/SUB/SUBQ/ASL any sub-pass executed (game.pickups
+    # already names it, 'last_x'), or from entry if none did (every sub-pass 'skip').
+    exit_sr = (sr & ~0x1F) | (0x04 if result['d0'] == 0 else 0)
+    if result['last_x'] is not None:
+        op, left, right = result['last_x']
+        exit_sr = (exit_sr & ~0x10) | ((_add_sr if op == 'add' else _sub_sr)(sr, left, right, 2) & 0x10)
+
+    # HEAD's own "moveq #0,d0" / "moveq #1,d3" / "moveq #1,d5" -- and, for d0, every RETRY_SETUP's
+    # own "moveq #0,d0" between attempts -- are full 32-bit clears; nothing after them ever restores
+    # a nonzero upper half, so d0/d3/d5 always exit with upper=0, never the caller's own entry value
+    # (found on fixture p34, whose caller's own d0 upper half was 0xFFFF, exposing the earlier bug).
+    # d4/d6 have no such MOVEQ of their own: their upper half genuinely survives from entry.
+    exit_registers = {'d0': result['d0'], 'd3': result['d0'],
+                      'a7': (registers['a7'] + 4) & 0xFFFFFFFF,
+                      'pc': _return(machine, registers['a7'] & 0xFFFFFF), 'sr': exit_sr}
+    if result['a2_exit'] is not None:
+        exit_registers['a2'] = result['a2_exit'] & 0xFFFFFFFF
+    if result['d4_exit'] is not None:
+        exit_registers['d4'] = (registers['d4'] & 0xFFFF0000) | result['d4_exit']
+    if result['d5_exit'] is not None:
+        exit_registers['d5'] = result['d5_exit']
+    if result['d6_exit'] is not None:
+        exit_registers['d6'] = (registers['d6'] & 0xFFFF0000) | result['d6_exit']
+    # a3 ends the routine at sub-pass 3's own list base (FFFFF0B2, unconditionally leaded before its
+    # own count test), advanced by 0x18 per retry ("lea $18(a3),a3") sub-pass 3's own attempts made.
+    sp3_attempts = result['subpasses'][2]['attempts']
+    exit_registers['a3'] = (pickups.GROUP_TABLES[2] + pickups.CONTACT_ENTRY_BASE_OFFSET
+                            + 0x18 * max(0, len(sp3_attempts) - 1)) & 0xFFFFFFFF
+
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=CONTACT_SEARCH_LAST_PC)

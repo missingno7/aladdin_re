@@ -536,3 +536,202 @@ def pickup_probe(read, d0, d1, record_d2):
     y = (d1 + read(CAMERA_Y, 2)) & 0xFFFF
     check = pickup_check(read, x, y, record_d2)
     return {'x': x, 'y': y, 'check': check, 'negative': _signed_word(check['d2']) < 0}
+
+
+# --- 008222/00837E: the movement-cluster contact search over the three collectible lists -----
+#
+# The blocker docs/gods/blockers/2026-09-17-008222.md (Decision, 18 September): reached from
+# inside the player state machine's own movement-cluster handlers (state 1, state 0, state 24 and
+# others), a reentrancy-guarded search over the SAME three collectible lists ``GROUP_TABLES`` names
+# above (their own leading count word, entries starting two bytes later) -- but read here as up to
+# three consecutive 0x18-byte "hit records" per list, each carrying three status words (offsets
+# 0/8/0x10) rather than the 8-byte item slots ``collect`` above reads from the identical bytes; the
+# two views coexist because 008222 only ever looks at the first three records of a list, well inside
+# ``collect``'s own nine-slot span.  Each of the three independent sub-passes is gated by its own
+# list's count word (negative skips the sub-pass outright) and looks up one item record's own word at
+# ``+0xA`` (``ITEM_VALUE``'s neighbour, named ``ITEM_CONTACT_WORD`` here): sub-pass 1 indexes the flat
+# item-record array directly (``count * 0x50`` bytes past ``ITEM_RECORDS_BASE``, the same address
+# ``pickups.ITEM_RECORDS`` -- the ROM pointer table -- points its own first entry at); sub-passes 2
+# and 3 go through that pointer table instead (``ITEM_RECORDS[count]``) and additionally abandon the
+# whole sub-pass when the word comes back negative.  ITEM_CONTACT_WORD then doubles as a retry budget
+# (decremented after each occupied entry; hitting exactly zero abandons the sub-pass before its own
+# third, unrolled attempt) and, on a match, a latch selector: sub-pass 1 sets ``CONTACT_LATCH``
+# unconditionally when its own ITEM_CONTACT_WORD is 1 (never reads the latch first, since nothing
+# could have set it yet); sub-passes 2 and 3 do the mirror image -- when THEIR OWN ITEM_CONTACT_WORD
+# is 1, they read the latch first and discard the match entirely (no store, no "found" contribution)
+# if it is already set, and never set it themselves either way.  A found-and-stored entry's own
+# address and the attempt's own index constant (1/4/7 for sub-pass 1, 0xA/0xD/0x10 for sub-pass 2,
+# 0x13/0x16/0x19 for sub-pass 3 -- a fixed per-sub-pass base plus 3 per retry, not the attempt's own
+# 0-based position) land in one of the three slot pairs.  The overall result (D0/D3) is 0 ("found")
+# if ANY sub-pass stored a match, 1 otherwise -- a sub-pass finding but being latch-discarded does
+# NOT count.  All three sub-passes always run (a match in an earlier one does not skip a later one).
+REENTRANCY_GUARD = 0xFFFFF1A2                          # word: nonzero while a search is already in progress
+CONTACT_LATCH = 0xFFFFF23C                              # word: cleared at entry; set once, by sub-pass 1 only
+CONTACT_SLOTS = (0xFFFFF374, 0xFFFFF378, 0xFFFFF37C)    # per sub-pass: the found entry's own address (long)
+CONTACT_INDEX_WORDS = (0xFFFFF36E, 0xFFFFF370, 0xFFFFF372)   # per sub-pass: the found attempt's own index
+CONTACT_ENTRY_BASE_OFFSET = 2                           # entries start two bytes past the list's count word
+CONTACT_ENTRY_STRIDE = 0x18                             # bytes between consecutive attempts in one sub-pass
+CONTACT_STATUS_OFFSETS = (0, 8, 0x10)                   # an entry's own three status words, tested in order
+CONTACT_ITEM_RECORDS_BASE = 0xFFFFF552                  # sub-pass 1's own direct arithmetic (== ITEM_RECORDS[0])
+CONTACT_ITEM_RECORD_STRIDE = 0x50                       # matches ITEM_RECORD_COUNT's own 0x50-byte records
+CONTACT_WORD_OFFSET = 0xA                               # ITEM_VALUE's neighbour: retry budget and latch selector
+CONTACT_INITIAL_INDEX = (1, 0xA, 0x13)                  # each sub-pass's own first-attempt index constant
+CONTACT_INDEX_STEP = 3                                  # added to the index per retry
+CONTACT_MAX_ATTEMPTS = 3
+
+
+def _contact_probe(read, entry_addr):
+    """00837E: an entry's own three status words (offsets 0/8/0x10), tested in ROM order; the first
+    nonzero one stops the check short ('occupied', naming which offset stopped it -- the boundary's
+    own cost varies with it); all three zero is a match ('free')."""
+    for offset in CONTACT_STATUS_OFFSETS:
+        if read((entry_addr + offset) & 0xFFFFFF, 2) != 0:
+            return {'result': 'occupied', 'stop_offset': offset}
+    return {'result': 'free', 'stop_offset': None}
+
+
+def _contact_subpass(read, sub_index, list_table, latch_set):
+    """One of 008222's own three sub-passes over ``list_table`` (one of ``GROUP_TABLES``).
+
+    ``sub_index`` (0/1/2) selects sub-pass 1's own direct item-record arithmetic versus sub-passes
+    2/3's indirect read through ``ITEM_RECORDS``; ``latch_set`` is ``CONTACT_LATCH``'s value as of
+    entering this sub-pass (only sub-pass 1 ever writes it, so 2 and 3 only ever read it).
+
+    Returns the sub-pass's own arm (``'skip'``: the count word was negative; ``'skip-negative'``:
+    sub-pass 2/3 only, ITEM_CONTACT_WORD was negative; ``'not-found'``: every attempt was occupied,
+    or the retry budget ran out; ``'found'``: a match was stored; ``'gated'``: a match was found but
+    discarded by the latch), the attempts made (each a probe result), the stores, whether this
+    sub-pass's own find (if any) was stored, and whether it set the latch (sub-pass 1 only).
+
+    Also carries what the boundary needs for the exit register file and CCR, since this sub-pass is
+    the only place that knows which of its own instructions ran: ``a2_exit``/``d4_exit``/
+    ``d5_exit``/``d6_exit`` (``None`` when this sub-pass left that register untouched -- the 'skip'
+    arm touches none of them) and ``last_x``, the ``(op, left, right)`` of the last ADD/ADDQ/SUB/
+    SUBQ/ASL this sub-pass executed (also ``None`` on 'skip'; every other instruction in the routine,
+    including every one inside the shared probe ``00837E``, leaves X alone).
+    """
+    # 008230 (HEAD) and each sub-pass's own setup (SP23_SETUP) clear this sub-pass's own slot
+    # unconditionally, BEFORE the count test -- a later find overwrites it, but every other arm
+    # (including 'skip') leaves the clear as the slot's own final value.
+    base_stores = {CONTACT_SLOTS[sub_index] & 0xFFFFFF: (0, 4)}
+    count = read(list_table & 0xFFFFFF, 2)
+    entries_base = (list_table + CONTACT_ENTRY_BASE_OFFSET) & 0xFFFFFFFF
+    if _signed_word(count) < 0:
+        return {'arm': 'skip', 'attempts': [], 'stores': base_stores, 'stored': False, 'sets_latch': False,
+                'count': count, 'a2_exit': None, 'd4_exit': None, 'd5_exit': None, 'd6_exit': None,
+                'last_x': None}
+
+    count16 = count & 0xFFFF
+    if sub_index == 0:
+        # d4 = count<<4, doubled twice more (<<6), then added to its own pre-doubled copy (d6, <<4):
+        # d4 = count<<6 + count<<4 = count*0x50; a2 itself stays CONTACT_ITEM_RECORDS_BASE throughout
+        # (d4 is only ever an INDEX register in the "$a(a2,d4.w)" read, never added into a2 itself).
+        shifted = (count16 << 4) & 0xFFFF
+        doubled = (shifted << 2) & 0xFFFF
+        lookup_x = ('add', doubled, shifted)
+        record_addr = (CONTACT_ITEM_RECORDS_BASE + _signed_word((count16 * CONTACT_ITEM_RECORD_STRIDE) & 0xFFFF)) & 0xFFFFFFFF
+        a2_lookup = CONTACT_ITEM_RECORDS_BASE
+    else:
+        # d5 = count, doubled twice (<<2) as the pointer table's own byte index; a2 becomes the
+        # record's own address once the indirection (movea.l) runs.
+        doubled_once = (count16 << 1) & 0xFFFF
+        lookup_x = ('add', doubled_once, doubled_once)
+        pointer_addr = (ITEM_RECORDS + _signed_word((count16 * 4) & 0xFFFF)) & 0xFFFFFF
+        record_addr = read(pointer_addr, 4) & 0xFFFFFFFF
+        a2_lookup = record_addr
+    contact_word = read((record_addr + CONTACT_WORD_OFFSET) & 0xFFFFFF, 2)
+    word16 = contact_word & 0xFFFF
+
+    if sub_index != 0 and _signed_word(contact_word) < 0:
+        return {'arm': 'skip-negative', 'attempts': [], 'stores': base_stores, 'stored': False, 'sets_latch': False,
+                'count': count, 'record_addr': record_addr, 'contact_word': contact_word,
+                'a2_exit': a2_lookup, 'd4_exit': word16, 'd5_exit': doubled_once, 'd6_exit': word16,
+                'last_x': lookup_x}
+
+    d4_track, d5_track, last_x = word16, CONTACT_INITIAL_INDEX[sub_index], lookup_x
+    attempts = []
+    found_attempt = None
+    for attempt in range(CONTACT_MAX_ATTEMPTS):
+        entry_addr = (entries_base + CONTACT_ENTRY_STRIDE * attempt) & 0xFFFFFFFF
+        index_value = d5_track & 0xFFFF
+        probe = _contact_probe(read, entry_addr)
+        step = {'attempt': attempt, 'entry': entry_addr, 'index': index_value, **probe}
+        attempts.append(step)
+        if probe['result'] == 'free':
+            found_attempt = step
+            break
+        if attempt < CONTACT_MAX_ATTEMPTS - 1:
+            pre_d4 = d4_track
+            d4_track = (d4_track - 1) & 0xFFFF
+            last_x = ('sub', pre_d4, 1)
+            step['budget_after'] = d4_track
+            if d4_track == 0:
+                break   # the retry budget ran out before the last unrolled attempt
+            pre_d5 = d5_track
+            d5_track = (d5_track + CONTACT_INDEX_STEP) & 0xFFFF
+            last_x = ('add', pre_d5, CONTACT_INDEX_STEP)
+
+    stores, stored, sets_latch, gated = dict(base_stores), False, False, False
+    if found_attempt is not None:
+        if sub_index == 0:
+            stores[CONTACT_SLOTS[0] & 0xFFFFFF] = (found_attempt['entry'], 4)
+            stores[CONTACT_INDEX_WORDS[0] & 0xFFFFFF] = (found_attempt['index'], 2)
+            stored = True
+            if word16 == 1:
+                stores[CONTACT_LATCH & 0xFFFFFF] = (1, 2)
+                sets_latch = True
+        elif word16 == 1 and latch_set:
+            gated = True
+        else:
+            stores[CONTACT_SLOTS[sub_index] & 0xFFFFFF] = (found_attempt['entry'], 4)
+            stores[CONTACT_INDEX_WORDS[sub_index] & 0xFFFFFF] = (found_attempt['index'], 2)
+            stored = True
+
+    arm = 'found' if stored else ('gated' if gated else 'not-found')
+    return {'arm': arm, 'attempts': attempts, 'stores': stores, 'stored': stored, 'sets_latch': sets_latch,
+            'count': count, 'record_addr': record_addr, 'contact_word': contact_word,
+            'found_attempt': found_attempt, 'a2_exit': a2_lookup, 'd4_exit': d4_track,
+            'd5_exit': d5_track & 0xFFFF, 'd6_exit': word16, 'last_x': last_x}
+
+
+def contact_search(read):
+    """008222 (with its helper 00837E): the movement-cluster hit-list search.
+
+    Returns the reentrancy arm (``'busy'`` when the guard was already set: no RAM touched but the
+    guard), or ``'ran'`` with the three sub-passes' own results, the combined stores, and D0/D3
+    (0 if any sub-pass stored a match, 1 otherwise).
+    """
+    if read(REENTRANCY_GUARD, 2) != 0:
+        return {'arm': 'busy', 'd0': 1, 'stores': {}, 'subpasses': None}
+
+    stores = {REENTRANCY_GUARD & 0xFFFFFF: (1, 2), CONTACT_LATCH & 0xFFFFFF: (0, 2)}
+    latch_set = False
+    subpasses = []
+    any_stored = False
+    # HEAD's own "moveq #1,d5" (the reentrancy guard just cleared) leaves d5=1 even if every
+    # sub-pass below is 'skip' and never touches it again; a2/d4/d6 have no such HEAD setter.
+    a2_exit = d4_exit = d6_exit = last_x = None
+    d5_exit = CONTACT_INITIAL_INDEX[0]
+    for sub_index, list_table in enumerate(GROUP_TABLES):
+        result = _contact_subpass(read, sub_index, list_table, latch_set)
+        subpasses.append(result)
+        stores.update(result['stores'])
+        if result['sets_latch']:
+            latch_set = True
+        if result['stored']:
+            any_stored = True
+        # Each sub-pass always runs, so whichever most recently touched a register is what is live
+        # at the end -- sub-pass 3's own value wins if it ran at all, sub-pass 2's if 3 was 'skip', etc.
+        if result['a2_exit'] is not None:
+            a2_exit = result['a2_exit']
+        if result['d4_exit'] is not None:
+            d4_exit = result['d4_exit']
+        if result['d5_exit'] is not None:
+            d5_exit = result['d5_exit']
+        if result['d6_exit'] is not None:
+            d6_exit = result['d6_exit']
+        if result['last_x'] is not None:
+            last_x = result['last_x']
+    d0 = 0 if any_stored else 1
+    return {'arm': 'ran', 'd0': d0, 'stores': stores, 'subpasses': subpasses, 'found': any_stored,
+            'a2_exit': a2_exit, 'd4_exit': d4_exit, 'd5_exit': d5_exit, 'd6_exit': d6_exit, 'last_x': last_x}

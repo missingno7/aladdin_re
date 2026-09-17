@@ -79,17 +79,20 @@ machine (`005700`, 29 states), the creature update (`00A772`, 8 kinds) and
 the world update (`0030CC`), the next three subsystems.
 
 `005700`'s own shared tail (`0075D6`) is recovered as a platform-tail
-seam (17 Sep); its own state handlers are blocked on a further
-subsystem, not yet named: every movement-cluster state examined
-(1, 0, 26) reaches a hit-list search (`008222`) or its own per-object-type
-consumers (`012DA0`/`012E5A`) on a real, frequently-witnessed fraction of
-its activations (`docs/gods/blockers/2026-09-17-008222.md`).
+seam (17 Sep); its own state handlers still need a further subsystem
+before they can be planned: every movement-cluster state examined
+(1, 0, 24) reaches a hit-list search (`008222`, recovered 18 Sep as
+`contact-search` -- the supervisor's Decision on
+`docs/gods/blockers/2026-09-17-008222.md` named its own data,
+`pickups.ITEM_RECORDS`) or its own per-object-type consumers
+(`012DA0`/`012E5A`) on a real, frequently-witnessed fraction of its
+activations; `012DA0`/`012E5A`'s own per-type dispatch is the next bite.
 
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with thirty-five gates armed, the camera follow step `002806`, the
+  original with thirty-six gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -115,7 +118,8 @@ its activations (`docs/gods/blockers/2026-09-17-008222.md`).
   player state machine's own shared tail `0075D6` (a platform-tail seam
   over a second inline upload, `001312`, with no suffix beyond its own
   `rts`: the tile trigger scan's clean arm, the follow-point step, the
-  state-table re-index); `camera`,
+  state-table re-index), and the movement-cluster contact search `008222`
+  (with its own helper `00837E`); `camera`,
   `sprites`, `sprites-static`, `conditions`, `pickups`,
   `table-reset`, `spawn-queue`, `grid-cell`, `footprint`, `solid-draw`,
   `animation-step`, `countdown-check`, `collision-gate`, `zone-check`,
@@ -124,7 +128,8 @@ its activations (`docs/gods/blockers/2026-09-17-008222.md`).
   `pickup-probe`, `walker`, `projectile-launch`, `projectile-resume`,
   `message-gate`, `string-copy`, `achievement-slot-reset`,
   `achievement-slot-dispatch`, `slot-scan`, `record-id-scan`,
-  `action-reset-elapsed`, `action-clear-group` and `player-tail` arm each alone.
+  `action-reset-elapsed`, `action-clear-group`, `player-tail` and
+  `contact-search` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -248,7 +253,10 @@ ids, never to `main`:
 | `player-tail` reproduces the original on `fb408bc75597…`: **PASS, 34,904 frames, 16,386 hits (8,201 seam entries, 8,185 completions), 2,891 fallbacks (2,704 tile-scan event-found by kind: 3→2,003, 6→650, 4→27, 2→14, 1→3, 5→3, 8→2, 7→1, 9→1; 133 z80 bank guard, 42 y-minimum-step declines, 10 seam deadline, 2 observation deadline)** -- up from 10,042 hits / 6,059 fallbacks (5,939 of them tile-scan trigger declines) before 18 Sep's event-status characterisation; `camera-sprites` (unchanged gate count) on the tree of all eight recordings: **PASS, 107,519 frames, 1,095,639 hits (130,432 seam entries, 129,355 completions), 14,007 fallbacks, tree bit-exact** -- a second, pre-existing defect found and fixed on this tree run before it passed (below) | `history-verify fb408bc75597 --candidate player-tail`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-player-tail3-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18d` |
 | **defect found by the tree run, not by any of the 654 fixtures**: the y follow-point band's own decrease-side setter is `moveq #$20,d3` (007654-00765A) -- MOVEQ sign-extends to the FULL 32-bit register, clearing d3's own upper half, unlike the increase band's `move.w #$d0,d3` / `move.w d1,d3` (plain .w moves that leave it alone); `player_tail_plan` carried the caller's own entry upper half through unconditionally.  Invisible on every fixture (all had a zero d3 upper half at entry already) and on the original, 'clean'-only admission (no fixture with a nonzero upper half ever reached this code, since a 'trigger' scan always declined outright); first exposed once 18 Sep's event-status change started admitting 'trigger-but-declined' scans, on node `ca2b703b6fd5…` frame 9661 (a silent divergence: matching video/audio, `state_sha256` differed by two RAM bytes, traced to `d3 = 0x4B460004` in the candidate vs `0x00000004` in the original) | fixed; regression test pokes a nonzero d3 upper half onto a decrease-band fixture and asserts it does not survive | `tests/games/gods/test_player_tail.py` |
 | the player tail's negative control (a follow-point byte off; a 'hold'/'hold' occurrence passes through unmutated rather than risk STATE_COUNTER, confirmed once to fault the machine outright) diverges at frame 539 on `f0ac19738f19…`, at frame 6,013 in the boundary-6000 segment window, and (18 Sep, re-verified after both changes) at frame 2,261 on `fb408bc75597…` | `--candidate player-tail-mutant-result` | `artifacts/gods/verify-player-tail-mutant`, `artifacts/gods/verify-player-tail3-mutant` |
-| the suite: `scripts/run_tests.py gods` (common + Gods), about 51 s | 4,021 tests (9 skipped) | — |
+| **`008222` (with `00837E`) movement-cluster contact search** (the supervisor's Decision, `docs/gods/blockers/2026-09-17-008222.md`): a reentrancy-guarded search over the three collectible lists `pickups.GROUP_TABLES` already names, structurally parallel to `hazard.proximity_search`; three independent sub-passes, each gated by its own list's count word and each retrying up to three consecutive 0x18-byte hit records, with a retry budget (`ITEM_CONTACT_WORD`, the item record's own `+0xA` word) that can also latch a duplicate-suppression flag (`CONTACT_LATCH`) when it is exactly 1; censused over all eight recordings (271 real path classes, `--max-classes 400`) found sub-pass 2's own item DOES reach `ITEM_CONTACT_WORD == 1` (96 fixtures, admitted: the latch is always still clear there, since sub-pass 1's own item never has it) -- only sub-pass 1 itself ever setting the latch, a sub-pass 2/3 match then finding it already set ('gated'), and a sub-pass 2/3 with a negative `ITEM_CONTACT_WORD` ('skip-negative') stay declined, unwitnessed by any recording; costed one instruction-block at a time (every instruction's own cost confirmed data-independent), not per fixed path, so the plan generalizes past the retained fixtures | `factcheck check` on every fixture | `tests/games/gods/test_contact_search.py` |
+| `contact-search` reproduces the original on `fb408bc75597…`: **PASS, 794 hits of 800 gates, 6 fallbacks (2 observation deadline, 1 vblank in span, 3 z80 bank guard, all exact adapter refusals, 0 unsupported domain)**; `camera-sprites` (all thirty-six gates) on the tree of all eight recordings: **PASS, 107,519 frames, 1,098,065 hits, 14,018 fallbacks (11 at the new gate, all exact adapter refusals), tree bit-exact** | `history-verify fb408bc75597 --candidate contact-search`; `history-verify main --candidate camera-sprites --tree` | `artifacts/gods/verify-contact-search-fb408bc75597`, `artifacts/gods/verify-camera-sprites-tree-2026-09-18f` |
+| the contact search's negative control (D0/D3 toggled by XOR 1, not the generic +1 register mutant -- both are always exactly 0 or 1, and the first activation in the whole game is itself a 'not found' occurrence, which +1 cannot flip past zero) diverges at frame 2,284, the first frame the region is exercised | `--candidate contact-search-mutant-result` | `artifacts/gods/verify-contact-search-mutant` |
+| the suite: `scripts/run_tests.py gods` (common + Gods), about 57 s | 4,309 tests (9 skipped) | — |
 
 The fallbacks that remain on the tree are all exact by construction: a
 `scheduler admission` refusal is the native scheduler declining a plan or a
