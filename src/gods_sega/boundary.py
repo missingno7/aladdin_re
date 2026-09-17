@@ -2097,6 +2097,104 @@ def achievement_slot_reset_suffix(machine, registers):
                       last_pc=ACHIEVEMENT_SLOT_RESET_LAST_PC)
 
 
+# --- 004790: the slot dispatch (game/achievements.py: achievement_slot_dispatch) -----------------
+#
+# A caller-supplied record's own tracked id, checked against 0047DA's own four ids; at most one can
+# match (the ids are distinct).  A miss is a plain RAM-only leaf (four redundant compares, no calls).
+# A match is a platform tail one level UP from achievement_slot_reset_plan: the whole of 0047DA
+# (including ITS OWN nested call into 001648) is one opaque ceded block -- during a seam only its own
+# resume_pc is gated (genesis_re.seam.run_seam narrows the gate array for the span), so 0047DA's own
+# separate gate never fires inside it, and this composition need not know anything about 0047DA's own
+# internals beyond what achievement_slot_reset_plan already proved.  The resume is 004790's own
+# continuation after the ONE bsr that ran (0047BA/0047C4/0047CE/0047D8, one per matched slot), and the
+# suffix is whichever later comparisons the ROM still runs (all misses, since the ids are distinct)
+# plus 004790's own final rts.
+ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_DISPATCH_LAST_PC = 0x004790, 0x0047D8
+_AD_BSR_ADDRESSES = (0x0047B8, 0x0047C2, 0x0047CC, 0x0047D6)     # the bsr.b $47da instruction, per matched slot
+_AD_RESUME_ADDRESSES = (0x0047BA, 0x0047C4, 0x0047CE, 0x0047D8)  # right after that bsr, per matched slot
+_AD_LOAD_D5 = (8, 1)                     # move.w (a2),d5                                (004790/0047AE)
+_AD_LEA_TABLE = (8, 1)                   # lea.l $f8c2.w,a3                              (004792)
+_AD_DOUBLE = (4, 1)                      # add.w d5,d5
+_AD_ADDA = (8, 1)                        # adda.w d5,a3
+_AD_CMP_STATUS = (16, 1)                 # cmpi.w #2,4(a3)                               (0047A0)
+_AD_BEQ_STATUS_TAKEN = (10, 1)           # beq.b (status==2, the only witnessed continuation) (0047A6)
+_AD_CMP_ID = (12, 1)                     # cmp.w idN,d5
+_AD_BNE_TAKEN, _AD_BNE_NOTTAKEN = (10, 1), (8, 1)
+_AD_MOVEQ = (4, 1)                       # moveq #n,d0
+_AD_BSR = (18, 1)                        # bsr.b $47da
+_AD_RTS = (16, 1)
+_AD_HEAD = _add(_AD_LOAD_D5, _AD_LEA_TABLE, _AD_DOUBLE, _AD_ADDA, _AD_DOUBLE, _AD_DOUBLE, _AD_ADDA,
+               _AD_CMP_STATUS, _AD_BEQ_STATUS_TAKEN, _AD_LOAD_D5)
+
+
+def achievement_slot_dispatch_plan(machine, registers):
+    """004790: the slot dispatch; a miss is a plain leaf, a match is a seam over 0047DA (itself a
+    seam over 001648) -- the whole of 0047DA is opaque to this composition."""
+    from .game import achievements
+    if registers['pc'] != ACHIEVEMENT_DISPATCH_ENTRY:
+        raise UnsupportedCandidate('achievement slot dispatch planner needs the machine parked at 004790')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    a2 = registers['a2'] & 0xFFFFFFFF
+    read = _reader(machine)
+    result = achievements.achievement_slot_dispatch(read, a2)
+    if result['arm'] == 'blocked':
+        raise UnsupportedCandidate(f"achievement slot dispatch status {result['status']} not witnessed by a recording")
+    tracked = result['tracked']
+    d5 = (registers['d5'] & 0xFFFF0000) | tracked
+    if result['arm'] == 'no-match':
+        c, i = _add(_AD_HEAD, *(_add(_AD_CMP_ID, _AD_BNE_TAKEN) for _ in range(4)), _AD_RTS)
+        exit_sr = _cmp_sr(sr, tracked, read(achievements.TRACKED_IDS[3], 2), 2)
+        return AtomicPlan(cycles=c, instructions=i, writes=(),
+                          registers={'d5': d5, 'a3': result['record'] & 0xFFFFFFFF,
+                                     'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+                                     'sr': exit_sr},
+                          last_pc=ACHIEVEMENT_DISPATCH_LAST_PC)
+    slot = result['match']
+    c, i = _add(_AD_HEAD, *(_add(_AD_CMP_ID, _AD_BNE_TAKEN) for _ in range(slot)), _AD_CMP_ID, _AD_BNE_NOTTAKEN,
+               _AD_MOVEQ, _AD_BSR)
+    a3 = result['record'] & 0xFFFFFFFF
+    # moveq #n,d0 is the LAST flag-setter before the bsr, not the cmp before it (achievement_slot_reset_plan's
+    # own lesson: MOVEQ sets N/Z/V/C, only X unaffected) -- nothing between the moveq and the bsr touches CCR.
+    exit_sr = _logic_sr(sr, slot, 4)
+    return_slot = (sp - 4) & 0xFFFFFF
+    _ram_span('achievement slot dispatch return slot', return_slot, 4)
+    writes = _bytes(return_slot, _AD_RESUME_ADDRESSES[slot], 4)
+    prefix = AtomicPlan(cycles=c, instructions=i, writes=writes,
+                        registers={'d0': slot, 'd5': d5, 'a3': a3, 'a7': (sp32 - 4) & 0xFFFFFFFF,
+                                   'pc': ACHIEVEMENT_SLOT_RESET_ENTRY, 'sr': exit_sr},
+                        last_pc=_AD_BSR_ADDRESSES[slot])
+    return Seam(prefix=prefix, resume_pc=_AD_RESUME_ADDRESSES[slot], stack_basis=sp32 & 0xFFFFFFFF,
+               guards=((sp, 4),), suffix=achievement_slot_dispatch_suffix)
+
+
+def achievement_slot_dispatch_suffix(machine, registers):
+    """The resume after the ONE matched bsr into 0047DA (itself already back from its own seam over
+    001648): whichever later comparisons the ROM still runs (always misses), then 004790's own rts."""
+    pc = registers['pc']
+    if pc not in _AD_RESUME_ADDRESSES:
+        raise UnsupportedCandidate('achievement slot dispatch suffix needs the machine parked at its own resume')
+    slot = _AD_RESUME_ADDRESSES.index(pc)
+    from .game import achievements
+    read = _reader(machine)
+    d5 = registers['d5']
+    tracked = d5 & 0xFFFF
+    remaining = range(slot + 1, 4)
+    c, i = _add(*(_add(_AD_CMP_ID, _AD_BNE_TAKEN) for _ in remaining), _AD_RTS)
+    sp = registers['a7'] & 0xFFFFFF
+    exit_registers = {'a7': (registers['a7'] + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    if slot < 3:
+        # A later comparison ran, and cmp (unlike moveq or bne) always sets the flags: the exit SR is
+        # exactly that comparison's, independent of anything the ceded 0047DA/001648 block left behind.
+        exit_registers['sr'] = _cmp_sr(registers['sr'], tracked, read(achievements.TRACKED_IDS[3], 2), 2)
+    # slot == 3: resume_pc IS 0047D8 itself, the rts with nothing in between -- the machine's own live
+    # SR already holds whatever the ceded block left (no Python-side override needed or possible).
+    return AtomicPlan(cycles=c, instructions=i, writes=(), registers=exit_registers,
+                      last_pc=ACHIEVEMENT_DISPATCH_LAST_PC)
+
+
 # --- 00F828: the proximity table search-and-add (game/hazard.py: proximity_search/proximity_add) ---
 #
 # Owns its own internal call into 00F86A the way 0049DA owns its calls into

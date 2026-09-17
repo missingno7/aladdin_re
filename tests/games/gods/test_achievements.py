@@ -112,3 +112,81 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverge
     mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
                                   candidate='achievement-slot-reset-mutant-result', reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 004790: the slot dispatch (game/achievements.py: achievement_slot_dispatch) -----------------
+#
+# A caller-supplied record pointer's own tracked id, gated by a shared per-id status word (only 2 is
+# witnessed) then checked against 0047DA's own four ids.  A miss is a plain leaf; a match is a
+# platform tail one level up from achievement_slot_reset_plan -- the whole of 0047DA (itself a seam
+# over 001648) is one opaque ceded block to this composition.
+
+DISPATCH_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-004790-fresh-*/004790-entry-*.state'))
+needs_dispatch_census = pytest.mark.skipif(not DISPATCH_FIXTURES or not GODS.rom_path.is_file(),
+                                           reason='no local census of 004790')
+
+
+def test_a_witnessed_status_with_no_matching_id_is_a_plain_miss():
+    world = {(achievements.RECORD_TABLE & 0xFFFFFF, 2): 5}  # a2 -> tracked id 5
+    world[((achievements.RECORD_TABLE + achievements.RECORD_STRIDE * 5 + 4) & 0xFFFFFF, 2)] = 2  # status
+    for address in achievements.TRACKED_IDS:
+        world[(address, 2)] = 999   # none of the four tracked ids is 5
+    result = achievements.achievement_slot_dispatch(_reader(world), achievements.RECORD_TABLE)
+    assert result == {'arm': 'no-match', 'tracked': 5, 'record': result['record'], 'status': 2, 'match': None}
+
+
+def test_a_matching_tracked_id_names_its_own_slot():
+    tracked = 7
+    world = {(achievements.RECORD_TABLE & 0xFFFFFF, 2): tracked}
+    world[((achievements.RECORD_TABLE + achievements.RECORD_STRIDE * tracked + 4) & 0xFFFFFF, 2)] = 2
+    world[(achievements.TRACKED_IDS[2], 2)] = tracked
+    result = achievements.achievement_slot_dispatch(_reader(world), achievements.RECORD_TABLE)
+    assert result['arm'] == 'match' and result['match'] == 2
+
+
+def test_an_unwitnessed_status_is_blocked():
+    world = {(achievements.RECORD_TABLE & 0xFFFFFF, 2): 0}
+    world[((achievements.RECORD_TABLE + 4) & 0xFFFFFF, 2)] = 1   # neither 0 nor 2
+    result = achievements.achievement_slot_dispatch(_reader(world), achievements.RECORD_TABLE)
+    assert result['arm'] == 'blocked'
+    assert 1 not in achievements.WITNESSED_STATUS
+
+
+@needs_dispatch_census
+@pytest.mark.parametrize('fixture', DISPATCH_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_dispatch_plan_reproduces_every_fact_of_the_original_or_declines_an_unwitnessed_status(fixture):
+    state = fixture.read_bytes()
+    meta = json.loads(fixture.with_suffix('.json').read_text(encoding='utf-8'))
+    assert meta['entry'] == boundary.ACHIEVEMENT_DISPATCH_ENTRY
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.achievement_slot_dispatch_plan(machine, registers)
+        except boundary.UnsupportedCandidate:
+            return
+    if isinstance(plan, boundary.Seam):
+        _check_seam(plan, state)
+        return
+    facts = pathfacts.trace(state, game=GODS)
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_dispatch_candidate_names_are_explicit():
+    assert recovery.Candidate('achievement-slot-dispatch').gate_pcs == (boundary.ACHIEVEMENT_DISPATCH_ENTRY,)
+    assert boundary.ACHIEVEMENT_DISPATCH_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('achievement-slot-dispatch-mutant-result').mutation is recovery._mutate_register
+
+
+@needs_reference
+def test_dispatch_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverges():
+    report = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
+                                  candidate='achievement-slot-dispatch', reference=EVIDENCE)
+    assert report['status'] == 'PASS', report
+    if report['candidate_hits'] == 0:
+        pytest.skip('achievement-slot-dispatch never hits in this window')
+    mutant = segment_verify.check(EVIDENCE / 'boundary-6000.state', game=GODS, frames=120,
+                                  candidate='achievement-slot-dispatch-mutant-result', reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
