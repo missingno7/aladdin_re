@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with fifty-nine gates armed, the camera follow step `002806`, the
+  original with sixty gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -180,8 +180,8 @@ one planner") is the next bite.
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
-  `state-2`, `state-3`, `state-4`, `state-17`, `state-21` and `state-28`
-  arm each alone.
+  `state-2`, `state-3`, `state-4`, `state-17`, `state-21`, `state-28` and
+  `state-22` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -974,7 +974,8 @@ small leaf):
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
   state-13, state-12, state-16, state-11, state-2, state-3, state-4,
-  state-17, state-21, state-28 -- 10,938 of 13,488 activations (81%)
+  state-17, state-21, state-28, state-22 -- 10,974 of 13,488 activations
+  (81%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1141,6 +1142,27 @@ small leaf):
   (`005828`, recovered 18 Sep) is the smallest leaf yet: an
   UNCONDITIONAL transition to state 1, `d7` forced to 2, no input ever
   read.  All 71 real path classes across all five recordings agree.
+  State 22 (`0062B0`, recovered 18 Sep) is state 21's own `FFFFF1BA`-
+  gated head in front of state 12's own ENTIRE oscillation body and BOTH
+  block tests, reused verbatim (byte-for-byte the same masks, offsets and
+  immediates as state 12's own); a genuine ground-found jump lands on
+  the SAME PHYSICAL ground-tail code state 12's own uses (`006134`-
+  `006160`, not a relocated copy).  One real, confirmed difference from
+  state 12's own: the ALT ground test's own mask is `FFFFF18C & 0x1F`
+  here, not state 12's own `0x1C`.  The tail (once neither ground test
+  finds anything) is D7-based: exactly 3 transitions to state 12 (`d7`
+  forced to 0); exactly 1 calls the already-recovered movement-cluster
+  consumer `012DA0` before exiting unchanged; any other value exits
+  unchanged directly.  91 real path classes collapse to six real
+  terminal shapes.  Two word-branch cost tables transcribed backwards
+  (the SAME recurring bug class) were the only defects; one real,
+  useful finding along the way: this candidate's own mutant (dropping
+  `012DA0`'s own writes wholesale) corrupts a linked-list-style record
+  the real game dereferences a few frames later, causing a genuine
+  M68000 address error rather than a clean value mismatch on one
+  fixture -- `history-verify`'s own crash-tolerant comparison already
+  reports this cleanly as DIVERGENCE; `segment_verify`'s own lighter
+  check does not, so the test catches the native exception directly.
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least

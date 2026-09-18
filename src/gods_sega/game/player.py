@@ -2145,3 +2145,80 @@ STATE28_D7 = 2
 def state28_step(read):
     """005828-005830: unconditional -- always transitions to state 1 with d7 forced to 2."""
     return {'arm': 'transition-1', 'd7': STATE28_D7}
+
+
+# --- 0062B0: state 22 -- state 21's own `FFFFF1BA`-gated head in front of state 12's own ENTIRE
+# oscillation body (`state12_oscillate`) and BOTH block tests (`state12_block_test_left`/`_right`,
+# reused verbatim -- the LEFT arm's own mask (0x1F), offsets (-1/0x7F/0xFF) and RIGHT arm's own mask
+# (0x1C), offsets (1/0x81/0x101) are byte-for-byte the SAME as state 12's own, confirmed via a direct
+# disassembly of `0062B0`-`006412`), with a GENUINE ground-found jump into the SAME PHYSICAL ground-
+# tail code state 12's own uses (`006134`-`006160`, not a relocated copy -- state 12's own `beq.w
+# $612e` and state 22's own `beq.w $612e` land on the IDENTICAL bytes, so `state12_ground_tail` is
+# reused exactly, addresses included).  One real, confirmed difference from state 12's own: the ALT
+# ground test's own mask is `FFFFF18C & 0x1F` here, NOT state 12's own `0x1C` (`0063BE`-`0063C2`).
+# The tail (once neither ground test finds anything) is D7-based: exactly 3 transitions to state 12
+# (`0xC`, `d7` forced to 0); exactly 1 calls the already-recovered movement-cluster consumer `012DA0`
+# (`contact_consume` PRIMARY, not state 21's own `012E5A` SECONDARY) before exiting unchanged; any
+# other value exits unchanged directly.  Costed one instruction-block at a time from the tracer on
+# real fixtures over census-0062B0-* (all five recordings; 91 real path classes collapsing to six
+# real terminal shapes).
+STATE22_ENTRY = 0x0062B0
+STATE22_TRIGGER_D7_GATE = 3
+STATE22_CONSUME_D7_GATE = 1
+
+
+def _state22_head(read, d7):
+    """0062B0-0062BE: D7 -= 1 (and FFFFF1BA cleared) when F1BA is set, else D7 += 1 -- the SAME
+    shape `_state21_head`/`_state26_head` use, a separate ROM copy of each."""
+    if read(F1BA, 2) != 0:
+        return (d7 - 1) & 0xFFFF, True
+    return (d7 + 1) & 0xFFFF, False
+
+
+def state22_step(read, d7):
+    """0062B0-0063F6: state 22's own decision tree.  Returns `'ground'` (the shared state-12 ground
+    tail, `state12_ground_tail`), `'trigger'` (state 12, D7 forced to 0), `'consume'` (the caller
+    composes a call into 012DA0 first), or `'unchanged'`."""
+    from .grid import grid_cell
+    new_d7, f1ba_was_set = _state22_head(read, d7)
+    osc = state12_oscillate(read)
+    position_x = read(POSITION_X, 2)
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    cell1 = grid_cell(read)
+    provisional_state_index = None
+    position_x_after = position_x
+    f1a0 = read(F1A0, 2)
+    f1a0_after = f1a0
+    if ea20 == -1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xB
+        blocked = state12_block_test_left(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x - 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+    elif ea20 == 1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xC
+        blocked = state12_block_test_right(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x + 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+
+    def _read_after_move(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (POSITION_X & 0xFFFFFF) else read(a, s)
+
+    cell2 = grid_cell(_read_after_move)
+    address2 = cell2['address']
+    base = {'d7': new_d7, 'f1ba_was_set': f1ba_was_set, 'osc': osc, 'ea20': ea20,
+            'provisional_state_index': provisional_state_index, 'position_x': position_x_after,
+            'f1a0': f1a0_after, 'cell1': cell1, 'cell2': cell2}
+    ground = read((address2 + 0x180) & 0xFFFFFF, 1) == 1
+    if not ground:
+        low = _read_after_move(POSITION_X, 2) & 0x1F   # NOT state 12's own 0x1C -- a real difference
+        if low >= 8 and read((address2 + 0x181) & 0xFFFFFF, 1) == 1:
+            ground = True
+    if ground:
+        return {'arm': 'ground', **base}
+    if new_d7 == STATE22_TRIGGER_D7_GATE:
+        return {'arm': 'trigger', **base}
+    if new_d7 == STATE22_CONSUME_D7_GATE:
+        return {'arm': 'consume', **base}
+    return {'arm': 'unchanged', **base}
