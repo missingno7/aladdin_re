@@ -179,7 +179,7 @@ one planner") is the next bite.
   `contact-search`, `contact-consume-primary`,
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
-  `state-26`, `state-8` and `state-13` arm each alone.
+  `state-26`, `state-8`, `state-13` and `state-12` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -971,10 +971,10 @@ small leaf):
   (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
-  state-13 -- 9,390 of 13,488 activations (70%) directly reproduced by
-  their own candidate, every remaining activation still running the
-  original but reaching the ALREADY-recovered `player-tail` gate one
-  level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
+  state-13, state-12 -- 9,711 of 13,488 activations (72%) directly
+  reproduced by their own candidate, every remaining activation still
+  running the original but reaching the ALREADY-recovered `player-tail`
+  gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
   both ways, "one region, two gates, one planner") and state 6 (its own
   mirror, sharing state 0's own hand-off the same way) are both plain
   leaves composed over the already-recovered contact-consume family;
@@ -1011,11 +1011,44 @@ small leaf):
   loops" shape -- and, unlike state 14's own register-based -6 step
   (saved/restored via `FFFFF1B2`), state 13's own `addq.w #6,f18e.w` is
   an unconditional MEMORY add, so `POSITION_Y` stays at the advanced
-  value even on the "exit unchanged" arm.
+  value even on the "exit unchanged" arm.  State 12 (`005FF4`, recovered
+  18 Sep) is a genuinely NEW shape -- an oscillating swing/pendulum
+  dispatcher, not a horizontal/vertical/falling twin of anything already
+  recovered -- sharing the already-recovered grid cell and contact
+  search and, for the first time, RAM the zone check's own routine also
+  reads (`game/zones.py`'s `COOLDOWN`/`SUPPRESS_COOLDOWN`,
+  `FFFFEF3E`/`FFFFF1B6`; state 12 shares the fields, not the routine).
+  Its own oscillation head runs unconditionally every activation
+  (`FFFFF198`, a tick counter, advances TWICE per tick -- once by the
+  OLD `FFFFF194`'s own value shifted right 2, again by a plain +1 after
+  `FFFFF194` itself bumps/caps at 10 -- a real defect the FAST tier
+  caught: the first addition was missing entirely from an early draft);
+  an `FFFFEA20`-gated block test (`== -1`, a LEFT arm provisionally
+  setting state 11 -- witnessed only via a real 120-frame continuation
+  from a retained fixture, never by any single-tick census entry, since
+  605 real census path classes across all five recordings never
+  happened to land on it; captured directly from that continuation and
+  retained as its own fixture -- or `== 1`, a RIGHT arm provisionally
+  setting state 12 itself) may step `POSITION_X`; the tail re-reads the
+  grid cell and either finds ground (state 16, with a genuine three-way
+  `COOLDOWN`-adjustment tail: exit unchanged within the tick gate, exit
+  suppressed, or halve the excess into `COOLDOWN`), opens a trigger gate
+  into the already-recovered `contact_search` (state 22), or exits
+  unchanged.  Real defects the FAST tier caught before the tree: the
+  missing SECOND `FFFFF198` addition above; two word-branch cost tables
+  transcribed backwards (`btst`'s own `beq.w`, the search's own
+  `bne.w`); a missing detour cost when the right arm's own retry budget
+  is open but its own block test is skipped outright; a missing
+  `POSITION_X` register update after that same skip; a missing
+  `POSITION_Y` write on the ground tail's own "exit unchanged" sub-arm
+  (`FFFFF18E`'s own `+6` advance is an unconditional MEMORY write, not
+  state 14's own register-based, saved/restored step); and two `D0`
+  register updates missing after the tick/cooldown arithmetic overwrites
+  it.
 - **Remaining blocker**: none structural -- the 17 September escalation
   was the shared tail itself, since resolved (`player-tail`).  What is
   left is pure volume: the remaining witnessed states in frequency order
-  (12, 16, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10) -- state 20
+  (16, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10) -- state 20
   is already gated (a real STATE_TABLE reconstruction from `005700`'s own
   dispatch code, 18 Sep, found `FFFFF192 == 20` reaches `0069AC`, the
   entry the existing `'state-26'` candidate already owns end to end; the

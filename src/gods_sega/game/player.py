@@ -1638,3 +1638,171 @@ def state13_settle_probe(read, settle_d7):
     return {'arm': 'clear', 'cell': cell, 'd7': 0, 'stores': {
         STATE_INDEX: (STATE13_TO_STATE10, 2), POSITION_Y: (new_y, 2), F194 & 0xFFFFFF: (0, 2),
         F1A0 & 0xFFFFFF: (0, 2), F198 & 0xFFFFFF: (0, 2)}}
+
+
+# --- 005FF4: state 12's own decision tree -- an oscillating swing/pendulum dispatcher, a genuinely
+# NEW shape (not a horizontal/vertical/falling twin of anything already recovered), reached the same
+# way and sharing the ALREADY-recovered grid cell, contact search and the zone check's own COOLDOWN
+# fields (`game/zones.py`'s `COOLDOWN`/`SUPPRESS_COOLDOWN`, `FFFFEF3E`/`FFFFF1B6` -- state 12 shares
+# the same RAM words, not the zone check's own routine).  Confirmed by a fresh disassembly and
+# `factcheck.py facts --path` on real fixtures over `census-005FF4-*` (all five recordings; 609 real
+# path classes collapsing to six real terminal shapes, since the diversity is almost entirely the
+# oscillation counter's own data-dependent values, not the control flow).  No `d7` (STATE_COUNTER) is
+# ever READ by this routine at all -- only written, and only on the 'trigger' arm (forced to 1).
+#
+# The oscillation head (005FF4-006033) runs unconditionally: `POSITION_Y` (`FFFFF18E`) steps by 4
+# every activation; `FFFFF194` (an oscillation counter, capped at `STATE12_OSCILLATION_CAP`) advances
+# by 1 unless `FFFFEF4C` is nonzero (a hold flag this module does not otherwise name); `POSITION_Y`
+# THEN steps again by the (possibly just-advanced) counter's own value -- so `POSITION_Y` moves by
+# `4 + FFFFF194` net; a per-tick counter `FFFFF198` advances by 1, and reaching
+# `STATE12_TICK_CAP` (8) queues a periodic sound (`hazard.SOUND_COMMAND`, cue `0x50`) without
+# resetting the counter (it free-runs past 8).
+#
+# The EA20-gated block test (006038-00608A) runs TWO independent, mutually-exclusive-in-practice
+# checks in sequence (both reachable in the same disassembly, but `FFFFEA20` can only hold one value),
+# each gated additionally by `FFFFF1A0 < STATE12_RETRY_CAP` (6, unwitnessed when it closes the gate --
+# real ROM, declined by the boundary): `FFFFEA20 == -1` sets a PROVISIONAL `STATE_INDEX = 11` (0xB)
+# and runs a LEFT block test (offsets -1/0x7F/0xFF, gated on `FFFFF18C`'s own low bits `& 0x1f` being
+# exactly 0 -- the SAME gate shape state 8's own arm A uses; witnessed only via a real 120-frame
+# continuation from a retained fixture, not by any single-tick census entry, since the whole-history
+# census's own path-signature classes never happened to land on it) that steps `POSITION_X` by -4 and
+# `FFFFF1A0` by +1 when clear; `FFFFEA20 == 1` sets a PROVISIONAL `STATE_INDEX = 12` (0xC) and runs a
+# RIGHT block test (offsets 1/0x81/0x101) gated on `FFFFF18C`'s own low bits (`& 0x1c`, boundary
+# values `0x1c` and `8`) that steps `POSITION_X` by +4 and `FFFFF1A0` by +1 when clear.  Either
+# provisional `STATE_INDEX` is overwritten later in the SAME activation by whichever of
+# 'ground'/'trigger' fires, or left standing on 'unchanged'.
+#
+# The ground/trigger tail (0060EA-00612A) re-reads the grid cell (position may have just moved) and
+# tests `+0x180(a0)` for a ground byte (value 1): a match (or, when `FFFFF18C`'s own low bits `& 0x1c`
+# are `>= 8`, an ALTERNATE match at `+0x181(a0)`) transitions to state 16 (`state12_ground_tail`,
+# STATE12_GROUND_INDEX); neither match falls to the trigger gate (`FFFFEA23` bit 2, then the already-
+# recovered `contact_search`) -- a 'found' result transitions to state 22 (STATE12_TRIGGER_INDEX,
+# `FFFFF1BA` set, `d7` forced to 1); a closed gate or a 'not found' result exits unchanged.
+STATE12_ENTRY = 0x005FF4
+STATE12_OSCILLATION_CAP = 0xA
+STATE12_TICK_CAP = 8
+STATE12_RETRY_CAP = 6
+STATE12_GROUND_INDEX = 0x10
+STATE12_TRIGGER_INDEX = 0x16
+F194_HOLD = 0xFFFFEF4C          # word: FFFFF194 does not advance while this is nonzero
+
+
+def state12_oscillate(read):
+    """005FF4-006033: the oscillation head, run unconditionally every activation.  `FFFFF198` (the
+    tick counter) advances TWICE here: first by the OLD `FFFFF194`'s own value arithmetic-shifted
+    right by 2 (`005FFE add.w d0,f198.w`, before `FFFFF194` itself is bumped), then by a plain +1
+    (`006022`) after `FFFFF194` has been bumped/capped.  Returns the new `FFFFF194` value (post-cap),
+    the FINAL `FFFFF198` value (after both steps), whether it reached `STATE12_TICK_CAP` (queues the
+    periodic sound), and the two `POSITION_Y` steps' own combined delta (4 plus the NEW oscillation
+    counter's own value)."""
+    old_f194 = read(F194, 2)
+    f198 = (read(F198, 2) + (old_f194 >> 2)) & 0xFFFF   # 005FFE: += old F194 >> 2 (arithmetic; F194 >= 0 always)
+    f194 = old_f194
+    if read(F194_HOLD, 2) & 0xFFFF == 0:
+        f194 = (f194 + 1) & 0xFFFF
+        if f194 > STATE12_OSCILLATION_CAP:
+            f194 = STATE12_OSCILLATION_CAP
+    f198 = (f198 + 1) & 0xFFFF   # 006022: += 1
+    sound = f198 == STATE12_TICK_CAP
+    return {'f194': f194, 'f198': f198, 'sound': sound, 'position_y_delta': (4 + f194) & 0xFFFF}
+
+
+def state12_block_test_right(read, position_x, address):
+    """00609A-0060E2: the `FFFFEA20 == 1` arm's own right block test, reached only once `FFFFF1A0 <
+    STATE12_RETRY_CAP`.  Gated on `FFFFF18C`'s own low bits `& 0x1c`: a match to `0x1c` OR a value
+    under 8 runs the test (offsets 1/0x81/0x101, then, if the low nibble of `FFFFF18E` is nonzero, a
+    `+0x181` nibble test too); a value from 8 to 0x18 (other than 0x1c) skips the test outright
+    (never blocked).  Returns whether it was blocked."""
+    low = position_x & 0x1C
+    if low != 0x1C and low >= 8:
+        return False
+    for offset in (1, 0x81, 0x101):
+        if read((address + offset) & 0xFFFFFF, 1) == 1:
+            return True
+    nibble = read(POSITION_Y, 2) & 0xF
+    if nibble != 0 and read((address + 0x181) & 0xFFFFFF, 1) == 1:
+        return True
+    return False
+
+
+def state12_block_test_left(read, position_x, address):
+    """006048-006086: the `FFFFEA20 == -1` arm's own left block test (offsets -1/0x7F/0xFF, gated on
+    `FFFFF18C`'s own low bits `& 0x1f` being exactly 0 -- the SAME gate shape state 8's own arm A
+    uses), reached only once `FFFFF1A0 < STATE12_RETRY_CAP`."""
+    low = position_x & 0x1F
+    if low == 0:
+        for offset in (-1, 0x7F, 0xFF):
+            if read((address + offset) & 0xFFFFFF, 1) == 1:
+                return True
+    nibble = read(POSITION_Y, 2) & 0xF
+    if nibble != 0 and read((address + 0x17F) & 0xFFFFFF, 1) == 1:
+        return True
+    return False
+
+
+def state12_ground_tail(read, f198_value):
+    """00612E-006160: state 12's own ground-found tail -- transitions to state 16, aligns
+    `POSITION_Y` down to a tile boundary, clears `FFFFF1B8`, queues the movement sound cue, then
+    -- ONLY once `FFFFF198` (the caller's own tick counter, already advanced by the oscillation head)
+    exceeds 0x14 -- decrements the zone check's own `COOLDOWN` (`FFFFEF3E`) by half the excess,
+    unless `SUPPRESS_COOLDOWN` (`FFFFF1B6`) is set.  Returns `'ground'` either way; the caller applies
+    the SAME `STATE_INDEX`/`POSITION_Y`/`FFFFF1B8`/sound stores regardless of which of the three
+    exits below actually fires (all real, witnessed shapes)."""
+    from .zones import COOLDOWN, SUPPRESS_COOLDOWN
+    excess = (f198_value - 0x14) & 0xFFFF
+    excess_signed = _signed_word(excess)
+    if excess_signed <= 0:
+        return {'arm': 'ground', 'cooldown_delta': None}
+    if read(SUPPRESS_COOLDOWN, 2) & 0xFFFF != 0:
+        return {'arm': 'ground', 'cooldown_delta': None}
+    half = excess_signed >> 1
+    return {'arm': 'ground', 'cooldown_delta': half}
+
+
+def state12_step(read):
+    """005FF4-00612A: state 12's own whole decision tree up to (and including) the trigger gate.
+    Returns `'unchanged'`, `'trigger'` (state 22) or `'ground'` (state 16, `state12_ground_tail`).
+    See the module note above for the shape."""
+    from .grid import grid_cell
+    osc = state12_oscillate(read)
+    position_x = read(POSITION_X, 2)
+
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    cell1 = grid_cell(read)
+    provisional_state_index = None
+    position_x_after = position_x
+    f1a0 = read(F1A0, 2)
+    f1a0_after = f1a0
+    if ea20 == -1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xB
+        blocked = state12_block_test_left(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x - 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+    elif ea20 == 1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xC
+        blocked = state12_block_test_right(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x + 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+
+    def _read_after_move(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (POSITION_X & 0xFFFFFF) else read(a, s)
+    cell2 = grid_cell(_read_after_move)
+    address2 = cell2['address']
+
+    base = {'osc': osc, 'ea20': ea20, 'provisional_state_index': provisional_state_index,
+            'position_x': position_x_after, 'f1a0': f1a0_after, 'cell1': cell1, 'cell2': cell2}
+
+    ground = read((address2 + 0x180) & 0xFFFFFF, 1) == 1
+    if not ground:
+        low = _read_after_move(POSITION_X, 2) & 0x1C
+        if low >= 8 and read((address2 + 0x181) & 0xFFFFFF, 1) == 1:
+            ground = True
+    if ground:
+        return {'arm': 'ground', **base}
+
+    bit2 = read(EA23_WORD, 1) & 4
+    if not bit2:
+        return {'arm': 'unchanged', **base}
+    return {'arm': 'trigger-gate', **base}

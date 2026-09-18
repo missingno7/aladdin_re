@@ -9433,3 +9433,470 @@ def state13_plan(machine, registers):
 
     return _state13_main_dispatch(machine, read, registers, sr, order, exit_registers, cycles,
                                    instructions, head['ea20_one'], registers['d7'])
+
+
+# --- 005FF4: state 12 (game.player.state12_step / state12_oscillate / state12_block_test_left /
+# state12_block_test_right / state12_ground_tail) -- an oscillating swing/pendulum dispatcher, a
+# genuinely NEW shape (not a horizontal/vertical/falling twin), sharing the already-recovered grid
+# cell and contact search and the zone check's own COOLDOWN/SUPPRESS_COOLDOWN fields.  Costed one
+# instruction-block at a time from the tracer on real fixtures over census-005FF4-* covering every
+# real terminal shape (609 real path classes over all five recordings collapse to six: exit
+# unchanged via a closed trigger gate or a 'not found' search, a state-22 trigger, and the ground
+# tail's own three real exits).  No d7 (STATE_COUNTER) is ever read as an input.
+STATE12_ENTRY = 0x005FF4
+
+_S12_ADVANCE_Y = (16, 1)                     # 005FF4 addq.w #4,f18e.w
+_S12_READ_F194 = (12, 1)                     # 005FF8 move.w f194,d0
+_S12_ASR2 = (10, 1)                          # 005FFC asr.w #2,d0
+_S12_ADD_F198 = (16, 1)                      # 005FFE add.w d0,f198.w
+_S12_HOLD_TEST = (12, 1)                     # 006002 tst.w ef4c.w
+_S12_HOLD_BNE = {True: (10, 1), False: (8, 1)}          # 006006 bne.b -- taken(!=0): skip the bump
+_S12_BUMP = (16 + 16, 2)                     # 006008 addq.w #1,f194 (mem); 00600C cmpi.w #$a,f194 (mem)
+_S12_BUMP_BLE = {True: (10, 1), False: (8, 1)}          # 006012 ble.b -- taken(<=10): no cap needed
+_S12_CAP = (16, 1)                           # 006014 move.w #$a,f194.w
+_S12_STEP_Y2 = (12 + 16, 2)                  # 00601A move.w f194,d0; 00601E add.w d0,f18e.w (mem)
+_S12_TICK = (16 + 16, 2)                     # 006022 addq.w #1,f198 (mem); 006026 cmpi.w #8,f198 (mem)
+_S12_TICK_BNE = {True: (10, 1), False: (8, 1)}          # 00602C bne.b -- taken(!=8): no sound
+_S12_SOUND = (16, 1)                         # 00602E move.w #$50,fdf4.w
+_S12_BSR_GRID = (18, 1)                      # bsr.w $63fa (both call sites, 006034/0060E6)
+
+_S12_LEFT_GATE_TEST = (16, 1)                # 006038 cmpi.w #$ffff,ea20.w
+_S12_LEFT_GATE_BNE = {True: (10, 1), False: (8, 1)}     # 00603E bne.b -- taken(!=-1): skip the left arm
+_S12_RETRY_TEST = (16, 1)                    # cmpi.w #6,f1a0.w (both arms)
+_S12_RETRY_BGE = {True: (10, 1), False: (8, 1)}         # bge.b -- taken(>=6): budget exhausted, skip
+_S12_LEFT_SET_STATE = (16, 1)                # 006048 move.w #$b,f192.w
+_S12_LR_HEAD = (12 + 8, 2)                   # move f18c,d0; andi.w #imm,d0
+_S12_LEFT_BNE_LOW = {True: (10, 1), False: (8, 1)}      # 006056 bne.b -- taken(low!=0): skip the block test
+_S12_GRID_TEST = (16, 1)                     # cmpi.b #1,offset(a0)
+_S12_GRID_BEQ = {True: (10, 1), False: (8, 1)}          # beq.b -- taken: blocked, decline
+_S12_NIBBLE_HEAD = (12 + 8, 2)               # move f18e,d0; andi #$f,d0
+_S12_NIBBLE_BEQ = {True: (10, 1), False: (8, 1)}        # beq.b -- taken(==0): skip the nibble test
+_S12_NIBBLE_TEST = (16, 1)                   # cmpi.b #1,offset(a0)
+_S12_NIBBLE_BEQ2 = {True: (10, 1), False: (8, 1)}       # beq.b -- taken: blocked, decline
+_S12_LEFT_ADVANCE = (16 + 16, 2)             # 006082 subq.w #4,f18c (mem); 006086 addq.w #1,f1a0 (mem)
+
+_S12_RIGHT_GATE_TEST = (16, 1)               # 00608A cmpi.w #1,ea20.w
+_S12_RIGHT_GATE_BNE = {True: (10, 1), False: (8, 1)}    # 006090 bne.b -- taken(!=1): skip the right arm
+_S12_RIGHT_SET_STATE = (16, 1)               # 00609A move.w #$c,f192.w
+_S12_RIGHT_MASK_TEST = (8, 1)                # 0060A8 cmpi.w #$1c,d0
+_S12_RIGHT_MASK_BEQ = {True: (10, 1), False: (8, 1)}    # 0060AC beq.b -- taken(==0x1c): straight to the grid test
+_S12_RIGHT_LOW_TEST = (8, 1)                 # 0060AE cmpi.w #8,d0
+_S12_RIGHT_LOW_BGE = {True: (10, 1), False: (8, 1)}     # 0060B2 bge.b -- taken(>=8): skip the block test outright
+_S12_RIGHT_ADVANCE = (16 + 16, 2)            # 0060DE addq.w #4,f18c (mem); 0060E2 addq.w #1,f1a0 (mem)
+
+_S12_TAIL_MOVEQ = (4, 1)                     # 0060EA moveq #0,d7
+_S12_GROUND_TEST = (16, 1)                   # 0060EC cmpi.b #1,$180(a0)
+_S12_GROUND_BEQ = {True: (10, 1), False: (8, 1)}        # 0060F2 beq.b -- taken: ground found
+_S12_ALT_HEAD = (12 + 8, 2)                  # 0060F4 move f18c,d0; 0060F8 andi.w #$1c,d0
+_S12_ALT_TEST = (8, 1)                       # 0060FC cmpi.w #8,d0
+_S12_ALT_BLT = {True: (10, 1), False: (8, 1)}           # 006100 blt.b -- taken(<8): skip the alt test
+_S12_ALT_GROUND_TEST = (16, 1)               # 006102 cmpi.b #1,$181(a0)
+_S12_ALT_GROUND_BEQ = {True: (10, 1), False: (8, 1)}    # 006108 beq.b -- taken: ground found (alt)
+_S12_TRIGGER_BIT2 = (16, 1)                  # 00610A btst.b #2,ea23.w
+_S12_TRIGGER_BIT2_BEQ = {True: (10, 1), False: (12, 1)} # 006110 beq.w -- taken(clear): exit unchanged
+_S12_BSR_SEARCH = (18, 1)                    # 006114 bsr.w $8222
+_S12_TRIGGER_TST_D0 = (4, 1)                 # 006118 tst.w d0
+_S12_TRIGGER_BNE_D0 = {True: (10, 1), False: (12, 1)}   # 00611A bne.w -- taken(!=0, not found): exit unchanged
+_S12_TRIGGER_TAIL = (16 + 4 + 12 + 10, 4)    # 00611E move.w #$16,f192; moveq #1,d7; move.w d7,f1ba; bra.w
+
+_S12G_HEAD = (16 + 20 + 16 + 4 + 16, 5)      # move state; andi f18e #$fff0; clr f1b8; moveq #0,d7; move #$39,fdf6
+_S12G_TICK_TEST = (12 + 8, 2)                # move f198,d0; subi.w #$14,d0
+_S12G_TICK_BLE = {True: (10, 1), False: (12, 1)}        # ble.w -- taken(<=0): exit unchanged
+_S12G_SUPPRESS_TEST = (12, 1)                # tst.w f1b6.w
+_S12G_SUPPRESS_BNE = {True: (10, 1), False: (12, 1)}    # bne.w -- taken(!=0): exit unchanged
+_S12G_APPLY = (8 + 16 + 10, 3)               # asr.w #1,d0; sub.w d0,ef3e.w; bra.w
+
+
+def _state12_head_cost(read):
+    """005FF4-006033: state 12's own oscillation head."""
+    from .game import player
+    osc = player.state12_oscillate(read)
+    c, i = _add(_S12_ADVANCE_Y, _S12_READ_F194, _S12_ASR2, _S12_ADD_F198, _S12_HOLD_TEST)
+    hold = read(player.F194_HOLD, 2) & 0xFFFF != 0
+    c, i = _add((c, i), _S12_HOLD_BNE[hold])
+    if not hold:
+        f194_raw = read(player.F194, 2)
+        bumped = (f194_raw + 1) & 0xFFFF
+        capped = bumped > player.STATE12_OSCILLATION_CAP
+        c, i = _add((c, i), _S12_BUMP, _S12_BUMP_BLE[not capped])
+        if capped:
+            c, i = _add((c, i), _S12_CAP)
+    c, i = _add((c, i), _S12_STEP_Y2, _S12_TICK)
+    sound = osc['f198'] == player.STATE12_TICK_CAP
+    c, i = _add((c, i), _S12_TICK_BNE[not sound])
+    if sound:
+        c, i = _add((c, i), _S12_SOUND)
+    return c, i, osc
+
+
+def state12_plan(machine, registers):
+    """005FF4 (state 12): the player state machine's own dispatch table entry 12, an oscillating
+    swing/pendulum dispatcher.  See `game.player`'s own module note above `state12_step`."""
+    from .game import player
+    from .game.grid import grid_cell
+    if registers['pc'] != STATE12_ENTRY:
+        raise UnsupportedCandidate('state 12 planner needs the machine parked at 005FF4')
+    sr = registers['sr']
+    read = _reader(machine)
+    sp32 = registers['a7']
+    order = {}
+    exit_registers = {'d7': registers['d7']}
+
+    hc, hi, osc = _state12_head_cost(read)
+    cycles, instructions = hc, hi
+    new_y = (read(player.POSITION_Y, 2) + osc['position_y_delta']) & 0xFFFF
+    for a, b in _bytes(player.POSITION_Y, new_y, 2):
+        order[a] = b
+    for a, b in _bytes(player.F194 & 0xFFFFFF, osc['f194'], 2):
+        order[a] = b
+    for a, b in _bytes(player.F198 & 0xFFFFFF, osc['f198'], 2):
+        order[a] = b
+    if osc['sound']:
+        from .game.hazard import SOUND_COMMAND
+        for a, b in _bytes(SOUND_COMMAND & 0xFFFFFF, 0x50, 2):
+            order[a] = b
+    sr = _cmp_sr(sr, osc['f198'], player.STATE12_TICK_CAP, 2)   # 006026's own cmpi.w is the last flag-setter so far
+
+    # 005FF4's own addq.w #4,f18e.w and 00601E's own add.w d0,f18e.w are REAL, IMMEDIATE memory
+    # writes -- POSITION_Y is already at `new_y` in real RAM by the time the grid_cell calls, the
+    # block tests and the ground tests below run; the machine snapshot itself is not yet updated
+    # (this is a plan computation, not a real execution), so every read from here on must see the
+    # advanced value, not the parked one.
+    read_orig = read
+
+    def read(a, s, _y=new_y):
+        return _y if (a & 0xFFFFFF) == (player.POSITION_Y & 0xFFFFFF) else read_orig(a, s)
+
+    ea20 = player._signed_word(read(player.EA20_WORD, 2))
+    position_x = read(player.POSITION_X, 2)
+    f1a0 = read(player.F1A0, 2)
+
+    c, i = _S12_BSR_GRID
+    cycles += c
+    instructions += i
+    cycles += GRID_CELL_COST[0]
+    instructions += GRID_CELL_COST[1]
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x006038, 4))
+    cell1 = grid_cell(read)
+    exit_registers['a0'] = cell1['address'] & 0xFFFFFFFF
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell1['d0']
+    exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cell1['d1']
+    sr = _asl_sr(sr, cell1['row_source'], 3, 2)
+
+    c, i = _S12_LEFT_GATE_TEST
+    cycles += c
+    instructions += i
+    retry_open = f1a0 < player.STATE12_RETRY_CAP
+    provisional_state = None
+    position_x_after = position_x
+    if ea20 == -1:
+        c, i = _S12_LEFT_GATE_BNE[False]
+        cycles += c
+        instructions += i
+        c, i = _S12_RETRY_TEST
+        cycles += c
+        instructions += i
+        c, i = _S12_RETRY_BGE[not retry_open]
+        cycles += c
+        instructions += i
+        if not retry_open:
+            raise UnsupportedCandidate('state 12 left arm retry budget exhausted (FFFFF1A0 >= 6) not witnessed by a recording')
+        provisional_state = 0xB
+        c, i = _S12_LEFT_SET_STATE
+        cycles += c
+        instructions += i
+        address = cell1['address']
+        low = position_x & 0x1F
+        c, i = _S12_LR_HEAD
+        cycles += c
+        instructions += i
+        c, i = _S12_LEFT_BNE_LOW[low != 0]
+        cycles += c
+        instructions += i
+        blocked = False
+        if low == 0:
+            for offset in (-1, 0x7F, 0xFF):
+                c, i = _S12_GRID_TEST
+                cycles += c
+                instructions += i
+                hit = read((address + offset) & 0xFFFFFF, 1) == 1
+                c, i = _S12_GRID_BEQ[hit]
+                cycles += c
+                instructions += i
+                if hit:
+                    blocked = True
+                    break
+            if not blocked:
+                nibble = read(player.POSITION_Y, 2) & 0xF
+                c, i = _S12_NIBBLE_HEAD
+                cycles += c
+                instructions += i
+                c, i = _S12_NIBBLE_BEQ[nibble == 0]
+                cycles += c
+                instructions += i
+                if nibble != 0:
+                    c, i = _S12_NIBBLE_TEST
+                    cycles += c
+                    instructions += i
+                    blocked = read((address + 0x17F) & 0xFFFFFF, 1) == 1
+                    c, i = _S12_NIBBLE_BEQ2[blocked]
+                    cycles += c
+                    instructions += i
+        if not blocked:
+            c, i = _S12_LEFT_ADVANCE
+            cycles += c
+            instructions += i
+            position_x_after = (position_x - 4) & 0xFFFF
+            for a, b in _bytes(player.POSITION_X, position_x_after, 2):
+                order[a] = b
+            for a, b in _bytes(player.F1A0 & 0xFFFFFF, (f1a0 + 1) & 0xFFFF, 2):
+                order[a] = b
+    else:
+        c, i = _S12_LEFT_GATE_BNE[True]
+        cycles += c
+        instructions += i
+
+    c, i = _S12_RIGHT_GATE_TEST
+    cycles += c
+    instructions += i
+    if ea20 == 1:
+        c, i = _S12_RIGHT_GATE_BNE[False]
+        cycles += c
+        instructions += i
+        c, i = _S12_RETRY_TEST
+        cycles += c
+        instructions += i
+        c, i = _S12_RETRY_BGE[not retry_open]
+        cycles += c
+        instructions += i
+        if retry_open:
+            provisional_state = 0xC
+            c, i = _S12_RIGHT_SET_STATE
+            cycles += c
+            instructions += i
+            address = cell1['address']
+            low = position_x & 0x1C
+            c, i = _add(_S12_LR_HEAD, _S12_RIGHT_MASK_TEST)
+            cycles += c
+            instructions += i
+            mask_match = low == 0x1C
+            c, i = _S12_RIGHT_MASK_BEQ[mask_match]
+            cycles += c
+            instructions += i
+            run_test = mask_match
+            if not mask_match:
+                c, i = _S12_RIGHT_LOW_TEST
+                cycles += c
+                instructions += i
+                skip_test = low >= 8
+                c, i = _S12_RIGHT_LOW_BGE[skip_test]
+                cycles += c
+                instructions += i
+                run_test = not skip_test
+            blocked = False
+            if run_test:
+                for offset in (1, 0x81, 0x101):
+                    c, i = _S12_GRID_TEST
+                    cycles += c
+                    instructions += i
+                    hit = read((address + offset) & 0xFFFFFF, 1) == 1
+                    c, i = _S12_GRID_BEQ[hit]
+                    cycles += c
+                    instructions += i
+                    if hit:
+                        blocked = True
+                        break
+                if not blocked:
+                    nibble = read(player.POSITION_Y, 2) & 0xF
+                    c, i = _S12_NIBBLE_HEAD
+                    cycles += c
+                    instructions += i
+                    c, i = _S12_NIBBLE_BEQ[nibble == 0]
+                    cycles += c
+                    instructions += i
+                    if nibble != 0:
+                        c, i = _S12_NIBBLE_TEST
+                        cycles += c
+                        instructions += i
+                        blocked = read((address + 0x181) & 0xFFFFFF, 1) == 1
+                        c, i = _S12_NIBBLE_BEQ2[blocked]
+                        cycles += c
+                        instructions += i
+            if not blocked:
+                c, i = _S12_RIGHT_ADVANCE
+                cycles += c
+                instructions += i
+                position_x_after = (position_x + 4) & 0xFFFF
+                for a, b in _bytes(player.POSITION_X, position_x_after, 2):
+                    order[a] = b
+                for a, b in _bytes(player.F1A0 & 0xFFFFFF, (f1a0 + 1) & 0xFFFF, 2):
+                    order[a] = b
+    else:
+        c, i = _S12_RIGHT_GATE_BNE[True]
+        cycles += c
+        instructions += i
+
+    if provisional_state is not None:
+        for a, b in _bytes(player.STATE_INDEX, provisional_state, 2):
+            order[a] = b
+
+    def _read_after_move(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (player.POSITION_X & 0xFFFFFF) else read(a, s)
+    c, i = _S12_BSR_GRID
+    cycles += c
+    instructions += i
+    cycles += GRID_CELL_COST[0]
+    instructions += GRID_CELL_COST[1]
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x0060EA, 4))
+    cell2 = grid_cell(_read_after_move)
+    address2 = cell2['address']
+    exit_registers['a0'] = cell2['address'] & 0xFFFFFFFF
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell2['d0']
+    exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cell2['d1']
+    sr = _asl_sr(sr, cell2['row_source'], 3, 2)
+
+    c, i = _S12_TAIL_MOVEQ
+    cycles += c
+    instructions += i
+    exit_registers['d7'] = 0
+    c, i = _S12_GROUND_TEST
+    cycles += c
+    instructions += i
+    ground = read((address2 + 0x180) & 0xFFFFFF, 1) == 1
+    c, i = _S12_GROUND_BEQ[ground]
+    cycles += c
+    instructions += i
+    alt_low = None
+    if not ground:
+        # 0060F4/0060F8 run UNCONDITIONALLY once the first ground test fails, overwriting D0 with
+        # POSITION_X's own low bits (& 0x1c) -- not grid_cell's own column -- and 0060FC's own
+        # cmpi.w #8,d0 is the last flag-setter until btst below touches Z alone.
+        low = _read_after_move(player.POSITION_X, 2) & 0x1C
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | low
+        c, i = _add(_S12_ALT_HEAD, _S12_ALT_TEST)
+        cycles += c
+        instructions += i
+        sr = _cmp_sr(sr, low, 8, 2)
+        alt_low = low < 8
+        c, i = _S12_ALT_BLT[alt_low]
+        cycles += c
+        instructions += i
+        if not alt_low:
+            c, i = _S12_ALT_GROUND_TEST
+            cycles += c
+            instructions += i
+            alt_byte = read((address2 + 0x181) & 0xFFFFFF, 1)
+            ground = alt_byte == 1
+            sr = _cmp_sr(sr, alt_byte, 1, 1)
+            c, i = _S12_ALT_GROUND_BEQ[ground]
+            cycles += c
+            instructions += i
+
+    if ground:
+        for a, b in _bytes(player.STATE_INDEX, player.STATE12_GROUND_INDEX, 2):
+            order[a] = b
+        masked_y = new_y & 0xFFF0
+        for a, b in _bytes(player.POSITION_Y, masked_y, 2):
+            order[a] = b
+        from .game.pickups import MOVEMENT_SOUND_CUE
+        for a, b in _bytes(player.F1B8 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        for a, b in _bytes(MOVEMENT_SOUND_CUE & 0xFFFFFF, 0x39, 2):
+            order[a] = b
+        from .game.zones import COOLDOWN, SUPPRESS_COOLDOWN
+        c, i = _S12G_HEAD
+        cycles += c
+        instructions += i
+        c, i = _S12G_TICK_TEST
+        cycles += c
+        instructions += i
+        d0 = player._signed_word((osc['f198'] - 0x14) & 0xFFFF)
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | ((osc['f198'] - 0x14) & 0xFFFF)
+        c, i = _S12G_TICK_BLE[d0 <= 0]
+        cycles += c
+        instructions += i
+        if d0 <= 0:
+            sr = _sub_sr(sr, osc['f198'], 0x14, 2)   # 00614A subi.w #$14,d0: a real subtract, X follows C
+            exit_registers['pc'] = 0x0075D6
+            exit_registers['sr'] = sr
+            return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                              registers=exit_registers, last_pc=0x00614E)
+        suppress = read(SUPPRESS_COOLDOWN, 2) & 0xFFFF != 0
+        c, i = _S12G_SUPPRESS_TEST
+        cycles += c
+        instructions += i
+        c, i = _S12G_SUPPRESS_BNE[suppress]
+        cycles += c
+        instructions += i
+        if suppress:
+            sr = _logic_sr(sr, read(SUPPRESS_COOLDOWN, 2), 2)
+            exit_registers['pc'] = 0x0075D6
+            exit_registers['sr'] = sr
+            return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                              registers=exit_registers, last_pc=0x006156)
+        half = d0 >> 1
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | (half & 0xFFFF)   # 00615A asr.w #1,d0
+        cooldown = (read(COOLDOWN, 2) - half) & 0xFFFF
+        for a, b in _bytes(COOLDOWN & 0xFFFFFF, cooldown, 2):
+            order[a] = b
+        c, i = _S12G_APPLY
+        cycles += c
+        instructions += i
+        sr = _sub_sr(sr, read(COOLDOWN, 2), half, 2)
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006160)
+
+    c, i = _S12_TRIGGER_BIT2
+    cycles += c
+    instructions += i
+    bit2 = read(player.EA23_WORD, 1) & 4
+    c, i = _S12_TRIGGER_BIT2_BEQ[not bit2]
+    cycles += c
+    instructions += i
+    if not bit2:
+        # btst only ever touches Z; N/V/C/X are retained from whatever the last flag-setter left
+        # (the ground/alt-ground path's own cmpi.w #8,d0 when the alt test ran, sr already carries it).
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = (sr & ~0x04) | (0x00 if bit2 else 0x04)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006110)
+
+    c, i = _S12_BSR_SEARCH
+    cycles += c
+    instructions += i
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, 0x006118, 4):
+        order[a] = b
+    cs_cycles, cs_instructions, cs_order, cs_registers, cs_result = _contact_search_resolve(
+        machine, read, {**registers, 'pc': CONTACT_SEARCH_ENTRY, 'a7': sp32 - 4, 'sr': sr}, sp32 - 4)
+    cycles += cs_cycles
+    instructions += cs_instructions
+    order.update(cs_order)
+    exit_registers.update(cs_registers)
+    sr = cs_registers['sr']
+    c, i = _S12_TRIGGER_TST_D0
+    cycles += c
+    instructions += i
+    found = cs_result['d0'] == 0
+    c, i = _S12_TRIGGER_BNE_D0[not found]
+    cycles += c
+    instructions += i
+    if not found:
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, cs_result['d0'], 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x00611A)
+
+    c, i = _S12_TRIGGER_TAIL
+    cycles += c
+    instructions += i
+    for a, b in _bytes(player.STATE_INDEX, player.STATE12_TRIGGER_INDEX, 2):
+        order[a] = b
+    for a, b in _bytes(player.F1BA & 0xFFFFFF, 1, 2):
+        order[a] = b
+    exit_registers['d7'] = 1
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = _logic_sr(sr, 1, 2)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x00612A)
