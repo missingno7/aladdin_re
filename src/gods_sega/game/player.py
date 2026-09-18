@@ -1832,3 +1832,87 @@ def state16_step(read):
         return {'arm': 'countdown', 'stores': {F198 & 0xFFFFFF: (new_f198, 2)}}
     return {'arm': 'transition-1', 'd7': 2,
             'stores': {F198 & 0xFFFFFF: (new_f198, 2), STATE_INDEX: (1, 2)}}
+
+
+# --- 005D32: state 11's own decision tree -- BYTE-IDENTICAL to state 12's own oscillation head and
+# EA20-gated block test (005D32-005E28 vs 005FF4-0060EA, confirmed against the ROM save for relocated
+# branch displacements: every constant, mask and threshold is the SAME, including the LEFT/RIGHT
+# arms' own provisional STATE_INDEX targets, 0xB and 0xC -- the SAME values state 12's own arms use).
+# Real differences: only the ground/trigger tail's own targets (state 17/23, not state 12's 16/22)
+# and the ground tail's own instruction ORDER (`005E6C move.w #$11,f192; 005E72 clr.w f1b8; 005E76
+# moveq #0,d7; 005E78 move.w #$39,fdf6; 005E7E andi.w #$fff0,f18e.w` -- the ANDI runs LAST here, not
+# second as in state 12's own `00612E move.w #$10,f192; 006134 andi.w #$fff0,f18e.w; 00613A clr.w
+# f1b8; ...`; the SAME four stores either way, so this does not change any final value, only which
+# instruction is nominally "last" before the tick test -- itself not the true last flag-setter on
+# any exit, exactly as state 12's own module note already established).  `factcheck.py facts --path`
+# on real fixtures over `census-005D32-*` (all five recordings; 693 activations, six real terminal
+# shapes matching state 12's own set exactly, including the LEFT arm -- `FFFFEA20 == -1` -- which,
+# like state 12's own, is witnessed only via a real 120-frame `segment_verify` continuation, not any
+# single-tick census entry).
+STATE11_ENTRY = 0x005D32
+STATE11_GROUND_INDEX = 0x11        # 17, not state 12's 16
+STATE11_TRIGGER_INDEX = 0x17       # 23, not state 12's 22
+
+
+def state11_step(read):
+    """005D32-005E4E: state 11's own whole decision tree up to (and including) the trigger gate.
+    BYTE-IDENTICAL to `state12_step`'s own oscillation head and EA20-gated block test; only the
+    ground/trigger targets differ.  See the module note above for the shape."""
+    from .grid import grid_cell
+    osc = state12_oscillate(read)
+    position_x = read(POSITION_X, 2)
+
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    cell1 = grid_cell(read)
+    provisional_state_index = None
+    position_x_after = position_x
+    f1a0 = read(F1A0, 2)
+    f1a0_after = f1a0
+    if ea20 == -1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xB
+        blocked = state12_block_test_left(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x - 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+    elif ea20 == 1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xC
+        blocked = state12_block_test_right(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x + 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+
+    def _read_after_move(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (POSITION_X & 0xFFFFFF) else read(a, s)
+    cell2 = grid_cell(_read_after_move)
+    address2 = cell2['address']
+
+    base = {'osc': osc, 'ea20': ea20, 'provisional_state_index': provisional_state_index,
+            'position_x': position_x_after, 'f1a0': f1a0_after, 'cell1': cell1, 'cell2': cell2}
+
+    ground = read((address2 + 0x180) & 0xFFFFFF, 1) == 1
+    if not ground:
+        low = _read_after_move(POSITION_X, 2) & 0x1C
+        if low >= 8 and read((address2 + 0x181) & 0xFFFFFF, 1) == 1:
+            ground = True
+    if ground:
+        return {'arm': 'ground', **base}
+
+    bit2 = read(EA23_WORD, 1) & 4
+    if not bit2:
+        return {'arm': 'unchanged', **base}
+    return {'arm': 'trigger-gate', **base}
+
+
+def state11_ground_tail(read, f198_value):
+    """005E6C-005E9E: state 11's own ground-found tail -- BYTE-IDENTICAL stores to
+    `state12_ground_tail`'s own (just reordered in the ROM), targeting state `STATE11_GROUND_INDEX`
+    (17, not state 12's 16)."""
+    excess = (f198_value - 0x14) & 0xFFFF
+    excess_signed = _signed_word(excess)
+    if excess_signed <= 0:
+        return {'arm': 'ground', 'cooldown_delta': None}
+    from .zones import SUPPRESS_COOLDOWN
+    if read(SUPPRESS_COOLDOWN, 2) & 0xFFFF != 0:
+        return {'arm': 'ground', 'cooldown_delta': None}
+    half = excess_signed >> 1
+    return {'arm': 'ground', 'cooldown_delta': half}

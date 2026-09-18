@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with forty-four gates armed, the camera follow step `002806`, the
+  original with fifty-three gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -179,8 +179,8 @@ one planner") is the next bite.
   `contact-search`, `contact-consume-primary`,
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
-  `state-26`, `state-8`, `state-13`, `state-12` and `state-16` arm each
-  alone.
+  `state-26`, `state-8`, `state-13`, `state-12`, `state-16` and `state-11`
+  arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -972,7 +972,7 @@ small leaf):
   (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
-  state-13, state-12, state-16 -- 9,965 of 13,488 activations (74%)
+  state-13, state-12, state-16, state-11 -- 10,134 of 13,488 activations (75%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1055,7 +1055,23 @@ small leaf):
   across all five recordings collapse to exactly three real terminal
   shapes; the only defect the FAST tier caught was a word-branch cost
   table transcribed backwards (`bpl.w`, the same class of bug states
-  12/16's own sessions kept finding).
+  12/16's own sessions kept finding).  State 11 (`005D32`, recovered 18
+  Sep) is BYTE-IDENTICAL to state 12's own oscillation head and
+  `FFFFEA20`-gated block test -- confirmed via a raw ROM diff,
+  `rom[0x005D32:0x005E28] == rom[0x005FF4:0x0060EA]`, differing only in
+  relocated branch-displacement bytes, down to the LEFT/RIGHT arms' own
+  hardcoded provisional `STATE_INDEX` values (0xB/0xC, unchanged, since
+  those ARE this dispatcher's own pair of table indices); the ground
+  tail's own four stores are the same instructions, just reordered in
+  the ROM (`clr f1b8`/`moveq d7`/`move fdf6` BEFORE `andi f18e`, unlike
+  state 12's own `andi`-second order), targeting states 17 (ground) and
+  23 (trigger) instead of state 12's own 16/22. Every `_S12_*`/`_S12G_*`
+  cost constant is reused verbatim; no new defects, since none of state
+  12's own nine were specific to its own address range. The LEFT arm
+  (`FFFFEA20 == -1`) was, again, invisible to the whole-history census
+  (693 real path classes across all five recordings never landed on it)
+  and needed the same targeted 120-frame `segment_verify` continuation
+  capture as state 12's own.
 - **Remaining blocker**: none structural -- the 17 September escalation
   was the shared tail itself, since resolved (`player-tail`).  What is
   left is pure volume: the remaining witnessed states in frequency order
