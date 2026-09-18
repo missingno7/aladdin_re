@@ -85,6 +85,10 @@ AIM_TARGET_SCAN_BACKWARD_FIXTURES = sorted(Path('artifacts/gods/evidence').glob(
 needs_aim_target_scan_backward_census = pytest.mark.skipif(not AIM_TARGET_SCAN_BACKWARD_FIXTURES or not GODS.rom_path.is_file(),
                                                             reason='no local census of 00B7DA')
 
+AIM_TARGET_RESOLVE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B6AE-*/00B6AE-entry-p*.state'))
+needs_aim_target_resolve_census = pytest.mark.skipif(not AIM_TARGET_RESOLVE_FIXTURES or not GODS.rom_path.is_file(),
+                                                      reason='no local census of 00B6AE')
+
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
 
@@ -1290,4 +1294,57 @@ def test_aim_target_scan_backward_candidate_matches_the_reference_and_its_mutant
         'unsupported domain: aim target scan backward: found without a new best, not witnessed by a recording'}
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-target-scan-backward-mutant-result',
                                   reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B6AE: the aim target resolve (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
+# 00AF52", 19 Sep -- the third of the three further callees 00B002's own reconnaissance found bounded
+# over {00AF3C, 00B32E, 00B05A}).  Consumes 00B724 and 00B7DA's own 'exhausted' snapshots, a two-slot
+# outer loop each doing an independent vertical scan.  See game/creatures.py's own module note above
+# aim_target_resolve.
+
+def test_aim_target_resolve_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-target-resolve').gate_pcs == (boundary.AIM_TARGET_RESOLVE_ENTRY,)
+    assert boundary.AIM_TARGET_RESOLVE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-target-resolve-mutant-result').mutation is recovery._mutate_aim_target_resolve
+
+
+@needs_aim_target_resolve_census
+@pytest.mark.parametrize('fixture', AIM_TARGET_RESOLVE_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_target_resolve_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_target_resolve_plan(machine, registers)
+        except UnsupportedCandidate:
+            pytest.skip('declined arm (found-without-a-new-best / aim_pool_add pool-full) -- '
+                       'covered by factcheck check, not this MATCH-only test')
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_target_resolve_candidate_matches_the_reference_and_its_mutant_diverges():
+    # Most real occurrences decline down to a no-op (y-bound / step-limit / pruned, or both slots
+    # empty): the only RAM this routine ever changes on such an occurrence is the dead internal-call
+    # stack residue (see _mutate_aim_target_resolve's own note), so a fixture/window has to be found
+    # where a 'found' or 'store' arm actually fires before the mutant means anything.
+    report = mutant = None
+    for fixture in AIM_TARGET_RESOLVE_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-target-resolve', reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        assert report['status'] == 'PASS', report
+        assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-target-resolve-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-target-resolve produce an observable effect')
     assert mutant['status'] == 'DIVERGENCE'

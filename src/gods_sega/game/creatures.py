@@ -1206,3 +1206,97 @@ def aim_target_scan_backward(read, type_ptr, x0, y0, a3):
         checks.append({'arm': 'continue', 'd7_before': d7_before_incr, 'd2_before': d2_before,
                         'layer0': layer0, 'layer1': layer1, 'tile': tile, 'header': header})
         index += 1
+
+
+# --- 00B6AE: the aim target resolve (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
+# 00AF52", 19 Sep -- the third of the three further callees 00B002's own reconnaissance found bounded
+# over {00AF3C, 00B32E, 00B05A}).  Consumes the two 'exhausted' snapshots 00B724 and 00B7DA's own
+# calls, earlier in the SAME activation, leave (AIM_SEARCH_SNAPSHOT/AIM_SEARCH_BACKWARD_SNAPSHOT): a
+# two-slot outer loop, one slot per snapshot, each an independent VERTICAL scan downward (Y steps by
+# 0x10, half 00B724/00B7DA's own horizontal 0x20 -- the row stride GRID_ROW_BYTES and the window
+# table's own row-to-row stride AIM_CUE_WINDOW_STRIDE_1 advance the grid/mark pointers together) until
+# a row's own two-rows-down footing IS 1 (the opposite polarity from 00B724/00B7DA's own per-step
+# test: there, header==1 means keep going; here, header==1 means STOP scanning and evaluate this row).
+# An empty snapshot (both its own position words zero) skips the slot outright.  Evaluating a found
+# row reuses the shape 00B724/00B7DA's own do: 'found' (the window-mark cell already negative -- update
+# the shared best registry AIM_SEARCH_BEST_FLAG/AIM_SEARCH_BEST_INDEX, this time compared UNSIGNED
+# STRICT, a third convention distinct from both 00B724's own unsigned>= and 00B7DA's own signed>=),
+# 'pruned' (a step index already at or past this one) or a STORE (the window-mark cell zero, or
+# positive but this step is an improvement) that reuses the already-recovered aim_pool_add (00B05A)
+# verbatim over the ORIGINAL AIM_POOL, not AIM_SEARCH_POOL -- the snapshot's own flag word (its own
+# +6 offset: AIM_SEARCH_SNAPSHOT_FLAG / AIM_SEARCH_BACKWARD_SNAPSHOT_FLAG) is threaded through as the
+# pool entry's own fourth word.  'step-limit' (the SAME type_ptr+0xD field 00B724 reads) and 'y-bound'
+# (the scan's own vertical extent, AIM_TARGET_RESOLVE_Y_LIMIT) end a slot without a header==1 row ever
+# found.
+AIM_TARGET_RESOLVE_SLOTS = ((AIM_SEARCH_SNAPSHOT, AIM_SEARCH_SNAPSHOT_FLAG),
+                            (AIM_SEARCH_BACKWARD_SNAPSHOT, AIM_SEARCH_BACKWARD_SNAPSHOT_FLAG))
+AIM_TARGET_RESOLVE_Y_STEP = 0x10
+AIM_TARGET_RESOLVE_Y_LIMIT = 0xC0               # signed: the scan's own vertical extent
+AIM_TARGET_RESOLVE_ROW_STRIDE = 0x80            # == grid.GRID_ROW_BYTES
+AIM_TARGET_RESOLVE_MARK_STRIDE = AIM_CUE_WINDOW_STRIDE_1
+
+
+def _resolve_slot(read, type_ptr, limit, snapshot_addr, flag_addr):
+    from .grid import grid_cell_at, _signed_byte, _signed_word
+    d0 = read(snapshot_addr & 0xFFFFFF, 2) & 0xFFFF
+    d1 = read((snapshot_addr + 2) & 0xFFFFFF, 2) & 0xFFFF
+    d7 = read((snapshot_addr + 4) & 0xFFFFFF, 2) & 0xFFFF
+    cell = grid_cell_at(d0, d1)
+    a2 = cell['address'] & 0xFFFFFFFF
+    a0 = (aim_window_address(read, d0, d1) + AIM_SEARCH_MARK_OFFSET) & 0xFFFFFFFF
+    d3 = (d1 - read(FOLLOW_Y, 2)) & 0xFFFF
+    steps = []
+    while True:
+        d3_before = d3
+        d3 = (d3 + AIM_TARGET_RESOLVE_Y_STEP) & 0xFFFF
+        if _signed_word(d3) >= AIM_TARGET_RESOLVE_Y_LIMIT:
+            return {'arm': 'y-bound', 'steps': steps, 'd0': d0, 'd1': d1, 'd7': d7, 'a2': a2, 'a0': a0,
+                    'd3': d3, 'd3_before': d3_before}
+        d1_before = d1
+        d1 = (d1 + AIM_TARGET_RESOLVE_Y_STEP) & 0xFFFF
+        d7 = (d7 + 1) & 0xFFFF
+        a2 = (a2 + AIM_TARGET_RESOLVE_ROW_STRIDE) & 0xFFFFFFFF
+        a0 = (a0 + AIM_TARGET_RESOLVE_MARK_STRIDE) & 0xFFFFFFFF
+        header = read((a2 + 0x100) & 0xFFFFFF, 1) & 0xFF
+        if header != 1:
+            steps.append({'header': header, 'continue': True, 'd1_before': d1_before})
+            continue
+        steps.append({'header': header, 'continue': False, 'd1_before': d1_before})
+        if _signed_byte(d7 & 0xFF) > _signed_byte(limit):
+            return {'arm': 'step-limit', 'steps': steps, 'd0': d0, 'd1': d1, 'd7': d7, 'a2': a2, 'a0': a0, 'd3': d3}
+        tile = read(a0 & 0xFFFFFF, 1) & 0xFF
+        stile = _signed_byte(tile)
+        if stile < 0:
+            best_index_before = read(AIM_SEARCH_BEST_INDEX, 2) & 0xFFFF
+            skip = d7 > best_index_before          # cmp.w f2d0,d7; bhi -- unsigned, STRICT
+            flag = read(flag_addr & 0xFFFFFF, 2) & 0xFFFF
+            return {'arm': 'found', 'steps': steps, 'd0': d0, 'd1': d1, 'd7': d7, 'a2': a2, 'a0': a0,
+                    'd3': d3, 'tile': tile, 'best_index_before': best_index_before, 'update_best': not skip,
+                    'flag': flag}
+        if stile > 0 and _signed_byte(d7 & 0xFF) >= _signed_byte(tile):
+            return {'arm': 'pruned', 'steps': steps, 'd0': d0, 'd1': d1, 'd7': d7, 'a2': a2, 'a0': a0, 'd3': d3,
+                    'tile': tile}
+        # tile == 0, or (tile > 0 and d7 < tile): store.
+        flag = read(flag_addr & 0xFFFFFF, 2) & 0xFFFF
+        add_result = aim_pool_add(read, d0, d1, d7, flag)
+        return {'arm': 'store', 'steps': steps, 'd0': d0, 'd1': d1, 'd7': d7, 'a2': a2, 'a0': a0, 'd3': d3,
+                'tile': tile, 'flag': flag, 'add_result': add_result}
+
+
+def aim_target_resolve(read, type_ptr):
+    """00B6AE: see the module note above.  Returns ``{'slots': [slot0, slot1]}``, one dict per outer
+    slot (in AIM_TARGET_RESOLVE_SLOTS order): ``{'arm': 'empty'}`` (the snapshot's own leading long is
+    zero) or the result of ``_resolve_slot`` -- ``'y-bound'`` / ``'step-limit'`` / ``'pruned'`` (no
+    match; a real recording witnesses each), ``'found'`` (with ``'update_best'``: only the True case --
+    every witnessed occurrence -- is admitted, the False case is real ROM never witnessed) or
+    ``'store'`` (with the already-recovered ``aim_pool_add``'s own result nested in -- only its own
+    ``'found'`` arm is witnessed here, matching aim_pool_add's own recovery)."""
+    type_ptr &= 0xFFFFFF
+    limit = read((type_ptr + AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1) & 0xFF
+    slots = []
+    for snapshot_addr, flag_addr in AIM_TARGET_RESOLVE_SLOTS:
+        if read(snapshot_addr & 0xFFFFFF, 4) == 0:
+            slots.append({'arm': 'empty'})
+            continue
+        slots.append(_resolve_slot(read, type_ptr, limit, snapshot_addr, flag_addr))
+    return {'slots': slots}

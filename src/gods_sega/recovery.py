@@ -17,6 +17,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_WINDOW_ADDRESS_ENTRY, aim_window_address_plan,
                        AIM_TARGET_SCAN_ENTRY, aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY, aim_target_scan_backward_plan,
+                       AIM_TARGET_RESOLVE_ENTRY, aim_target_resolve_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
@@ -42,6 +43,20 @@ def _mutate_result(plan: AtomicPlan) -> AtomicPlan:
         return plan
     address, value = plan.writes[-1]
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes[:-1] + ((address, (value + 1) & 0xFF),),
+                      plan.registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_aim_target_resolve(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00B6AE: the FIRST stored byte, not the last -- the last one or four bytes
+    of plan.writes are always the internal-call stack residue (00AF3C/00B32E/00B05A's own return
+    address, dead: popped by this routine's own rts before any frame boundary, the same class of blind
+    spot 009D6C's own kind_frame_offset mutant found), which is empty writes for the two-empty-slots
+    occurrence and otherwise NEVER the mark byte or the pool/best-registry stores that are this
+    region's own real, observable effect."""
+    if not plan.writes:
+        return plan
+    address, value = plan.writes[0]
+    return AtomicPlan(plan.cycles, plan.instructions, ((address, (value + 1) & 0xFF),) + plan.writes[1:],
                       plan.registers, plan.last_pc, plan.direct_calls)
 
 
@@ -289,6 +304,7 @@ PLANNERS = {
     'aim-window-address': {AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan},
     'aim-target-scan': {AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan},
     'aim-target-scan-backward': {AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan},
+    'aim-target-resolve': {AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
@@ -380,7 +396,8 @@ PLANNERS = {
                        AIM_POOL_RESET_ENTRY: aim_pool_reset_plan, AIM_POOL_ADD_ENTRY: aim_pool_add_plan,
                        AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan,
                        AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan,
-                       AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan},
+                       AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan,
+                       AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -610,7 +627,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-pool-add-mutant-result': ('aim-pool-add', _mutate_result),
              'aim-window-address-mutant-result': ('aim-window-address', _mutate_aim_window_address),
              'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result),
-             'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result)}
+             'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
+             'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve)}
 
 
 @dataclass

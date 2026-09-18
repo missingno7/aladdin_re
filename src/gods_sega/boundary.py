@@ -16952,3 +16952,310 @@ def aim_target_scan_backward_plan(machine, registers):
                           last_pc=AIM_TARGET_SCAN_BACKWARD_FOUND_PC)
 
     raise UnsupportedCandidate(f'aim target scan backward: {arm}, not witnessed by a recording')
+
+
+# --- 00B6AE: the aim target resolve (game/creatures.py: aim_target_resolve) --------------------------
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-00B6AE-*, 93 retained fixtures over
+# four recordings).  See game/creatures.py's own module note above aim_target_resolve.
+AIM_TARGET_RESOLVE_ENTRY = 0x00B6AE
+AIM_TARGET_RESOLVE_EMPTY_PC = 0x00B70A     # a slot's own tst.l beq target -- never itself a last_pc
+AIM_TARGET_RESOLVE_STEP_PC = 0x00B710      # the routine's own rts (every arm but 'found' ends here)
+AIM_TARGET_RESOLVE_FOUND_TAIL_PC = 0x00B710  # 'found' also ends at the SAME rts (via its own bra)
+AIM_TARGET_RESOLVE_AF3C_RETURN = 0x00B6C2
+AIM_TARGET_RESOLVE_WINDOW_RETURN = 0x00B6C6
+AIM_TARGET_RESOLVE_POOLADD_RETURN = 0x00B70A
+
+_RES_MOVEQ_D6 = (4, 1)                  # 00B6AE moveq #1,d6
+_RES_LEA_A1 = (12, 1)                   # 00B6B0 lea.l $fffff2b2.l,a1
+_RES_TST_L = (12, 1)                    # 00B6B6 tst.l (a1)
+_RES_BEQ_EMPTY = {True: (10, 1), False: (8, 1)}     # 00B6B8
+_RES_MOVEM_READ = (24, 1)               # 00B6BA movem.w (a1),d0-d1/d7
+_RES_BSR_AF3C = (18, 1)                 # 00B6BE
+_RES_BSR_WINDOW = (18, 1)               # 00B6C2
+_RES_LEA_MARK = (8, 1)                  # 00B6C6 lea.l $14(a0),a0
+_RES_MOVE_D3 = (4, 1)                   # 00B6CA move.w d1,d3
+_RES_SUB_D3 = (12, 1)                   # 00B6CC sub.w f3f0,d3
+_RES_ADD_D3 = (8, 1)                    # 00B6D0 addi.w #$10,d3
+_RES_CMP_YBOUND = (8, 1)                # 00B6D4 cmpi.w #$c0,d3
+_RES_BGE_YBOUND = {True: (10, 1), False: (8, 1)}    # 00B6D8
+_RES_ADD_D1 = (8, 1)                    # 00B6DA addi.w #$10,d1
+_RES_ADD_D7 = (4, 1)                    # 00B6DE addq.w #1,d7
+_RES_LEA_ROW = (8, 1)                   # 00B6E0 lea.l $80(a2),a2
+_RES_LEA_MARKSTEP = (8, 1)              # 00B6E4 lea.l $14(a0),a0
+_RES_CMP_HEADER = (16, 1)               # 00B6E8 cmpi.b #1,$100(a2)
+_RES_BNE_HEADER = {True: (10, 1), False: (8, 1)}    # 00B6EE -- taken: keep scanning down
+_RES_CMP_LIMIT = (12, 1)                # 00B6F0 cmp.b $d(a4),d7
+_RES_BGT_LIMIT = {True: (10, 1), False: (8, 1)}     # 00B6F4
+_RES_TST_TILE = (8, 1)                  # 00B6F6 tst.b (a0)
+_RES_BEQ_STORE = {True: (10, 1), False: (8, 1)}     # 00B6F8 -- taken: tile==0, straight to store
+_RES_BMI_FOUND = {True: (10, 1), False: (8, 1)}     # 00B6FA
+_RES_CMP_PRUNE = (8, 1)                 # 00B6FC cmp.b (a0),d7
+_RES_BGE_PRUNE = {True: (10, 1), False: (8, 1)}     # 00B6FE
+_RES_MOVE_MARK = (8, 1)                 # 00B700 move.b d7,(a0)
+_RES_MOVE_FLAG = (12, 1)                # 00B702 move.w $6(a1),d2
+_RES_BSR_POOLADD = (18, 1)              # 00B706
+_RES_ADDQ_A1 = (4, 1)                   # 00B70A addq.w #8,a1
+_RES_DBRA = {True: (10, 1), False: (14, 1)}         # 00B70C
+_RES_RTS = (16, 1)                      # 00B710
+_RES_CMP_BEST = (12, 1)                 # 00B712 cmp.w f2d0,d7
+_RES_BHI_BEST = {False: (8, 1)}         # 00B716 -- only 'not taken' (update) ever witnessed
+_RES_STORE_BEST_FLAG = (20, 1)          # 00B718 move.w $6(a1),f2ce
+_RES_STORE_BEST_INDEX = (12, 1)         # 00B71E move.w d7,f2d0
+_RES_BRA_CONTINUE = (10, 1)             # 00B722
+
+_RES_HEAD_EMPTY = _add(_RES_TST_L, _RES_BEQ_EMPTY[True])
+_RES_HEAD_NONEMPTY = _add(_RES_TST_L, _RES_BEQ_EMPTY[False], _RES_MOVEM_READ, _RES_BSR_AF3C, _AF3C_COST,
+                          _RES_BSR_WINDOW, _AIM_WINDOW_ADDRESS_COST, _RES_LEA_MARK, _RES_MOVE_D3, _RES_SUB_D3)
+_RES_STEP_HEAD = _add(_RES_ADD_D3, _RES_CMP_YBOUND, _RES_BGE_YBOUND[False], _RES_ADD_D1, _RES_ADD_D7,
+                      _RES_LEA_ROW, _RES_LEA_MARKSTEP, _RES_CMP_HEADER)
+_RES_YBOUND_TAIL = _add(_RES_ADD_D3, _RES_CMP_YBOUND, _RES_BGE_YBOUND[True])
+_RES_EVAL_HEAD = _RES_CMP_LIMIT   # after the last step's own header==1 (bne not taken)
+
+
+def _res_window_d2(read, d0, d1):
+    """00B32E's own D2 residue -- the offset itself (``_cue_offset``, before it is added to
+    AIM_CUE_WINDOW_BASE to form A0), left untouched by 00B6AE for the rest of a slot's own processing
+    (unlike 00B724/00B7DA, which both immediately overwrite D2 with their own camera-relative X in the
+    setup right after the SAME internal call): the ONLY thing that changes it again is the STORE arm's
+    own ``move.w $6(a1),d2`` (the snapshot's own flag word)."""
+    from .game import creatures
+    dx = (d0 - read(creatures.FOLLOW_X, 2)) & 0xFFFF
+    dy = (d1 - read(creatures.FOLLOW_Y, 2)) & 0xFFFF
+    return creatures._cue_offset(dx, dy, 0) & 0xFFFF
+
+
+def _res_pool_add_cost(add_result):
+    from .game import creatures
+    if add_result['arm'] != 'found':
+        raise UnsupportedCandidate(f"aim target resolve: aim pool add {add_result['arm']}, not witnessed")
+    cycles, instructions = _AIM_POOL_ADD_HEAD
+    c, i = _add(*([_AIM_POOL_ADD_SKIP] * add_result['skipped']))
+    cycles += c
+    instructions += i
+    c, i = _AIM_POOL_ADD_FOUND_TEST
+    cycles += c
+    instructions += i
+    c, i = _AIM_POOL_ADD_WRITE
+    cycles += c
+    instructions += i
+    c, i = _AIM_POOL_ADD_RTS
+    cycles += c
+    instructions += i
+    return cycles, instructions
+
+
+def _res_slot_cost(slot, sr):
+    """Cost, CCR and outcome of ONE outer slot (game.creatures._resolve_slot's own result already
+    decided the control flow); returns (cycles, instructions, sr, last_call_return_or_None).  X needs
+    threading through every step: ADDI.w #$10,d1 (00B6DA) is the last X-setter any step that reaches
+    the header test leaves (it runs right after ADDI.w #$10,d3, 00B6D0, which sets X too but is always
+    immediately overwritten within the SAME step); the 'y-bound' arm's own final, step-less attempt
+    only ever runs the d3 one, so ITS OWN X is what a 'y-bound' exit leaves.  N/Z/V/C are always
+    overwritten fresh by whichever CMP/TST/MOVE is the eventual exit's own last instruction, charged
+    by the caller after this returns."""
+    from .game import creatures
+    if slot['arm'] == 'empty':
+        c, i = _RES_HEAD_EMPTY
+        return c, i, sr, None
+    cycles, instructions = _RES_HEAD_NONEMPTY
+    last_call = AIM_TARGET_RESOLVE_WINDOW_RETURN
+    for step in slot['steps']:
+        c, i = _RES_STEP_HEAD
+        cycles += c
+        instructions += i
+        c, i = _RES_BNE_HEADER[step['continue']]
+        cycles += c
+        instructions += i
+        sr = _add_sr(sr, step['d1_before'], creatures.AIM_TARGET_RESOLVE_Y_STEP, 2)  # ADDI.w #$10,d1
+    if slot['arm'] == 'y-bound':
+        c, i = _RES_YBOUND_TAIL
+        cycles += c
+        instructions += i
+        sr = _add_sr(sr, slot['d3_before'], creatures.AIM_TARGET_RESOLVE_Y_STEP, 2)  # ADDI.w #$10,d3
+        return cycles, instructions, sr, last_call
+    c, i = _RES_EVAL_HEAD
+    cycles += c
+    instructions += i
+    if slot['arm'] == 'step-limit':
+        c, i = _RES_BGT_LIMIT[True]
+        cycles += c
+        instructions += i
+        return cycles, instructions, sr, last_call
+    c, i = _RES_BGT_LIMIT[False]
+    cycles += c
+    instructions += i
+    c, i = _RES_TST_TILE
+    cycles += c
+    instructions += i
+    tile_zero = slot['tile'] == 0
+    c, i = _RES_BEQ_STORE[tile_zero]
+    cycles += c
+    instructions += i
+    if not tile_zero:
+        found_taken = slot['arm'] == 'found'
+        c, i = _RES_BMI_FOUND[found_taken]
+        cycles += c
+        instructions += i
+        if found_taken:
+            c, i = _add(_RES_CMP_BEST, _RES_BHI_BEST[False], _RES_STORE_BEST_FLAG, _RES_STORE_BEST_INDEX,
+                       _RES_BRA_CONTINUE)
+            cycles += c
+            instructions += i
+            return cycles, instructions, sr, last_call
+        c, i = _RES_CMP_PRUNE
+        cycles += c
+        instructions += i
+        pruned_taken = slot['arm'] == 'pruned'
+        c, i = _RES_BGE_PRUNE[pruned_taken]
+        cycles += c
+        instructions += i
+        if pruned_taken:
+            return cycles, instructions, sr, last_call
+    # store (tile == 0, or tile > 0 and not pruned)
+    c, i = _add(_RES_MOVE_MARK, _RES_MOVE_FLAG, _RES_BSR_POOLADD)
+    cycles += c
+    instructions += i
+    pool_cycles, pool_instructions = _res_pool_add_cost(slot['add_result'])
+    cycles += pool_cycles
+    instructions += pool_instructions
+    return cycles, instructions, sr, AIM_TARGET_RESOLVE_POOLADD_RETURN
+
+
+def aim_target_resolve_plan(machine, registers):
+    """00B6AE: see game/creatures.py's own module note above aim_target_resolve.  A 'found' without an
+    improvement (00B716's own taken arm) and aim_pool_add's own non-'found' arms are real ROM, never
+    witnessed by any recording: both decline.  Slot 1 is planned AFTER slot 0's own writes are known
+    (an overlaid ``_ConstMachine`` read, the same "read my own prior write, not the parked machine's"
+    problem creature_pickup_check_plan's own composition already solves) -- real on every occurrence
+    where BOTH slots reach a real outcome: the second slot's own aim_pool_add call must see the first
+    slot's own pool entry, and a second 'found' must compare against the first slot's own updated
+    AIM_SEARCH_BEST_INDEX, not the parked machine's stale one."""
+    from .game import creatures
+    if registers['pc'] != AIM_TARGET_RESOLVE_ENTRY:
+        raise UnsupportedCandidate('aim target resolve planner needs the machine parked at 00B6AE')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    type_ptr = registers['a4'] & 0xFFFFFF
+    limit = read((type_ptr + creatures.AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1) & 0xFF
+
+    cycles, instructions = _RES_MOVEQ_D6[0], _RES_MOVEQ_D6[1]
+    c, i = _RES_LEA_A1
+    cycles += c
+    instructions += i
+
+    current = {}          # only registers a real slot actually wrote land here
+    writes = ()
+    last_call_return = None
+    overrides = {}         # address & 0xFFFF -> byte, accumulated across slots for the NEXT slot's own read
+    for snapshot_addr, flag_addr in creatures.AIM_TARGET_RESOLVE_SLOTS:
+        slot_machine = _ConstMachine(machine, overrides) if overrides else machine
+        slot_read = _reader(slot_machine)
+        if slot_read(snapshot_addr & 0xFFFFFF, 4) == 0:
+            slot = {'arm': 'empty'}
+        else:
+            slot = creatures._resolve_slot(slot_read, type_ptr, limit, snapshot_addr, flag_addr)
+        if slot.get('arm') == 'found' and not slot['update_best']:
+            raise UnsupportedCandidate('aim target resolve: found without a new best, not witnessed by a recording')
+
+        c, i, sr, call_return = _res_slot_cost(slot, sr)
+        cycles += c
+        instructions += i
+        c, i = _RES_ADDQ_A1
+        cycles += c
+        instructions += i
+        if call_return is not None:
+            last_call_return = call_return
+        if slot['arm'] == 'empty':
+            # tst.l (a1) (00B6B6) is this slot's own last flag-setter: the long tested is always 0
+            # (that is the only way 'empty' is chosen).
+            sr = _logic_sr(sr, 0, 4)
+            continue
+        # movem.w (a1),d0-d1/d7 (00B6BA) SIGN-EXTENDS each word into its own register (word-size MOVEM
+        # loads always do, unlike a plain move.w, which only touches the low word) -- the upper half
+        # this slot's own D0/D1/D7 carry from here on is NOT the caller's entry upper half.
+        d0_upper = 0xFFFF0000 if slot['d0'] & 0x8000 else 0
+        d1_upper = 0xFFFF0000 if (slot_read((snapshot_addr + 2) & 0xFFFFFF, 2) & 0x8000) else 0
+        d7_upper = 0xFFFF0000 if (slot_read((snapshot_addr + 4) & 0xFFFFFF, 2) & 0x8000) else 0
+        current['a2'] = slot['a2']
+        current['a0'] = slot['a0']
+        current['d0'] = d0_upper | (slot['d0'] & 0xFFFF)
+        current['d1'] = d1_upper | (slot['d1'] & 0xFFFF)
+        current['d7'] = d7_upper | (slot['d7'] & 0xFFFF)
+        # D3 is scratch, never read back by anything after this routine (not exposed as a semantic
+        # result); it is still part of the exact register file, so it is carried the same way.
+        current['d3'] = slot['d3'] & 0xFFFF
+        # D2 is 00B32E's own scratch residue (_res_window_d2) for every non-empty slot, overwritten
+        # only by the STORE arm's own flag read, below -- see _res_window_d2's own note.
+        current['d2'] = _res_window_d2(slot_read, slot['d0'],
+                                       slot_read((snapshot_addr + 2) & 0xFFFFFF, 2) & 0xFFFF)
+        arm = slot['arm']
+        if arm == 'found':
+            writes += _bytes(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFFFF, slot['flag'], 2)
+            writes += _bytes(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFFFF, slot['d7'] & 0xFFFF, 2)
+            for addr, value in (_bytes(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFF, slot['flag'], 2) +
+                               _bytes(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFF, slot['d7'] & 0xFFFF, 2)):
+                overrides[addr] = value
+            # move.w d7,f2d0 (00B71E) is the last flag-setter on this arm.
+            sr = _logic_sr(sr, slot['d7'], 2)
+        elif arm == 'store':
+            mark_write = (slot['a0'] & 0xFFFFFF, slot['d7'] & 0xFF)
+            writes += (mark_write,)
+            overrides[mark_write[0] & 0xFFFF] = mark_write[1]
+            add_result = slot['add_result']
+            writes += tuple(add_result['stores'].items())
+            for addr, value in add_result['stores'].items():
+                overrides[addr & 0xFFFF] = value
+            current['a0'] = add_result['address'] + creatures.AIM_POOL_STRIDE  # 00B05A's own exit A0
+            d5_final = (0x1F - add_result['skipped']) & 0xFFFF
+            current['d5'] = d5_final
+            current['d2'] = slot['flag'] & 0xFFFF
+            # addq.w #1,AIM_POOL_COUNT (00B07C, inside the reused aim_pool_add) is the last flag-setter.
+            sr = _add_sr(sr, add_result['count'], 1, 2)
+        else:
+            # y-bound / step-limit / pruned: no flag-setter of its OWN beyond what the last CMP inside
+            # _res_slot_cost already charged; the exit CCR still needs it, so recompute here.
+            if arm == 'y-bound':
+                sr = _cmp_sr(sr, slot['d3'], creatures.AIM_TARGET_RESOLVE_Y_LIMIT & 0xFFFF, 2)
+            elif arm == 'step-limit':
+                sr = _cmp_sr(sr, slot['d7'] & 0xFF, limit, 1)
+            else:
+                sr = _cmp_sr(sr, slot['d7'] & 0xFF, slot['tile'], 1)
+
+    if last_call_return is not None:
+        writes += _bytes((sp - 4) & 0xFFFFFF, last_call_return, 4)
+
+    c, i = _RES_DBRA[True]     # the first outer iteration's own dbra is always taken (d6: 1 -> 0)
+    cycles += c
+    instructions += i
+    c, i = _RES_DBRA[False]    # the second is always NOT taken (d6: 0 -> -1, loop ends)
+    cycles += c
+    instructions += i
+    c, i = _RES_RTS
+    cycles += c
+    instructions += i
+
+    exit_registers = {'d6': 0xFFFF, 'a1': (creatures.AIM_SEARCH_SNAPSHOT + 16) & 0xFFFFFFFF,
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': sr}
+    if 'a2' in current:
+        exit_registers['a2'] = current['a2'] & 0xFFFFFFFF
+    if 'a0' in current:
+        exit_registers['a0'] = current['a0'] & 0xFFFFFFFF
+    if 'd0' in current:
+        # already sign-extended by movem.w (a1),d0-d1/d7 -- not merged with the entry upper half.
+        exit_registers['d0'] = current['d0'] & 0xFFFFFFFF
+    if 'd1' in current:
+        exit_registers['d1'] = current['d1'] & 0xFFFFFFFF
+    if 'd7' in current:
+        exit_registers['d7'] = current['d7'] & 0xFFFFFFFF
+    if 'd3' in current:
+        exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | current['d3']
+    if 'd2' in current:
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | current['d2']
+    if 'd5' in current:
+        # aim_pool_add's own moveq #$1f,d5 clears the whole register -- not preserved from entry.
+        exit_registers['d5'] = current['d5']
+
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=AIM_TARGET_RESOLVE_STEP_PC)
