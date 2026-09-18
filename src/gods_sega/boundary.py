@@ -17167,6 +17167,430 @@ def aim_ray_march_backward_plan(machine, registers):
     return _aim_ray_march_plan(machine, registers, forward=False)
 
 
+# --- 00B588: the aim pool scan (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on 00B588")
+# -- the outer dispatcher: for every entry currently in AIM_POOL, one gated pre-check (the grid cell
+# one row above the creature's own tracked position, `-0x80(a2)`) then up to four ray-march + probe
+# passes (00B354/00B62A at D5=7, conditionally D5=13 when the type's own template byte at A4+0xC is
+# > 4; 00B440/00B62A the same way).  A3 (the current pool entry) is LOCAL -- 00B588 sets it itself
+# (`lea.l $ffff41b2.l,a3`), not caller-supplied; A4 (the creature TYPE pointer) and A5 (the
+# aim_probe_mark_store dedup register) pass straight through, unexamined, exactly as
+# aim_probe_mark_store's own module note already says this session could not confirm the source of.
+#
+# A real internal-call composition four levels deep for the busiest arm (00B588 -> 00B354/00B440 ->
+# 00B524 -> 00B32E) plus a fifth chain (00B588 -> 00B62A -> 00B05A): rather than re-derive every one of
+# those levels' own cost/CCR/residue rules a second time, this plan calls the ALREADY-SEALED gate plans
+# for 00AF3C, 00B354/00B440 and 00B62A directly, each with a synthetic `registers` dict (this call
+# site's own PC/A7/SR/operands) against a `_ConstMachine` overlay that accumulates every write in call
+# order -- the same overlay technique aim_target_resolve_plan already uses between its own two slots,
+# extended here to a REAL bsr (the overlay is seeded with the correct return-address residue at the
+# call's own stack slot before the sub-plan runs, so its own internal `_return()` reads exactly what a
+# real bsr would have pushed).  Every register a sub-plan reports changed is merged into this plan's own
+# exit register file in call order, so the LAST sub-call to touch a register is what 00B588 itself
+# exits with -- byte for byte the same "whichever call happened last" rule this session's own ray-march
+# and probe compositions already established, one level higher.
+AIM_POOL_SCAN_ENTRY, AIM_POOL_SCAN_LAST_PC = 0x00B588, 0x00B628
+
+_AIM_POOL_SCAN_COST = {
+    (0x00B588, None): 12,
+    (0x00B58E, None): 12,
+    (0x00B592, False): 12,
+    (0x00B592, True): 10,
+    (0x00B596, None): 4,
+    (0x00B598, None): 8,
+    (0x00B59A, None): 12,
+    (0x00B59C, False): 12,
+    (0x00B5A0, None): 8,
+    (0x00B5A2, None): 12,
+    (0x00B5A6, None): 16,
+    (0x00B5AC, True): 18,
+    (0x00B5B0, None): 16,
+    (0x00B5B6, False): 8,
+    (0x00B5B6, True): 10,
+    (0x00B5B8, None): 4,
+    (0x00B5BA, None): 16,
+    (0x00B5BE, True): 18,
+    (0x00B5C2, True): 18,
+    (0x00B5C6, None): 16,
+    (0x00B5CC, False): 8,
+    (0x00B5CC, True): 10,
+    (0x00B5CE, None): 16,
+    (0x00B5D4, None): 4,
+    (0x00B5D6, None): 8,
+    (0x00B5D8, None): 12,
+    (0x00B5DC, None): 16,
+    (0x00B5E0, True): 18,
+    (0x00B5E4, True): 18,
+    (0x00B5E8, None): 4,
+    (0x00B5EA, None): 8,
+    (0x00B5EC, None): 12,
+    (0x00B5F0, None): 16,
+    (0x00B5F6, None): 16,
+    (0x00B5FA, True): 18,
+    (0x00B5FE, True): 18,
+    (0x00B600, None): 16,
+    (0x00B606, False): 8,
+    (0x00B606, True): 10,
+    (0x00B608, None): 4,
+    (0x00B60A, None): 16,
+    (0x00B610, None): 8,
+    (0x00B612, None): 12,
+    (0x00B616, None): 16,
+    (0x00B61A, True): 18,
+    (0x00B61E, True): 18,
+    (0x00B620, None): 8,
+    (0x00B622, None): 4,
+    (0x00B624, False): 14,
+    (0x00B624, True): 10,
+    (0x00B628, None): 16,
+}
+
+
+def _signed_byte_local(value):
+    value &= 0xFF
+    return value - 0x100 if value & 0x80 else value
+
+
+def _aim_pool_scan_pass(machine, overlay, sp_at_entry, sr, a4, a5, a3, d0, d1, d5, d7, f2d2, forward,
+                        bsr_ray_return, bsr_store_return):
+    """One of 00B588's own four (D5, F2D2, direction) passes: move.w #f2d2,f2d2.w + clr.w f2d4.w
+    (charged by the caller, before this runs -- both real writes regardless of which pass), then this
+    function's own bsr the right ray march, then bsr 00B62A with the ray march's OWN exit D0/D1
+    (00B588 never reloads them in between -- the SAME "consumes the callee's own exit registers, not
+    its own" fact the whole ray-march/probe chain already relies on).  `sp_at_entry` is 00B588's own
+    A7 at the moment this pass begins (after the entry's own D6 push, before either bsr): BOTH this
+    pass's own bsr pushes land at the SAME address, `sp_at_entry - 4`, since neither callee leaves a
+    frame of its own.  Returns (cycles, instructions, sr, merged_registers) -- `overlay` (a
+    {offset & 0xFFFF: byte} dict) is mutated in place with every write, in call order."""
+    from .game import creatures
+    cycles, instructions = 0, 0
+    merged = {}
+    push_sp = (sp_at_entry - 4) & 0xFFFFFF
+
+    # move.w #f2d2,f2d2.w + clr.w f2d4.w: this pass's own real writes, charged by the caller at its own
+    # instruction addresses (before either bsr below) -- must land in the overlay before the ray march
+    # runs, since 00B354/00B440 read f2d2.w through their own internal bsr into aim_probe_mark.  The
+    # ray march's own exit write to f2d4.w (below) overwrites this clear regardless.
+    overlay[creatures.AIM_RAY_CONTEXT_FLAG & 0xFFFF] = 0
+    overlay[(creatures.AIM_RAY_CONTEXT_FLAG + 1) & 0xFFFF] = f2d2 & 0xFF
+    overlay[creatures.AIM_RAY_STEP_INDEX & 0xFFFF] = 0
+    overlay[(creatures.AIM_RAY_STEP_INDEX + 1) & 0xFFFF] = 0
+
+    # bsr $b354 / $b440 (18cy, 1 instruction -- the CALLER's own call instruction; the ray march's own
+    # cost starts only once it is entered).
+    cycles += 18
+    instructions += 1
+    for offset in range(4):
+        overlay[(push_sp + offset) & 0xFFFF] = (bsr_ray_return >> (8 * (3 - offset))) & 0xFF
+    ray_regs = {'pc': (AIM_RAY_MARCH_FORWARD_ENTRY if forward else AIM_RAY_MARCH_BACKWARD_ENTRY),
+                'a7': push_sp, 'sr': sr, 'd0': d0, 'd1': d1, 'd5': d5, 'd7': d7, 'a3': a3, 'a4': a4}
+    ray_plan = (aim_ray_march_forward_plan if forward else aim_ray_march_backward_plan)(
+        _ConstMachine(machine, overlay), ray_regs)
+    cycles += ray_plan.cycles
+    instructions += ray_plan.instructions
+    for addr, value in ray_plan.writes:
+        overlay[addr & 0xFFFF] = value
+    sr = ray_plan.registers['sr']
+    merged.update({k: v for k, v in ray_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    ray_d0 = ray_plan.registers.get('d0', d0)
+    ray_d1 = ray_plan.registers.get('d1', d1)
+    ray_d2 = ray_plan.registers.get('d2', 0)
+    ray_d3 = ray_plan.registers.get('d3', 0)
+    ray_d7 = ray_plan.registers.get('d7', d7)
+
+    # bsr $b62a (18cy, 1 instruction), landing at the SAME stack slot (sp_at_entry is unchanged: the
+    # ray march's own rts popped its call back to it).
+    cycles += 18
+    instructions += 1
+    for offset in range(4):
+        overlay[(push_sp + offset) & 0xFFFF] = (bsr_store_return >> (8 * (3 - offset))) & 0xFF
+    store_regs = {'pc': AIM_PROBE_MARK_STORE_ENTRY, 'a7': push_sp, 'sr': sr,
+                  'd0': ray_d0, 'd1': ray_d1, 'd2': ray_d2, 'd3': ray_d3, 'd7': ray_d7,
+                  'a3': a3, 'a4': a4, 'a5': a5}
+    store_plan = aim_probe_mark_store_plan(_ConstMachine(machine, overlay), store_regs)
+    cycles += store_plan.cycles
+    instructions += store_plan.instructions
+    for addr, value in store_plan.writes:
+        overlay[addr & 0xFFFF] = value
+    sr = store_plan.registers['sr']
+    merged.update({k: v for k, v in store_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+
+    return cycles, instructions, sr, merged
+
+
+def aim_pool_scan_plan(machine, registers):
+    """00B588: see the module note above."""
+    from .game import creatures
+    if registers['pc'] != AIM_POOL_SCAN_ENTRY:
+        raise UnsupportedCandidate('aim pool scan planner needs the machine parked at 00B588')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a4, a5 = registers['a4'], registers['a5']
+    # D2/D3 are dead to 00B588 itself (never read), but 00AF3C's own plan needs SOME entry value to
+    # preserve the upper half its own asr/asl leave untouched -- tracked here exactly like every other
+    # register a sub-call may change, seeded from this gate's own entry.
+    cur_d2, cur_d3, cur_d7 = registers.get('d2', 0), registers.get('d3', 0), registers.get('d7', 0)
+
+    overlay = {}
+
+    def cur_read(address, size):
+        return _reader(_ConstMachine(machine, overlay))(address, size)
+
+    def cost(addr, taken=None):
+        return _AIM_POOL_SCAN_COST[(addr, taken)], 1
+
+    cycles, instructions = cost(0x00B588)
+    c, i = cost(0x00B58E)
+    cycles += c
+    instructions += i
+    count = cur_read(creatures.AIM_SEARCH_COUNT & 0xFFFFFF, 2) & 0xFFFF
+    sr = _logic_sr(sr, count, 2)
+    empty_pool = count == 0
+    c, i = cost(0x00B592, empty_pool)
+    cycles += c
+    instructions += i
+
+    exit_registers = {}
+    a3 = creatures.AIM_SEARCH_POOL_LOW & 0xFFFFFFFF
+    d6 = count
+
+    if not empty_pool:
+        d6_before = count
+        d6 = (count - 1) & 0xFFFF
+        c, i = cost(0x00B596)
+        cycles += c
+        instructions += i
+        sr = _sub_sr(sr, d6_before, 1, 2)
+
+        for index in range(count):
+            iter_d6 = (count - 1 - index) & 0xFFFF
+            c, i = cost(0x00B598)
+            cycles += c
+            instructions += i
+            overlay[(sp - 2) & 0xFFFF] = (iter_d6 >> 8) & 0xFF
+            overlay[(sp - 1) & 0xFFFF] = iter_d6 & 0xFF
+
+            leading = cur_read(a3 & 0xFFFFFF, 4)
+            c, i = cost(0x00B59A)
+            cycles += c
+            instructions += i
+            sr = _logic_sr(sr, leading, 4)
+            entry_empty = leading == 0
+            c, i = cost(0x00B59C, False)
+            cycles += c
+            instructions += i
+            if entry_empty:
+                raise UnsupportedCandidate('aim pool scan: empty pool entry mid-scan, not witnessed by a recording')
+
+            # move.w (a3),d0 / move.w 2(a3),d1: word ops -- each entry's own upper half survives every
+            # reload, the whole routine through (nothing here ever touches d0/d1's own upper 16 bits).
+            d0 = (registers['d0'] & 0xFFFF0000) | (cur_read(a3 & 0xFFFFFF, 2) & 0xFFFF)
+            c, i = cost(0x00B5A0)
+            cycles += c
+            instructions += i
+            d1 = (registers['d1'] & 0xFFFF0000) | (cur_read((a3 + 2) & 0xFFFFFF, 2) & 0xFFFF)
+            c, i = cost(0x00B5A2)
+            cycles += c
+            instructions += i
+            c, i = cost(0x00B5A6)
+            cycles += c
+            instructions += i
+            # move.w #$3,f2d2.w: this iteration's own unconditional real write, every entry regardless
+            # of skip or which pass(es) run later -- each pass's own f2d2 write (inside
+            # _aim_pool_scan_pass) overwrites it in turn when that pass actually runs.
+            overlay[creatures.AIM_RAY_CONTEXT_FLAG & 0xFFFF] = 0
+            overlay[(creatures.AIM_RAY_CONTEXT_FLAG + 1) & 0xFFFF] = 3
+            sr = _logic_sr(sr, 3, 2)
+
+            c, i = cost(0x00B5AC, True)
+            cycles += c
+            instructions += i
+            af3c_push_sp = (sp - 6) & 0xFFFFFF
+            for offset in range(4):
+                overlay[(af3c_push_sp + offset) & 0xFFFF] = (0x00B5B0 >> (8 * (3 - offset))) & 0xFF
+            af3c_regs = {'pc': AF3C_ENTRY, 'a7': af3c_push_sp, 'sr': sr, 'd0': d0, 'd1': d1,
+                         'd2': cur_d2, 'd3': cur_d3}
+            af3c_plan = creature_grid_cell_d0d1_plan(_ConstMachine(machine, overlay), af3c_regs)
+            cycles += af3c_plan.cycles
+            instructions += af3c_plan.instructions
+            for addr, value in af3c_plan.writes:
+                overlay[addr & 0xFFFF] = value
+            sr = af3c_plan.registers['sr']
+            exit_registers.update({k: v for k, v in af3c_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+            cur_d2 = af3c_plan.registers.get('d2', cur_d2)
+            cur_d3 = af3c_plan.registers.get('d3', cur_d3)
+            a2 = af3c_plan.registers['a2']
+            # 00AF3C never touches d0/d1 itself (only reads them into d2/d3), so this iteration's own
+            # "move.w (a3),d0 / move.w 2(a3),d1" reads above are the routine's own real, observable
+            # register state regardless of what runs next -- real even on a skipped entry, where no
+            # later pass ever overwrites them.  A later pass's own exit d0/d1 (below, via `merged`)
+            # still overwrites this the same "last call wins" way every other register here does.
+            exit_registers['d0'] = d0
+            exit_registers['d1'] = d1
+
+            skip_byte = cur_read((a2 - 0x80) & 0xFFFFFF, 1) & 0xFF
+            c, i = cost(0x00B5B0)
+            cycles += c
+            instructions += i
+            sr = _cmp_sr(sr, skip_byte, 1, 1)
+            skip = skip_byte == 1
+            c, i = cost(0x00B5B6, skip)
+            cycles += c
+            instructions += i
+
+            if not skip:
+                c, i = cost(0x00B5B8)
+                cycles += c
+                instructions += i
+                c, i = cost(0x00B5BA)
+                cycles += c
+                instructions += i
+                c, i, sr, merged = _aim_pool_scan_pass(machine, overlay, sp - 2, sr, a4, a5, a3, d0, d1, 7, cur_d7,
+                                                       3, True, 0x00B5C2, 0x00B5C6)
+                cycles += c
+                instructions += i
+                exit_registers.update(merged)
+                cur_d2 = merged.get('d2', cur_d2)
+                cur_d3 = merged.get('d3', cur_d3)
+                cur_d7 = merged.get('d7', cur_d7)
+
+                type_byte = cur_read((a4 + 0xC) & 0xFFFFFF, 1) & 0xFF
+                c, i = cost(0x00B5C6)
+                cycles += c
+                instructions += i
+                sr = _cmp_sr(sr, type_byte, 4, 1)
+                extended = _signed_byte_local(type_byte) > 4
+                c, i = cost(0x00B5CC, not extended)
+                cycles += c
+                instructions += i
+                if extended:
+                    c, i = cost(0x00B5CE)
+                    cycles += c
+                    instructions += i
+                    c, i = cost(0x00B5D4)
+                    cycles += c
+                    instructions += i
+                    c, i = cost(0x00B5D6)
+                    cycles += c
+                    instructions += i
+                    c, i = cost(0x00B5D8)
+                    cycles += c
+                    instructions += i
+                    c, i = cost(0x00B5DC)
+                    cycles += c
+                    instructions += i
+                    c, i, sr, merged = _aim_pool_scan_pass(machine, overlay, sp - 2, sr, a4, a5, a3, d0, d1, 13, cur_d7,
+                                                           7, True, 0x00B5E4, 0x00B5E8)
+                    cycles += c
+                    instructions += i
+                    exit_registers.update(merged)
+                    cur_d2 = merged.get('d2', cur_d2)
+                    cur_d3 = merged.get('d3', cur_d3)
+                    cur_d7 = merged.get('d7', cur_d7)
+
+                c, i = cost(0x00B5E8)
+                cycles += c
+                instructions += i
+                c, i = cost(0x00B5EA)
+                cycles += c
+                instructions += i
+                c, i = cost(0x00B5EC)
+                cycles += c
+                instructions += i
+                c, i = cost(0x00B5F0)
+                cycles += c
+                instructions += i
+                c, i = cost(0x00B5F6)
+                cycles += c
+                instructions += i
+                c, i, sr, merged = _aim_pool_scan_pass(machine, overlay, sp - 2, sr, a4, a5, a3, d0, d1, 7, cur_d7,
+                                                       2, False, 0x00B5FE, 0x00B600)
+                cycles += c
+                instructions += i
+                exit_registers.update(merged)
+                cur_d2 = merged.get('d2', cur_d2)
+                cur_d3 = merged.get('d3', cur_d3)
+                cur_d7 = merged.get('d7', cur_d7)
+
+                type_byte = cur_read((a4 + 0xC) & 0xFFFFFF, 1) & 0xFF
+                c, i = cost(0x00B600)
+                cycles += c
+                instructions += i
+                sr = _cmp_sr(sr, type_byte, 4, 1)
+                extended = _signed_byte_local(type_byte) > 4
+                c, i = cost(0x00B606, not extended)
+                cycles += c
+                instructions += i
+                if extended:
+                    c, i = cost(0x00B608)
+                    cycles += c
+                    instructions += i
+                    c, i = cost(0x00B60A)
+                    cycles += c
+                    instructions += i
+                    c, i = cost(0x00B610)
+                    cycles += c
+                    instructions += i
+                    c, i = cost(0x00B612)
+                    cycles += c
+                    instructions += i
+                    c, i = cost(0x00B616)
+                    cycles += c
+                    instructions += i
+                    c, i, sr, merged = _aim_pool_scan_pass(machine, overlay, sp - 2, sr, a4, a5, a3, d0, d1, 13, cur_d7,
+                                                           6, False, 0x00B61E, 0x00B620)
+                    cycles += c
+                    instructions += i
+                    exit_registers.update(merged)
+                    cur_d2 = merged.get('d2', cur_d2)
+                    cur_d3 = merged.get('d3', cur_d3)
+                    cur_d7 = merged.get('d7', cur_d7)
+
+            c, i = cost(0x00B620)
+            cycles += c
+            instructions += i
+            # move.w (a7)+,d6: pops this iteration's own counter word back off the stack -- its value
+            # (not the type-byte cmp two instructions back) is what sets the flags the dbra below falls
+            # through with, since dbra itself never touches ccr.
+            sr = _logic_sr(sr, iter_d6, 2)
+            c, i = cost(0x00B622)
+            cycles += c
+            instructions += i
+            a3 = (a3 + creatures.AIM_SEARCH_POOL_STRIDE) & 0xFFFFFFFF
+            last_iter = index == count - 1
+            c, i = cost(0x00B624, not last_iter)
+            cycles += c
+            instructions += i
+            # native/machine.cpp's own al_atomic requires 0 < cycles <= 100000 and 0 < instructions <=
+            # 10000 -- a real cap this routine's own worst case (a busy AIM_POOL, several extended
+            # passes) can exceed (fb408bc75597's own p7-p9 fixtures already sit near 14,450
+            # instructions/129,500 cycles for four entries).  Declining lets the native machine step
+            # this activation itself rather than the adapter hard-erroring the whole session.
+            if cycles > 100000 or instructions > 10000:
+                raise UnsupportedCandidate(
+                    'aim pool scan: projected cost exceeds the native adapter\'s own atomic-plan cap '
+                    f'({cycles} cycles, {instructions} instructions after {index + 1} of {count} entries)')
+
+        d6 = 0xFFFF
+
+    c, i = cost(0x00B628)
+    cycles += c
+    instructions += i
+
+    exit_registers['d6'] = (registers['d6'] & 0xFFFF0000) | (d6 & 0xFFFF)
+    exit_registers['a3'] = a3 & 0xFFFFFFFF
+    exit_registers['a7'] = (sp32 + 4) & 0xFFFFFFFF
+    exit_registers['pc'] = _return(machine, sp)
+    exit_registers['sr'] = sr
+    # overlay keys are 16-bit work-RAM offsets (what _reader/_ConstMachine need for reads); every
+    # address this routine ever touches is real work RAM (0xFF0000-0xFFFFFF), so the plan's own
+    # 24-bit write addresses are simply the 0xFF0000 page reapplied.
+    writes = tuple((addr | 0xFF0000, value) for addr, value in overlay.items())
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers=exit_registers, last_pc=AIM_POOL_SCAN_LAST_PC)
+
+
+
+
 # --- 00B724: the aim target scan (game/creatures.py: aim_target_scan) -------------------------------
 #
 # Cost fragments from the tracer (artifacts/gods/evidence/census-00B724-*, 127 retained fixtures over

@@ -617,6 +617,65 @@ below, has the count and the milestone tree numbers).
   `00AA76`/`00AB50`, `00A772` as the family, `00A578` as the walk with its
   own semantic-operation card.
 
+- **19 September, grinder session closing the ray-march family**: `00B588`
+  itself recovered -- a DBRA loop over `AIM_SEARCH_COUNT` entries at
+  `AIM_SEARCH_POOL_LOW` (a real defect this session's own first
+  `factcheck check` caught: the pool this routine walks is
+  `aim_target_scan`'s own per-call "visited columns" pool, `AIM_SEARCH_*`,
+  not `AIM_POOL_*`).  Per entry: one unconditional `00AF3C` grid-cell
+  lookup gating a skip test (`-0x80(a2) == 1`, real ROM, never witnessed
+  skipping mid-scan on an empty slot -- that arm still declines by name);
+  unless skipped, a forward ray-march-and-store pass (`00B354`/`00B62A`)
+  always, a second forward pass only when the creature's own type
+  template byte past `$c(a4)` is signed greater than 4 (D5 13 instead of
+  7, F2D2 7 instead of 3), then the same shape backward (`00B440`/`00B62A`,
+  F2D2 2 then 6) -- none, two or four ray-march+store passes an entry,
+  every combination witnessed.  `gods_sega.boundary.aim_pool_scan_plan`
+  composes the four already-sealed gate plans as real internal `bsr`'s,
+  the same `_ConstMachine` overlay technique the ray marches already use
+  for their own internal probe calls, now four levels deep at its busiest
+  arm.  Six real defects this session's own `factcheck check` found in
+  turn before the fixtures matched: two ray-march-pass call sites had
+  D5/D7 positionally swapped; the plan's own final writes used 16-bit
+  overlay addresses instead of the 24-bit work-RAM addresses factcheck
+  compares against; the per-entry D6 stack push never decremented across
+  iterations; the per-entry F2D2 context-flag write used one hardcoded
+  literal instead of each pass's own real value (and is the ONLY write to
+  survive a skipped entry, so its absence surfaced as a missing write on
+  the very first single-entry fixture); one extended pass's own
+  `clr.w f2d4.w` cost entry was never charged; and D0/D1's own reload
+  every iteration needs the entry's own upper half preserved, explicit
+  even on a skipped entry where no later call ever reports the register
+  changed.  A seventh, only visible past the fixtures: `native/machine.cpp`'s
+  own `al_atomic` requires 0 < instructions <= 10,000 and 0 < cycles <=
+  100,000 -- a real cap a busy pool (several entries, several extended
+  passes) can exceed, first seen as a `CANDIDATE_ERROR` on
+  `f0ac19738f19…`'s own `history-verify`, not by any fixture (census
+  fixtures alone never exercise the native adapter's own admission path).
+  `aim_pool_scan_plan` now declines by name once its own running total
+  would cross either limit, the same "decline rather than guess" rule
+  every unwitnessed arm already follows, just triggered by cost instead of
+  by a branch.  `candidate 'aim-pool-scan'` replaces
+  `'aim-ray-march-forward'`/`'aim-ray-march-backward'`/`'aim-probe-mark-store'`
+  in `camera-sprites`: every witnessed call into those three PCs comes
+  from `00B588`'s own body, so its own atomic plan already covers the
+  whole span once `00B588` itself is armed there -- sixty-four gates to
+  **sixty-two**, freeing two ahead of `00A772`'s own family composition
+  (their own `PLANNERS` entries and standalone tests are unchanged, the
+  same "retired from the combined candidate, kept for its own isolated
+  tests" shape the 25 individual player-state gates and `005700` already
+  established).  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-b588`, 107,519
+  frames, current receipts).  Reproduces the original on
+  `f0ac19738f19…`: PASS, 15 hits, 27 fallbacks (23 atomic-plan-cap
+  declines, all a busy pool genuinely exceeding the native adapter's own
+  limit; 4 observation deadline, both `ADAPTER_REFUSALS`); mutant
+  (`_mutate_aim_ray_march`, shared with the ray marches) DIVERGENCE at
+  frame 13,905.  Next, per the Decision's own order: `00B002`, `00AF52`,
+  `00AC36`, `00AA76`/`00AB50`, then `00A772` as the family (frees the
+  creature gates further), then `00A578` as the walk with its own
+  semantic-operation card.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

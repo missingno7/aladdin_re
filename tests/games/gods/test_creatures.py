@@ -105,6 +105,10 @@ AIM_RAY_MARCH_BACKWARD_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('c
 needs_aim_ray_march_backward_census = pytest.mark.skipif(not AIM_RAY_MARCH_BACKWARD_FIXTURES or not GODS.rom_path.is_file(),
                                                          reason='no local census of 00B440')
 
+AIM_POOL_SCAN_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B588-*/00B588-entry-p*.state'))
+needs_aim_pool_scan_census = pytest.mark.skipif(not AIM_POOL_SCAN_FIXTURES or not GODS.rom_path.is_file(),
+                                                reason='no local census of 00B588')
+
 SPAWN_FIND_FREE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B8C2-*/00B8C2-entry-p*.state'))
 needs_spawn_find_free_census = pytest.mark.skipif(not SPAWN_FIND_FREE_FIXTURES or not GODS.rom_path.is_file(),
                                                    reason='no local census of 00B8C2')
@@ -1386,7 +1390,10 @@ def test_aim_probe_mark_candidate_names_are_explicit():
 
 def test_aim_probe_mark_store_candidate_names_are_explicit():
     assert recovery.Candidate('aim-probe-mark-store').gate_pcs == (boundary.AIM_PROBE_MARK_STORE_ENTRY,)
-    assert boundary.AIM_PROBE_MARK_STORE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites' own combined gate set 19 September: every witnessed call into
+    # 00B62A comes from 00B588's own body, whose atomic plan now covers the whole span once 00B588
+    # itself is armed there (see the aim-pool-scan tests below).  Its own PLANNERS entry is unchanged.
+    assert boundary.AIM_PROBE_MARK_STORE_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-probe-mark-store-mutant-result').mutation is recovery._mutate_aim_probe
 
 
@@ -1468,13 +1475,15 @@ def test_aim_probe_mark_store_candidate_matches_the_reference_and_its_mutant_div
 
 def test_aim_ray_march_forward_candidate_names_are_explicit():
     assert recovery.Candidate('aim-ray-march-forward').gate_pcs == (boundary.AIM_RAY_MARCH_FORWARD_ENTRY,)
-    assert boundary.AIM_RAY_MARCH_FORWARD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 19 September -- see test_aim_probe_mark_store_candidate_names_are_explicit.
+    assert boundary.AIM_RAY_MARCH_FORWARD_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-ray-march-forward-mutant-result').mutation is recovery._mutate_aim_ray_march
 
 
 def test_aim_ray_march_backward_candidate_names_are_explicit():
     assert recovery.Candidate('aim-ray-march-backward').gate_pcs == (boundary.AIM_RAY_MARCH_BACKWARD_ENTRY,)
-    assert boundary.AIM_RAY_MARCH_BACKWARD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 19 September -- see test_aim_probe_mark_store_candidate_names_are_explicit.
+    assert boundary.AIM_RAY_MARCH_BACKWARD_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-ray-march-backward-mutant-result').mutation is recovery._mutate_aim_ray_march
 
 
@@ -1543,6 +1552,59 @@ def test_aim_ray_march_backward_candidate_matches_the_reference_and_its_mutant_d
             break
     else:
         pytest.skip('no retained fixture/window makes aim-ray-march-backward produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B588: the aim pool scan -- the composition over every AIM_POOL entry ("Decision on 00B588",
+# 19 Sep): 00AF3C's own grid cell plus, for every entry not skipped, a forward ray-march-and-store pass
+# and a backward one, each possibly extended (00B32E's own type template byte past 4) a second time.
+# See boundary.py's own module note above aim_pool_scan_plan.
+
+def test_aim_pool_scan_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-pool-scan').gate_pcs == (boundary.AIM_POOL_SCAN_ENTRY,)
+    assert boundary.AIM_POOL_SCAN_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-pool-scan-mutant-result').mutation is recovery._mutate_aim_ray_march
+
+
+@needs_aim_pool_scan_census
+@pytest.mark.parametrize('fixture', AIM_POOL_SCAN_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_pool_scan_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_pool_scan_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            # A busy pool (several entries, several extended passes) can genuinely exceed
+            # native/machine.cpp's own al_atomic cost cap (0 < instructions <= 10,000, 0 < cycles <=
+            # 100,000) -- a real, witnessed decline, not a modelling gap.
+            assert 'aim pool scan' in str(error), error
+            return
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc']))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_pool_scan_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_POOL_SCAN_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-pool-scan',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        assert report['status'] == 'PASS', report
+        assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-pool-scan-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-pool-scan produce an observable effect')
     assert mutant['status'] == 'DIVERGENCE'
 
 

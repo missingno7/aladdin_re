@@ -19,6 +19,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_PROBE_MARK_STORE_ENTRY, aim_probe_mark_store_plan,
                        AIM_RAY_MARCH_FORWARD_ENTRY, aim_ray_march_forward_plan,
                        AIM_RAY_MARCH_BACKWARD_ENTRY, aim_ray_march_backward_plan,
+                       AIM_POOL_SCAN_ENTRY, aim_pool_scan_plan,
                        AIM_TARGET_SCAN_ENTRY, aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY, aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY, aim_target_resolve_plan,
@@ -359,6 +360,7 @@ PLANNERS = {
     'aim-probe-mark-store': {AIM_PROBE_MARK_STORE_ENTRY: aim_probe_mark_store_plan},
     'aim-ray-march-forward': {AIM_RAY_MARCH_FORWARD_ENTRY: aim_ray_march_forward_plan},
     'aim-ray-march-backward': {AIM_RAY_MARCH_BACKWARD_ENTRY: aim_ray_march_backward_plan},
+    'aim-pool-scan': {AIM_POOL_SCAN_ENTRY: aim_pool_scan_plan},
     'aim-target-scan': {AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan},
     'aim-target-scan-backward': {AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan},
     'aim-target-resolve': {AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
@@ -455,9 +457,17 @@ PLANNERS = {
                        AIM_POOL_RESET_ENTRY: aim_pool_reset_plan, AIM_POOL_ADD_ENTRY: aim_pool_add_plan,
                        AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan,
                        AIM_PROBE_MARK_ENTRY: aim_probe_mark_plan,
-                       AIM_PROBE_MARK_STORE_ENTRY: aim_probe_mark_store_plan,
-                       AIM_RAY_MARCH_FORWARD_ENTRY: aim_ray_march_forward_plan,
-                       AIM_RAY_MARCH_BACKWARD_ENTRY: aim_ray_march_backward_plan,
+                       # AIM_PROBE_MARK_STORE_ENTRY (00B62A) and the two ray marches (00B354/00B440) are
+                       # RETIRED from this combined candidate's own gate set, 19 September: every
+                       # witnessed call into them comes from 00B588's own body (00B62A directly, the
+                       # ray marches via its own bsr), so once 00B588 itself is armed here its atomic
+                       # plan already covers that whole span -- the native machine never independently
+                       # reaches these three PCs as gate hits while 00B588 is armed.  The SAME "one
+                       # region composes, the pieces stay for their own isolated tests" shape the 25
+                       # player-state gates and 005700 already established above; their own PLANNERS
+                       # entries and gate PCs are unchanged.  Frees three gates for AIM_POOL_SCAN_ENTRY's
+                       # own one (64 -> 62; docs/gods/STATUS.md's 19 September entry).
+                       AIM_POOL_SCAN_ENTRY: aim_pool_scan_plan,
                        AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan,
@@ -694,6 +704,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-probe-mark-store-mutant-result': ('aim-probe-mark-store', _mutate_aim_probe),
              'aim-ray-march-forward-mutant-result': ('aim-ray-march-forward', _mutate_aim_ray_march),
              'aim-ray-march-backward-mutant-result': ('aim-ray-march-backward', _mutate_aim_ray_march),
+             'aim-pool-scan-mutant-result': ('aim-pool-scan', _mutate_aim_ray_march),
              'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result),
              'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),
