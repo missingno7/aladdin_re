@@ -412,9 +412,24 @@ below, has the count and the milestone tree numbers).
   and `--perturb-upper-halves` both clean.  `camera-sprites` (fifty-two
   gates) milestone tree PASS; `aim-cue-update` reproduces the original on
   `f0ac19738f19…`: PASS, 15,148 frames, 39 hits, 0 fallbacks, bit-exact;
-  mutant `aim-cue-update-mutant-result` DIVERGENCE at frame 10,658.  Next,
-  per the Decision's own order: `00B02A`, then `00B724`/`00B7DA`/`00B6AE`
-  and `00B002`, then `00AF52` itself over all of them.
+  mutant `aim-cue-update-mutant-result` DIVERGENCE at frame 10,658.
+  `00B02A`/`00B05A` (`'aim-pool-reset'`/`'aim-pool-add'`) are recovered
+  next, the same session: one 256-byte, 32-slot work-RAM pool at
+  `FFFF40B2`-`FFFF41B2`, two entries -- `00B02A` an unconditional,
+  branch-free reset from the SAME ROM constants `00B082`'s own fill reads
+  (a different tiling, dropping A5); `00B05A` the ADD, the SAME
+  "scan a fixed-stride table for a free long-tested slot, write four
+  words, bump a counter" shape `hazard.effect_pool_add`/`timers._spawn`
+  already prove -- every witnessed occurrence (all five recordings) finds
+  a free slot within the first four positions; the counter-gate and a
+  fully exhausted scan are real ROM, never witnessed, declined.
+  `camera-sprites` (fifty-four gates) milestone tree PASS on all five
+  leaves (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19e`,
+  107,519 frames); both candidates reproduce the original on
+  `f0ac19738f19…`: PASS, 39 hits each, 0 fallbacks, bit-exact; both
+  mutants DIVERGENCE.  Next, per the Decision's own order: `00B724`,
+  `00B7DA`, `00B6AE`, then `00B002` (which calls all three), then
+  `00AF52` itself over everything recovered so far.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 

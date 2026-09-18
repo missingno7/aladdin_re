@@ -842,3 +842,77 @@ def aim_cue_update(read, type_ptr):
             result['retry'] = {'arm': 'undispatched'}   # index 2 (self) or 3: never witnessed
         return result
     return {**base, 'arm': 'undispatched'}
+
+
+# --- 00B02A / 00B05A: the aim pool reset and add (docs/gods/blockers/2026-09-18-00A578.md's own
+# "Decision on 00AF52", 19 Sep -- the first of 00AF52's own three further calls, per the supervisor's
+# own order).  One 256-byte, 32-slot (8 bytes each) work-RAM table, two entries: 00B02A is an
+# unconditional register-save, refill-from-ROM-constants (the SAME AIM_CUE_FILL_SOURCE 00B082 already
+# reads, a different tiling -- four full 13-register blocks then one 12-register block, dropping A5)
+# and a counter clear, then a full register restore -- a plain reset, no branch at all.  00B05A is the
+# ADD: gated on the counter (AIM_POOL_COUNT) not yet at AIM_POOL_SLOTS, it scans the table for the
+# first slot whose own leading long is zero and writes four caller words there (D0, D1, D7, D2),
+# incrementing the counter -- the SAME "scan a fixed-stride table for a free long-tested slot, write
+# four words, bump a counter" shape ``hazard.effect_pool_add``/``timers._spawn`` already prove.  Every
+# witnessed occurrence (across all five recordings) finds a free slot within the first four positions;
+# the counter-gate ('pool-full-by-count') and a fully exhausted scan ('pool-full-scanned') are real
+# ROM, never witnessed: the boundary declines both.
+AIM_POOL_LOW, AIM_POOL_HIGH = 0xFFFF40B2, 0xFFFF41B2   # 256 bytes, 32 slots of 8
+AIM_POOL_STRIDE = 8
+AIM_POOL_SLOTS = 32
+AIM_POOL_COUNT = 0xFFFFF2AE            # word: this pool's own occupancy counter
+_AIM_POOL_FILL_ORDER = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'a1', 'a2', 'a3', 'a4', 'a5')
+_AIM_POOL_FILL_LAST_REGISTERS = 12     # the final (5th) store drops A5 (d0-d7/a1-a4 only)
+
+
+def _aim_pool_fill_stores(read):
+    """00B02E-00B04C: the SAME thirteen ROM words AIM_CUE_FILL_SOURCE names (``_cue_fill_registers``),
+    tiled by four full 13-register ``movem.l -(a0)`` stores then one 12-register (d0-d7/a1-a4) partial
+    store into AIM_POOL_LOW..AIM_POOL_HIGH -- 256 bytes, every single call."""
+    longs = [_cue_fill_registers(read)[name] for name in _AIM_POOL_FILL_ORDER]
+    stores = {}
+    address = AIM_POOL_HIGH
+    for block in range(5):
+        count = _AIM_CUE_FILL_REGISTERS if block < 4 else _AIM_POOL_FILL_LAST_REGISTERS
+        address -= 4 * count
+        for slot in range(count):
+            value = longs[slot]
+            for byte_index in range(4):
+                stores[(address + 4 * slot + byte_index) & 0xFFFFFF] = (value >> (8 * (3 - byte_index))) & 0xFF
+    return stores
+
+
+def aim_pool_reset(read):
+    """00B02A: refill the 256-byte pool from ROM constants and clear AIM_POOL_COUNT -- unconditional,
+    no branch."""
+    stores = _aim_pool_fill_stores(read)
+    stores[AIM_POOL_COUNT & 0xFFFFFF] = 0
+    stores[(AIM_POOL_COUNT + 1) & 0xFFFFFF] = 0
+    return {'stores': stores}
+
+
+def aim_pool_add(read, d0, d1, d7, d2):
+    """00B05A: scan AIM_POOL_LOW.. for the first slot whose own leading long (its own first two words)
+    is zero, and write ``d0, d1, d7, d2`` there (in that order), incrementing AIM_POOL_COUNT.  Returns
+    ``'arm'``: ``'found'`` (with the slot index and address), ``'pool-full-by-count'`` (the counter
+    already at AIM_POOL_SLOTS, unwitnessed) or ``'pool-full-scanned'`` (every slot occupied,
+    unwitnessed)."""
+    count = read(AIM_POOL_COUNT, 2) & 0xFFFF
+    if count >= AIM_POOL_SLOTS:
+        return {'arm': 'pool-full-by-count', 'count': count}
+    address = AIM_POOL_LOW
+    skipped = 0
+    for index in range(AIM_POOL_SLOTS):
+        leading = read(address & 0xFFFFFF, 4)
+        if leading == 0:
+            stores = {}
+            for offset, value in ((0, d0), (2, d1), (4, d7), (6, d2)):
+                stores[(address + offset) & 0xFFFFFF] = (value >> 8) & 0xFF
+                stores[(address + offset + 1) & 0xFFFFFF] = value & 0xFF
+            stores[AIM_POOL_COUNT & 0xFFFFFF] = ((count + 1) >> 8) & 0xFF
+            stores[(AIM_POOL_COUNT + 1) & 0xFFFFFF] = (count + 1) & 0xFF
+            return {'arm': 'found', 'index': index, 'address': address, 'skipped': skipped,
+                    'count': count, 'stores': stores}
+        skipped += 1
+        address = (address + AIM_POOL_STRIDE) & 0xFFFFFFFF
+    return {'arm': 'pool-full-scanned', 'count': count, 'skipped': skipped}

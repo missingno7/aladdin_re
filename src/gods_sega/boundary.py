@@ -16124,3 +16124,85 @@ def aim_cue_update_plan(machine, registers):
                       writes=_cue_frame_writes(sp, registers) + tuple(writes.items()),
                       registers=exit_registers, last_pc=last_pc)
 
+
+
+# --- 00B02A / 00B05A: the aim pool reset and add (game/creatures.py: aim_pool_reset, aim_pool_add) --
+#
+# Costs from the tracer (artifacts/gods/evidence/census-00B02A-*, census-00B05A-*): 00B02A is one
+# fixed cost, no branch at all (a full d0-d7/a0-a5 save, the ROM-constant fill, a counter clear, a
+# full restore); 00B05A is a fixed head/tail plus a per-skipped-slot fragment, verified against four
+# independent fixtures (0-3 skips) until the assembled totals matched to the cycle.
+AIM_POOL_RESET_ENTRY, AIM_POOL_RESET_LAST_PC = 0x00B02A, 0x00B058
+AIM_POOL_ADD_ENTRY, AIM_POOL_ADD_LAST_PC = 0x00B05A, 0x00B080
+AIM_POOL_RESET_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5')
+_AIM_POOL_RESET_COST = (912, 11)   # the whole routine: fixed, no branch (verified against census-00B02A-*)
+
+_AIM_POOL_ADD_HEAD = (12 + 4 + 12 + 8, 4)          # lea; moveq #$1f,d5; cmp.w f2ae,d5; blt not taken
+_AIM_POOL_ADD_SKIP = (12 + 8 + 4 + 10, 4)          # tst.l (a0); beq not taken; addq.w #8,a0; dbra taken
+_AIM_POOL_ADD_FOUND_TEST = (12 + 10, 2)            # tst.l (a0); beq taken
+_AIM_POOL_ADD_WRITE = (8 + 8 + 8 + 8 + 16, 5)      # move.w x4; addq.w #1,f2ae.w
+_AIM_POOL_ADD_RTS = (16, 1)
+
+
+def _aim_pool_reset_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(AIM_POOL_RESET_FRAME_REGISTERS)
+                 for pair in _bytes(sp - 56 + 4 * index, registers[name], 4))
+
+
+def aim_pool_reset_plan(machine, registers):
+    """00B02A: refill the 256-byte pool from ROM constants and clear AIM_POOL_COUNT.  Unconditional,
+    no branch: the pushed d0-d7/a0-a5 frame is popped back to the SAME entry values, but the 56 bytes
+    of residue are real (nothing else touches that stack span)."""
+    from .game import creatures
+    if registers['pc'] != AIM_POOL_RESET_ENTRY:
+        raise UnsupportedCandidate('aim pool reset planner needs the machine parked at 00B02A')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    result = creatures.aim_pool_reset(read)
+    writes = _aim_pool_reset_frame_writes(sp, registers) + tuple(result['stores'].items())
+    cycles, instructions = _AIM_POOL_RESET_COST
+    # clr.w AIM_POOL_COUNT is the last flag-setter: Z=1, N=V=C=0, X retained.
+    exit_sr = _logic_sr(sr, 0, 2)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=AIM_POOL_RESET_LAST_PC)
+
+
+def aim_pool_add_plan(machine, registers):
+    """00B05A: scan the 256-byte pool for a free slot and write D0/D1/D7/D2 there.  Only the
+    'found' arm (every witnessed occurrence, all five recordings, within the first four slots) is
+    admitted; the counter-gate and a fully exhausted scan are real ROM, never witnessed."""
+    from .game import creatures
+    if registers['pc'] != AIM_POOL_ADD_ENTRY:
+        raise UnsupportedCandidate('aim pool add planner needs the machine parked at 00B05A')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    d0, d1, d7, d2 = (registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                      registers['d7'] & 0xFFFF, registers['d2'] & 0xFFFF)
+    result = creatures.aim_pool_add(read, d0, d1, d7, d2)
+    if result['arm'] != 'found':
+        raise UnsupportedCandidate(f"aim pool add: {result['arm']}, not witnessed by a recording")
+    cycles, instructions = _AIM_POOL_ADD_HEAD
+    c, i = _add(*([_AIM_POOL_ADD_SKIP] * result['skipped']))
+    cycles += c
+    instructions += i
+    c, i = _AIM_POOL_ADD_FOUND_TEST
+    cycles += c
+    instructions += i
+    c, i = _AIM_POOL_ADD_WRITE
+    cycles += c
+    instructions += i
+    c, i = _AIM_POOL_ADD_RTS
+    cycles += c
+    instructions += i
+    exit_a0 = (creatures.AIM_POOL_LOW + creatures.AIM_POOL_STRIDE * (result['index'] + 1)) & 0xFFFFFFFF
+    d5_final = (0x1F - result['skipped']) & 0xFFFFFFFF
+    # addq.w #1,AIM_POOL_COUNT (00B07C) is the last flag-setter: N/Z/V/C from the incremented word, X
+    # set with C (ADDQ).
+    exit_sr = _add_sr(sr, result['count'], 1, 2)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(result['stores'].items()),
+                      registers={'a0': exit_a0, 'd5': d5_final, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                                 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=AIM_POOL_ADD_LAST_PC)

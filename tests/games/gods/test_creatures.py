@@ -65,6 +65,14 @@ AIM_CUE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B082-*/
 needs_aim_cue_census = pytest.mark.skipif(not AIM_CUE_FIXTURES or not GODS.rom_path.is_file(),
                                           reason='no local census of 00B082')
 
+AIM_POOL_RESET_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B02A-*/00B02A-entry-p*.state'))
+needs_aim_pool_reset_census = pytest.mark.skipif(not AIM_POOL_RESET_FIXTURES or not GODS.rom_path.is_file(),
+                                                 reason='no local census of 00B02A')
+
+AIM_POOL_ADD_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B05A-*/00B05A-entry-p*.state'))
+needs_aim_pool_add_census = pytest.mark.skipif(not AIM_POOL_ADD_FIXTURES or not GODS.rom_path.is_file(),
+                                               reason='no local census of 00B05A')
+
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
 
@@ -1001,5 +1009,115 @@ def test_aim_cue_update_candidate_matches_the_reference_and_its_mutant_diverges(
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-cue-update-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B02A / 00B05A: the aim pool reset and add (docs/gods/blockers/2026-09-18-00A578.md's own
+# "Decision on 00AF52", 19 Sep -- the first of 00AF52's own three further calls).  One 256-byte,
+# 32-slot pool; 00B02A resets it from ROM constants (unconditional, no branch); 00B05A scans it for a
+# free slot and writes four caller words there, the SAME shape hazard.effect_pool_add/timers._spawn
+# already prove.  See game/creatures.py's own module note above aim_pool_reset/aim_pool_add.
+
+def test_aim_pool_reset_refills_from_rom_constants_and_clears_the_counter():
+    values = {}
+    result = creatures.aim_pool_reset(_reader(values))
+    assert result['stores'][creatures.AIM_POOL_COUNT & 0xFFFFFF] == 0
+    assert len(result['stores']) == creatures.AIM_POOL_HIGH - creatures.AIM_POOL_LOW + 2
+
+
+def test_aim_pool_add_finds_the_first_free_slot():
+    values = {(creatures.AIM_POOL_COUNT & 0xFFFFFF, 2): 0,
+             (creatures.AIM_POOL_LOW & 0xFFFFFF, 4): 0x11112222}   # slot 0 occupied
+    result = creatures.aim_pool_add(_reader(values), 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD)
+    assert result['arm'] == 'found' and result['index'] == 1 and result['skipped'] == 1
+    slot1 = (creatures.AIM_POOL_LOW + creatures.AIM_POOL_STRIDE) & 0xFFFFFF
+    assert result['stores'][slot1] == 0xAA and result['stores'][slot1 + 1] == 0xAA
+
+
+def test_aim_pool_add_declines_the_counter_gate_by_name():
+    values = {(creatures.AIM_POOL_COUNT & 0xFFFFFF, 2): creatures.AIM_POOL_SLOTS}
+    result = creatures.aim_pool_add(_reader(values), 0, 0, 0, 0)
+    assert result['arm'] == 'pool-full-by-count'
+
+
+def test_aim_pool_add_declines_a_fully_occupied_scan_by_name():
+    values = {(creatures.AIM_POOL_COUNT & 0xFFFFFF, 2): 0}
+    for index in range(creatures.AIM_POOL_SLOTS):
+        address = (creatures.AIM_POOL_LOW + creatures.AIM_POOL_STRIDE * index) & 0xFFFFFF
+        values[(address, 4)] = 0xFFFFFFFF
+    result = creatures.aim_pool_add(_reader(values), 0, 0, 0, 0)
+    assert result['arm'] == 'pool-full-scanned'
+
+
+@needs_aim_pool_reset_census
+@pytest.mark.parametrize('fixture', AIM_POOL_RESET_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_pool_reset_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.aim_pool_reset_plan(machine, registers)
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_aim_pool_add_census
+@pytest.mark.parametrize('fixture', AIM_POOL_ADD_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_pool_add_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_pool_add_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'aim pool add' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_aim_pool_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-pool-reset').gate_pcs == (boundary.AIM_POOL_RESET_ENTRY,)
+    assert recovery.Candidate('aim-pool-add').gate_pcs == (boundary.AIM_POOL_ADD_ENTRY,)
+    assert boundary.AIM_POOL_RESET_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.AIM_POOL_ADD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-pool-reset-mutant-result').mutation is recovery._mutate_result
+    assert recovery.Candidate('aim-pool-add-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_reference
+def test_aim_pool_reset_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in AIM_POOL_RESET_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-pool-reset', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00B02A within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-pool-reset-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+@needs_reference
+def test_aim_pool_add_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in AIM_POOL_ADD_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-pool-add', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00B05A within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-pool-add-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'
