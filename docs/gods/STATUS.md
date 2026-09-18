@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with fifty-six gates armed, the camera follow step `002806`, the
+  original with fifty-seven gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -180,7 +180,7 @@ one planner") is the next bite.
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
-  `state-2`, `state-3` and `state-4` arm each alone.
+  `state-2`, `state-3`, `state-4` and `state-17` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -972,8 +972,8 @@ small leaf):
   (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
-  state-13, state-12, state-16, state-11, state-2, state-3, state-4 --
-  10,618 of 13,488 activations (79%)
+  state-13, state-12, state-16, state-11, state-2, state-3, state-4,
+  state-17 -- 10,763 of 13,488 activations (80%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1107,7 +1107,14 @@ small leaf):
   declines by name.  `FFFFEA20 != 0` transitions to state 3 (`d7` forced
   to 0) when negative, or state 2 (`d7` forced to 2) when positive.  81
   real path classes across all five recordings collapse to exactly three
-  real terminal shapes.
+  real terminal shapes.  State 17 (`006666`, recovered 18 Sep) is the
+  SAME "settle then countdown" shape as state 16's own, transitioning to
+  state 0 instead of state 1 once `FFFFF198` goes negative (`d7` forced
+  to 2, the same value state 16's own transition uses) -- not
+  byte-identical to state 16's own code (the final store is `clr.w
+  f192.w`, not a `move.w #imm`), so costed with its own constants.  298
+  real path classes across all five recordings collapse to exactly three
+  real terminal shapes.  No defects.
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least

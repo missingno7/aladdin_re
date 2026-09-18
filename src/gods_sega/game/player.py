@@ -1834,6 +1834,28 @@ def state16_step(read):
             'stores': {F198 & 0xFFFFFF: (new_f198, 2), STATE_INDEX: (1, 2)}}
 
 
+# --- 006666: state 17 -- the SAME "settle then countdown" shape as state 16's own, one tick faster
+# to build (both share F1B8/F198), transitioning to state 0 instead of state 1 once F198 goes
+# negative (d7 forced to 2, the SAME value state 16's own transition uses).  Not byte-identical to
+# state 16's own code (the final store is `clr.w f192.w`, not a `move.w #imm`, so the tail's own
+# bytes differ even though the algorithm does not), so costed with its own constants.  298 real path
+# classes across all five recordings collapse to exactly three real terminal shapes.
+STATE17_ENTRY = 0x006666
+
+
+def state17_step(read):
+    """006666-006682: state 17's own whole decision tree.  Returns `'settle'`, `'countdown'`, or
+    `'transition-0'` (state 0, d7 forced to 2)."""
+    f1b8 = read(F1B8, 2)
+    if f1b8 == 0:
+        return {'arm': 'settle', 'stores': {F1B8 & 0xFFFFFF: ((f1b8 + 1) & 0xFFFF, 2)}}
+    new_f198 = (read(F198, 2) - 4) & 0xFFFF
+    if _signed_word(new_f198) >= 0:
+        return {'arm': 'countdown', 'stores': {F198 & 0xFFFFFF: (new_f198, 2)}}
+    return {'arm': 'transition-0', 'd7': 2,
+            'stores': {F198 & 0xFFFFFF: (new_f198, 2), STATE_INDEX: (0, 2)}}
+
+
 # --- 005D32: state 11's own decision tree -- BYTE-IDENTICAL to state 12's own oscillation head and
 # EA20-gated block test (005D32-005E28 vs 005FF4-0060EA, confirmed against the ROM save for relocated
 # branch displacements: every constant, mask and threshold is the SAME, including the LEFT/RIGHT
