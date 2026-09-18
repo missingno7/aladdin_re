@@ -45,6 +45,14 @@ GROUND_CONTACT_MIRROR_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('ce
 needs_ground_contact_mirror_census = pytest.mark.skipif(not GROUND_CONTACT_MIRROR_FIXTURES or not GODS.rom_path.is_file(),
                                                         reason='no local census of 00AD88')
 
+FALL_KIND_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AE6C-*/00AE6C-entry-p*.state'))
+needs_fall_kind_census = pytest.mark.skipif(not FALL_KIND_FIXTURES or not GODS.rom_path.is_file(),
+                                            reason='no local census of 00AE6C')
+
+FALL_KIND_MIRROR_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AED4-*/00AED4-entry-p*.state'))
+needs_fall_kind_mirror_census = pytest.mark.skipif(not FALL_KIND_MIRROR_FIXTURES or not GODS.rom_path.is_file(),
+                                                   reason='no local census of 00AED4')
+
 GROUND_EDGE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AD68-*/00AD68-entry-p*.state'))
 needs_ground_edge_census = pytest.mark.skipif(not GROUND_EDGE_FIXTURES or not GODS.rom_path.is_file(),
                                               reason='no local census of 00AD68')
@@ -672,5 +680,175 @@ def test_ground_contact_update_mirror_candidate_matches_the_reference_and_its_mu
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-ground-contact-mirror-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00AE6C/00AED4: the fall kind handlers -- kinds 2 and 3 of 00A772's own eight-entry table, the
+# KIND_FALL/MIRROR_KIND_FALL targets ground_contact_update's own family hands off to (19 Sep).  A
+# distinct shape: FRAME_STEP cleared and kind_frame_offset composed inline (a real bsr/rts, not a
+# hand-off), FALL_VELOCITY added to POSITION_Y and incremented (capped), then the near test (+0x100/
+# +0x101) and, on a match with POSITION_X's own low 5 bits at zero, a third test at the SAME offsets
+# ground_contact_update's own skip test uses (-1/+0x7f for 00AE6C, +1/+0x81 for 00AED4).
+
+def _fall_kind_base(x=0x204, y=0x40, velocity=5, kind=2, frame_step=3, type_frame=1):
+    return {(INSTANCE_PTR + creatures.FRAME_STEP, 2): frame_step,
+            (INSTANCE_PTR + creatures.KIND, 2): kind,
+            (creatures.KIND_TABLE + 8 * kind + creatures.KIND_TABLE_VALUE_OFFSET, 4): 0x808,
+            (TYPE_PTR + creatures.TYPE_FRAME_BYTE, 1): type_frame,
+            (creatures.FRAME_TABLE_PTR & 0xFFFFFF, 4): 0xFF9000,
+            (0xFF9000 + (type_frame << 4), 2): 0x10,
+            (INSTANCE_PTR + creatures.FALL_VELOCITY, 2): velocity,
+            (INSTANCE_PTR + creatures.POSITION_X, 2): x,
+            (INSTANCE_PTR + creatures.POSITION_Y, 2): y}
+
+
+def test_fall_kind_update_not_triggered_still_steps_position_y_and_velocity():
+    values = _fall_kind_base(x=0x204, y=0x40, velocity=5)             # low5(0x204) == 4 < 8
+    cell = _grid_address(0x204, 0x45)                                  # new_y = y + velocity = 0x45
+    values[(cell + 0x100) & 0xFFFFFF, 1] = 0                          # near test: no match
+    result = creatures.fall_kind_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'not-triggered' and result['near']['arm'] == 'no-match-near-edge'
+    assert result['incremented'] and result['new_y'] == 0x45
+    stores = result['stores']
+    assert stores[(INSTANCE_PTR + creatures.FRAME_STEP) & 0xFFFFFF] == (0, 2)
+    assert stores[(INSTANCE_PTR + creatures.FALL_VELOCITY) & 0xFFFFFF] == (6, 2)
+    assert stores[(INSTANCE_PTR + creatures.POSITION_Y) & 0xFFFFFF] == (0x45, 2)
+    assert (INSTANCE_PTR + creatures.KIND) & 0xFFFFFF not in stores
+
+
+def test_fall_kind_update_velocity_caps_at_the_ceiling():
+    values = _fall_kind_base(x=0x204, y=0x40, velocity=creatures.FALL_VELOCITY_CEILING)
+    cell = _grid_address(0x204, 0x40 + creatures.FALL_VELOCITY_CEILING)
+    values[(cell + 0x100) & 0xFFFFFF, 1] = 0
+    result = creatures.fall_kind_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert not result['incremented']
+    assert (INSTANCE_PTR + creatures.FALL_VELOCITY) & 0xFFFFFF not in result['stores']
+
+
+def test_fall_kind_update_near_trigger_with_nonzero_low5_skips_the_third_test():
+    values = _fall_kind_base(x=0x204, y=0x40, velocity=5)              # low5 == 4, nonzero
+    cell = _grid_address(0x204, 0x45)
+    values[(cell + 0x100) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    result = creatures.fall_kind_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'triggered-low5nz'
+    stores = result['stores']
+    assert stores[(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (0, 2)          # 00AE6C's own near_kind
+    assert stores[(INSTANCE_PTR + creatures.POSITION_Y) & 0xFFFFFF] == (0x45 & 0xFFF0, 2)
+
+
+def test_fall_kind_update_third_test_no_match_leaves_the_near_kind_in_place():
+    values = _fall_kind_base(x=0x200, y=0x40, velocity=5)              # low5 == 0: the third test runs
+    cell = _grid_address(0x200, 0x45)
+    values[(cell + 0x100) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    masked_y = 0x45 & 0xFFF0
+    cell2 = _grid_address(0x200, masked_y)
+    values[(cell2 + creatures.GROUND_SKIP_TEST_LOW_OFFSET) & 0xFFFFFF, 1] = 0
+    values[(cell2 + creatures.GROUND_SKIP_TEST_HIGH_OFFSET) & 0xFFFFFF, 1] = 0
+    result = creatures.fall_kind_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'triggered-third-no-match'
+    assert result['stores'][(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (0, 2)
+
+
+def test_fall_kind_update_third_test_match_overwrites_kind_to_one():
+    values = _fall_kind_base(x=0x200, y=0x40, velocity=5)
+    cell = _grid_address(0x200, 0x45)
+    values[(cell + 0x100) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    masked_y = 0x45 & 0xFFF0
+    cell2 = _grid_address(0x200, masked_y)
+    values[(cell2 + creatures.GROUND_SKIP_TEST_LOW_OFFSET) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    result = creatures.fall_kind_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'triggered-third-match' and result['third'] == 'cell-low'
+    assert result['stores'][(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (1, 2)
+
+
+def test_fall_kind_update_mirror_third_test_match_overwrites_kind_to_zero():
+    values = _fall_kind_base(x=0x200, y=0x40, velocity=5)
+    cell = _grid_address(0x200, 0x45)
+    values[(cell + 0x100) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    masked_y = 0x45 & 0xFFF0
+    cell2 = _grid_address(0x200, masked_y)
+    values[(cell2 + creatures.MIRROR_SKIP_TEST_LOW_OFFSET) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    result = creatures.fall_kind_update_mirror(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'triggered-third-match' and result['third'] == 'cell-low'
+    stores = result['stores']
+    assert stores[(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (0, 2)          # 00AED4's own third_kind
+
+
+# --- boundary: gods_sega.boundary.fall_kind_update_plan/_mirror_plan over every retained fixture -----
+
+@needs_fall_kind_census
+@pytest.mark.parametrize('fixture', FALL_KIND_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_fall_kind_update_plan_reproduces_every_witnessed_arm(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.fall_kind_update_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'fall kind update' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_fall_kind_mirror_census
+@pytest.mark.parametrize('fixture', FALL_KIND_MIRROR_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_fall_kind_update_mirror_plan_reproduces_every_witnessed_arm(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.fall_kind_update_mirror_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'fall kind update mirror' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_fall_kind_update_candidate_names_are_explicit():
+    assert recovery.Candidate('creature-fall-kind').gate_pcs == (boundary.FALL_KIND_UPDATE_ENTRY,)
+    assert boundary.FALL_KIND_UPDATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('creature-fall-kind-mutant-result').mutation is recovery._mutate_result
+    assert recovery.Candidate('creature-fall-kind-mirror').gate_pcs == (boundary.FALL_KIND_UPDATE_MIRROR_ENTRY,)
+    assert boundary.FALL_KIND_UPDATE_MIRROR_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('creature-fall-kind-mirror-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_reference
+def test_fall_kind_update_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in FALL_KIND_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='creature-fall-kind', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00AE6C within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-fall-kind-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+@needs_reference
+def test_fall_kind_update_mirror_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in FALL_KIND_MIRROR_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='creature-fall-kind-mirror', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00AED4 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-fall-kind-mirror-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

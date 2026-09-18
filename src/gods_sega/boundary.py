@@ -5351,6 +5351,188 @@ def ground_contact_update_mirror_plan(machine, registers):
                                 error_name='ground contact update mirror')
 
 
+# --- 00AE6C/00AED4: the fall kind handlers (game/creatures.py: fall_kind_update / _mirror) -----------
+#
+# Kinds 2 and 3 of 00A772's own eight-entry table -- the KIND_FALL/MIRROR_KIND_FALL targets
+# ground_contact_update's own family hands off to.  A distinct shape from 00ACA0/00AD88: this one
+# CALLS kind_frame_offset by BSR near its own head (composed inline, not a hand-off -- the routine
+# returns normally to its own RTS, to 00A772) and never touches POSITION_X.  The near test (offset
+# +0x100/+0x101) and the third test (offset -1/+0x7F for 00AE6C, matching 00ACA0's own skip test; +1/
+# +0x81 for 00AED4, matching 00AD88's own) are BOTH implemented inline here -- no bsr to a shared leaf
+# -- so their own costs are fresh (no d1/moveq bookkeeping the way 00AD46/ground_edge_test's own bsr'd
+# body carries).  Every arm of both regions shares ONE physical rts (00AED2 for 00AE6C, 00AF3A for
+# 00AED4): every branch in the body lands there directly.
+FALL_KIND_UPDATE_ENTRY, FALL_KIND_UPDATE_LAST_PC = 0x00AE6C, 0x00AED2
+FALL_KIND_UPDATE_MIRROR_ENTRY, FALL_KIND_UPDATE_MIRROR_LAST_PC = 0x00AED4, 0x00AF3A
+_FKS_CLR_FRAME_STEP = (16, 1)             # 00AE6C clr.w $4(a5)
+_FKS_BSR_FRAME = (18, 1)                  # 00AE70 bsr.w $aa50 (reuse _KF_COST for kind_frame_offset's own body)
+_FKS_LOAD_VELOCITY = (12, 1)              # 00AE74 move.w $12(a5),d0
+_FKS_CMP_CEILING = (8, 1)                 # 00AE78 cmpi.w #$10,d0
+_FKS_BEQ_CEILING = {True: (10, 1), False: (8, 1)}       # 00AE7C beq.b $ae82
+_FKS_ADDQ_VELOCITY = (16, 1)              # 00AE7E addq.w #1,$12(a5) -- only when not capped
+_FKS_ADD_Y = (16, 1)                      # 00AE82 add.w d0,$2(a5)
+_FKS_BSR_GRID = (18, 1)                   # 00AE86/00AEB8 bsr.w $aa38 (reuse _CGC_COST for the body)
+_FKS_NEAR_CMP1 = (16, 1)                  # 00AE8A cmpi.b #1,$100(a1)
+_FKS_NEAR_BEQ1 = {True: (10, 1), False: (8, 1)}         # 00AE90 beq.b $aea6
+_FKS_NEAR_LOAD_X = (8, 1)                 # 00AE92 move.w (a5),d0
+_FKS_NEAR_MASK_X = (8, 1)                 # 00AE94 andi.w #$1f,d0
+_FKS_NEAR_CMP_EDGE = (8, 1)               # 00AE98 cmpi.w #8,d0
+_FKS_NEAR_BLT = {True: (10, 1), False: (8, 1)}          # 00AE9C blt.b $aed2
+_FKS_NEAR_CMP2 = (16, 1)                  # 00AE9E cmpi.b #1,$101(a1)
+_FKS_NEAR_BNE2 = {True: (10, 1), False: (8, 1)}         # 00AEA4 bne.b $aed2
+_FKS_MASK_Y_NEAR = (20, 1)                # 00AEA6 andi.w #$fff0,$2(a5)
+_FKS_SET_NEAR_KIND = (16, 1)              # 00AEAC clr.w $a(a5) (00AE6C) / move.w #1,$a(a5) (00AED4)
+_FKS_LOW5_LOAD = (8, 1)                   # 00AEB0 move.w (a5),d0
+_FKS_LOW5_MASK = (8, 1)                   # 00AEB2 andi.w #$1f,d0
+_FKS_LOW5_BNE = {True: (10, 1), False: (8, 1)}          # 00AEB6 bne.b $aed2
+_FKS_THIRD_CMP1 = (16, 1)                 # 00AEBC cmpi.b #1,-1(a1) / +1(a1)
+_FKS_THIRD_BEQ1 = {True: (10, 1), False: (8, 1)}        # 00AEC2 beq.b $aecc
+_FKS_THIRD_CMP2 = (16, 1)                 # 00AEC4 cmpi.b #1,$7f(a1) / $81(a1)
+_FKS_THIRD_BNE2 = {True: (10, 1), False: (8, 1)}        # 00AECA bne.b $aed2
+_FKS_SET_THIRD_KIND = (16, 1)             # 00AECC move.w #1,$a(a5) (00AE6C) / clr.w $a(a5) (00AED4)
+_FKS_RTS = (16, 1)
+_FKS_NOT_TRIGGERED_NEAR_EDGE_COST = _add(_FKS_NEAR_CMP1, _FKS_NEAR_BEQ1[False], _FKS_NEAR_LOAD_X, _FKS_NEAR_MASK_X,
+                                        _FKS_NEAR_CMP_EDGE, _FKS_NEAR_BLT[True])
+_FKS_NOT_TRIGGERED_NO_MATCH_COST = _add(_FKS_NEAR_CMP1, _FKS_NEAR_BEQ1[False], _FKS_NEAR_LOAD_X, _FKS_NEAR_MASK_X,
+                                       _FKS_NEAR_CMP_EDGE, _FKS_NEAR_BLT[False], _FKS_NEAR_CMP2, _FKS_NEAR_BNE2[True])
+_FKS_NEAR_TRIGGER_COST = _add(_FKS_NEAR_CMP1, _FKS_NEAR_BEQ1[True])
+_FKS_NEAR_TRIGGER_HIGH_COST = _add(_FKS_NEAR_CMP1, _FKS_NEAR_BEQ1[False], _FKS_NEAR_LOAD_X, _FKS_NEAR_MASK_X,
+                                  _FKS_NEAR_CMP_EDGE, _FKS_NEAR_BLT[False], _FKS_NEAR_CMP2, _FKS_NEAR_BNE2[False])
+
+
+def _fall_kind_plan(machine, registers, *, entry, semantics, last_pc, grid_residue_pc, grid2_residue_pc, error_name):
+    """The shared shape ``fall_kind_update_plan``/``fall_kind_update_mirror_plan`` both run: FRAME_STEP
+    cleared and kind_frame_offset composed inline (a real bsr/rts, not a hand-off -- every register it
+    sets is dead by the time this routine's own rts runs, overwritten by the grid_cell calls that
+    follow), FALL_VELOCITY added to POSITION_Y and incremented (capped at FALL_VELOCITY_CEILING), the
+    near test and, on a match with POSITION_X's own low 5 bits at zero, the third test.  Every arm
+    shares the SAME physical rts, so one ``last_pc`` covers the whole region."""
+    from .game import creatures
+    if registers['pc'] != entry:
+        raise UnsupportedCandidate(f'{error_name} planner needs the machine parked at {entry:06X}')
+    sr = registers['sr']
+    read = _reader(machine)
+    type_ptr, instance_ptr = registers['a4'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
+    result = semantics(read, type_ptr, instance_ptr)
+    arm = result['arm']
+    sp = registers['a7'] & 0xFFFFFF
+    exit_pc = _return(machine, sp)
+    # d2 and a0 are the composed kind_frame_offset call's own real outputs (its own last move.l/movea.l);
+    # dead by the time this routine's own rts runs (nothing reads them again), but the tracer sees them
+    # change, so every arm must report the same real values.
+    frame_table = read(creatures.FRAME_TABLE_PTR, 4) & 0xFFFFFFFF
+    base_registers = {'a7': (registers['a7'] + 4) & 0xFFFFFFFF, 'pc': exit_pc,
+                      # move.l $4(a0,d0.w),d2 (kind_frame_offset's own head) is a LONGWORD load from
+                      # the ROM kind table, whose own upper word is always 0 (confirmed from the ROM,
+                      # kind_frame_offset_plan's own docstring) -- entry d2's own upper half is
+                      # irrelevant, fully replaced.
+                      'd2': result['frame']['d2'] & 0xFFFFFFFF, 'a0': frame_table}
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # Every internal bsr pushes its own return address at (a7-4); each bsr/rts pair nets a7 back to the
+    # SAME slot, so only the LAST call's own return address survives as durable stack residue -- here
+    # that is always the LAST grid_cell call (bsr $aa50's own return, 00AE74/00AEDC, never survives:
+    # the grid_cell call(s) that follow always overwrite it).
+    grid_residue = _bytes((sp - 4) & 0xFFFFFF, grid_residue_pc, 4)
+
+    cost = _add(_FKS_CLR_FRAME_STEP, _FKS_BSR_FRAME, _KF_COST, _FKS_LOAD_VELOCITY, _FKS_CMP_CEILING,
+               _FKS_BEQ_CEILING[not result['incremented']])
+    if result['incremented']:
+        cost = _add(cost, _FKS_ADDQ_VELOCITY)
+    cost = _add(cost, _FKS_ADD_Y, _FKS_BSR_GRID, _CGC_COST)
+    # asl.w #3,d1 (creature_grid_cell's own last instruction) is the first real X-setter; add.w
+    # (ADD_Y) ran before the call, so its own X is overwritten by the grid_cell call's own asl.
+    sr = _asl_sr(sr, result['grid']['row_source'], 3, 2)
+    near = result['near']
+
+    # moveq #0,d0 (inside the composed kind_frame_offset call, its own unconditional head) clears the
+    # WHOLE 32-bit register before anything else in this routine ever touches d0; every later store is
+    # a plain move.w/andi.w, so d0's own upper half is 0 from there on, on every arm (the same lesson
+    # ground_contact_update's own reload head taught).  d1's own upper half, by contrast, is never
+    # cleared anywhere in this routine -- only word ops touch it -- so it is preserved from entry.
+    d1_upper = registers['d1'] & 0xFFFF0000
+    grid = result['grid']
+
+    if arm == 'not-triggered':
+        if near['arm'] == 'no-match-near-edge':
+            cost = _add(cost, _FKS_NOT_TRIGGERED_NEAR_EDGE_COST)
+            exit_sr = _cmp_sr(sr, near['x_low5'], 8, 2)
+        else:
+            cost = _add(cost, _FKS_NOT_TRIGGERED_NO_MATCH_COST)
+            exit_sr = _cmp_sr(sr, near['high'], 1, 1)
+        cost = _add(cost, _FKS_RTS)
+        exit_registers = dict(base_registers, sr=exit_sr, d0=near['x_low5'], d1=d1_upper | grid['d1'],
+                              a1=grid['a1'] & 0xFFFFFFFF)
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=grid_residue + writes, registers=exit_registers,
+                          last_pc=last_pc)
+
+    # Near-triggered (either probe: the ROM only tests whether either matched, never which).
+    if near['arm'] == 'cell-high':
+        cost = _add(cost, _FKS_NEAR_TRIGGER_HIGH_COST)
+    else:
+        cost = _add(cost, _FKS_NEAR_TRIGGER_COST)
+    cost = _add(cost, _FKS_MASK_Y_NEAR, _FKS_SET_NEAR_KIND, _FKS_LOW5_LOAD, _FKS_LOW5_MASK)
+    # 00AEB0/00AEB2's own re-read of POSITION_X (LOW5_LOAD/LOW5_MASK) runs after EVERY near trigger,
+    # overwriting d0 with x&0x1f again regardless of which probe matched -- so d0's own value from the
+    # near test itself never survives to any exit; every arm from here on uses this re-read's result.
+
+    if arm == 'triggered-low5nz':
+        cost = _add(cost, _FKS_LOW5_BNE[True], _FKS_RTS)
+        # andi.w #$1f,d0 (LOW5_MASK, the routine's own re-read before the branch) is the last NZVC
+        # setter; X still threads from the FIRST grid_cell call's own asl (nothing between touches it).
+        exit_sr = _logic_sr(sr, result['low5'], 2)
+        exit_registers = dict(base_registers, sr=exit_sr, d0=result['low5'],
+                              d1=d1_upper | grid['d1'], a1=grid['a1'] & 0xFFFFFFFF)
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=grid_residue + writes, registers=exit_registers,
+                          last_pc=last_pc)
+
+    # low5 == 0: the third test runs, over a SECOND grid_cell call (the routine's own POSITION_Y write
+    # from MASK_Y_NEAR is already live in RAM by the time it runs -- the semantics' own overlay reader
+    # already reflects it).
+    cost = _add(cost, _FKS_LOW5_BNE[False], _FKS_BSR_GRID, _CGC_COST)
+    grid2 = result['grid2']
+    sr = _asl_sr(sr, grid2['row_source'], 3, 2)
+    third = result['third']
+    if third not in ('cell-low', 'no-match'):
+        raise UnsupportedCandidate(f'{error_name} third test arm not witnessed by a recording: {third}')
+    cost = _add(cost, _FKS_THIRD_CMP1)
+    if third == 'cell-low':
+        cost = _add(cost, _FKS_THIRD_BEQ1[True], _FKS_SET_THIRD_KIND, _FKS_RTS)
+        # move.w #1,$a(a5)/clr.w $a(a5) (SET_THIRD_KIND) is the last NZVC setter (a MOVE/CLR of the
+        # fixed KIND value); X still threads from the SECOND grid_cell call's own asl.
+        exit_sr = _logic_sr(sr, result['stores'][(instance_ptr + creatures.KIND) & 0xFFFFFF][0], 2)
+    else:
+        cost = _add(cost, _FKS_THIRD_BEQ1[False], _FKS_THIRD_CMP2, _FKS_THIRD_BNE2[True], _FKS_RTS)
+        # cmpi.b #1,$7f(a1)/$81(a1) (THIRD_CMP2) is the last NZVC setter; X unaffected, still from
+        # the second grid_cell call's own asl.
+        exit_sr = _cmp_sr(sr, result['third_high'], 1, 1)
+    exit_registers = dict(base_registers, sr=exit_sr, d0=grid2['d0'],
+                          d1=d1_upper | grid2['d1'], a1=grid2['a1'] & 0xFFFFFFFF)
+    grid2_residue = _bytes((sp - 4) & 0xFFFFFF, grid2_residue_pc, 4)
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=grid2_residue + writes, registers=exit_registers,
+                      last_pc=last_pc)
+
+
+def fall_kind_update_plan(machine, registers):
+    """00AE6C: kind 2's own fall tick, composed over kind_frame_offset (inline) and creature_grid_cell
+    (called up to twice); its own third test is at -1(a1)/+0x7f(a1), the SAME offsets
+    ground_contact_update's own skip test uses."""
+    from .game import creatures
+    return _fall_kind_plan(machine, registers, entry=FALL_KIND_UPDATE_ENTRY,
+                           semantics=creatures.fall_kind_update, last_pc=FALL_KIND_UPDATE_LAST_PC,
+                           grid_residue_pc=0x00AE8A, grid2_residue_pc=0x00AEBC,
+                           error_name='fall kind update')
+
+
+def fall_kind_update_mirror_plan(machine, registers):
+    """00AED4: kind 3's own fall tick -- the SAME shape as 00AE6C, mirrored: its own third test is at
+    +1(a1)/+0x81(a1), the SAME offsets ground_contact_update_mirror's own skip test uses."""
+    from .game import creatures
+    return _fall_kind_plan(machine, registers, entry=FALL_KIND_UPDATE_MIRROR_ENTRY,
+                           semantics=creatures.fall_kind_update_mirror, last_pc=FALL_KIND_UPDATE_MIRROR_LAST_PC,
+                           grid_residue_pc=0x00AEF2, grid2_residue_pc=0x00AF26,
+                           error_name='fall kind update mirror')
+
+
 # --- 0044C0/004550: the trail check (game/trail.py) -- event kind 6 ---------------------------------
 #
 # Raised the same way kind 3 (00462C) is: the tile scan's own preamble (0077BE-007876) jsr's straight

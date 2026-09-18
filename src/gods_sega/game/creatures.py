@@ -546,3 +546,103 @@ def ground_contact_update_mirror(read, type_ptr, instance_ptr):
                                 skip_low_offset=MIRROR_SKIP_TEST_LOW_OFFSET,
                                 skip_high_offset=MIRROR_SKIP_TEST_HIGH_OFFSET,
                                 near_kind=1, far_kind=MIRROR_KIND_FALL)
+
+
+# --- 00AE6C/00AED4: the fall kind handlers -- kinds 2 and 3 of 00A772's own eight-entry table, the
+# targets KIND_FALL/MIRROR_KIND_FALL name above.  A distinct shape from 00ACA0/00AD88 (docs/gods/
+# STATUS.md: "a distinct 'vertical fall' shape... at a DIFFERENT record offset"): no POSITION_X step at
+# all; instead FRAME_STEP (0x4, the SAME field kind_frame_offset itself reads) is cleared before an
+# immediate composed call into kind_frame_offset (00AA50, called by BSR here, not a tail-jump -- this
+# routine returns normally, RTS, to 00A772), then FALL_VELOCITY (0x12 -- the SAME offset
+# ground_contact_update's own FALL_PHASE names for a different caller, likewise not established as the
+# same field) is added to POSITION_Y and incremented (capped once it reaches FALL_VELOCITY_CEILING,
+# never past).  The near test (00AD46's own (d16,An) shape again, +0x100/+0x101) then gates a THIRD
+# test byte-for-byte the SAME shape as ground_contact_update's own skip test (00AE6C's own probes are
+# at the SAME -1/+0x7F offsets 00ACA0 uses; 00AED4's own at the SAME +1/+0x81 offsets 00AD88 uses --
+# confirmed, not coincidence) -- gated by POSITION_X's own low 5 bits being zero, exactly as
+# ground_contact_update's own skip test is, but AFTER the near trigger already ran, not before it.
+FALL_VELOCITY = 0x12               # instance_ptr word: this creature's own fall speed, added to
+                                    # POSITION_Y every tick, incremented (capped) until FALL_VELOCITY_CEILING.
+                                    # The SAME offset ground_contact_update's own FALL_PHASE names.
+FALL_VELOCITY_CEILING = 0x10       # FALL_VELOCITY stops incrementing once it reaches exactly this
+
+
+def _fall_kind_step(read, type_ptr, instance_ptr, *, third_low_offset, third_high_offset, near_kind, third_kind):
+    """The shared shape 00AE6C and 00AED4 both run, parameterised on what differs: the third test's own
+    two cell-byte offsets, and which KIND the near trigger and the third trigger each hand the creature
+    off to (``fall_kind_update``/``fall_kind_update_mirror``, below, supply the ROM's own real values).
+
+    Returns the arm (``'not-triggered'`` -- the near test never matched; ``'triggered-low5nz'`` -- the
+    near test matched (either probe -- the ROM only tests D1, never which of the two set it, the same
+    reasoning ground_contact_update's own near test already established) but POSITION_X's own low 5 bits are nonzero,
+    so the third test never runs, KIND set to ``near_kind``; ``'triggered-third-no-match'`` -- the third
+    test ran and missed, KIND stays ``near_kind``; or ``'triggered-third-match'`` -- the third test hit
+    (either probe: the ROM only tests whether EITHER matched, never which, the same reasoning
+    ground_contact_update's own near test uses), KIND overwritten to ``third_kind``) plus every fact the
+    boundary's own cost needs."""
+    type_ptr &= 0xFFFFFF
+    instance_ptr &= 0xFFFFFF
+    stores = {(instance_ptr + FRAME_STEP) & 0xFFFFFF: (0, 2)}
+    read1 = _overlay(read, stores)
+    frame = kind_frame_offset(read1, type_ptr, instance_ptr)
+    velocity = read(instance_ptr + FALL_VELOCITY, 2) & 0xFFFF
+    incremented = velocity != FALL_VELOCITY_CEILING
+    if incremented:
+        stores[(instance_ptr + FALL_VELOCITY) & 0xFFFFFF] = ((velocity + 1) & 0xFFFF, 2)
+    y = read(instance_ptr + POSITION_Y, 2) & 0xFFFF
+    new_y = (y + velocity) & 0xFFFF
+    stores[(instance_ptr + POSITION_Y) & 0xFFFFFF] = (new_y, 2)
+    read2 = _overlay(read, stores)
+    grid = creature_grid_cell(read2, instance_ptr)
+    cell_addr = grid['a1'] & 0xFFFFFF
+    x = read(instance_ptr + POSITION_X, 2) & 0xFFFF
+    near = ground_edge_test(read2, cell_addr + 0x100, x)
+    result = {'frame': frame, 'velocity': velocity, 'incremented': incremented, 'y': y, 'new_y': new_y,
+              'grid': grid, 'near': near, 'x': x, 'stores': dict(stores)}
+    if near['arm'] not in ('cell-low', 'cell-high'):
+        result['arm'] = 'not-triggered'
+        return result
+    masked_y = new_y & 0xFFF0
+    stores[(instance_ptr + POSITION_Y) & 0xFFFFFF] = (masked_y, 2)
+    stores[(instance_ptr + KIND) & 0xFFFFFF] = (near_kind, 2)
+    result.update(masked_y=masked_y, stores=dict(stores))
+    low5 = x & 0x1F
+    result['low5'] = low5
+    if low5 != 0:
+        result['arm'] = 'triggered-low5nz'
+        return result
+    read3 = _overlay(read, stores)
+    grid2 = creature_grid_cell(read3, instance_ptr)
+    cell2_addr = grid2['a1'] & 0xFFFFFF
+    low_byte = read3((cell2_addr + third_low_offset) & 0xFFFFFF, 1) & 0xFF
+    high_byte = None
+    if low_byte == GROUND_EDGE_FLAG:
+        third = 'cell-low'
+    else:
+        high_byte = read3((cell2_addr + third_high_offset) & 0xFFFFFF, 1) & 0xFF
+        third = 'cell-high' if high_byte == GROUND_EDGE_FLAG else 'no-match'
+    result.update(grid2=grid2, third=third, third_high=high_byte)
+    if third == 'no-match':
+        result['arm'] = 'triggered-third-no-match'
+    else:
+        stores[(instance_ptr + KIND) & 0xFFFFFF] = (third_kind, 2)
+        result['arm'] = 'triggered-third-match'
+    result['stores'] = stores
+    return result
+
+
+def fall_kind_update(read, type_ptr, instance_ptr):
+    """00AE6C: kind 2's own fall tick -- the third test's own two cell probes are at -1(a1)/+0x7F(a1)
+    (the SAME offsets ground_contact_update's own skip test uses), a near trigger sets KIND to 0
+    (00AA76), a third-test trigger sets KIND to 1 (00AB50)."""
+    return _fall_kind_step(read, type_ptr, instance_ptr, third_low_offset=GROUND_SKIP_TEST_LOW_OFFSET,
+                           third_high_offset=GROUND_SKIP_TEST_HIGH_OFFSET, near_kind=0, third_kind=1)
+
+
+def fall_kind_update_mirror(read, type_ptr, instance_ptr):
+    """00AED4: kind 3's own fall tick -- the SAME shape as 00AE6C (``fall_kind_update``), mirrored: the
+    third test's own two cell probes are at +1(a1)/+0x81(a1) (the SAME offsets
+    ground_contact_update_mirror's own skip test uses), a near trigger sets KIND to 1 (00AB50), a
+    third-test trigger sets KIND to 0 (00AA76) -- the OPPOSITE assignment from 00AE6C's own."""
+    return _fall_kind_step(read, type_ptr, instance_ptr, third_low_offset=MIRROR_SKIP_TEST_LOW_OFFSET,
+                           third_high_offset=MIRROR_SKIP_TEST_HIGH_OFFSET, near_kind=1, third_kind=0)
