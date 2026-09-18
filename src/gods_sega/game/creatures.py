@@ -38,6 +38,10 @@ QUADRANT_WORD = 0x4                # type_ptr word: bits 4-5 (>>4 & 3) select th
 COUNTDOWN = 0xE                    # instance_ptr word: ticks down to zero, then reloads
 POSITION_X, POSITION_Y = 0x0, 0x2  # instance_ptr words: this creature's own world position
 DIRECTION_INDEX = 0xA              # instance_ptr word: bit index into DIRECTION_BIT_TABLE
+KIND = DIRECTION_INDEX             # the SAME field: 00A772's own kind-table dispatch and 00AA50 both
+                                    # index KIND_TABLE with it (confirmed by trace, 18 Sep) -- the Q0
+                                    # arm's own DIRECTION_BIT_TABLE bit index above is this same
+                                    # 0-7 value read for a second purpose, not a distinct field.
 FORWARD_BACK = 0x12                # instance_ptr word: sign selects BACK(<0)/skip(==0)/FORWARD(>0)
 DIRECTION_BIT_TABLE = 0x009DEA     # ROM byte: bit N (mod 8) set selects BACK, clear selects FORWARD
 TRACKED_SIGN = 0xFFFFF1BE          # word: negative routes through DIRECTION_BIT_TABLE, else FORWARD_BACK
@@ -45,6 +49,38 @@ LAUNCH_POSITION_BIAS = 0x10        # instance position -> the launch's own x0 (X
 TARGET_BIAS_X, TARGET_BIAS_Y = 0x8, 0x6   # matches projectiles.TARGET_BIAS_X/Y (tracked position bias)
 AIM_JITTER_MASK, AIM_JITTER_BIAS = 0x3F, 0x1F   # jitter = (next_random() & 0x3F) - 0x1F, one draw per axis
 LAUNCH_FLAG = 0                    # moveq #0,d6: the launch's own flag argument, fixed (not caller-derived)
+
+# 00AA50: the creature's own per-kind, per-frame offset -- called both from 00A772's own $f38a.w
+# "moving" arm (its own result fed straight to the next unrecovered call, 00A922) and from inside the
+# ground/fall kind handlers (00ACA0/00AD88/00AE6C/00AED4, per the blocker).  RAM/ROM-read only, no
+# store, one unconditional path on every one of 19,798 occurrences across four recordings that reach
+# it (the fifth never does): the routine's own arithmetic is the fact, not a guess at what the result
+# means.
+KIND_TABLE = 0x00A538               # ROM: the SAME 8-entry, 8-byte kind table 00A772's own dispatch reads
+                                     # (handler pointer at +0, a per-kind word here at +4 -- 0x800, 0,
+                                     # 0x808, 8, 0x808, 8, 0x808, 8 for kinds 0-7, confirmed from the ROM)
+KIND_TABLE_VALUE_OFFSET = 0x4       # the per-kind long this routine reads (upper word always 0 in the ROM)
+FRAME_STEP = 0x4                    # instance_ptr word: added to the kind table's own per-kind value
+TYPE_FRAME_BYTE = 0x7               # type_ptr byte: adjacent to ATTACK_BYTE; this type's own frame number
+FRAME_TABLE_PTR = 0xFFFFF188        # long: a work-RAM pointer to a per-kind table, read fresh every call
+                                     # (every witnessed occurrence reads the SAME pointer value, but it
+                                     # is live state, not hardcoded -- a level or animation-state global)
+
+
+def kind_frame_offset(read, type_ptr, instance_ptr):
+    """00AA50: ``((KIND_TABLE[kind].value + instance.frame_step) << 4) + FRAME_TABLE[type.frame << 4]``,
+    all 16-bit arithmetic (the kind table's own value is read as a long, but every ROM entry's upper
+    word is zero, so the result -- returned as ``'d2'`` -- is exactly this word, zero-extended)."""
+    type_ptr &= 0xFFFFFF
+    instance_ptr &= 0xFFFFFF
+    kind = read(instance_ptr + KIND, 2) & 0xFFFF
+    kind_value = read(KIND_TABLE + 8 * kind + KIND_TABLE_VALUE_OFFSET, 4)
+    step = read(instance_ptr + FRAME_STEP, 2) & 0xFFFF
+    offset = ((kind_value + step) << 4) & 0xFFFF
+    frame = read(type_ptr + TYPE_FRAME_BYTE, 1) & 0xFF
+    table = read(FRAME_TABLE_PTR, 4) & 0xFFFFFF
+    delta = read((table + ((frame << 4) & 0xFFFF)) & 0xFFFFFF, 2) & 0xFFFF
+    return {'d2': (offset + delta) & 0xFFFF, 'kind': kind, 'frame': frame, 'offset': offset, 'delta': delta}
 
 
 def _signed_word(value):

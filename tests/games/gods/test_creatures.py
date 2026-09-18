@@ -17,7 +17,7 @@ import pytest
 import pathfacts
 import segment_verify
 
-from genesis_re.machine import Machine
+from genesis_re.machine import Machine, NativeError
 from gods_sega import boundary, recovery
 from gods_sega.game import creatures, effects, projectiles, timers
 from gods_sega.profile import GODS
@@ -27,6 +27,10 @@ FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-009D6C*/009D6C-en
 needs_census = pytest.mark.skipif(not FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 009D6C')
 needs_reference = pytest.mark.skipif(not (EVIDENCE / 'reference.json').exists() or not GODS.history_path().is_dir(),
                                      reason='no local Gods reference evidence')
+
+KIND_FRAME_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AA50-*/00AA50-entry-p*.state'))
+needs_kind_frame_census = pytest.mark.skipif(not KIND_FRAME_FIXTURES or not GODS.rom_path.is_file(),
+                                             reason='no local census of 00AA50')
 
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
@@ -180,3 +184,80 @@ def test_candidate_matches_the_reference_over_real_frames_and_its_mutant_diverge
     mutant = segment_verify.check(state, game=GODS, frames=20000, candidate='creature-attack-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00AA50: the creature's own per-kind, per-frame offset -----------------------------------------
+#
+# One of 00A772's own unconditional callees (docs/gods/blockers/2026-09-18-00A578.md's own "Next
+# question").  RAM/ROM-read only, no store, one unconditional path -- 19,798 occurrences across four
+# recordings, all the SAME 12-instruction shape.
+
+def test_kind_frame_offset_reads_the_kind_table_and_the_frame_table():
+    values = {(INSTANCE_PTR + creatures.KIND, 2): 2,
+              (creatures.KIND_TABLE + 8 * 2 + creatures.KIND_TABLE_VALUE_OFFSET, 4): 0x808,
+              (INSTANCE_PTR + creatures.FRAME_STEP, 2): 1,
+              (TYPE_PTR + creatures.TYPE_FRAME_BYTE, 1): 3,
+              (creatures.FRAME_TABLE_PTR & 0xFFFFFF, 4): 0xFF9000,
+              (0xFF9000 + (3 << 4), 2): 0x10}
+    result = creatures.kind_frame_offset(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['kind'] == 2 and result['frame'] == 3
+    assert result['offset'] == ((0x808 + 1) << 4) & 0xFFFF
+    assert result['delta'] == 0x10
+    assert result['d2'] == (result['offset'] + result['delta']) & 0xFFFF
+
+
+def test_kind_table_values_all_have_a_zero_upper_word_in_the_real_rom():
+    """The boundary plan's own exit d2 depends on this: confirmed from the ROM, not assumed."""
+    from gods_sega.profile import GODS as _GODS
+    rom = _GODS.read_rom()
+    for kind in range(8):
+        value = int.from_bytes(rom[creatures.KIND_TABLE + 8 * kind + creatures.KIND_TABLE_VALUE_OFFSET:
+                                   creatures.KIND_TABLE + 8 * kind + creatures.KIND_TABLE_VALUE_OFFSET + 4], 'big')
+        assert value & 0xFFFF0000 == 0, kind
+
+
+# --- boundary: gods_sega.boundary.kind_frame_offset_plan over every retained fixture ----------------
+
+@needs_kind_frame_census
+@pytest.mark.parametrize('fixture', KIND_FRAME_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_kind_frame_offset_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.kind_frame_offset_plan(machine, registers)
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_kind_frame_offset_candidate_names_are_explicit():
+    assert recovery.Candidate('creature-frame-offset').gate_pcs == (boundary.KIND_FRAME_OFFSET_ENTRY,)
+    assert boundary.KIND_FRAME_OFFSET_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    # D2, not the generic D0 register mutant: this leaf's own D0 is dispatch scratch it fully
+    # overwrites from a moveq before ever using it, dead by the time any caller could read it back.
+    assert recovery.Candidate('creature-frame-offset-mutant-result').mutation is recovery._mutate_kind_frame_offset
+
+
+@needs_reference
+def test_kind_frame_offset_candidate_matches_the_reference_and_its_mutant_faults_the_machine():
+    # D2 feeds a still-unrecovered chain (00A922 -> ... -> 00126A's own sprite emitter) that turns it
+    # into a table offset large enough that +1 here reaches unmapped memory a few calls downstream --
+    # an M68000 address error, not a clean value mismatch (the SAME class state 22/23's own mutants
+    # hit): a real consequence of the corruption, not a control failure, and history-verify's own
+    # crash-tolerant comparison would report it as DIVERGENCE the same way.
+    state = Path('artifacts/gods/evidence/main/boundary-12000.state')
+    if not state.is_file():
+        pytest.skip('no local boundary-12000.state reference')
+    report = segment_verify.check(state, game=GODS, frames=300, candidate='creature-frame-offset', reference=EVIDENCE)
+    assert report['status'] == 'PASS', report
+    if report['candidate_hits'] == 0:
+        pytest.skip('creature-frame-offset never hits in this window')
+    try:
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-frame-offset-mutant-result',
+                                      reference=EVIDENCE)
+    except NativeError as error:
+        assert 'address error' in str(error).lower(), error
+        return
+    assert mutant['status'] == 'DIVERGENCE', mutant

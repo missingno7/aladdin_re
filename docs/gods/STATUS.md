@@ -249,6 +249,23 @@ below, has the count and the milestone tree numbers).
   found while scoping them (six new unrecovered helpers `00A578`'s own
   spawn-init loop and `00A772`'s own tail call into, past `009D6C` and the
   kind table).
+- **The candidate `creature-frame-offset`** (`src/gods_sega/recovery.py`):
+  a single gate at `00AA50`, one of `00A772`'s own three unconditional
+  callees (18 Sep, `docs/gods/blockers/2026-09-18-00A578.md`'s own
+  Progress) -- the creature's own per-kind, per-frame animation offset,
+  reached both from `00A772`'s own `$f38a.w` "moving" arm and from inside
+  the still-unrecovered ground/fall kind handlers.  Twelve instructions,
+  RAM/ROM-read only, no store, ONE unconditional path (no branch at all)
+  on every one of 19,798 occurrences across the four recordings that
+  reach it.  Milestone tree PASS on those four (18 Sep,
+  `artifacts/gods/verify-creature-frame-offset-2026-09-18`, bit-exact);
+  the fifth recording never reaches it at all, honestly `NOT_EXERCISED`.
+  Mutant `creature-frame-offset-mutant-result` (D2 off by one) faults the
+  M68000 with an address error a few calls into the still-unrecovered
+  chain its own result feeds -- the same "real consequence of the
+  corruption" class states 22/23's own mutants hit, not a control
+  failure.  `00A922` and `00B944` (the remaining two of `00A772`'s own
+  unconditional callees) are the next bites.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 

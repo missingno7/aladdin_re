@@ -17,7 +17,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
-                       LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
+                       KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
@@ -25,7 +25,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        animation_step_plan, attack_update_plan, camera_follow_plan,
                        collision_gate_plan, contact_consume_primary_plan, contact_consume_secondary_plan, contact_search_plan,
                        countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
-                       footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
+                       footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, kind_frame_offset_plan, launch_plan, message_gate_plan,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_state_plan, player_tail_plan, proximity_plan,
                        record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state2_plan, state10_plan, state3_plan, state4_plan, state5_plan, state6_plan, state8_plan, state9_plan, state11_plan, state12_plan, state13_plan, state14_plan, state16_plan, state17_plan, state18_plan, state19_plan, state21_plan, state22_plan, state23_plan, state26_plan, state27_plan, state28_plan, static_emit_plan, string_copy_plan, table_reset_plan,
@@ -155,6 +155,20 @@ def _mutate_state14_counter(plan: AtomicPlan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_kind_frame_offset(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00AA50: D2, the routine's own real result (pushed as 00A922's own
+    argument immediately after the call, and read directly by the ground/fall kind handlers), off by
+    one.  Not the generic _mutate_register (D0): this leaf's own D0 is dispatch scratch it fully
+    overwrites from a moveq before ever using it, dead by the time any caller could read it back.
+    Confirmed empirically (18 Sep): this control faults the M68000 with an address error deep in the
+    still-unrecovered chain D2 feeds (00A922 -> ... -> 00126A's own sprite emitter), the same "real
+    consequence of the corruption, not a control failure" class states 22/23's own mutants hit --
+    history-verify's own crash-tolerant comparison reports it as DIVERGENCE the same way."""
+    registers = dict(plan.registers)
+    registers['d2'] = (registers.get('d2', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
 def _mutate_player_state_counter(plan) -> AtomicPlan:
     """Negative control for the composed player state family (005700): STATE_COUNTER (D7) off by
     one, the same shape states 0/1/14's own mutants already draw -- every witnessed activation (100%
@@ -222,6 +236,7 @@ PLANNERS = {
     'action-clear-group': {ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
     'player-tail': {PLAYER_TAIL_ENTRY: player_tail_plan},
     'player-state': {PLAYER_STATE_ENTRY: player_state_plan},
+    'creature-frame-offset': {KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
     'contact-consume-secondary': {CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan},
@@ -475,7 +490,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # random cursor advance) rather than the tail-jump's own dead stack residue, so
              # _mutate_result's one-byte flip is genuinely observable.
              'creature-attack-mutant-result': ('creature-attack', _mutate_result),
-             'player-state-mutant-result': ('player-state', _mutate_player_state_counter)}
+             'player-state-mutant-result': ('player-state', _mutate_player_state_counter),
+             'creature-frame-offset-mutant-result': ('creature-frame-offset', _mutate_kind_frame_offset)}
 
 
 @dataclass

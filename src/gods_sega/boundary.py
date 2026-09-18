@@ -4434,6 +4434,59 @@ def attack_update_plan(machine, registers):
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers, last_pc=last_pc)
 
 
+# --- 00AA50: the creature's own per-kind, per-frame offset (game/creatures.py: kind_frame_offset) --
+#
+# One of 00A772's own unconditional callees (docs/gods/blockers/2026-09-18-00A578.md's own "Next
+# question"): reached both from 00A772's own $f38a.w "moving" arm (its own result fed straight to
+# the next unrecovered call, 00A922) and from inside the ground/fall kind handlers.  RAM/ROM-read
+# only, no store, one unconditional path -- confirmed across four recordings (19,798 real
+# occurrences, `census-00AA50-*`), not merely unexercised by branches: the ROM has none here.
+KIND_FRAME_OFFSET_ENTRY, KIND_FRAME_OFFSET_LAST_PC = 0x00AA50, 0x00AA74
+_KF_LEA = (8, 1)              # lea.l $a538(pc),a0
+_KF_LOAD_KIND = (12, 1)       # move.w $a(a5),d0
+_KF_DOUBLE = (12, 1)          # asl.w #3,d0
+_KF_LOAD_VALUE = (18, 1)      # move.l $4(a0,d0.w),d2
+_KF_ADD_STEP = (12, 1)        # add.w $4(a5),d2
+_KF_SHIFT_VALUE = (14, 1)     # asl.w #4,d2
+_KF_CLEAR_D0 = (4, 1)         # moveq #0,d0
+_KF_LOAD_FRAME = (12, 1)      # move.b $7(a4),d0
+_KF_SHIFT_FRAME = (14, 1)     # asl.w #4,d0
+_KF_LOAD_TABLE = (16, 1)      # movea.l $f188.w,a0
+_KF_ADD_DELTA = (14, 1)       # add.w (a0,d0.w),d2
+_KF_RTS = (16, 1)
+_KF_COST = _add(_KF_LEA, _KF_LOAD_KIND, _KF_DOUBLE, _KF_LOAD_VALUE, _KF_ADD_STEP, _KF_SHIFT_VALUE,
+               _KF_CLEAR_D0, _KF_LOAD_FRAME, _KF_SHIFT_FRAME, _KF_LOAD_TABLE, _KF_ADD_DELTA, _KF_RTS)
+
+
+def kind_frame_offset_plan(machine, registers):
+    """00AA50: pure RAM/ROM reads, one unconditional path, no store -- the plan is just the exit
+    register file (d0, d2, a0) and the cost; nothing else changes."""
+    from .game import creatures
+    if registers['pc'] != KIND_FRAME_OFFSET_ENTRY:
+        raise UnsupportedCandidate('kind frame offset planner needs the machine parked at 00AA50')
+    sr = registers['sr']
+    read = _reader(machine)
+    type_ptr, instance_ptr = registers['a4'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
+    result = creatures.kind_frame_offset(read, type_ptr, instance_ptr)
+    cycles, instructions = _KF_COST
+    # add.w (a0,d0.w),d2 (the final instruction before rts) is the last flag-setter; X is set with C.
+    exit_sr = _add_sr(sr, result['offset'], result['delta'], 2)
+    frame_table = read(creatures.FRAME_TABLE_PTR, 4) & 0xFFFFFFFF
+    exit_registers = {
+        'd0': ((result['frame'] << 4) & 0xFFFF),                      # moveq #0,d0 clears the upper half fully
+        'd2': result['d2'] & 0xFFFFFFFF,                               # the ROM kind table's own +4 long is
+                                                                        # always upper-zero (confirmed from the
+                                                                        # ROM, all eight entries), so the full
+                                                                        # 32-bit exit equals the 16-bit result
+        'a0': frame_table,
+        'a7': (registers['a7'] + 4) & 0xFFFFFFFF,
+        'pc': _return(machine, registers['a7'] & 0xFFFFFF),
+        'sr': exit_sr,
+    }
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
+                      last_pc=KIND_FRAME_OFFSET_LAST_PC)
+
+
 # --- 0044C0/004550: the trail check (game/trail.py) -- event kind 6 ---------------------------------
 #
 # Raised the same way kind 3 (00462C) is: the tile scan's own preamble (0077BE-007876) jsr's straight
