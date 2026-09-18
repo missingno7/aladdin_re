@@ -2,7 +2,7 @@
 
 Current state only.  The per-region record is `ledger.md`; the iteration
 recipe is `grinder-protocol.md`; the worker prompt is `grinder-goal.md`.
-Last updated 17 September 2026.
+Last updated 18 September 2026.
 
 ## The cartridge
 
@@ -309,8 +309,37 @@ below, has the count and the milestone tree numbers).
   standalone gate): 107,519 frames total, 19,779 hits, 19 fallbacks (all
   `ADAPTER_REFUSALS`); the fifth recording (`ca2b703b6fd5`) never reaches
   `00A922` at all, honestly `NOT_EXERCISED` (0 retained fixtures in its
-  own census, matching).  The witnessed kind handlers and their callees
-  are the next bite, then `00A772` as the family and `00A578` as the walk.
+  own census, matching).
+- **The candidate `creature-grid-cell`** (`src/gods_sega/recovery.py`): a
+  single gate at `00AA38`, the first of the six further callees the six
+  witnessed kind handlers need (19 Sep,
+  `docs/gods/blockers/2026-09-18-00A578.md`'s own Decision).  Byte-for-byte
+  `game.grid.grid_cell_at`'s own arithmetic (0063FA/010CBC's shared shape),
+  a third call site over the creature instance's own POSITION_X/POSITION_Y
+  instead of the fixed words or a caller's D0/D1 -- confirmed identical,
+  not merely similar.  One unconditional path, no branch, no store, no
+  seam.  Milestone tree PASS on four of the five leaves
+  (`artifacts/gods/verify-creature-grid-cell-leaves-2026-09-18`, standalone
+  gate): 107,519 frames total, 1,283 hits, 0 fallbacks; `ca2b703b6fd5`
+  honestly `NOT_EXERCISED`, matching every other creature-family leaf.
+- **The candidate `ground-edge-test`** (`src/gods_sega/recovery.py`): a
+  single gate at `00AD68`, the second of the six further callees.  A
+  two-cell test over the grid table's own bytes at the address
+  `creature-grid-cell` leaves in A1, gated by the creature's own
+  POSITION_X low 5 bits; only the two non-matching arms (D1=0) are
+  witnessed -- the two arms where the flag actually matches (D1=1) are
+  real ROM, declined.  `--perturb-upper-halves` caught a real defect (the
+  routine's own `moveq #0,d1` clears the whole 32-bit register, not the
+  low word the plan first assumed).  Milestone tree PASS on four of the
+  five leaves (`artifacts/gods/verify-ground-edge-test-leaves-2026-09-18`,
+  standalone gate): 107,519 frames total, 394 hits, 0 fallbacks;
+  `ca2b703b6fd5` honestly `NOT_EXERCISED`.  Both kept out of
+  `camera-sprites` for the same reason the other creature-subsystem
+  leaves are.  Next: `00ACA0`/`00AD88` (the ground-contact kind handlers,
+  now unblocked -- both further callees they need are recovered), then
+  `00AE6C`/`00AED4` (the fall kind handlers, same two callees), then
+  `00AA76`/`00AB50` (need `00AF3C`/`00AF52` first), then `00A772` as the
+  family and `00A578` as the walk.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 

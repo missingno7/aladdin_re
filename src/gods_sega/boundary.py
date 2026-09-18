@@ -5031,6 +5031,104 @@ def kind_frame_offset_plan(machine, registers):
                       last_pc=KIND_FRAME_OFFSET_LAST_PC)
 
 
+# --- 00AA38: the creature's own grid-cell lookup (game/creatures.py: creature_grid_cell) -------------
+#
+# Byte-for-byte 0063FA's own arithmetic (game.grid.grid_cell_at), parameterised on the creature's own
+# POSITION_X/POSITION_Y instead of the fixed GRID_X/GRID_Y (0063FA) or a caller's D0/D1 (010CBC).  One
+# of the six further callees the ground/fall kind handlers need
+# (docs/gods/blockers/2026-09-18-00A578.md).  RAM/ROM-read only, one unconditional path, no store; cost
+# from the tracer (artifacts/gods/evidence/census-00AA38-*).
+CREATURE_GRID_CELL_ENTRY, CREATURE_GRID_CELL_LAST_PC = 0x00AA38, 0x00AA4E
+_CGC_LEA = (8, 1)             # lea.l $885e.w,a1
+_CGC_LOAD_X = (8, 1)          # move.w (a5),d0
+_CGC_LOAD_Y = (12, 1)         # move.w $2(a5),d1
+_CGC_MASK_Y = (8, 1)          # andi.w #$fff0,d1
+_CGC_ASR_X = (16, 1)          # asr.w #5,d0
+_CGC_ASL_Y = (12, 1)          # asl.w #3,d1
+_CGC_ADD_X = (8, 1)           # adda.w d0,a1 (address register: no flags)
+_CGC_ADD_Y = (8, 1)           # adda.w d1,a1 (address register: no flags)
+_CGC_RTS = (16, 1)
+_CGC_COST = _add(_CGC_LEA, _CGC_LOAD_X, _CGC_LOAD_Y, _CGC_MASK_Y, _CGC_ASR_X, _CGC_ASL_Y,
+                _CGC_ADD_X, _CGC_ADD_Y, _CGC_RTS)
+
+
+def creature_grid_cell_plan(machine, registers):
+    """00AA38: pure RAM/ROM reads, one unconditional path, no store; the last flag-setter is
+    asl.w #3,d1 (both adda.w that follow leave CCR untouched, same as grid_cell_plan's own asl)."""
+    from .game import creatures
+    if registers['pc'] != CREATURE_GRID_CELL_ENTRY:
+        raise UnsupportedCandidate('creature grid cell planner needs the machine parked at 00AA38')
+    sr = registers['sr']
+    read = _reader(machine)
+    instance_ptr = registers['a5'] & 0xFFFFFF
+    result = creatures.creature_grid_cell(read, instance_ptr)
+    exit_sr = _asl_sr(sr, result['row_source'], 3, 2)
+    d0 = (registers['d0'] & 0xFFFF0000) | result['d0']
+    d1 = (registers['d1'] & 0xFFFF0000) | result['d1']
+    sp = registers['a7']
+    return AtomicPlan(cycles=_CGC_COST[0], instructions=_CGC_COST[1], writes=(),
+                      registers={'d0': d0, 'd1': d1, 'a1': result['a1'],
+                                 'a7': (sp + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp & 0xFFFFFF), 'sr': exit_sr},
+                      last_pc=CREATURE_GRID_CELL_LAST_PC)
+
+
+# --- 00AD68: the ground-edge test (game/creatures.py: ground_edge_test) ------------------------------
+#
+# The second of the six further callees.  Cost per witnessed arm from the tracer
+# (artifacts/gods/evidence/census-00AD68-*); 'cell-low' and 'cell-high' (the flag actually matches) are
+# real ROM, declined, unwitnessed by any of the four recordings that reach this leaf.
+GROUND_EDGE_TEST_ENTRY, GROUND_EDGE_TEST_LAST_PC = 0x00AD68, 0x00AD86
+_GET_MOVEQ_D1 = (4, 1)            # moveq #0,d1
+_GET_CMP_LOW = (12, 1)            # cmpi.b #1,(a1)
+_GET_BEQ_LOW = {True: (10, 1), False: (8, 1)}     # beq.b $ad84 -- taken: 'cell-low', unwitnessed
+_GET_LOAD_X = (8, 1)              # move.w (a5),d0
+_GET_MASK_X = (8, 1)              # andi.w #$1f,d0
+_GET_CMP_EDGE = (8, 1)            # cmpi.w #8,d0
+_GET_BLT_EDGE = {True: (10, 1), False: (8, 1)}    # blt.b $ad86 -- taken: 'no-match-near-edge'
+_GET_CMP_HIGH = (16, 1)           # cmpi.b #1,$1(a1)
+_GET_BNE_HIGH = {True: (10, 1), False: (8, 1)}    # bne.b $ad86 -- taken: 'no-match'; not taken: 'cell-high', unwitnessed
+_GET_RTS = (16, 1)
+_GET_NEAR_EDGE_COST = _add(_GET_MOVEQ_D1, _GET_CMP_LOW, _GET_BEQ_LOW[False], _GET_LOAD_X, _GET_MASK_X,
+                          _GET_CMP_EDGE, _GET_BLT_EDGE[True], _GET_RTS)
+_GET_NO_MATCH_COST = _add(_GET_MOVEQ_D1, _GET_CMP_LOW, _GET_BEQ_LOW[False], _GET_LOAD_X, _GET_MASK_X,
+                         _GET_CMP_EDGE, _GET_BLT_EDGE[False], _GET_CMP_HIGH, _GET_BNE_HIGH[True], _GET_RTS)
+
+
+def ground_edge_test_plan(machine, registers):
+    """00AD68: the witnessed arms only ('cell-low'/'cell-high' -- the flag itself found -- decline).
+
+    'no-match-near-edge': the last flag-setter is cmpi.w #8,d0 (the low-5-bits test).
+    'no-match': the last flag-setter is cmpi.b #1,$1(a1) (the second cell byte test).
+    """
+    from .game import creatures
+    if registers['pc'] != GROUND_EDGE_TEST_ENTRY:
+        raise UnsupportedCandidate('ground edge test planner needs the machine parked at 00AD68')
+    sr = registers['sr']
+    read = _reader(machine)
+    cell_addr = registers['a1'] & 0xFFFFFF
+    x = read(registers['a5'] & 0xFFFFFF, 2) & 0xFFFF
+    result = creatures.ground_edge_test(read, cell_addr, x)
+    if result['arm'] in ('cell-low', 'cell-high'):
+        raise UnsupportedCandidate(f"ground edge test arm not witnessed by a recording: {result['arm']}")
+    d0 = (registers['d0'] & 0xFFFF0000) | result['x_low5']
+    # moveq #0,d1 (the routine's own first instruction, unconditional) clears the WHOLE 32-bit
+    # register, and the only other write to it (moveq #1,d1, the declined 'found' arms) does too --
+    # unlike the word-only ops in this routine's own D0, D1's own upper half is never preserved from
+    # entry (--perturb-upper-halves caught this: 18 Sep, real defect, not a guess).
+    d1 = result['d1'] & 0xFFFFFFFF
+    sp = registers['a7']
+    if result['arm'] == 'no-match-near-edge':
+        cost = _GET_NEAR_EDGE_COST
+        exit_sr = _cmp_sr(sr, result['x_low5'], 8, 2)
+    else:
+        cost = _GET_NO_MATCH_COST
+        exit_sr = _cmp_sr(sr, result['high'], 1, 1)
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=(),
+                      registers={'d0': d0, 'd1': d1, 'a7': (sp + 4) & 0xFFFFFFFF,
+                                 'pc': _return(machine, sp & 0xFFFFFF), 'sr': exit_sr},
+                      last_pc=GROUND_EDGE_TEST_LAST_PC)
+
+
 # --- 0044C0/004550: the trail check (game/trail.py) -- event kind 6 ---------------------------------
 #
 # Raised the same way kind 3 (00462C) is: the tile scan's own preamble (0077BE-007876) jsr's straight

@@ -18,6 +18,7 @@ import pathfacts
 import segment_verify
 
 from genesis_re.machine import Machine, NativeError
+from genesis_re.seam import UnsupportedCandidate
 from gods_sega import boundary, recovery
 from gods_sega.game import creatures, effects, projectiles, timers
 from gods_sega.profile import GODS
@@ -31,6 +32,14 @@ needs_reference = pytest.mark.skipif(not (EVIDENCE / 'reference.json').exists() 
 KIND_FRAME_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AA50-*/00AA50-entry-p*.state'))
 needs_kind_frame_census = pytest.mark.skipif(not KIND_FRAME_FIXTURES or not GODS.rom_path.is_file(),
                                              reason='no local census of 00AA50')
+
+GRID_CELL_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AA38-*/00AA38-entry-p*.state'))
+needs_grid_cell_census = pytest.mark.skipif(not GRID_CELL_FIXTURES or not GODS.rom_path.is_file(),
+                                            reason='no local census of 00AA38')
+
+GROUND_EDGE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AD68-*/00AD68-entry-p*.state'))
+needs_ground_edge_census = pytest.mark.skipif(not GROUND_EDGE_FIXTURES or not GODS.rom_path.is_file(),
+                                              reason='no local census of 00AD68')
 
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
@@ -261,3 +270,121 @@ def test_kind_frame_offset_candidate_matches_the_reference_and_its_mutant_faults
         assert 'address error' in str(error).lower(), error
         return
     assert mutant['status'] == 'DIVERGENCE', mutant
+
+
+# --- 00AA38: the creature's own grid-cell lookup (docs/gods/blockers/2026-09-18-00A578.md's own "six
+# further callees") -- byte-for-byte grid.grid_cell_at's own arithmetic, over the creature's own
+# POSITION_X/POSITION_Y.  RAM/ROM-read only, one unconditional path -- 1,283 occurrences across the
+# four recordings that reach it (`ca2b703b6fd5` never does, matching every other creature-family leaf).
+
+def test_creature_grid_cell_matches_grid_cell_at():
+    from gods_sega.game import grid
+    values = {(INSTANCE_PTR + creatures.POSITION_X, 2): 0x204, (INSTANCE_PTR + creatures.POSITION_Y, 2): 0x40}
+    result = creatures.creature_grid_cell(_reader(values), INSTANCE_PTR)
+    expected = grid.grid_cell_at(0x204, 0x40)
+    assert result['a1'] == expected['address'] & 0xFFFFFFFF
+    assert result['d0'] == expected['column'] & 0xFFFF and result['d1'] == expected['row'] & 0xFFFF
+    assert result['row_source'] == expected['row_source']
+
+
+@needs_grid_cell_census
+@pytest.mark.parametrize('fixture', GRID_CELL_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_creature_grid_cell_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.creature_grid_cell_plan(machine, registers)
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_creature_grid_cell_candidate_names_are_explicit():
+    assert recovery.Candidate('creature-grid-cell').gate_pcs == (boundary.CREATURE_GRID_CELL_ENTRY,)
+    assert boundary.CREATURE_GRID_CELL_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    # A1 (the address), not the generic D0 register mutant: D0/D1 are dead residue at both real call
+    # sites (00ACA0/00AD88's own tails immediately overwrite D0, and neither reads D1).
+    assert recovery.Candidate('creature-grid-cell-mutant-result').mutation is recovery._mutate_creature_grid_cell
+
+
+@needs_reference
+def test_creature_grid_cell_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in GRID_CELL_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='creature-grid-cell', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00AA38 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-grid-cell-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00AD68: the ground-edge test -- the second of the six further callees.  Only two of its four real
+# arms are witnessed (both returning d1=0); 'cell-low'/'cell-high' (the flag actually found) decline.
+
+def test_ground_edge_test_low_byte_match_declines_by_name_when_used_as_semantics():
+    result = creatures.ground_edge_test(_reader({(0xFF9000, 1): 1}), 0xFF9000, 0)
+    assert result == {'arm': 'cell-low', 'd1': 1}
+
+
+def test_ground_edge_test_near_edge_gate_blocks_the_second_test():
+    result = creatures.ground_edge_test(_reader({(0xFF9000, 1): 0, (0xFF9001, 1): 1}), 0xFF9000, 0x204)
+    assert result['arm'] == 'no-match-near-edge' and result['d1'] == 0 and result['x_low5'] == 4
+
+
+def test_ground_edge_test_high_byte_match_past_the_gate():
+    result = creatures.ground_edge_test(_reader({(0xFF9000, 1): 0, (0xFF9001, 1): 1}), 0xFF9000, 0x208)
+    assert result['arm'] == 'cell-high' and result['d1'] == 1
+
+
+def test_ground_edge_test_no_match_past_the_gate():
+    result = creatures.ground_edge_test(_reader({(0xFF9000, 1): 0, (0xFF9001, 1): 0}), 0xFF9000, 0x208)
+    assert result['arm'] == 'no-match' and result['d1'] == 0
+
+
+@needs_ground_edge_census
+@pytest.mark.parametrize('fixture', GROUND_EDGE_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_ground_edge_test_plan_reproduces_every_witnessed_arm(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.ground_edge_test_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'ground edge test' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_ground_edge_test_candidate_names_are_explicit():
+    assert recovery.Candidate('ground-edge-test').gate_pcs == (boundary.GROUND_EDGE_TEST_ENTRY,)
+    assert boundary.GROUND_EDGE_TEST_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    # D1 (the 0/1 outcome), XOR 1 not a blind +1: both are always exactly 0 or 1 (contact_search's
+    # own reasoning), and D0 (x_low5) is dead residue at both real call sites.
+    assert recovery.Candidate('ground-edge-test-mutant-result').mutation is recovery._mutate_ground_edge_outcome
+
+
+@needs_reference
+def test_ground_edge_test_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in GROUND_EDGE_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='ground-edge-test', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00AD68 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='ground-edge-test-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'

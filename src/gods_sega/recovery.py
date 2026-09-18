@@ -13,19 +13,19 @@ from dataclasses import dataclass, field
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
-                       ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
+                       ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
-                       EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
+                       EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, GROUND_EDGE_TEST_ENTRY, HAZARD_TICK_ENTRY,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
-                       animation_step_plan, attack_update_plan, camera_follow_plan, creature_pickup_check_plan, event_consume_plan,
+                       animation_step_plan, attack_update_plan, camera_follow_plan, creature_grid_cell_plan, creature_pickup_check_plan, event_consume_plan,
                        collision_gate_plan, contact_consume_primary_plan, contact_consume_secondary_plan, contact_search_plan,
                        countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
-                       footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, kind_frame_offset_plan, launch_plan, message_gate_plan,
+                       footprint_stamp_plan, condition_plan, grid_cell_plan, ground_edge_test_plan, hazard_tick_plan, kind_frame_offset_plan, launch_plan, message_gate_plan,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_state_plan, player_tail_plan, proximity_plan,
                        record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state2_plan, state10_plan, state3_plan, state4_plan, state5_plan, state6_plan, state8_plan, state9_plan, state11_plan, state12_plan, state13_plan, state14_plan, state16_plan, state17_plan, state18_plan, state19_plan, state21_plan, state22_plan, state23_plan, state26_plan, state_26_plan, state27_plan, state28_plan, static_emit_plan, string_copy_plan, table_reset_plan,
@@ -121,6 +121,28 @@ def _mutate_address(plan: AtomicPlan) -> AtomicPlan:
     in the idle window the caller has long overwritten it, and the mutant passed.)"""
     registers = dict(plan.registers)
     registers['a0'] = (registers.get('a0', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_creature_grid_cell(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00AA38: A1 (the grid-cell address, the routine's own real output) off by
+    one.  D0/D1 are dead residue at both real call sites (00ACA0/00AD88's own tails immediately
+    overwrite D0 from (a5) before ever reading it, and neither reads D1 at all): the same "flip the
+    address a caller dereferences" shape grid-cell's own mutant (_mutate_address) already uses, on A1
+    instead of A0 since that is this routine's own output register."""
+    registers = dict(plan.registers)
+    registers['a1'] = (registers.get('a1', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_ground_edge_outcome(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00AD68: D1 (0 or 1, the routine's only real output -- both real call sites,
+    00ACA0's and 00AD88's own tails, follow the bsr immediately with tst.w d1/beq) XOR 1, the same
+    "flip a boolean 0/1 outcome, not a blind +1" shape contact_search's own mutant uses (a blind +1
+    could stay nonzero either way).  D0 (x_low5) is dead residue at both call sites."""
+    registers = dict(plan.registers)
+    if 'd1' in registers:
+        registers['d1'] = registers['d1'] ^ 1
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
@@ -237,6 +259,8 @@ PLANNERS = {
     'player-tail': {PLAYER_TAIL_ENTRY: player_tail_plan},
     'player-state': {PLAYER_STATE_ENTRY: player_state_plan},
     'creature-frame-offset': {KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan},
+    'creature-grid-cell': {CREATURE_GRID_CELL_ENTRY: creature_grid_cell_plan},
+    'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
     'contact-consume-secondary': {CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan},
@@ -518,7 +542,9 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # save/restore -- clobber all of them before anything reads them back); the real,
              # observable effect is the found arm's own five stores (the instance's own event fields,
              # the object table's own consumed pair), so _mutate_result's one-byte flip is the control.
-             'event-consume-mutant-result': ('event-consume', _mutate_result)}
+             'event-consume-mutant-result': ('event-consume', _mutate_result),
+             'creature-grid-cell-mutant-result': ('creature-grid-cell', _mutate_creature_grid_cell),
+             'ground-edge-test-mutant-result': ('ground-edge-test', _mutate_ground_edge_outcome)}
 
 
 @dataclass

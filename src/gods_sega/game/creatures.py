@@ -339,3 +339,56 @@ def event_consume(read, type_ptr, instance_ptr):
               (instance_ptr + EVENT_KIND) & 0xFFFFFF: (ekind, 2), (obj_found + 4) & 0xFFFFFF: (0xFFFF, 2),
               (obj_found + 6) & 0xFFFFFF: (0, 2)}
     return {**base, 'arm': 'found', 'stores': stores, 'obj_found': obj_found}
+
+
+# --- 00AA38: the creature's own grid-cell lookup, one of the six further callees the ground/fall kind
+# handlers need (docs/gods/blockers/2026-09-18-00A578.md's own recon: "00AA38, a grid/position-to-tile-
+# address computation, structurally similar to game.grid.grid_cell_at").  Confirmed identical, not
+# merely similar: byte-for-byte 0063FA/010CBC's own shared arithmetic (game.grid.grid_cell_at), read
+# from the creature's own tracked position (POSITION_X/POSITION_Y) instead of a caller-supplied D0/D1
+# or the fixed GRID_X/GRID_Y -- a third call site of the same shape, the record convention the
+# grinder-protocol names as no reason to defer.  RAM/ROM-read only, no store, ONE unconditional path
+# on every one of 1,283 occurrences across the four recordings that reach it (census-00AA38-*,
+# `ca2b703b6fd5` never reaches 00A578's own creature slots at all, matching the other creature-family
+# leaves).  Only its own output register differs from 010CBC's (A1 here, A0 there).
+
+def creature_grid_cell(read, instance_ptr):
+    """00AA38: grid.grid_cell_at's own arithmetic, over this creature's own POSITION_X/POSITION_Y."""
+    from .grid import grid_cell_at
+    instance_ptr &= 0xFFFFFF
+    x = read(instance_ptr + POSITION_X, 2) & 0xFFFF
+    y = read(instance_ptr + POSITION_Y, 2) & 0xFFFF
+    result = grid_cell_at(x, y)
+    return {'a1': result['address'] & 0xFFFFFFFF, 'd0': result['column'] & 0xFFFF,
+            'd1': result['row'] & 0xFFFF, 'row_source': result['row_source']}
+
+
+# --- 00AD68: the second of the six further callees -- a two-cell test over the grid table's own bytes
+# at the address 00AA38/creature_grid_cell leaves in A1, gated by the SAME creature's own POSITION_X
+# low 5 bits (docs/gods/blockers/2026-09-18-00A578.md's own recon: "00AD68, a small collision-adjacent
+# leaf").  What the flag byte itself means is not established this session -- the name is what the
+# arithmetic supports (a per-cell marker the ground/fall kind handlers test), not more.  Census over
+# all four exercising recordings (census-00AD68-*) retains exactly two real path classes, both ending
+# with the result 0: the routine's own two "found" arms (the cell's low byte itself is 1, or -- past
+# the low-5 gate -- its neighbour is) are real ROM, declined, unwitnessed by any recording.
+GROUND_EDGE_LOW_BYTE = 0                # cell_addr byte: tested unconditionally first
+GROUND_EDGE_HIGH_BYTE = 1               # cell_addr+1 byte: tested only when x's own low 5 bits are >= 8
+GROUND_EDGE_X_GATE = 0x8                # the low-5-bits threshold that admits the second test
+GROUND_EDGE_FLAG = 1                    # the byte value either test matches
+
+
+def ground_edge_test(read, cell_addr, x):
+    """00AD68: tests the grid cell's own low byte, then -- only when ``x``'s own low 5 bits are >= 8 --
+    its neighbour, for ``GROUND_EDGE_FLAG``.  Returns the arm and ``d1`` (0 or 1, the routine's only
+    real output); 'cell-low' and 'cell-high' (the flag actually found) are real ROM, unwitnessed."""
+    cell_addr &= 0xFFFFFF
+    low = read(cell_addr, 1) & 0xFF
+    if low == GROUND_EDGE_FLAG:
+        return {'arm': 'cell-low', 'd1': 1}
+    x_low5 = x & 0x1F
+    if x_low5 < GROUND_EDGE_X_GATE:
+        return {'arm': 'no-match-near-edge', 'd1': 0, 'x_low5': x_low5}
+    high = read((cell_addr + GROUND_EDGE_HIGH_BYTE) & 0xFFFFFF, 1) & 0xFF
+    if high == GROUND_EDGE_FLAG:
+        return {'arm': 'cell-high', 'd1': 1}
+    return {'arm': 'no-match', 'd1': 0, 'x_low5': x_low5, 'high': high}
