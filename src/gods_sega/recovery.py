@@ -16,13 +16,13 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
-                       EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FALL_KIND_UPDATE_ENTRY, FALL_KIND_UPDATE_MIRROR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, GROUND_CONTACT_UPDATE_ENTRY, GROUND_CONTACT_UPDATE_MIRROR_ENTRY, GROUND_EDGE_TEST_ENTRY, HAZARD_TICK_ENTRY,
+                       AF3C_ENTRY, EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FALL_KIND_UPDATE_ENTRY, FALL_KIND_UPDATE_MIRROR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, GROUND_CONTACT_UPDATE_ENTRY, GROUND_CONTACT_UPDATE_MIRROR_ENTRY, GROUND_EDGE_TEST_ENTRY, HAZARD_TICK_ENTRY,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
-                       animation_step_plan, attack_update_plan, camera_follow_plan, creature_grid_cell_plan, creature_pickup_check_plan, event_consume_plan,
+                       animation_step_plan, attack_update_plan, camera_follow_plan, creature_grid_cell_plan, creature_grid_cell_d0d1_plan, creature_pickup_check_plan, event_consume_plan,
                        collision_gate_plan, contact_consume_primary_plan, contact_consume_secondary_plan, contact_search_plan,
                        countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan, fall_kind_update_plan, fall_kind_update_mirror_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, ground_contact_update_plan, ground_contact_update_mirror_plan, ground_edge_test_plan, hazard_tick_plan, kind_frame_offset_plan, launch_plan, message_gate_plan,
@@ -146,6 +146,15 @@ def _mutate_ground_edge_outcome(plan: AtomicPlan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_creature_grid_cell_d0d1(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00AF3C: A2 (the grid-cell address, the routine's own real output -- both
+    real call sites, 00AA76's and 00AB50's own tails, dereference it immediately) off by one, the same
+    "flip the address a caller dereferences" shape creature_grid_cell's own mutant already uses."""
+    registers = dict(plan.registers)
+    registers['a2'] = (registers.get('a2', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
 def _mutate_state0_counter(plan: AtomicPlan) -> AtomicPlan:
     """Negative control for state 0: the same shape as `_mutate_state1_counter`, for the same reason
     (its own 'shared-unchanged'/'shared-reset' arms leave the plan's own semantic stores empty)."""
@@ -260,6 +269,7 @@ PLANNERS = {
     'player-state': {PLAYER_STATE_ENTRY: player_state_plan},
     'creature-frame-offset': {KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan},
     'creature-grid-cell': {CREATURE_GRID_CELL_ENTRY: creature_grid_cell_plan},
+    'creature-grid-cell-d0d1': {AF3C_ENTRY: creature_grid_cell_d0d1_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
@@ -345,7 +355,8 @@ PLANNERS = {
                        EVENT_CONSUME_ENTRY: event_consume_plan, CREATURE_PICKUP_CHECK_ENTRY: creature_pickup_check_plan,
                        GROUND_CONTACT_UPDATE_ENTRY: ground_contact_update_plan,
                        GROUND_CONTACT_UPDATE_MIRROR_ENTRY: ground_contact_update_mirror_plan,
-                       FALL_KIND_UPDATE_ENTRY: fall_kind_update_plan, FALL_KIND_UPDATE_MIRROR_ENTRY: fall_kind_update_mirror_plan},
+                       FALL_KIND_UPDATE_ENTRY: fall_kind_update_plan, FALL_KIND_UPDATE_MIRROR_ENTRY: fall_kind_update_mirror_plan,
+                       AF3C_ENTRY: creature_grid_cell_d0d1_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -568,7 +579,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'creature-ground-contact-mutant-result': ('creature-ground-contact', _mutate_result),
              'creature-ground-contact-mirror-mutant-result': ('creature-ground-contact-mirror', _mutate_result),
              'creature-fall-kind-mutant-result': ('creature-fall-kind', _mutate_result),
-             'creature-fall-kind-mirror-mutant-result': ('creature-fall-kind-mirror', _mutate_result)}
+             'creature-fall-kind-mirror-mutant-result': ('creature-fall-kind-mirror', _mutate_result),
+             'creature-grid-cell-d0d1-mutant-result': ('creature-grid-cell-d0d1', _mutate_creature_grid_cell_d0d1)}
 
 
 @dataclass

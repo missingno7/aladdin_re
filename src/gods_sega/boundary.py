@@ -5533,6 +5533,52 @@ def fall_kind_update_mirror_plan(machine, registers):
                            error_name='fall kind update mirror')
 
 
+# --- 00AF3C: the creature-kind-handler grid-cell lookup, D0/D1 convention (game/grid.py: grid_cell_at) -
+#
+# A FOURTH call site of the shared arithmetic 0063FA/010CBC/00AA38 all run (docs/gods/blockers/
+# 2026-09-18-00A578.md's own "Next question", 19 Sep): X/Y read from the caller's own D0/D1 (010CBC's
+# own convention, not the fixed words or a creature's own POSITION_X/Y), the address left in A2.  Pure:
+# no RAM read at all (D0/D1 are already loaded by the caller), one unconditional path, no store -- the
+# SAME 9-instruction, 84-cycle body 010CBC's own already-costed composition uses (`_CG_CALL`), extremely
+# hot (22,932 occurrences across the four exercising recordings).  Needed by 00AA76/00AB50 (the two
+# most-witnessed kind handlers) before either can be planned; both still declined by 00AF52's own
+# further, larger blocker (docs/gods/blockers/2026-09-18-00A578.md's own 19 September Progress).
+AF3C_ENTRY, AF3C_LAST_PC = 0x00AF3C, 0x00AF50
+_AF3C_LEA = (8, 1)             # lea.l $885e.w,a2
+_AF3C_MOVE_D2 = (4, 1)         # move.w d0,d2
+_AF3C_MOVE_D3 = (4, 1)         # move.w d1,d3
+_AF3C_MASK_D3 = (8, 1)         # andi.w #$fff0,d3
+_AF3C_ASR_D2 = (16, 1)         # asr.w #5,d2
+_AF3C_ASL_D3 = (12, 1)         # asl.w #3,d3
+_AF3C_ADD_D2 = (8, 1)          # adda.w d2,a2
+_AF3C_ADD_D3 = (8, 1)          # adda.w d3,a2
+_AF3C_RTS = (16, 1)
+_AF3C_COST = _add(_AF3C_LEA, _AF3C_MOVE_D2, _AF3C_MOVE_D3, _AF3C_MASK_D3, _AF3C_ASR_D2, _AF3C_ASL_D3,
+                  _AF3C_ADD_D2, _AF3C_ADD_D3, _AF3C_RTS)
+
+
+def creature_grid_cell_d0d1_plan(machine, registers):
+    """00AF3C: grid.grid_cell_at's own arithmetic, over the caller's own D0/D1 (the SAME shape 010CBC's
+    own already-composed body uses); pure, no RAM read, one unconditional path, no store."""
+    from .game import grid
+    if registers['pc'] != AF3C_ENTRY:
+        raise UnsupportedCandidate('creature grid cell (D0/D1) planner needs the machine parked at 00AF3C')
+    sr = registers['sr']
+    x = registers['d0'] & 0xFFFF
+    y = registers['d1'] & 0xFFFF
+    result = grid.grid_cell_at(x, y)
+    # asl.w #3,d3 is the last flag-setter (both adda.w that follow leave CCR untouched) -- the SAME
+    # formula creature_grid_cell_plan's own exit_sr already uses.
+    exit_sr = _asl_sr(sr, result['row_source'], 3, 2)
+    d2 = (registers['d2'] & 0xFFFF0000) | (result['column'] & 0xFFFF)
+    d3 = (registers['d3'] & 0xFFFF0000) | (result['row'] & 0xFFFF)
+    sp = registers['a7']
+    return AtomicPlan(cycles=_AF3C_COST[0], instructions=_AF3C_COST[1], writes=(),
+                      registers={'d2': d2, 'd3': d3, 'a2': result['address'] & 0xFFFFFFFF,
+                                 'a7': (sp + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp & 0xFFFFFF), 'sr': exit_sr},
+                      last_pc=AF3C_LAST_PC)
+
+
 # --- 0044C0/004550: the trail check (game/trail.py) -- event kind 6 ---------------------------------
 #
 # Raised the same way kind 3 (00462C) is: the tile scan's own preamble (0077BE-007876) jsr's straight

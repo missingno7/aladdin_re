@@ -33,6 +33,10 @@ KIND_FRAME_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AA50
 needs_kind_frame_census = pytest.mark.skipif(not KIND_FRAME_FIXTURES or not GODS.rom_path.is_file(),
                                              reason='no local census of 00AA50')
 
+AF3C_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AF3C-*/00AF3C-entry-p*.state'))
+needs_af3c_census = pytest.mark.skipif(not AF3C_FIXTURES or not GODS.rom_path.is_file(),
+                                       reason='no local census of 00AF3C')
+
 GRID_CELL_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AA38-*/00AA38-entry-p*.state'))
 needs_grid_cell_census = pytest.mark.skipif(not GRID_CELL_FIXTURES or not GODS.rom_path.is_file(),
                                             reason='no local census of 00AA38')
@@ -850,5 +854,57 @@ def test_fall_kind_update_mirror_candidate_matches_the_reference_and_its_mutant_
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-fall-kind-mirror-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00AF3C: a FOURTH call site of grid.grid_cell_at's own shared arithmetic (docs/gods/blockers/
+# 2026-09-18-00A578.md's own "Next question", 19 Sep) -- X/Y from the caller's own D0/D1 (010CBC's own
+# convention), the address left in A2.  Pure, no RAM read, one unconditional path, no store; needed by
+# 00AA76/00AB50 (still declined by 00AF52's own further, larger blocker).
+
+def test_creature_grid_cell_d0d1_reuses_grid_cell_at_with_no_wrapper():
+    # 00AF3C's own body is byte-for-byte grid_cell_at's own arithmetic (docs/gods/STATUS.md's own
+    # creature-family notes on 00AA38 already established this for a third call site; this is the
+    # fourth) -- there is no semantics wrapper of its own to unit-test beyond the boundary composing
+    # grid.grid_cell_at directly, checked here against a fixed input.
+    from gods_sega.game import grid
+    result = grid.grid_cell_at(0x204, 0x40)
+    assert result['address'] & 0xFFFFFF == grid.GRID_TABLE + (0x204 >> 5) + (((0x40 & 0xFFF0) << 3) & 0xFFFF) & 0xFFFFFF
+    assert result['column'] == 0x204 >> 5 and result['row_source'] == 0x40 & 0xFFF0
+
+
+@needs_af3c_census
+@pytest.mark.parametrize('fixture', AF3C_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_creature_grid_cell_d0d1_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.creature_grid_cell_d0d1_plan(machine, registers)
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_creature_grid_cell_d0d1_candidate_names_are_explicit():
+    assert recovery.Candidate('creature-grid-cell-d0d1').gate_pcs == (boundary.AF3C_ENTRY,)
+    assert boundary.AF3C_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('creature-grid-cell-d0d1-mutant-result').mutation is recovery._mutate_creature_grid_cell_d0d1
+
+
+@needs_reference
+def test_creature_grid_cell_d0d1_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in AF3C_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='creature-grid-cell-d0d1', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00AF3C within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-grid-cell-d0d1-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'
