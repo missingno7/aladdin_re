@@ -10360,3 +10360,81 @@ def state16_plan(machine, registers):
     exit_registers['sr'] = _logic_sr(sr, 1, 2)   # 00669E move.w #1,f192.w is the last flag-setter
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x0066A4)
+
+
+# --- 0074F0: state 2 -- a tiny three-arm leaf, the SAME shape as state 16's own "settle then
+# countdown" leaf.  Costed one instruction-block at a time from the tracer on real fixtures over
+# census-0074F0-* (all five recordings; 269 real path classes collapsing to exactly three real
+# terminal shapes).
+STATE2_ENTRY = 0x0074F0
+
+_S2_TEST = (12, 1)                           # 0074F0 tst.w ea20.w
+_S2_BPL = {True: (10, 1), False: (8, 1)}     # 0074F4 bpl.b -- taken(>=0): the counter arm (byte branch)
+_S2_TO3_TAIL = (16 + 10, 2)                  # 0074F6 move.w #3,f192.w; 0074FC bra.w
+_S2_COUNT = (4 + 8, 2)                       # 007500 addq.w #1,d7; 007502 cmpi.w #3,d7
+_S2_BLT = {True: (10, 1), False: (12, 1)}    # 007506 blt.w -- taken(<3): still counting (word branch)
+_S2_TO1_TAIL = (4 + 16 + 10, 3)              # 00750A moveq #6,d7; 00750C move.w #1,f192.w; 007512 bra.w
+
+
+def state2_plan(machine, registers):
+    """0074F0 (state 2): the player state machine's own dispatch table entry 2.  See
+    game.player's own module note above state2_step."""
+    from .game import player
+    if registers['pc'] != STATE2_ENTRY:
+        raise UnsupportedCandidate('state 2 planner needs the machine parked at 0074F0')
+    sr = registers['sr']
+    read = _reader(machine)
+    order = {}
+    exit_registers = {}
+
+    ea20 = read(player.EA20_WORD, 2)
+    result = player.state2_step(read, registers['d7'])
+    c, i = _S2_TEST
+    cycles, instructions = c, i
+    sr = _logic_sr(sr, ea20, 2)
+    negative = result['arm'] == 'transition-3'
+    c, i = _S2_BPL[not negative]
+    cycles += c
+    instructions += i
+
+    if negative:
+        c, i = _S2_TO3_TAIL
+        cycles += c
+        instructions += i
+        for a, b in _bytes(player.STATE_INDEX, player.STATE2_TO_STATE3, 2):
+            order[a] = b
+        sr = _logic_sr(sr, player.STATE2_TO_STATE3, 2)   # 0074F6's own move.w is the last flag-setter
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0074FC)
+
+    c, i = _S2_COUNT
+    cycles += c
+    instructions += i
+    counted = (registers['d7'] + 1) & 0xFFFF
+    sr = _add_sr(sr, registers['d7'], 1, 2)
+    sr = _cmp_sr(sr, counted, player.STATE2_COUNT_CAP, 2)   # 007502's own cmpi.w is the last flag-setter so far
+    still_counting = result['arm'] == 'counting'
+    c, i = _S2_BLT[still_counting]
+    cycles += c
+    instructions += i
+
+    if still_counting:
+        exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | result['d7']   # addq.w: a word op, upper half survives
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x007506)
+
+    c, i = _S2_TO1_TAIL
+    cycles += c
+    instructions += i
+    exit_registers['d7'] = result['d7']   # moveq #6,d7: a full 32-bit long move, clears the upper half
+    for a, b in _bytes(player.STATE_INDEX, player.STATE2_TO_STATE1, 2):
+        order[a] = b
+    sr = _logic_sr(sr, player.STATE2_TO_STATE1, 2)   # 00750C's own move.w is the last flag-setter
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x007512)

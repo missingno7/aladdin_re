@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with fifty-three gates armed, the camera follow step `002806`, the
+  original with fifty-four gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -179,8 +179,8 @@ one planner") is the next bite.
   `contact-search`, `contact-consume-primary`,
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
-  `state-26`, `state-8`, `state-13`, `state-12`, `state-16` and `state-11`
-  arm each alone.
+  `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11` and
+  `state-2` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -972,7 +972,8 @@ small leaf):
   (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
-  state-13, state-12, state-16, state-11 -- 10,134 of 13,488 activations (75%)
+  state-13, state-12, state-16, state-11, state-2 -- 10,301 of 13,488
+  activations (76%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1071,7 +1072,20 @@ small leaf):
   (`FFFFEA20 == -1`) was, again, invisible to the whole-history census
   (693 real path classes across all five recordings never landed on it)
   and needed the same targeted 120-frame `segment_verify` continuation
-  capture as state 12's own.
+  capture as state 12's own.  State 2 (`0074F0`, recovered 18 Sep) is
+  another tiny three-arm leaf, the SAME shape as state 16's own "settle
+  then countdown": `FFFFEA20 < 0` transitions straight to state 3;
+  otherwise a counter (`d7`) counts up and, once it reaches 3, forces
+  `d7` to 6 and transitions to state 1.  269 real path classes across
+  all five recordings collapse to exactly three real terminal shapes.
+  One real defect the FAST tier's own `--perturb-upper-halves` pass
+  caught (the plain sweep alone missed it, every witnessed `d7` already
+  having a clean upper half): the counting arm's own `addq.w` is a WORD
+  op, so the real ROM leaves `d7`'s own upper 16 bits untouched, but an
+  early draft returned the masked 16-bit result as the FULL 32-bit
+  register, clobbering it -- the transition arm's own `moveq`, by
+  contrast, is a real 32-bit LONG move and correctly clears the upper
+  half both ways.
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least

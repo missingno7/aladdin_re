@@ -1916,3 +1916,28 @@ def state11_ground_tail(read, f198_value):
         return {'arm': 'ground', 'cooldown_delta': None}
     half = excess_signed >> 1
     return {'arm': 'ground', 'cooldown_delta': half}
+
+
+# --- 0074F0: state 2 -- a tiny three-arm leaf, the SAME shape as state 16's own "settle then
+# countdown" leaf: `FFFFEA20 < 0` transitions straight to state 3; otherwise a counter (`d7`) counts
+# up and, once it reaches 3, forces `d7` to 6 and transitions to state 1.  No memory is read besides
+# `FFFFEA20`; `d7` is both read and written.  Costed one instruction-block at a time from the tracer
+# on real fixtures over `census-0074F0-*` (all five recordings; 269 real path classes collapsing to
+# exactly three real terminal shapes).
+STATE2_ENTRY = 0x0074F0
+STATE2_COUNT_CAP = 3
+STATE2_TO_STATE3 = 0x3
+STATE2_TO_STATE1 = 0x1
+STATE2_RESET_COUNTER = 0x6
+
+
+def state2_step(read, d7):
+    """0074F0: the counter/gate leaf. Returns the arm ('transition-3' / 'counting' /
+    'transition-1') and the new `d7`."""
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    if ea20 < 0:
+        return {'arm': 'transition-3', 'd7': d7 & 0xFFFF}
+    counted = (d7 + 1) & 0xFFFF
+    if _signed_word(counted) < STATE2_COUNT_CAP:
+        return {'arm': 'counting', 'd7': counted}
+    return {'arm': 'transition-1', 'd7': STATE2_RESET_COUNTER, 'counted': counted}
