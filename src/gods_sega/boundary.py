@@ -5129,6 +5129,184 @@ def ground_edge_test_plan(machine, registers):
                       last_pc=GROUND_EDGE_TEST_LAST_PC)
 
 
+# --- 00ACA0: the ground-contact kind handler (game/creatures.py: ground_contact_update) --------------
+#
+# Kind 4 of 00A772's own eight-entry table -- the most frequent witnessed kind handler
+# (docs/gods/blockers/2026-09-18-00A578.md's own Decision, 18 Sep).  Composes creature_grid_cell
+# (00AA38, called up to twice) and ground_edge_test (00AD68, called through two different entry
+# points: 00AD68 itself -- the far test, over 0/1(a1) -- and 00AD46, the near test, over the SAME
+# arithmetic fed cell_addr+0x100 through the (d16,An) addressing mode; a1 itself is never touched by
+# either call, only the immediate's own displacement changes).  Never returns to 00A772: the ROM's own
+# tail is always a tail-jump into kind_frame_offset's own separately-armed gate (00AA50,
+# 'creature-frame-offset') -- this plan ends there, a7 unchanged, the same hand-off shape
+# player_state_plan's own states use for the shared tail (docs/gods/grinder-protocol.md section 6a).
+# Two arms decline, unwitnessed by any of the four recordings that reach this leaf
+# (artifacts/gods/evidence/census-00ACA0-*, 35 retained fixtures, 13 real path classes): the near
+# test's own 'cell-high' match, and the far test's own 'cell-low'/'cell-high' match (the SAME two arms
+# ground_edge_test_plan's own gate already declines, for the direct 00AD68 entry -- consistent, not a
+# coincidence: no recording has ever been seen with the grid's own edge flag actually set two cells
+# ahead of a creature).
+GROUND_CONTACT_UPDATE_ENTRY = 0x00ACA0
+GROUND_CONTACT_UPDATE_EARLY_LAST_PC = 0x00ACEC   # idle (early bpl) and near-trigger both end here
+GROUND_CONTACT_UPDATE_TABLE_LAST_PC = 0x00AD42   # every table-tail exit (settle-continue/-reset) ends
+                                                  # at the SAME bra.w -- settle-reset's own two extra
+                                                  # stores run before it, not after
+_GCU_DEC = (16, 1)                        # 00ACA0 subq.w #1,$6(a5)
+_GCU_BPL = {True: (10, 1), False: (8, 1)}  # 00ACA4 bpl.b $acec
+_GCU_HANDOFF_BRA = (10, 1)                # bra.w $aa50 -- shared by every exit
+_GCU_RELOAD_HEAD = (4 + 12 + 10 + 4 + 4 + 12, 6)   # 00ACA6-00ACB2: moveq;move.b;asr;moveq;sub;move.w
+_GCU_BSR_GRID = (18, 1)                   # bsr.w $aa38 (both call sites)
+_GCU_LOAD_X = (8, 1)                      # 00ACBA move.w (a5),d0
+_GCU_MASK_X = (8, 1)                      # 00ACBC andi.w #$1f,d0
+_GCU_BNE_LOW5 = {True: (10, 1), False: (8, 1)}          # 00ACC0 bne.b $acd2
+_GCU_CMP_SKIP_LOW = (16, 1)               # 00ACC2 cmpi.b #1,-1(a1)  -- (d16,An)
+_GCU_BEQ_SKIP_LOW = {True: (10, 1), False: (8, 1)}      # 00ACC8
+_GCU_CMP_SKIP_HIGH = (16, 1)              # 00ACCA cmpi.b #1,$7f(a1)  -- (d16,An)
+_GCU_BEQ_SKIP_HIGH = {True: (10, 1), False: (8, 1)}     # 00ACD0
+_GCU_SUBQ_X = (12, 1)                     # 00ACD2 subq.w #4,(a5)
+_GCU_TST_FALL = (12, 1)                   # 00ACD4 tst.w $12(a5)
+_GCU_BGT_FALL = {True: (10, 1), False: (8, 1)}          # 00ACD8 bgt.b $acf0
+_GCU_BSR_NEAR = (18, 1)                   # 00ACDA bsr.w $ad46
+_GCU_TST_NEAR = (4, 1)                    # 00ACDE tst.w d1
+_GCU_BEQ_NEAR = {True: (10, 1), False: (8, 1)}          # 00ACE0 beq.b $acf0
+_GCU_CLR_KIND = (16, 1)                   # 00ACE2 clr.w $a(a5)
+_GCU_MASK_Y_NEAR = (20, 1)                # 00ACE6 andi.w #$fff0,$2(a5)
+_GCU_LEA_TABLE = (8, 1)                   # 00ACF0 lea.l $ae4c(pc),a0
+_GCU_LOAD_FALL_IDX = (12, 1)              # 00ACF4 move.w $12(a5),d0
+_GCU_DOUBLE_IDX = (4, 1)                  # 00ACF8 add.w d0,d0
+_GCU_READ_TABLE = (14, 1)                 # 00ACFA move.w (a0,d0.w),d0
+_GCU_ADD_DELTA_Y = (16, 1)                # 00ACFE add.w d0,$2(a5)
+_GCU_BSR_FAR = (18, 1)                    # 00AD06 bsr.w $ad68
+_GCU_TST_FAR = (4, 1)                     # 00AD0A tst.w d1
+_GCU_BEQ_FAR = {True: (10, 1), False: (8, 1)}           # 00AD0C beq.b $ad2a
+_GCU_DEC_FALL = (16, 1)                   # 00AD2A subq.w #1,$12(a5)
+_GCU_CMP_SETTLE = (16, 1)                 # 00AD2E cmpi.w #$fffb,$12(a5)
+_GCU_BGE_SETTLE = {True: (10, 1), False: (8, 1)}        # 00AD34 bge.b $ad42
+_GCU_RESET_KIND = (16, 1)                 # 00AD36 move.w #2,$a(a5)
+_GCU_RESET_FALL = (16, 1)                 # 00AD3C move.w #8,$12(a5)
+# The near test (00AD46): ground_edge_test's own shared per-instruction pieces (_GET_*, above) reused
+# as-is -- only the FIRST compare differs (00AD48 cmpi.b #1,$100(a1), the (d16,An) form, 16 cycles,
+# unlike 00AD68's own direct (a1) form at 12); the second compare is (d16,An) in BOTH routines already
+# (00AD5C $101(a1) here, 00AD7C $1(a1) there -- the SAME 16-cycle shape, reused as _GET_CMP_HIGH).
+_GCU_NEAR_CMP_LOW = (16, 1)               # 00AD48 cmpi.b #1,$100(a1)
+_GCU_NEAR_MOVEQ_ONE = (4, 1)              # 00AD64 moveq #1,d1 -- the near test's own triggered result
+_GCU_NEAR_TRIGGER_COST = _add(_GET_MOVEQ_D1, _GCU_NEAR_CMP_LOW, _GET_BEQ_LOW[True], _GCU_NEAR_MOVEQ_ONE, _GET_RTS)
+_GCU_NEAR_EDGE_COST = _add(_GET_MOVEQ_D1, _GCU_NEAR_CMP_LOW, _GET_BEQ_LOW[False], _GET_LOAD_X, _GET_MASK_X,
+                          _GET_CMP_EDGE, _GET_BLT_EDGE[True], _GET_RTS)
+_GCU_NEAR_NO_MATCH_COST = _add(_GET_MOVEQ_D1, _GCU_NEAR_CMP_LOW, _GET_BEQ_LOW[False], _GET_LOAD_X, _GET_MASK_X,
+                              _GET_CMP_EDGE, _GET_BLT_EDGE[False], _GET_CMP_HIGH, _GET_BNE_HIGH[True], _GET_RTS)
+# The far test (00AD68 itself): reuses _GET_NEAR_EDGE_COST / _GET_NO_MATCH_COST directly -- the SAME
+# offsets (0/1(a1)) as ground_edge_test_plan's own gate, so the SAME cost.
+
+
+def ground_contact_update_plan(machine, registers):
+    """00ACA0: the ground-contact kind handler, composed over creature_grid_cell and ground_edge_test
+    (both entry points), ending at a hand-off to kind_frame_offset's own separately-armed gate."""
+    from .game import creatures
+    if registers['pc'] != GROUND_CONTACT_UPDATE_ENTRY:
+        raise UnsupportedCandidate('ground contact update planner needs the machine parked at 00ACA0')
+    sr = registers['sr']
+    read = _reader(machine)
+    type_ptr, instance_ptr = registers['a4'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
+    result = creatures.ground_contact_update(read, type_ptr, instance_ptr)
+    arm = result['arm']
+    sp = registers['a7'] & 0xFFFFFF
+    base_registers = {'a7': registers['a7'] & 0xFFFFFFFF, 'pc': KIND_FRAME_OFFSET_ENTRY}
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # Every internal bsr pushes its own return address at (a7-4); each bsr/rts pair nets a7 back to the
+    # SAME slot, so only the LAST call's own return address survives as durable stack residue (real
+    # RAM the tracer sees, never overwritten again before this activation's own hand-off) -- the same
+    # shape state1_plan's own composed bsr into grid_cell already writes.
+
+    if arm == 'idle':
+        cost = _add(_GCU_DEC, _GCU_BPL[True], _GCU_HANDOFF_BRA)
+        exit_sr = _sub_sr(sr, result['timer_before'], 1, 2)
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers=dict(base_registers, sr=exit_sr),
+                          last_pc=GROUND_CONTACT_UPDATE_EARLY_LAST_PC)
+
+    if arm in ('near-trigger-cell-high', 'far-trigger-cell-low', 'far-trigger-cell-high'):
+        raise UnsupportedCandidate(f'ground contact update arm not witnessed by a recording: {arm}')
+
+    grid = result['grid']
+    # asl.w #3,d1 (creature_grid_cell's own last instruction) is the first real X-setter along every
+    # arm from here on; every later X-setter threads on top of it, exactly as creature_grid_cell_plan's
+    # own standalone exit_sr does for an external caller.
+    sr = _asl_sr(sr, grid['row_source'], 3, 2)
+    cost = _add(_GCU_DEC, _GCU_BPL[False], _GCU_RELOAD_HEAD, _GCU_BSR_GRID, _CGC_COST, _GCU_LOAD_X, _GCU_MASK_X)
+    subq_applied, skip_test, low5 = result['subq_applied'], result['skip_test'], result['low5']
+    if subq_applied:
+        if low5 != 0:
+            cost = _add(cost, _GCU_BNE_LOW5[True])
+        else:
+            cost = _add(cost, _GCU_BNE_LOW5[False], _GCU_CMP_SKIP_LOW, _GCU_BEQ_SKIP_LOW[False],
+                       _GCU_CMP_SKIP_HIGH, _GCU_BEQ_SKIP_HIGH[False])
+        cost = _add(cost, _GCU_SUBQ_X)
+        # subq.w #4,(a5) is a real X-setter (SUBQ), overwriting whatever grid_cell's own asl left.
+        sr = _sub_sr(sr, result['x_before'], 4, 2)
+    else:
+        cost = _add(cost, _GCU_BNE_LOW5[False], _GCU_CMP_SKIP_LOW, _GCU_BEQ_SKIP_LOW[skip_test == 'cell-low'])
+        if skip_test == 'cell-high':
+            cost = _add(cost, _GCU_CMP_SKIP_HIGH, _GCU_BEQ_SKIP_HIGH[True])
+        # cmpi.b/beq.b never touch X: it still carries grid_cell's own asl here.
+    cost = _add(cost, _GCU_TST_FALL)
+
+    # moveq #0,d0 (the reload head's own first instruction, unconditional on every non-idle arm)
+    # clears the WHOLE 32-bit register; every later store to d0 here is a plain move.w/andi.w, so its
+    # own upper word never comes back -- unlike creature_grid_cell's own standalone entry, d0's upper
+    # half is NOT preserved from THIS routine's own entry (--perturb-upper-halves caught this: 19 Sep).
+    d0_upper = 0
+
+    if arm == 'near-trigger':
+        near = result['near']
+        cost = _add(cost, _GCU_BGT_FALL[False], _GCU_BSR_NEAR, _GCU_NEAR_TRIGGER_COST,
+                   _GCU_TST_NEAR, _GCU_BEQ_NEAR[False], _GCU_CLR_KIND, _GCU_MASK_Y_NEAR, _GCU_HANDOFF_BRA)
+        # 00AD46's own body and clr.w/andi.w never touch X: andi.w #$fff0,$2(a5) is the last NZVC
+        # setter, X threads straight through from the subq/asl above.
+        exit_sr = _logic_sr(sr, result['new_y'], 2)
+        # d0's own last write is 00ACBC's own andi.w #$1f,d0 (LOAD_X/MASK_X, before the subq/skip-test
+        # block): neither the skip-test cmpi's nor 00AD46's own cell-low body ever touch d0 again.
+        exit_registers = dict(base_registers, sr=exit_sr, d0=d0_upper | result['low5'], d1=near['d1'] & 0xFFFFFFFF,
+                              a1=grid['a1'] & 0xFFFFFFFF)
+        residue = _bytes((sp - 4) & 0xFFFFFF, 0x00ACDE, 4)
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes + residue, registers=exit_registers,
+                          last_pc=GROUND_CONTACT_UPDATE_EARLY_LAST_PC)
+
+    fall_phase = result['fall_phase']
+    if fall_phase > 0:
+        cost = _add(cost, _GCU_BGT_FALL[True])
+    else:
+        near = result['near']
+        near_cost = _GCU_NEAR_EDGE_COST if near['arm'] == 'no-match-near-edge' else _GCU_NEAR_NO_MATCH_COST
+        cost = _add(cost, _GCU_BGT_FALL[False], _GCU_BSR_NEAR, near_cost, _GCU_TST_NEAR, _GCU_BEQ_NEAR[True])
+        # 00AD46's own body never touches X either.
+
+    far = result['far']
+    far_cost = _GET_NEAR_EDGE_COST if far['arm'] == 'no-match-near-edge' else _GET_NO_MATCH_COST
+    cost = _add(cost, _GCU_LEA_TABLE, _GCU_LOAD_FALL_IDX, _GCU_DOUBLE_IDX, _GCU_READ_TABLE, _GCU_ADD_DELTA_Y,
+               _GCU_BSR_GRID, _CGC_COST, _GCU_BSR_FAR, far_cost, _GCU_TST_FAR, _GCU_BEQ_FAR[True],
+               _GCU_DEC_FALL, _GCU_CMP_SETTLE)
+    # add.w d0,$2(a5) (the table delta) is a real X-setter; the second creature_grid_cell call's own
+    # asl.w #3,d1 overwrites it again; ground_edge_test's own body never touches X; subq.w #1,$12(a5)
+    # (the fall-phase decrement) is the LAST real X-setter of the whole routine -- cmpi.w #$fffb never
+    # touches X, and settle-reset's own two move.w's do not either, so it threads to the exit either way.
+    sr = _add_sr(sr, result['y'], result['delta'] & 0xFFFF, 2)
+    grid2 = result['grid2']
+    sr = _asl_sr(sr, grid2['row_source'], 3, 2)
+    sr = _sub_sr(sr, fall_phase & 0xFFFF, 1, 2)
+    exit_registers = dict(base_registers, d0=d0_upper | far['x_low5'], d1=far['d1'] & 0xFFFFFFFF,
+                          a0=creatures.GROUND_STATE_TABLE & 0xFFFFFFFF, a1=grid2['a1'] & 0xFFFFFFFF)
+    if arm == 'settle-continue':
+        cost = _add(cost, _GCU_BGE_SETTLE[True], _GCU_HANDOFF_BRA)
+        exit_registers['sr'] = _cmp_sr(sr, result['new_fall_phase'], 0xFFFB, 2)
+    else:  # 'settle-reset'
+        cost = _add(cost, _GCU_BGE_SETTLE[False], _GCU_RESET_KIND, _GCU_RESET_FALL, _GCU_HANDOFF_BRA)
+        exit_registers['sr'] = _logic_sr(sr, creatures.GROUND_SETTLE_RESET, 2)
+    residue = _bytes((sp - 4) & 0xFFFFFF, 0x00AD0A, 4)
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes + residue, registers=exit_registers,
+                      last_pc=GROUND_CONTACT_UPDATE_TABLE_LAST_PC)
+
+
 # --- 0044C0/004550: the trail check (game/trail.py) -- event kind 6 ---------------------------------
 #
 # Raised the same way kind 3 (00462C) is: the tile scan's own preamble (0077BE-007876) jsr's straight

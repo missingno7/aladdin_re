@@ -392,3 +392,122 @@ def ground_edge_test(read, cell_addr, x):
     if high == GROUND_EDGE_FLAG:
         return {'arm': 'cell-high', 'd1': 1}
     return {'arm': 'no-match', 'd1': 0, 'x_low5': x_low5, 'high': high}
+
+
+# --- 00ACA0: the ground-contact kind handler -- kind 4 of 00A772's own eight-entry table (00A538),
+# the most frequent witnessed kind handler (docs/gods/blockers/2026-09-18-00A578.md's own Decision:
+# "the six witnessed kind handlers are leaves or small families over the creature record").  Composes
+# the already-recovered creature_grid_cell (00AA38, called twice: once before the settle test, again
+# after the table-driven POSITION_Y step, over the record's OWN pending write -- an overlay reader,
+# the same shape attack_update's own chained next_random draws already use) and ground_edge_test
+# (00AD68) TWICE over: once directly (00AD68 itself, the far test, offsets 0/1) and once through a
+# sibling entry point (00AD46) that tests the SAME two grid-cell bytes through the (d16,An) addressing
+# mode instead ($100/$101(a1) -- confirmed identical arithmetic to ground_edge_test's own 0/1(a1), just
+# fed cell_addr+0x100, a real cross-reference finding, 19 Sep) -- the near test, gating whether the
+# table step runs at all.  Never returns to its own caller: the ROM's own tail is always
+# ``bra.w $aa50`` (kind_frame_offset, its own separately-armed gate, per docs/gods/grinder-protocol.md
+# section 6a's family-hand-off shape -- 00AA50's own effects are NOT inlined here, exactly as
+# ``player_state_plan``'s own states hand off to ``player-tail``'s gate rather than compose it).
+GROUND_HOLD_TIMER = 0x6            # instance_ptr word: ticks down each activation; negative reloads it.
+                                    # The SAME offset LIFECYCLE_RESET (00B944, above) names for a
+                                    # different caller -- not established as the same field this session.
+TYPE_GROUND_RELOAD_BYTE = 0xB      # type_ptr byte: (byte>>2), the reload is 2 - that shift (word wrap)
+GROUND_SKIP_TEST_LOW_OFFSET = -1   # cell_addr byte: the "hold position" cell test's own first probe
+GROUND_SKIP_TEST_HIGH_OFFSET = 0x7F  # cell_addr byte: its own second probe (low5==0 gates both)
+FALL_PHASE = 0x12                  # instance_ptr word: an index into GROUND_STATE_TABLE, 0 at rest,
+                                    # set to 2/8 by this routine's own settle tail, decremented once
+                                    # past the near-test guard.  The SAME offset FORWARD_BACK
+                                    # (attack_update, above) names for a different caller -- likewise
+                                    # not established as the same field.
+GROUND_STATE_TABLE = 0x00AE4C      # ROM: 13 signed words (0, -1, -1, -2, -4, -8 x8), a POSITION_Y delta
+GROUND_SETTLE_FLOOR = -5           # FALL_PHASE, after its own decrement, resets below this (signed)
+GROUND_SETTLE_RESET = 8            # the reset value for FALL_PHASE
+KIND_FALL = 2                      # KIND_TABLE index 2 == 00AE6C, the fall kind handler (the far-edge
+                                    # trigger and the settle-reset tail both hand the creature off to it
+                                    # by overwriting its own KIND field -- 00A772's own dispatch re-reads
+                                    # KIND every activation, so this is a real state transition, not a
+                                    # renamed record field: confirmed against docs/gods/blockers/
+                                    # 2026-09-18-00A578.md's own eight-entry table order)
+
+
+def ground_contact_update(read, type_ptr, instance_ptr):
+    """00ACA0: one creature's own ground-contact tick.
+
+    Returns the arm (``'idle'`` -- the hold timer stayed non-negative; ``'near-trigger'`` -- the
+    (d16,An) edge test's own 'cell-low' match, KIND cleared to 0 and POSITION_Y masked; the DECLINED,
+    unwitnessed ``'near-trigger-cell-high'``, ``'far-trigger-cell-low'``/``'far-trigger-cell-high'``;
+    or ``'settle-continue'``/``'settle-reset'`` -- the table-driven POSITION_Y step, the far edge test
+    (0/1(a1)) not triggering, and FALL_PHASE's own decrement landing at or above / below
+    GROUND_SETTLE_FLOOR) plus every intermediate fact the boundary's own cost needs (whether
+    POSITION_X's own -4 step applied or which cell test skipped it, the near/far ground_edge_test
+    results, the table read)."""
+    type_ptr &= 0xFFFFFF
+    instance_ptr &= 0xFFFFFF
+    timer_before = read(instance_ptr + GROUND_HOLD_TIMER, 2) & 0xFFFF
+    timer_after = (timer_before - 1) & 0xFFFF
+    if _signed_word(timer_after) >= 0:
+        return {'arm': 'idle', 'timer_before': timer_before, 'timer_after': timer_after,
+                'stores': {(instance_ptr + GROUND_HOLD_TIMER) & 0xFFFFFF: (timer_after, 2)}}
+    reload_byte = read(type_ptr + TYPE_GROUND_RELOAD_BYTE, 1) & 0xFF
+    reload = (2 - ((reload_byte >> 2) & 0xFFFF)) & 0xFFFF
+    stores = {(instance_ptr + GROUND_HOLD_TIMER) & 0xFFFFFF: (reload, 2)}
+    grid = creature_grid_cell(read, instance_ptr)
+    cell_addr = grid['a1'] & 0xFFFFFF
+    x = read(instance_ptr + POSITION_X, 2) & 0xFFFF
+    low5 = x & 0x1F
+    subq_applied, skip_test = True, None
+    if low5 == 0:
+        low_byte = read((cell_addr + GROUND_SKIP_TEST_LOW_OFFSET) & 0xFFFFFF, 1) & 0xFF
+        if low_byte == GROUND_EDGE_FLAG:
+            subq_applied, skip_test = False, 'cell-low'
+        else:
+            high_byte = read((cell_addr + GROUND_SKIP_TEST_HIGH_OFFSET) & 0xFFFFFF, 1) & 0xFF
+            if high_byte == GROUND_EDGE_FLAG:
+                subq_applied, skip_test = False, 'cell-high'
+    x_before = x
+    if subq_applied:
+        x = (x - 4) & 0xFFFF
+        stores[(instance_ptr + POSITION_X) & 0xFFFFFF] = (x, 2)
+    result = {'timer_before': timer_before, 'reload': reload, 'low5': low5, 'grid': grid,
+              'subq_applied': subq_applied, 'skip_test': skip_test, 'x': x, 'x_before': x_before}
+    fall_phase = _signed_word(read(instance_ptr + FALL_PHASE, 2))
+    result['fall_phase'] = fall_phase
+    if fall_phase <= 0:
+        near = ground_edge_test(read, cell_addr + 0x100, x)
+        result['near'] = near
+        if near['arm'] in ('cell-low', 'cell-high'):
+            if near['arm'] == 'cell-high':
+                result['arm'] = 'near-trigger-cell-high'
+                result['stores'] = stores
+                return result
+            y = read(instance_ptr + POSITION_Y, 2) & 0xFFFF
+            new_y = y & 0xFFF0
+            stores[(instance_ptr + KIND) & 0xFFFFFF] = (0, 2)
+            stores[(instance_ptr + POSITION_Y) & 0xFFFFFF] = (new_y, 2)
+            result.update(arm='near-trigger', y=y, new_y=new_y, stores=stores)
+            return result
+    delta = _signed_word(read((GROUND_STATE_TABLE + 2 * fall_phase) & 0xFFFFFF, 2))
+    y = read(instance_ptr + POSITION_Y, 2) & 0xFFFF
+    new_y = (y + delta) & 0xFFFF
+    stores[(instance_ptr + POSITION_Y) & 0xFFFFFF] = (new_y, 2)
+    read2 = _overlay(read, stores)
+    grid2 = creature_grid_cell(read2, instance_ptr)
+    cell2_addr = grid2['a1'] & 0xFFFFFF
+    x2 = read2(instance_ptr + POSITION_X, 2) & 0xFFFF
+    far = ground_edge_test(read2, cell2_addr, x2)
+    result.update(delta=delta, y=y, new_y=new_y, grid2=grid2, far=far)
+    if far['arm'] in ('cell-low', 'cell-high'):
+        result['arm'] = 'far-trigger-' + far['arm']
+        result['stores'] = stores
+        return result
+    new_fall_phase = (fall_phase - 1) & 0xFFFF
+    stores[(instance_ptr + FALL_PHASE) & 0xFFFFFF] = (new_fall_phase, 2)
+    if _signed_word(new_fall_phase) < GROUND_SETTLE_FLOOR:
+        stores[(instance_ptr + KIND) & 0xFFFFFF] = (KIND_FALL, 2)
+        stores[(instance_ptr + FALL_PHASE) & 0xFFFFFF] = (GROUND_SETTLE_RESET, 2)
+        result['arm'] = 'settle-reset'
+    else:
+        result['arm'] = 'settle-continue'
+    result['new_fall_phase'] = new_fall_phase
+    result['stores'] = stores
+    return result

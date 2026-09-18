@@ -37,6 +37,10 @@ GRID_CELL_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AA38-
 needs_grid_cell_census = pytest.mark.skipif(not GRID_CELL_FIXTURES or not GODS.rom_path.is_file(),
                                             reason='no local census of 00AA38')
 
+GROUND_CONTACT_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00ACA0-*/00ACA0-entry-p*.state'))
+needs_ground_contact_census = pytest.mark.skipif(not GROUND_CONTACT_FIXTURES or not GODS.rom_path.is_file(),
+                                                 reason='no local census of 00ACA0')
+
 GROUND_EDGE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AD68-*/00AD68-entry-p*.state'))
 needs_ground_edge_census = pytest.mark.skipif(not GROUND_EDGE_FIXTURES or not GODS.rom_path.is_file(),
                                               reason='no local census of 00AD68')
@@ -386,5 +390,157 @@ def test_ground_edge_test_candidate_matches_the_reference_and_its_mutant_diverge
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='ground-edge-test-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00ACA0: the ground-contact kind handler (kind 4 of 00A772's own eight-entry table) -- the most
+# frequent witnessed kind handler (docs/gods/blockers/2026-09-18-00A578.md's own Decision, 19 Sep).
+# Composes creature_grid_cell (called up to twice) and ground_edge_test (through two entry points --
+# 00AD46, the near test, feeding cell_addr+0x100 through the (d16,An) addressing mode, and 00AD68
+# itself, the far test, over 0/1(a1) directly).  Never returns to its own caller: the ROM's own tail is
+# always a tail-jump into kind_frame_offset's own separately-armed gate.
+
+def _grid_address(x, y):
+    from gods_sega.game import grid
+    return grid.grid_cell_at(x, y)['address'] & 0xFFFFFF
+
+
+def test_ground_contact_update_idle_arm_only_decrements_the_hold_timer():
+    values = {(INSTANCE_PTR + creatures.GROUND_HOLD_TIMER, 2): 5}
+    result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result == {'arm': 'idle', 'timer_before': 5, 'timer_after': 4,
+                      'stores': {(INSTANCE_PTR + creatures.GROUND_HOLD_TIMER) & 0xFFFFFF: (4, 2)}}
+
+
+def _reload_base(x=0x204, y=0x40, fall_phase=3):
+    return {(INSTANCE_PTR + creatures.GROUND_HOLD_TIMER, 2): 0,        # decrements to -1: reloads
+            (TYPE_PTR + creatures.TYPE_GROUND_RELOAD_BYTE, 1): 0xA,     # reload = 2 - (0xA >> 2) = 0
+            (INSTANCE_PTR + creatures.POSITION_X, 2): x,
+            (INSTANCE_PTR + creatures.POSITION_Y, 2): y,
+            (INSTANCE_PTR + creatures.FALL_PHASE, 2): fall_phase}
+
+
+def test_ground_contact_update_reload_steps_position_x_by_four_when_low_five_bits_are_set():
+    values = _reload_base(x=0x204)                                      # low5 == 4: the cell test never runs
+    values[(creatures.GROUND_STATE_TABLE + 2 * 3) & 0xFFFFFF, 2] = 0
+    cell2 = _grid_address(0x200, 0x40)
+    values[(cell2, 1)] = 0                                              # far test: 'no-match-near-edge'
+    result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['subq_applied'] and result['skip_test'] is None
+    assert result['x'] == 0x200 and result['reload'] == 0
+    assert (INSTANCE_PTR + creatures.POSITION_X) & 0xFFFFFF in result['stores']
+
+
+def test_ground_contact_update_position_x_step_skips_on_a_matching_low_cell():
+    values = _reload_base(x=0x200, y=0x40)                              # low5 == 0: the cell test runs
+    cell = _grid_address(0x200, 0x40)
+    values[(cell + creatures.GROUND_SKIP_TEST_LOW_OFFSET) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    values[(creatures.GROUND_STATE_TABLE + 2 * 3) & 0xFFFFFF, 2] = 0
+    cell2 = _grid_address(0x200, 0x40)
+    values[(cell2, 1)] = 0
+    result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert not result['subq_applied'] and result['skip_test'] == 'cell-low'
+    assert result['x'] == 0x200
+    assert (INSTANCE_PTR + creatures.POSITION_X) & 0xFFFFFF not in result['stores']
+
+
+def test_ground_contact_update_near_trigger_clears_kind_and_masks_position_y():
+    values = _reload_base(x=0x204, y=0x40, fall_phase=0)                # <= 0: the near test runs
+    cell = _grid_address(0x204, 0x40)                                   # creature_grid_cell reads the ENTRY x
+    values[(cell + 0x100) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG   # the (d16,An) near test's own first probe
+    result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'near-trigger'
+    assert result['new_y'] == 0x40 & 0xFFF0
+    stores = result['stores']
+    assert stores[(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (0, 2)
+    assert stores[(INSTANCE_PTR + creatures.POSITION_Y) & 0xFFFFFF] == (0x40 & 0xFFF0, 2)
+
+
+def test_ground_contact_update_near_trigger_cell_high_declines_by_name():
+    values = _reload_base(x=0x214, y=0x40, fall_phase=0)                # post-subq low5 (0x210) is >= 8
+    cell = _grid_address(0x214, 0x40)                                   # creature_grid_cell reads the ENTRY x
+    values[(cell + 0x100) & 0xFFFFFF, 1] = 0                            # first probe misses
+    values[(cell + 0x101) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG   # second probe matches
+    result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'near-trigger-cell-high'
+
+
+def test_ground_contact_update_far_trigger_declines_by_name():
+    values = _reload_base(x=0x204, y=0x40, fall_phase=3)                # > 0: the near test is skipped
+    values[(creatures.GROUND_STATE_TABLE + 2 * 3) & 0xFFFFFF, 2] = 0
+    cell2 = _grid_address(0x200, 0x40)
+    values[(cell2, 1)] = creatures.GROUND_EDGE_FLAG                     # the far test's own first probe matches
+    result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'far-trigger-cell-low'
+
+
+def test_ground_contact_update_settle_continue_steps_position_y_by_the_state_table():
+    values = _reload_base(x=0x204, y=0x40, fall_phase=3)
+    values[(creatures.GROUND_STATE_TABLE + 2 * 3) & 0xFFFFFF, 2] = 0x10
+    cell2 = _grid_address(0x200, 0x50)
+    values[(cell2, 1)] = 0
+    result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'settle-continue' and result['delta'] == 0x10 and result['new_y'] == 0x50
+    assert result['new_fall_phase'] == 2
+    stores = result['stores']
+    assert stores[(INSTANCE_PTR + creatures.POSITION_Y) & 0xFFFFFF] == (0x50, 2)
+    assert stores[(INSTANCE_PTR + creatures.FALL_PHASE) & 0xFFFFFF] == (2, 2)
+    assert (INSTANCE_PTR + creatures.KIND) & 0xFFFFFF not in stores
+
+
+def test_ground_contact_update_settle_reset_transitions_kind_to_the_fall_handler():
+    fall_phase = -5
+    values = _reload_base(x=0x204, y=0x40, fall_phase=fall_phase & 0xFFFF)
+    cell = _grid_address(0x204, 0x40)                                   # creature_grid_cell reads the ENTRY x
+    values[(cell + 0x100) & 0xFFFFFF, 1] = 0                            # near test: no match
+    values[(creatures.GROUND_STATE_TABLE + 2 * fall_phase) & 0xFFFFFF, 2] = 8
+    cell2 = _grid_address(0x200, 0x48)
+    values[(cell2, 1)] = 0                                              # far test: no match
+    result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'settle-reset'
+    stores = result['stores']
+    assert stores[(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (creatures.KIND_FALL, 2)
+    assert stores[(INSTANCE_PTR + creatures.FALL_PHASE) & 0xFFFFFF] == (creatures.GROUND_SETTLE_RESET, 2)
+
+
+# --- boundary: gods_sega.boundary.ground_contact_update_plan over every retained fixture -----------
+
+@needs_ground_contact_census
+@pytest.mark.parametrize('fixture', GROUND_CONTACT_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_ground_contact_update_plan_reproduces_every_witnessed_arm(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.ground_contact_update_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'ground contact update' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_ground_contact_update_candidate_names_are_explicit():
+    assert recovery.Candidate('creature-ground-contact').gate_pcs == (boundary.GROUND_CONTACT_UPDATE_ENTRY,)
+    assert boundary.GROUND_CONTACT_UPDATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('creature-ground-contact-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_reference
+def test_ground_contact_update_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in GROUND_CONTACT_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='creature-ground-contact', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00ACA0 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-ground-contact-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

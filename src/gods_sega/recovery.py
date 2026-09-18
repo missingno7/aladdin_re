@@ -16,7 +16,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
-                       EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, GROUND_EDGE_TEST_ENTRY, HAZARD_TICK_ENTRY,
+                       EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, GROUND_CONTACT_UPDATE_ENTRY, GROUND_EDGE_TEST_ENTRY, HAZARD_TICK_ENTRY,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
@@ -25,7 +25,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        animation_step_plan, attack_update_plan, camera_follow_plan, creature_grid_cell_plan, creature_pickup_check_plan, event_consume_plan,
                        collision_gate_plan, contact_consume_primary_plan, contact_consume_secondary_plan, contact_search_plan,
                        countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
-                       footprint_stamp_plan, condition_plan, grid_cell_plan, ground_edge_test_plan, hazard_tick_plan, kind_frame_offset_plan, launch_plan, message_gate_plan,
+                       footprint_stamp_plan, condition_plan, grid_cell_plan, ground_contact_update_plan, ground_edge_test_plan, hazard_tick_plan, kind_frame_offset_plan, launch_plan, message_gate_plan,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_state_plan, player_tail_plan, proximity_plan,
                        record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state2_plan, state10_plan, state3_plan, state4_plan, state5_plan, state6_plan, state8_plan, state9_plan, state11_plan, state12_plan, state13_plan, state14_plan, state16_plan, state17_plan, state18_plan, state19_plan, state21_plan, state22_plan, state23_plan, state26_plan, state_26_plan, state27_plan, state28_plan, static_emit_plan, string_copy_plan, table_reset_plan,
@@ -289,6 +289,7 @@ PLANNERS = {
     'creature-attack': {ATTACK_UPDATE_ENTRY: attack_update_plan},
     'creature-pickup-check': {CREATURE_PICKUP_CHECK_ENTRY: creature_pickup_check_plan},
     'event-consume': {EVENT_CONSUME_ENTRY: event_consume_plan},
+    'creature-ground-contact': {GROUND_CONTACT_UPDATE_ENTRY: ground_contact_update_plan},
     'state-2': {STATE2_ENTRY: state2_plan},
     'state-3': {STATE3_ENTRY: state3_plan},
     'state-4': {STATE4_ENTRY: state4_plan},
@@ -338,7 +339,8 @@ PLANNERS = {
                        # (the adapter holds 64 gates; the family composition frees them, as 005700's did).
                        ATTACK_UPDATE_ENTRY: attack_update_plan, KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan,
                        CREATURE_GRID_CELL_ENTRY: creature_grid_cell_plan, GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan,
-                       EVENT_CONSUME_ENTRY: event_consume_plan, CREATURE_PICKUP_CHECK_ENTRY: creature_pickup_check_plan},
+                       EVENT_CONSUME_ENTRY: event_consume_plan, CREATURE_PICKUP_CHECK_ENTRY: creature_pickup_check_plan,
+                       GROUND_CONTACT_UPDATE_ENTRY: ground_contact_update_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -549,7 +551,16 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # the object table's own consumed pair), so _mutate_result's one-byte flip is the control.
              'event-consume-mutant-result': ('event-consume', _mutate_result),
              'creature-grid-cell-mutant-result': ('creature-grid-cell', _mutate_creature_grid_cell),
-             'ground-edge-test-mutant-result': ('ground-edge-test', _mutate_ground_edge_outcome)}
+             'ground-edge-test-mutant-result': ('ground-edge-test', _mutate_ground_edge_outcome),
+             # every register this leaf sets is dead residue by construction -- kind_frame_offset (the
+             # gate it hands off to) reloads d0/d2/a0 itself from a4/a5 before ever reading them back,
+             # and the caller's own kind-table jsr right after that clobbers whatever is left.  The
+             # real, observable effects are the writes: GROUND_HOLD_TIMER on every arm (read back the
+             # very next activation), POSITION_X/POSITION_Y/FALL_PHASE, and KIND on 'near-trigger'/
+             # 'settle-reset' (00A772's own dispatch re-reads it every tick -- the SAME field
+             # kind_frame_offset's own mutant already proved observable), so _mutate_result's one-byte
+             # flip is the control.
+             'creature-ground-contact-mutant-result': ('creature-ground-contact', _mutate_result)}
 
 
 @dataclass
