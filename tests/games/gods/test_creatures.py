@@ -1736,6 +1736,58 @@ def test_aim_search_dispatch_candidate_matches_the_reference_and_its_mutant_dive
     assert mutant['status'] == 'DIVERGENCE'
 
 
+# --- 00AC36: the aim-search-flag kind dispatch (00AA76's own third call).  See game/creatures.py's
+# own module note above aim_search_flag_dispatch.
+
+AIM_SEARCH_FLAG_DISPATCH_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0XAC36-*/00AC36-entry-p*.state'))
+needs_aim_search_flag_dispatch_census = pytest.mark.skipif(
+    not AIM_SEARCH_FLAG_DISPATCH_FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 00AC36')
+
+
+def test_aim_search_flag_dispatch_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-search-flag-dispatch').gate_pcs == (boundary.AIM_SEARCH_FLAG_DISPATCH_ENTRY,)
+    assert boundary.AIM_SEARCH_FLAG_DISPATCH_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-search-flag-dispatch-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_aim_search_flag_dispatch_census
+@pytest.mark.parametrize('fixture', AIM_SEARCH_FLAG_DISPATCH_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_search_flag_dispatch_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_search_flag_dispatch_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'aim search flag dispatch' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_search_flag_dispatch_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_SEARCH_FLAG_DISPATCH_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-search-flag-dispatch',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        assert report['status'] == 'PASS', report
+        assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-search-flag-dispatch-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-search-flag-dispatch produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
 # --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (00A578's own spawn-init body's own
 # unconditional `bsr $b920`, independent of the whole 00AF52/00B588 chain).  See game/creatures.py's
 # own module note above spawn_table_find_free/spawn_table_add.

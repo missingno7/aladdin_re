@@ -19255,6 +19255,119 @@ def aim_search_dispatch_plan(machine, registers):
                       last_pc=AIM_SEARCH_DISPATCH_LAST_PC)
 
 
+# --- 00AC36: the aim-search-flag kind dispatch (game/creatures.py: aim_search_flag_dispatch) --------
+#
+# Cost fragments from the tracer (census-0XAC36-*, four recordings, 3 real path classes, all
+# callee-free).  See game/creatures.py's own module note above aim_search_flag_dispatch.
+AIM_SEARCH_FLAG_DISPATCH_ENTRY = 0x00AC36
+AIM_SEARCH_FLAG_DIRECT_LAST_PC = 0x00AC44
+AIM_SEARCH_FLAG_EXTENDED_LAST_PC = 0x00AC6E
+
+_ASFD_HEAD = (12 + 8, 2)                  # move.w f2ce.w,d0; cmpi.w #1,d0
+_ASFD_BGT = {False: (8, 1), True: (10, 1)}
+_ASFD_DIRECT_STORE = (12, 1)              # move.w d0,$a(a5)
+_ASFD_DIRECT_RTS = (16, 1)
+_ASFD_KIND_HEAD = (4 + 4 + 8 + 4, 4)      # subq #2,d0; move.w d0,d1; andi #1,d1; addq #4,d1
+_ASFD_KIND_STORE = (12, 1)                # move.w d1,$a(a5)
+_ASFD_MASK_SETUP = (8 + 4 + 4, 3)         # andi #$fffe,d0; moveq #7,d1; tst.w d0
+_ASFD_BEQ_FIRST = {False: (8, 1), True: (10, 1)}
+_ASFD_SECOND_SETUP = (4 + 4, 2)           # moveq #9,d1; subq #2,d0
+_ASFD_BEQ_SECOND = {False: (8, 1), True: (8, 1)}   # taken cost not witnessed by any recording -- same
+                                                    # 8cy every OTHER short Bcc here uses when taken by
+                                                    # this same pattern would be 10, but never observed
+_ASFD_THIRD_MOVEQ = (4, 1)                # moveq #$d,d1
+_ASFD_FALL_PHASE_STORE = (12, 1)          # move.w d1,$12(a5)
+_ASFD_FRAME_STEP_CLEAR = (16, 1)          # clr.w $4(a5)
+_ASFD_EXTENDED_RTS = (16, 1)
+
+
+def aim_search_flag_dispatch_plan(machine, registers):
+    """00AC36: see game/creatures.py's own module note above aim_search_flag_dispatch."""
+    from .game import creatures
+    if registers['pc'] != AIM_SEARCH_FLAG_DISPATCH_ENTRY:
+        raise UnsupportedCandidate('aim search flag dispatch planner needs the machine parked at 00AC36')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    a5 = registers['a5'] & 0xFFFFFFFF
+    f2ce = read(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFFFF, 2) & 0xFFFF
+    result = creatures.aim_search_flag_dispatch(f2ce)
+
+    cycles, instructions = _ASFD_HEAD
+    extended = result['arm'] != 'direct'
+    c, i = _ASFD_BGT[extended]
+    cycles += c
+    instructions += i
+
+    if not extended:
+        c, i = _ASFD_DIRECT_STORE
+        cycles += c
+        instructions += i
+        c, i = _ASFD_DIRECT_RTS
+        cycles += c
+        instructions += i
+        writes = _bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, result['kind'] & 0xFFFF, 2)
+        exit_sr = _logic_sr(sr, result['kind'] & 0xFFFF, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                          registers={'d0': (registers['d0'] & 0xFFFF0000) | (f2ce & 0xFFFF),
+                                     'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=AIM_SEARCH_FLAG_DIRECT_LAST_PC)
+
+    if result['arm'] == 'fall-phase-9':
+        raise UnsupportedCandidate('aim search flag dispatch: fall_phase 9, not witnessed by a recording')
+
+    c, i = _ASFD_KIND_HEAD
+    cycles += c
+    instructions += i
+    c, i = _ASFD_KIND_STORE
+    cycles += c
+    instructions += i
+    c, i = _ASFD_MASK_SETUP
+    cycles += c
+    instructions += i
+    first_zero = result['fall_phase'] == 7
+    c, i = _ASFD_BEQ_FIRST[first_zero]
+    cycles += c
+    instructions += i
+    d0_exit = 0
+    d1_exit = 7
+    if not first_zero:
+        c, i = _ASFD_SECOND_SETUP
+        cycles += c
+        instructions += i
+        c, i = _ASFD_BEQ_SECOND[False]
+        cycles += c
+        instructions += i
+        c, i = _ASFD_THIRD_MOVEQ
+        cycles += c
+        instructions += i
+        d0_exit = 2
+        d1_exit = 0xD
+    c, i = _ASFD_FALL_PHASE_STORE
+    cycles += c
+    instructions += i
+    c, i = _ASFD_FRAME_STEP_CLEAR
+    cycles += c
+    instructions += i
+    c, i = _ASFD_EXTENDED_RTS
+    cycles += c
+    instructions += i
+
+    writes = (_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, result['kind'] & 0xFFFF, 2) +
+             _bytes((a5 + creatures.FALL_PHASE) & 0xFFFFFF, d1_exit & 0xFFFF, 2) +
+             _bytes((a5 + creatures.FRAME_STEP) & 0xFFFFFF, 0, 2))
+    # clr.w $4(a5) is the last flag-setter: Z=1, N=V=C=0 always, X retained.
+    exit_sr = _logic_sr(sr, 0, 2)
+    # D0's own last write in both sub-arms is a word op (andi.w/subq.w on Dn) -- entry upper half
+    # survives.  D1's own last write is always moveq (#7 or #$d) -- clears the whole register, not
+    # preserved from entry.
+    d0_upper = registers['d0'] & 0xFFFF0000
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'d0': d0_upper | (d0_exit & 0xFFFF), 'd1': d1_exit & 0xFFFF,
+                                 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=AIM_SEARCH_FLAG_EXTENDED_LAST_PC)
+
+
 # --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (game/creatures.py: spawn_table_find_
 # free, spawn_table_add) -----------------------------------------------------------------------------
 #

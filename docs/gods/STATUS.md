@@ -775,6 +775,34 @@ below, has the count and the milestone tree numbers).
   further), then `00A578` as the walk with its own semantic-operation
   card.
 
+- **19 September, later the same session**: `00AC36` recovered -- exactly
+  the small, bounded, callee-free dispatcher the blocker doc's own
+  reconnaissance already named, now tractable with `00AF52`'s own
+  `AIM_SEARCH_BEST_FLAG` contract understood.  Reads `f2ce.w`
+  (`AIM_SEARCH_BEST_FLAG`) once: `f2ce <= 1` (signed) writes it straight
+  to `DIRECTION_INDEX` (`$a`, aka KIND); `f2ce > 1` derives `x = f2ce - 2`,
+  KIND `:= (x & 1) + 4` (an even/odd split over four/five), then over `x`
+  with its own low bit cleared -- `x == 0` sets `FALL_PHASE` (`$12`) to
+  7, one more `-2` reaching 0 sets it to 9 (real ROM, never witnessed by
+  any of the four recordings, declined by name), anything past that sets
+  it to 13 -- and clears `FRAME_STEP` (`$4`) regardless of which
+  `FALL_PHASE` arm.  `game.creatures.aim_search_flag_dispatch` (pure
+  arithmetic, no RAM read beyond `f2ce.w` itself, no calls);
+  `gods_sega.boundary.aim_search_flag_dispatch_plan`; candidate
+  `'aim-search-flag-dispatch'`, armed as a NEW leaf in `camera-sprites`
+  (fifty-eight gates to fifty-nine).  One real defect this session's own
+  `--perturb-upper-halves` found: D1's own last write in the 'extended'
+  arm is always a `moveq` (`#7` or `#$d`) -- clears the whole register;
+  the first draft preserved the caller's own entry upper half instead.
+  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-ac36`,
+  107,519 frames, current receipts).  Reproduces the original on
+  `fb408bc75597…`: PASS, 23 hits, 0 fallbacks; mutant (`_mutate_result`)
+  DIVERGENCE at frame 10,460.  Next, per the Decision's own order:
+  `00AA76`/`00AB50`, then `00A772` as the family (frees the creature
+  gates further), then `00A578` as the walk with its own
+  semantic-operation card.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

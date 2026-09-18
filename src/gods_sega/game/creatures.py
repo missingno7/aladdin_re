@@ -1842,3 +1842,34 @@ def spawn_table_add(read, instance_ptr):
              SPAWN_TABLE_BUSY_FLAG & 0xFFFFFF: (1, 2),
              (instance_ptr + SPAWN_ICON_TIMER_OFFSET) & 0xFFFFFF: (SPAWN_ICON_TIMER_VALUE, 2)}
     return {'arm': 'found', 'scan': scan, 'position': position, 'stores': stores}
+
+
+# --- 00AC36: the aim-search-flag kind dispatch (00AA76's own third call) --------------------------
+#
+# A small, bounded, callee-free dispatcher docs/gods/blockers/2026-09-18-00A578.md's own reconnaissance
+# already named -- read fresh once 00AF52's own AIM_SEARCH_BEST_FLAG contract was understood
+# (census-0XAC36-*, four recordings, 3 real path classes, all callee-free).  `f2ce.w`
+# (AIM_SEARCH_BEST_FLAG) is read into a local value once, never re-read:
+#   f2ce <= 1 (signed): KIND (DIRECTION_INDEX, $a) := f2ce itself, unconditional; FALL_PHASE and
+#     FRAME_STEP untouched (real: 00AF52's own head sets f2ce to -1 whenever the whole aim-search
+#     dispatch found nothing, and this is the SAME arm that reaches here with f2ce still 0 or 1 too).
+#   f2ce > 1: x = f2ce - 2; KIND := (x & 1) + 4 (an even/odd split over four/five); then, over x with
+#     its own low bit cleared: x == 0 -> FALL_PHASE := 7; x == 2 (after one more -2) -> FALL_PHASE := 9
+#     (real ROM, never witnessed -- declined); anything past that (x >= 4, i.e. f2ce >= 6) ->
+#     FALL_PHASE := 13.  FRAME_STEP is cleared whenever f2ce > 1, regardless of which FALL_PHASE arm.
+
+def aim_search_flag_dispatch(f2ce):
+    """00AC36: see the module note above.  Returns {'arm', 'kind', 'fall_phase' (only for 'extended')} --
+    'fall-phase-9' is real ROM, never witnessed by a recording; the caller declines it by name."""
+    f2ce = _signed_word(f2ce & 0xFFFF)
+    if f2ce <= 1:
+        return {'arm': 'direct', 'kind': f2ce & 0xFFFF}
+    x = (f2ce - 2) & 0xFFFF
+    kind = (x & 1) + 4
+    x &= 0xFFFE
+    if x == 0:
+        return {'arm': 'extended', 'kind': kind, 'fall_phase': 7}
+    x = (x - 2) & 0xFFFF
+    if x == 0:
+        return {'arm': 'fall-phase-9', 'kind': kind}
+    return {'arm': 'extended', 'kind': kind, 'fall_phase': 13}
