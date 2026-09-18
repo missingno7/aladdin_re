@@ -11603,3 +11603,29 @@ def state22_plan(machine, registers):
     exit_registers['sr'] = sr
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x0063EA)
+
+
+# --- 00581E: state 27 -- another unconditional leaf, the SAME shape as state 28's own.  Costed
+# from the tracer on real fixtures over census-00581E-* (all five recordings; 55 real path classes,
+# all one shape).
+STATE27_ENTRY = 0x00581E
+
+_S27_TAIL = (4 + 16 + 10, 3)   # 00581E moveq #2,d7; 005820 clr.w f192.w; 005824 bra.w
+
+
+def state27_plan(machine, registers):
+    """00581E (state 27): the player state machine's own dispatch table entry 27.  See
+    game.player's own module note above state27_step."""
+    from .game import player
+    if registers['pc'] != STATE27_ENTRY:
+        raise UnsupportedCandidate('state 27 planner needs the machine parked at 00581E')
+    sr = registers['sr']
+    order = {}
+    c, i = _S27_TAIL
+    cycles, instructions = c, i
+    for a, b in _bytes(player.STATE_INDEX, player.STATE27_TO_STATE0, 2):
+        order[a] = b
+    exit_registers = {'d7': player.STATE27_D7, 'pc': 0x0075D6,
+                       'sr': _logic_sr(sr, player.STATE27_TO_STATE0, 2)}   # 005820 clr.w f192.w is the last flag-setter
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x005824)

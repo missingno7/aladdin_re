@@ -2222,3 +2222,16 @@ def state22_step(read, d7):
     if new_d7 == STATE22_CONSUME_D7_GATE:
         return {'arm': 'consume', **base}
     return {'arm': 'unchanged', **base}
+
+
+# --- 00581E: state 27 -- another unconditional leaf, the SAME shape as state 28's own: always
+# transitions to state 0 (`clr.w f192.w`, not state 28's own `move.w #1,f192.w`), d7 forced to 2.
+# All 55 real path classes across all five recordings agree.
+STATE27_ENTRY = 0x00581E
+STATE27_TO_STATE0 = 0x0
+STATE27_D7 = 2
+
+
+def state27_step(read):
+    """00581E-005824: unconditional -- always transitions to state 0 with d7 forced to 2."""
+    return {'arm': 'transition-0', 'd7': STATE27_D7}

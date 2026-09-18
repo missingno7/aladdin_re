@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with sixty gates armed, the camera follow step `002806`, the
+  original with sixty-one gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -180,8 +180,8 @@ one planner") is the next bite.
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
-  `state-2`, `state-3`, `state-4`, `state-17`, `state-21`, `state-28` and
-  `state-22` arm each alone.
+  `state-2`, `state-3`, `state-4`, `state-17`, `state-21`, `state-28`,
+  `state-22` and `state-27` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -974,8 +974,8 @@ small leaf):
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
   state-13, state-12, state-16, state-11, state-2, state-3, state-4,
-  state-17, state-21, state-28, state-22 -- 10,974 of 13,488 activations
-  (81%)
+  state-17, state-21, state-28, state-22, state-27 -- 10,993 of 13,488
+  activations (81%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1163,6 +1163,11 @@ small leaf):
   fixture -- `history-verify`'s own crash-tolerant comparison already
   reports this cleanly as DIVERGENCE; `segment_verify`'s own lighter
   check does not, so the test catches the native exception directly.
+  State 27 (`00581E`, recovered 18 Sep) is another unconditional leaf,
+  the SAME shape as state 28's own: always transitions to state 0
+  (`clr.w f192.w`, not state 28's own `move.w #1,f192.w`), `d7` forced
+  to 2, no input ever read.  All 55 real path classes across all five
+  recordings agree.
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least
