@@ -2386,3 +2386,159 @@ def state10_ground_tail(read, f198_value):
         return {'cooldown_delta': None}
     half = excess_signed >> 1
     return {'cooldown_delta': half}
+
+
+# --- 005886/005834: states 19 and 18 -- a shared multi-part region, per docs/gods/blockers/
+# 2026-09-18-005886.md's own ten real terminal shapes (all witnessed, five recordings, 190 + 118
+# retained fixtures).  States 18 and 19 are "one region, two gates" (states 4/15, 5/1, 6/0's own
+# shape): NOT byte-identical heads (a raw ROM diff of the first 400 bytes differs in 369), but
+# branching into the SAME physical downstream code -- the FFFFEA1E==1 small dispatch (0058A2 for
+# state 19, 005852 for state 18) and the bsr into the achievement highlight cycle
+# (game.achievements.achievement_highlight_cycle, 0058C6/00588E for state 19, 005878 for state 18)
+# both land on identical addresses either way.  Only each state's own outer head (whether it takes
+# EA1E==1's own small dispatch or the "!=1" budget-then-reset arm) and the budget-exhausted
+# transition target (state 0 for 19, state 1 for 18) are state-specific.
+#
+# The scan (0058D2-005954/005C14-005C32, reached only via the EA1E==1 arm's own SCAN_ACTIVE==0 test)
+# is a SECOND, separately-compiled ROM copy of game.movement.box_overlap_scan's own algorithm --
+# confirmed instruction-for-instruction against a real trace, not byte-identical to 00722C (a
+# different opening sequence for the same margin arithmetic) -- consumed here unlike its own twin's
+# two witnessed call sites (states 0/1, where the result is discarded by both).  A found entry's own
+# `+4` field is an object-kind index into a 192-entry ROM table at 0x14B42; every one of the 63
+# witnessed 'found' fixtures (states 19 and 18 together) has kind == 2, checked exactly once -- a
+# continued scan past a different kind, or a kind >= the table's own 0xC0 bound, is real ROM code no
+# recording enters (declined by name, 'kind-other' / 'kind-out-of-range').  A kind of 2 disables the
+# table slot (+4 = -1, +6 = 0) unless FFFFEA23 bits 1 and 2 are BOTH clear, in which case the slot is
+# instead re-armed (+4 restored to the kind, +6 = 1) and SCAN_ACTIVE is cleared again (so the very
+# next tick's own dispatch re-scans from scratch, as if this tick's scan had not happened).
+PROXIMITY_TABLE = 0xFFFF4342           # the SAME table game.movement.box_overlap_scan (00722C) reads
+PROXIMITY_KIND_TABLE = 0x014B42        # 192-entry ROM table, indexed by the found entry's own kind
+PROXIMITY_KIND_TABLE_SIZE = 0xC0
+PROXIMITY_KIND_CONSUME = 2             # the only kind this region's own scan consumes
+SCAN_ACTIVE = 0xFFFFF238               # word: "the scan ran this tick, and was not rearmed" latch
+SCAN_EMPTY = 0xFFFFF23A                # word: "the scan found nothing" latch, set by its exhausted tail
+PENDING_HIGHLIGHT = 0xFFFFF2E0         # word: "a kind-2 object was found, not yet consumed" flag
+STATE19_ENTRY, STATE18_ENTRY = 0x005886, 0x005834
+STATE19_RESET_STATE_INDEX = 0          # 005898-0058A0: the "!=1" arm's own budget-exhausted transition
+STATE18_RESET_STATE_INDEX = 1          # 005846-00584E: the SAME shape, state 18's own target
+
+
+def state1918_scan_consume(read):
+    """0058D2-005954 into 005C14-005C32/005C54: the scan above, consumed.  Returns 'not-found'
+    (game.movement.box_overlap_scan's own exhausted tail), 'rearmed' or 'consumed' (a kind-2 match,
+    FFFFEA23 bits 1/2 both clear or not), or 'kind-other'/'kind-out-of-range' (real ROM, declined)."""
+    from .movement import box_overlap_scan
+    scan = box_overlap_scan(read)
+    if scan['arm'] == 'not-found':
+        return {'arm': 'not-found', 'scan': scan, 'stores': {SCAN_EMPTY & 0xFFFFFF: (1, 2)}}
+    found = scan['found']
+    entry = found['entry']
+    kind = read((entry + 4) & 0xFFFFFF, 2) & 0xFFFF
+    if kind >= PROXIMITY_KIND_TABLE_SIZE:
+        return {'arm': 'kind-out-of-range', 'scan': scan, 'kind': kind, 'entry': entry}
+    table_kind = read((PROXIMITY_KIND_TABLE + kind) & 0xFFFFFF, 1)
+    if table_kind != PROXIMITY_KIND_CONSUME:
+        return {'arm': 'kind-other', 'scan': scan, 'kind': kind, 'table_kind': table_kind, 'entry': entry}
+    bits_clear = (read(EA23_WORD, 1) & 0x6) == 0
+    if bits_clear:
+        stores = {(entry + 4) & 0xFFFFFF: (kind, 2), (entry + 6) & 0xFFFFFF: (1, 2),
+                  SCAN_ACTIVE & 0xFFFFFF: (0, 2)}
+        return {'arm': 'rearmed', 'scan': scan, 'kind': kind, 'entry': entry, 'stores': stores}
+    stores = {(entry + 4) & 0xFFFFFF: (0xFFFF, 2), (entry + 6) & 0xFFFFFF: (0, 2)}
+    return {'arm': 'consumed', 'scan': scan, 'kind': kind, 'entry': entry, 'stores': stores}
+
+
+def _state1918_pending_tail(read):
+    """005C68-005C80: FFFFF2E0 (PENDING_HIGHLIGHT) already set.  005C68's own bit-1 test branches
+    straight to 75D6 (real ROM, but EA23 bit 1 alone is unwitnessed here by any of 68 retained
+    fixtures across states 19 and 18: every one holds exactly bit 2 -- 'bit1-set', declined); bit 1
+    clear and bit 2 set holds it ('pending-hold', no store, the only witnessed combination); both
+    clear clears it ('pending-cleared')."""
+    ea23 = read(EA23_WORD, 1)
+    if ea23 & 0x2:
+        return {'arm': 'bit1-set'}
+    if ea23 & 0x4:
+        return {'arm': 'pending-hold', 'stores': {}}
+    return {'arm': 'pending-cleared', 'stores': {PENDING_HIGHLIGHT & 0xFFFFFF: (0, 2)}}
+
+
+def _state1918_idle_tail(read):
+    """005C84-005C94: PENDING_HIGHLIGHT clear.  Both of 005C84's own bit tests branch to the SAME
+    address (5C98), but EA23 bit 1 alone is unwitnessed here too (every one of 53 retained fixtures
+    across states 19 and 18 holds exactly bit 2 -- 'bit1-set', declined); bit 1 clear and bit 2 set
+    calls the highlight cycle with the sound cue ('idle-cycle', the only witnessed combination);
+    both clear just exits ('idle-exit')."""
+    ea23 = read(EA23_WORD, 1)
+    if ea23 & 0x2:
+        return {'arm': 'bit1-set'}
+    if ea23 & 0x4:
+        return {'arm': 'idle-cycle'}
+    return {'arm': 'idle-exit'}
+
+
+def state1918_dispatch(read):
+    """The FFFFEA1E==1 arm's own small dispatch, shared physically by states 19 (0058A2) and 18
+    (005852): SCAN_ACTIVE==0 runs the scan ('scan', the caller composes state1918_scan_consume);
+    otherwise SCAN_EMPTY==0 (the scan just found+consumed/rearmed something -- rearming clears
+    SCAN_ACTIVE itself, so this arm is only ever reached after a 'consumed' or 'not-found' scan)
+    goes straight to the SAME tail 005C58's own PENDING_HIGHLIGHT store falls into; SCAN_EMPTY!=0
+    additionally checks FFFFEA23 bits 1/2: either set flags PENDING_HIGHLIGHT before that SAME tail,
+    or (both clear) calls the highlight cycle directly ('highlight', the caller composes
+    game.achievements.achievement_highlight_cycle)."""
+    if read(SCAN_ACTIVE, 2) & 0xFFFF == 0:
+        return {'arm': 'scan'}
+    set_pending = False
+    if read(SCAN_EMPTY, 2) & 0xFFFF != 0:
+        ea23 = read(EA23_WORD, 1)
+        if not (ea23 & 0x6):
+            return {'arm': 'highlight'}
+        set_pending = True
+    stores = {SCAN_EMPTY & 0xFFFFFF: (0, 2)}          # 005C5E: clr.w f23a.w -- unconditional past this point
+    if set_pending:
+        stores[PENDING_HIGHLIGHT & 0xFFFFFF] = (1, 2)
+        pending = True
+    else:
+        pending = read(PENDING_HIGHLIGHT, 2) & 0xFFFF != 0
+    tail = _state1918_pending_tail(read) if pending else _state1918_idle_tail(read)
+    merged_stores = dict(stores)
+    merged_stores.update(tail.get('stores', {}))
+    return {**tail, 'set_pending': set_pending, 'stores': merged_stores}
+
+
+def state19_head(read):
+    """005886-00588E/0058A2: state 19's own outer head.  FFFFEA1E==1 delegates to state1918_dispatch
+    (whose own 'scan'/'highlight' arms need a further call); otherwise ('!=1') the highlight cycle is
+    called unconditionally and a per-activation budget (D7, the caller's own entry value) decides
+    whether this activation just exits ('budget-hold') or resets STATE_INDEX to 0 ('budget-reset'),
+    forcing D7 to 2 -- the SAME shape state 18's own '!=1' arm uses, targeting state 1 instead."""
+    if _signed_word(read(EA1E_WORD, 2)) == 1:
+        return {'head': 'dispatch', **state1918_dispatch(read)}
+    return {'head': 'budget', 'arm': 'highlight'}
+
+
+def state19_budget_tail(read, d7):
+    """005892-00589E: the '!=1' arm's own tail once the highlight cycle call has returned; ``d7`` is
+    the activation's OWN entry D7 (the caller's, unmodified up to this point)."""
+    new_d7 = (d7 - 1) & 0xFFFF
+    if _signed_word(new_d7) >= 0:
+        return {'arm': 'budget-hold', 'd7': new_d7, 'stores': {}}
+    return {'arm': 'budget-reset', 'd7': 2,
+            'stores': {STATE_INDEX & 0xFFFFFF: (STATE19_RESET_STATE_INDEX, 2)}}
+
+
+def state18_head(read):
+    """005834-00583C/005852: state 18's own outer head -- BYTE-DIFFERENT from state 19's own
+    (a raw ROM diff of the first 400 bytes differs in 369) but the SAME two-arm shape."""
+    if _signed_word(read(EA1E_WORD, 2)) == 1:
+        return {'head': 'dispatch', **state1918_dispatch(read)}
+    return {'head': 'budget', 'arm': 'highlight'}
+
+
+def state18_budget_tail(read, d7):
+    """005840-00584E: state 18's own tail, identical in shape to state19_budget_tail but targeting
+    state 1 (not state 19's own state 0) on the reset arm."""
+    new_d7 = (d7 - 1) & 0xFFFF
+    if _signed_word(new_d7) >= 0:
+        return {'arm': 'budget-hold', 'd7': new_d7, 'stores': {}}
+    return {'arm': 'budget-reset', 'd7': 2,
+            'stores': {STATE_INDEX & 0xFFFFFF: (STATE18_RESET_STATE_INDEX, 2)}}

@@ -1,26 +1,40 @@
-"""The achievement/collectible-slot tracker's own reset call (``0047DA``).
+"""The achievement/collectible-slot tracker's own reset call (``0047DA``), and the achievement
+highlight cycle (``005CEE``) states 19/18's own shared body calls.
 
-Reached from ``004790`` (the slot dispatch, one call per matching tracked id)
-and from ``0048B4`` inside ``004800``/``00475E``'s own bounded record scans
-(the trigger firing subsystem blocker's second structure,
-``docs/gods/blockers/2026-09-16-00462C-firing.md``): four consecutive
-tracked-id slots at ``FFFFF22E`` are marked empty (``-1``) by index, and the
-routine always calls into the collected-item icon upload (``001648``) to
-clear the matching VRAM icon slot -- with ``D2`` fixed at ``-1`` on every
-witnessed call, the icon upload's own "clear" arm, never its real
-tile-descriptor upload (a positive ``D2``, unreached from this caller: the
-routine's own code sets ``D2`` unconditionally before the call, so no
-recording needs to witness the other value for this fact to hold).
+``0047DA`` is reached from ``004790`` (the slot dispatch, one call per matching tracked id) and from
+``0048B4`` inside ``004800``/``00475E``'s own bounded record scans (the trigger firing subsystem
+blocker's second structure, ``docs/gods/blockers/2026-09-16-00462C-firing.md``): four consecutive
+tracked-id slots at ``FFFFF22E`` are marked empty (``-1``) by index, and the routine always calls
+into the collected-item icon upload (``001648``) to clear the matching VRAM icon slot -- with ``D2``
+fixed at ``-1`` on every witnessed call, the icon upload's own "clear" arm, never its real
+tile-descriptor upload (a positive ``D2``, unreached from this caller: the routine's own code sets
+``D2`` unconditionally before the call, so no recording needs to witness the other value for this
+fact to hold).
 
-Pure function of ``read(address, size)``; no cycles, CCR, stack or
-registers -- the whole routine is scratch (its own ``d1``/``d2``/``a0``
-frame restores their entry values unchanged at the RTS).
+**Correction (18 Sep, states 19/18's own blocker,
+``docs/gods/blockers/2026-09-18-005886.md``):** ``ACHIEVEMENT_SLOTS``/``HIGHLIGHT_ID`` are NOT
+specific to this tracker -- ``005CEE`` (reached from states 19 and 18, not from the achievement slot
+dispatch family at all) indexes ``ACHIEVEMENT_SLOTS`` directly by ``HIGHLIGHT_ID`` (``(a3,
+d4.w)`` with ``d4 = HIGHLIGHT_ID*2``), a different addressing convention from ``achievement_slot_reset``'s
+own four fixed offsets, but the SAME two fields.  Both belong to whatever subsystem owns the
+proximity-scan-and-highlight mechanic below, shared with the achievement/collectible-slot tracker by
+address, not by ownership.
+
+Pure functions of ``read(address, size)``; no cycles, CCR, stack or registers -- ``0047DA``'s whole
+routine is scratch (its own ``d1``/``d2``/``a0`` frame restores their entry values unchanged at the
+RTS); ``achievement_highlight_cycle`` below is likewise scratch (only ``d7`` is saved/restored, by
+``005CEE`` itself, entirely inside its own seam).
 """
 from __future__ import annotations
 
 ACHIEVEMENT_SLOTS = 0xFFFFF22E    # four consecutive words, one per tracked id (FFEF8C/F01E/F0B0's own ids); -1 = empty
 HIGHLIGHT_ID = 0xFFFFF236         # word: D0 matching this selects 001648's own DDDDDDDD fill instead of FFFFFFFF
 WITNESSED_ICON_SLOTS = (0, 1, 3)  # D0: which of 001648's four VRAM icon slots (its own table at 0016C2); 2 unwitnessed
+
+
+def _signed_word(value):
+    value &= 0xFFFF
+    return value - 0x10000 if value & 0x8000 else value
 
 
 def achievement_slot_reset(read, d0):
@@ -149,3 +163,37 @@ def record_id_scan_check(read, a1, position):
         return False, None
     value = read((a1 + id_offset) & 0xFFFFFF, 2) & 0xFFFF
     return id_in_range(value), value
+
+
+# --- 005CEE: the achievement highlight cycle (states 19/18's own shared body,
+# ``game.player.state1918_dispatch``'s own ``'highlight'`` arm) -----------------------------------
+#
+# Called by bsr from three sites across states 19 and 18 (0058C6/00588E, 005878); its own D7 is the
+# only register it saves/restores, so from the caller's own composition it is one opaque ceded block
+# (a seam over a seam, ``achievement_slot_dispatch``'s own shape over ``0047DA``).  Reads
+# ACHIEVEMENT_SLOTS[HIGHLIGHT_ID]: negative (empty) skips straight to the "refresh" tail below;
+# otherwise the floating icon spawn (``game.spawns.floating_icon_spawn``) is called with the tracked
+# position (GRID_X + 8, GRID_Y + 0x20) and the stored value + HIGHLIGHT_KIND_BIAS, and the slot is
+# marked consumed (-1) either way BEFORE the spawn call.  Both arms converge on the SAME refresh: the
+# CURRENT HIGHLIGHT_ID's own icon slot re-uploaded highlighted (001648, d1=1) with whatever
+# ACHIEVEMENT_SLOTS now holds there as D2 (-1 on every witnessed call: HIGHLIGHT_ID's own slot was
+# never the one just consumed in any of the 191 witnessed activations, states 19 and 18 together).
+HIGHLIGHT_KIND_BIAS = 0xB              # 005D00: addi.w #$b,d2 -- the floating-icon spawn's own kind bias
+HIGHLIGHT_REFRESH_ICON_D2 = 0xFFFFFFFF  # moveq #$ff,d2 -- sign-extends to the full register (the refresh call's own fixed "clear" pattern)
+
+
+def achievement_highlight_cycle(read):
+    """005CEE: the slot at ACHIEVEMENT_SLOTS[HIGHLIGHT_ID], empty or not, then a fixed refresh call.
+    Returns ``'refresh'`` (the slot was already empty) or ``'spawn'`` (the slot held a value: the
+    caller composes ``game.spawns.floating_icon_spawn`` with ``kind`` and marks the slot consumed);
+    either way the caller uploads HIGHLIGHT_ID's own icon slot with D1=1, D2=HIGHLIGHT_REFRESH_ICON_D2.
+    """
+    slot = read(HIGHLIGHT_ID, 2) & 0xFFFF
+    doubled = (slot * 2) & 0xFFFF
+    address = (ACHIEVEMENT_SLOTS + doubled) & 0xFFFFFF
+    stored = read(address, 2)
+    if _signed_word(stored) < 0:
+        return {'arm': 'refresh', 'highlight_id': slot, 'icon_d0': slot, 'stores': {}}
+    kind = (stored + HIGHLIGHT_KIND_BIAS) & 0xFFFF
+    return {'arm': 'spawn', 'highlight_id': slot, 'icon_d0': slot, 'kind': kind,
+            'stores': {address: (0xFFFF, 2)}}

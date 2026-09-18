@@ -19,7 +19,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
-                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
+                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, camera_follow_plan,
@@ -28,7 +28,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_tail_plan, proximity_plan,
-                       record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state2_plan, state10_plan, state3_plan, state4_plan, state5_plan, state6_plan, state8_plan, state9_plan, state11_plan, state12_plan, state13_plan, state14_plan, state16_plan, state17_plan, state21_plan, state22_plan, state23_plan, state26_plan, state27_plan, state28_plan, static_emit_plan, string_copy_plan, table_reset_plan,
+                       record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state2_plan, state10_plan, state3_plan, state4_plan, state5_plan, state6_plan, state8_plan, state9_plan, state11_plan, state12_plan, state13_plan, state14_plan, state16_plan, state17_plan, state18_plan, state19_plan, state21_plan, state22_plan, state23_plan, state26_plan, state27_plan, state28_plan, static_emit_plan, string_copy_plan, table_reset_plan,
                        trail_check_plan, walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
 
@@ -220,6 +220,8 @@ PLANNERS = {
     'state-27': {STATE27_ENTRY: state27_plan},
     'state-23': {STATE23_ENTRY: state23_plan},
     'state-10': {STATE10_ENTRY: state10_plan},
+    'state-19': {STATE19_ENTRY: state19_plan},
+    'state-18': {STATE18_ENTRY: state18_plan},
     'state-2': {STATE2_ENTRY: state2_plan},
     'state-3': {STATE3_ENTRY: state3_plan},
     'state-4': {STATE4_ENTRY: state4_plan},
@@ -253,7 +255,16 @@ PLANNERS = {
                        STATE11_ENTRY: state11_plan, STATE2_ENTRY: state2_plan, STATE3_ENTRY: state3_plan,
                        STATE4_ENTRY: state4_plan, STATE17_ENTRY: state17_plan, STATE21_ENTRY: state21_plan,
                        STATE28_ENTRY: state28_plan, STATE22_ENTRY: state22_plan, STATE27_ENTRY: state27_plan,
-                       STATE23_ENTRY: state23_plan, STATE10_ENTRY: state10_plan},
+                       STATE23_ENTRY: state23_plan, STATE10_ENTRY: state10_plan,
+                       # STATE18_ENTRY is NOT armed here: native/machine.cpp caps the gate set at 64
+                       # (PortForge, pinned) and camera-sprites was already at 63 -- state 19 (190
+                       # activations) takes the last slot; state 18 (63 activations) stays a fully
+                       # recovered, individually verified candidate ('state-18', its own single gate)
+                       # per Aladdin's own precedent (docs/archive/aladdin/recovery-cost-log.md: "an
+                       # attempted nine-gate expansion exceeded native capacity... independent wrapper
+                       # plans are oracle-only entry points. No new gate manager or native change.").
+                       # See docs/gods/ledger.md's 18 September entry.
+                       STATE19_ENTRY: state19_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -421,6 +432,16 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # STATE_INDEX/D7 feed the shared tail's own re-index or a future activation's own
              # dispatch the same unbounded way.
              'state-10-mutant-result': ('state-10', _mutate_outcome),
+             # a register, not the generic STATE_INDEX/D7-feeds-an-unbounded-table _mutate_outcome
+             # every other state uses: states 19/18 are seam-heavy (the achievement highlight cycle,
+             # the box-scan consume) and _mutate_outcome's own "drop every write" corrupts the seam's
+             # own structural return-address writes, faulting the M68000 rather than diverging cleanly
+             # (confirmed: PC lands on a data address and executes garbage).  D0 carries the icon slot
+             # into every ceded 001648 call (achievement-slot-dispatch's own reasoning) and is real on
+             # every admitted arm, seam or plain, so a register mutant is always observable and never
+             # touches the stack.
+             'state-19-mutant-result': ('state-19', _mutate_register),
+             'state-18-mutant-result': ('state-18', _mutate_register),
              'state-14-mutant-result': ('state-14', _mutate_state14_counter)}
 
 

@@ -7277,6 +7277,857 @@ def box_overlap_scan_plan(machine, registers):
                       registers=exit_registers, last_pc=last_pc)
 
 
+
+
+# --- 005886/005834: states 19 and 18 -- see game.player's own module note above
+# state1918_scan_consume / state1918_dispatch / state19_head / state18_head / achievements.
+# achievement_highlight_cycle / spawns.floating_icon_spawn.  "One region, two gates": states 19 and
+# 18 share the WHOLE body from 0058D2 onward physically (the scan, the post-scan dispatch at 005C14,
+# the pending/idle tails, the achievement highlight cycle at 005CEE); only each state's own outer
+# head (0058A2-0058D2 for 19, 005852-005878 for 18: NOT byte-identical, but the same shape) and the
+# budget-reset transition target are separate ROM copies with their own cost constants.  Costed one
+# instruction-block at a time from the tracer on every retained fixture across states 19
+# (census-005886-*, five recordings, 190 fixtures) and 18 (census-005834-*, five recordings, 118
+# fixtures).  The scan (0058D2-005954) is a second, separately-compiled copy of
+# game.movement.box_overlap_scan's own algorithm (00722C) -- its own per-entry costs (_BS_*,
+# _bs_entry_cost, above) are reused verbatim, confirmed instruction-for-instruction identical; only
+# the head (a different opening sequence for the same margin arithmetic) and the found/not-found
+# tails (continuing into this region's own dispatch instead of 00722C's own "move #imm,-(a7);rtr"
+# trick) are this region's own.  Both the 005C36 consume-and-highlight call and the 005CEE-owned
+# achievement highlight cycle reach 001648 (the SAME icon-upload device operation
+# achievement_slot_reset_plan already seams) with D2 sometimes POSITIVE here (005C36's own call: the
+# found entry's own kind, e.g. 0x12) -- 001648's own real-descriptor upload arm, never witnessed by
+# achievement_slot_reset's own always-D2=-1 caller, but the seam does not need to know which arm the
+# ceded operation takes.
+STATE19_ENTRY, STATE18_ENTRY = 0x005886, 0x005834
+STATE1918_ICON_UPLOAD = 0x001648        # the SAME seam target achievement_slot_reset_plan already uses
+STATE1918_CYCLE_SOUND_VALUE = 0x4B
+
+_S1918_SCAN_HEAD = (16 + 4 + 4 + 12 + 12 + 12 + 8, 7)     # 0058D2-0058EA: move#1,f238; moveq x2; add x2; lea; move#$c7,d6
+_S1918_FOUND_TAIL_HEAD = (12 + 24 + 8, 3)                 # 00592E-005938: lea 14b42,a2; movem.w (a0),d0-d2; cmpi #$c0,d2
+_S1918_FOUND_RANGE_BGE_NOT = (12, 1)                      # 00593C bge.w -- not taken (kind < 0xc0, the only witnessed case)
+_S1918_FOUND_KIND_TEST = (18, 1)                          # 005940 cmpi.b #2,(a2,d2.w)
+_S1918_FOUND_KIND_BNE_NOT = (8, 1)                        # 005946 bne.b -- not taken (kind == 2, the only witnessed case)
+_S1918_FOUND_SAVE_A2 = (4, 1)                             # 005948 movea.l a0,a2
+_S1918_FOUND_DISABLE = (16 + 16, 2)                       # 00594A-005950: move.w #$ffff,4(a0); clr.w 6(a0)
+_S1918_FOUND_BRA_5C14 = (10, 1)                           # 005954 bra.w $5c14
+_S1918_NOTFOUND_SET_EMPTY = (16, 1)                       # 005924 move.w #1,f23a.w
+_S1918_NOTFOUND_BRA = (10, 1)                             # 00592A bra.w 75d6
+
+_S1918_5C14_BIT1_TEST = (16, 1)                           # 005C14 btst #1,ea23.w
+_S1918_5C14_BIT1_BNE = {True: (10, 1), False: (8, 1)}     # 005C1A bne.b -- taken: consume directly
+_S1918_5C14_BIT2_TEST = (16, 1)                           # 005C1C btst #2,ea23.w
+_S1918_5C14_BIT2_BNE = {True: (10, 1), False: (8, 1)}     # 005C22 bne.b
+_S1918_REARM_CLEAR_ACTIVE = (16, 1)                       # 005C24 clr.w f238.w
+_S1918_REARM_STORE_KIND = (12, 1)                         # 005C28 move.w d2,4(a2)
+_S1918_REARM_STORE_ONE = (16, 1)                          # 005C2C move.w #1,6(a2)
+_S1918_REARM_BRA = (10, 1)                                # 005C32 bra.w 75d6
+_S1918_CONSUME_HEAD = (16 + 8 + 12 + 4 + 4 + 14, 6)       # 005C36-005C48: move#1,f2e0; lea; move f236,d5; move d5,d0; add d5,d5; move d2,(a3,d5)
+_S1918_CONSUME_MOVEQ_D1 = (4, 1)                          # 005C4C moveq #1,d1
+_S1918_CONSUME_JSR = (20, 1)                              # 005C4E jsr 1648 -- the prefix's own last instruction
+_S1918_CONSUME_TAIL_BRA = (10, 1)                         # 005C54 bra.w 75d6 -- the suffix, after 1648 returns
+
+_S1918_DISPATCH_MOVEQ = (4, 1)                            # moveq #1,d7 -- 0058A2 (state19) / 005852 (state18)
+_S1918_5C58_SET_PENDING = (16, 1)                         # 005C58 move.w #1,f2e0.w
+_S1918_5C5E_CLEAR_EMPTY = (16, 1)                         # 005C5E clr.w f23a.w
+_S1918_5C62_TST_PENDING = (12, 1)                         # 005C62 tst.w f2e0.w
+_S1918_5C66_BEQ_IDLE = {True: (10, 1), False: (8, 1)}     # 005C66 beq.b -- taken: PENDING clear (idle tail)
+_S1918_PEND_BIT1_TEST = (16, 1)                           # 005C68 btst #1,ea23.w
+_S1918_PEND_BIT1_BNE_NOT = (12, 1)                        # 005C6E bne.w -- not taken (bit 1 clear, the only witnessed case)
+_S1918_PEND_BIT2_TEST = (16, 1)                           # 005C72 btst #2,ea23.w
+_S1918_PEND_BIT2_BNE = {True: (10, 1), False: (12, 1)}    # 005C78 bne.w
+_S1918_PEND_CLEAR = (16, 1)                               # 005C7C clr.w f2e0.w
+_S1918_PEND_BRA = (10, 1)                                 # 005C80 bra.w 75d6
+_S1918_IDLE_BIT1_TEST = (16, 1)                           # 005C84 btst #1,ea23.w
+_S1918_IDLE_BIT1_BNE_NOT = (8, 1)                         # 005C8A bne.b -- not taken (bit 1 clear, the only witnessed case)
+_S1918_IDLE_BIT2_TEST = (16, 1)                           # 005C8C btst #2,ea23.w
+_S1918_IDLE_BIT2_BNE = {True: (10, 1), False: (8, 1)}     # 005C92 bne.b
+_S1918_IDLE_EXIT_BRA = (10, 1)                            # 005C94 bra.w 75d6
+
+_S1918_CYCLE_SOUND = (16, 1)                              # 005C98 move.w #$4b,fdf6.w
+_S1918_CYCLE_HEAD1 = (12 + 4 + 4 + 8 + 14, 5)             # 005C9E-005CAA: move f236,d5; move d5,d0; add d5,d5; lea; move (a3,d5),d2
+_S1918_CYCLE_MOVEQ_D1_0 = (4, 1)                          # 005CAE moveq #0,d1
+_S1918_CYCLE_JSR1 = (20, 1)                               # 005CB0 jsr 1648 (clear the OLD highlighted icon)
+_S1918_CYCLE_CLEAR_PENDING = (16, 1)                      # 005CE0 clr.w f16e.w
+_S1918_CYCLE_LOAD_BUFFER = (16, 1)                        # 005CE4 movea.l f166.w,a3
+_S1918_CYCLE_CLEAR_BUFFER = (12, 1)                       # 005CE8 clr.w (a3)
+_S1918_CYCLE_BRA = (10, 1)                                # 005CEA bra.w 75d6
+
+_S1918_HIGHLIGHT_PUSH = (12, 1)                           # 005CEE move.l d7,-(a7)
+_S1918_HIGHLIGHT_HEAD = (8 + 12 + 4 + 14, 4)              # 005CF0-005CFA: lea; move f236,d4; add d4,d4; move (a3,d4),d2
+_S1918_HIGHLIGHT_BMI_EMPTY = {True: (10, 1), False: (8, 1)}   # 005CFE bmi.b -- taken: slot already empty ('refresh')
+_S1918_HIGHLIGHT_ADDI = (8, 1)                            # 005D00 addi.w #$b,d2
+_S1918_HIGHLIGHT_BMI2_NOT = (8, 1)                        # 005D04 bmi.b -- not taken (the only witnessed case)
+_S1918_HIGHLIGHT_SPAWN_SETUP = (12 + 12 + 4 + 8 + 18, 5)  # 005D06-005D14: move f18c,d0; move f18e,d1; addq#8,d0; addi#$20,d1; move#$ffff,(a3,d4)
+_S1918_HIGHLIGHT_JSR_SPAWN = (20, 1)                      # 005D1A jsr 10d7c
+# 010D7C's own body (game.spawns.floating_icon_spawn's own 'spawn' arm, the only one witnessed):
+_S1918_SPAWN_CMPI = (8, 1)                                # 010D7C cmpi.w #$3d,d2
+_S1918_SPAWN_BEQ_NOT = (8, 1)                             # 010D80 beq.b -- not taken (kind != 0x3d, the only witnessed case)
+_S1918_SPAWN_TST_BUSY = (12, 1)                           # 010D82 tst.w f1f6.w
+_S1918_SPAWN_BPL_NOT = (12, 1)                            # 010D86 bpl.w -- not taken (idle, the only witnessed case)
+_S1918_SPAWN_STORE = (12 + 12 + 16 + 12, 4)               # 010D8A-010D98: move d0,f1f0; move d1,f1f2; move#$fffd,f1f4; move d2,f1f6
+_S1918_SPAWN_RTS = (16, 1)                                # 010D9C rts
+_S1918_HIGHLIGHT_REFRESH_HEAD = (12 + 4 + 4, 3)           # 005D20-005D26: move f236,d0; moveq#1,d1; moveq#$ff,d2
+_S1918_HIGHLIGHT_REFRESH_JSR = (20, 1)                    # 005D28 jsr 1648
+_S1918_HIGHLIGHT_RESTORE_D7 = (12, 1)                     # 005D2E move.l (a7)+,d7
+_S1918_HIGHLIGHT_RTS = (16, 1)                            # 005D30 rts
+
+_S19_HEAD_CMPI = (16, 1)                                  # 005886 cmpi.w #1,ea1e.w
+_S19_HEAD_BEQ = {True: (10, 1), False: (8, 1)}            # 00588C beq.b $58a2
+_S19_BUDGET_BSR = (18, 1)                                 # 00588E bsr.w $5cee
+_S19_BUDGET_SUBQ = (4, 1)                                 # 005892 subq.w #1,d7
+_S19_BUDGET_BPL = {True: (10, 1), False: (12, 1)}         # 005894 bpl.w -- taken: budget still open
+_S19_BUDGET_RESET_MOVEQ = (4, 1)                          # 005898 moveq #2,d7
+_S19_BUDGET_RESET_STORE = (16, 1)                         # 00589A clr.w f192.w
+_S19_BUDGET_RESET_BRA = (10, 1)                           # 00589E bra.w 75d6
+_S19_DISPATCH_TST_ACTIVE = (12, 1)                        # 0058A4 tst.w f238.w
+_S19_DISPATCH_BEQ_SCAN = {True: (10, 1), False: (8, 1)}   # 0058A8 beq.b $58d2
+_S19_DISPATCH_TST_EMPTY = (12, 1)                         # 0058AA tst.w f23a.w
+_S19_DISPATCH_BEQ_DIRECT = {True: (10, 1), False: (12, 1)}  # 0058AE beq.w $5c5e -- word branch
+_S19_DISPATCH_BIT1_TEST = (16, 1)                         # 0058B2 btst #1,ea23.w
+_S19_DISPATCH_BIT1_BNE_NOT = (12, 1)                      # 0058B8 bne.w -- not taken (the only witnessed case)
+_S19_DISPATCH_BIT2_TEST = (16, 1)                         # 0058BC btst #2,ea23.w
+_S19_DISPATCH_BIT2_BNE = {True: (10, 1), False: (12, 1)}  # 0058C2 bne.w
+_S19_DISPATCH_BSR_HIGHLIGHT = (18, 1)                     # 0058C6 bsr.w $5cee
+_S19_DISPATCH_TST_ACTIVE2 = (12, 1)                       # 0058CA tst.w f238.w
+_S19_DISPATCH_BNE_EXIT = (10, 1)                          # 0058CE bne.w 75d6 -- always taken (f238 already nonzero here)
+
+_S18_HEAD_CMPI = (16, 1)                                  # 005834 cmpi.w #1,ea1e.w
+_S18_HEAD_BEQ = {True: (10, 1), False: (8, 1)}            # 00583A beq.b $5852
+_S18_BUDGET_BSR = (18, 1)                                 # 00583C bsr.w $5cee
+_S18_BUDGET_SUBQ = (4, 1)                                 # 005840 subq.w #1,d7
+_S18_BUDGET_BPL = {True: (10, 1), False: (12, 1)}         # 005842 bpl.w -- taken: budget still open
+_S18_BUDGET_RESET_MOVEQ = (4, 1)                          # 005846 moveq #2,d7
+_S18_BUDGET_RESET_STORE = (16, 1)                         # 005848 move.w #1,f192.w
+_S18_BUDGET_RESET_BRA = (10, 1)                           # 00584E bra.w 75d6
+_S18_DISPATCH_TST_ACTIVE = (12, 1)                        # 005854 tst.w f238.w
+_S18_DISPATCH_BEQ_SCAN = {True: (10, 1), False: (12, 1)}  # 005858 beq.w $58d2
+_S18_DISPATCH_TST_EMPTY = (12, 1)                         # 00585C tst.w f23a.w
+_S18_DISPATCH_BEQ_DIRECT = {True: (10, 1), False: (12, 1)}  # 005860 beq.w $5c5e
+_S18_DISPATCH_BIT1_TEST = (16, 1)                         # 005864 btst #1,ea23.w
+_S18_DISPATCH_BIT1_BNE_NOT = (12, 1)                      # 00586A bne.w -- not taken (the only witnessed case)
+_S18_DISPATCH_BIT2_TEST = (16, 1)                         # 00586E btst #2,ea23.w
+_S18_DISPATCH_BIT2_BNE = {True: (10, 1), False: (12, 1)}  # 005874 bne.w
+_S18_DISPATCH_BSR_HIGHLIGHT = (18, 1)                     # 005878 bsr.w $5cee
+_S18_DISPATCH_TST_ACTIVE2 = (12, 1)                       # 00587C tst.w f238.w
+_S18_DISPATCH_BEQ_RESCAN_NOT = (8, 1)                     # 005880 beq.b $58d2 -- always not taken (f238 unchanged since entry)
+_S18_DISPATCH_BRA_EXIT = (10, 1)                          # 005882 bra.w 75d6
+
+import collections as _collections
+
+_S1918Costs = _collections.namedtuple('_S1918Costs', [
+    'active_test', 'beq_scan', 'empty_test', 'beq_direct',
+    'bit1_test', 'bit1_bne_not', 'bit2_test', 'bit2_bne', 'bsr_highlight'])
+
+_S19_DISPATCH_COSTS = _S1918Costs(
+    active_test=_S19_DISPATCH_TST_ACTIVE, beq_scan=_S19_DISPATCH_BEQ_SCAN,
+    empty_test=_S19_DISPATCH_TST_EMPTY, beq_direct=_S19_DISPATCH_BEQ_DIRECT,
+    bit1_test=_S19_DISPATCH_BIT1_TEST, bit1_bne_not=_S19_DISPATCH_BIT1_BNE_NOT,
+    bit2_test=_S19_DISPATCH_BIT2_TEST, bit2_bne=_S19_DISPATCH_BIT2_BNE,
+    bsr_highlight=_S19_DISPATCH_BSR_HIGHLIGHT)
+_S18_DISPATCH_COSTS = _S1918Costs(
+    active_test=_S18_DISPATCH_TST_ACTIVE, beq_scan=_S18_DISPATCH_BEQ_SCAN,
+    empty_test=_S18_DISPATCH_TST_EMPTY, beq_direct=_S18_DISPATCH_BEQ_DIRECT,
+    bit1_test=_S18_DISPATCH_BIT1_TEST, bit1_bne_not=_S18_DISPATCH_BIT1_BNE_NOT,
+    bit2_test=_S18_DISPATCH_BIT2_TEST, bit2_bne=_S18_DISPATCH_BIT2_BNE,
+    bsr_highlight=_S18_DISPATCH_BSR_HIGHLIGHT)
+
+
+def _s1918_scan_plan(machine, registers, read, cycles, instructions, sr):
+    """0058D2-005954: the scan itself (game.movement.box_overlap_scan's own algorithm), consumed by
+    player.state1918_scan_consume.  Returns a plain AtomicPlan ('not-found' / 'rearmed') or a Seam
+    ('consumed', ceded over 001648)."""
+    from .game import player, movement
+    result = player.state1918_scan_consume(read)
+    scan = result['scan']
+    entries = scan['entries']
+    c, i = _S1918_SCAN_HEAD
+    cycles += c
+    instructions += i
+    for index, step in enumerate(entries):
+        c, i = _bs_entry_cost(step, index == movement.BOX_SCAN_COUNT - 1)
+        cycles += c
+        instructions += i
+    exit_registers = {'d0': scan['player_x'], 'd1': scan['player_y'], 'd7': 1}
+    last_tested = next((e for e in reversed(entries) if e['arm'] in ('tested', 'found')), None)
+    if last_tested is not None:
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | ((last_tested['x'] - 4) & 0xFFFF)
+        exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | ((last_tested['y'] - 0xC) & 0xFFFF)
+        exit_registers['d4'] = last_tested['far_x']
+        exit_registers['d5'] = last_tested['far_y']
+    dbra_count = len(entries) - (1 if scan['arm'] == 'found' else 0)
+    exit_registers['d6'] = (registers['d6'] & 0xFFFF0000) | ((0xC7 - dbra_count) & 0xFFFF)
+    sp32 = registers['a7']
+    sp = sp32 & 0xFFFFFF
+    # 0058D2 move.w #1,f238.w runs unconditionally at scan entry, before any of found/not-found is
+    # decided; the 'rearmed' tail's own clr.w f238.w (005C24) later overrides it back to 0.
+    order = dict(_bytes(0xFFFFF238 & 0xFFFFFF, 1, 2))
+
+    if result['arm'] == 'not-found':
+        c, i = _S1918_NOTFOUND_SET_EMPTY
+        cycles += c
+        instructions += i
+        for a, (v, s) in result['stores'].items():
+            order.update(dict(_bytes(a, v, s)))
+        sr = _logic_sr(sr, 1, 2)   # 005924 move.w #1,f23a.w is the last flag-setter
+        c, i = _S1918_NOTFOUND_BRA
+        cycles += c
+        instructions += i
+        exit_registers['a0'] = scan['end_entry'] & 0xFFFFFFFF
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x00592A)
+
+    if result['arm'] in ('kind-other', 'kind-out-of-range'):
+        raise UnsupportedCandidate(f"state 19/18 scan found-kind arm not witnessed: {result['arm']}")
+
+    entry = result['entry']
+    exit_registers['a0'] = entry & 0xFFFFFFFF
+    # 005934 movem.w (a0),d0-d2 overwrites d0/d1/d2 with the found entry's own raw x/y/kind fields
+    # (each sign-extended to 32 bits, MOVEM's own word-transfer convention) -- unlike 00722C's own
+    # tail, which never reaches this instruction.  d3/d4/d5/d6 are untouched by it (only three
+    # registers, d0-d2) and keep the box-test chain's own residue computed above.
+    def _sign_extend(word):
+        word &= 0xFFFF
+        return (word - 0x10000) & 0xFFFFFFFF if word & 0x8000 else word
+    ex = read(entry & 0xFFFFFF, 2)
+    ey = read((entry + 2) & 0xFFFFFF, 2)
+    kind = result['kind']
+    exit_registers['d0'] = _sign_extend(ex)
+    exit_registers['d1'] = _sign_extend(ey)
+    exit_registers['d2'] = _sign_extend(kind)
+    c, i = _S1918_FOUND_TAIL_HEAD
+    cycles += c
+    instructions += i
+    c, i = _S1918_FOUND_RANGE_BGE_NOT
+    cycles += c
+    instructions += i
+    c, i = _S1918_FOUND_KIND_TEST
+    cycles += c
+    instructions += i
+    c, i = _S1918_FOUND_KIND_BNE_NOT
+    cycles += c
+    instructions += i
+    c, i = _S1918_FOUND_SAVE_A2
+    cycles += c
+    instructions += i
+    c, i = _S1918_FOUND_DISABLE
+    cycles += c
+    instructions += i
+    c, i = _S1918_FOUND_BRA_5C14
+    cycles += c
+    instructions += i
+    c, i = _S1918_5C14_BIT1_TEST
+    cycles += c
+    instructions += i
+    ea23 = read(0xFFFFEA23, 1)
+    bit1, bit2 = bool(ea23 & 0x2), bool(ea23 & 0x4)
+    c, i = _S1918_5C14_BIT1_BNE[bit1]
+    cycles += c
+    instructions += i
+    if not bit1:
+        c, i = _S1918_5C14_BIT2_TEST
+        cycles += c
+        instructions += i
+        c, i = _S1918_5C14_BIT2_BNE[bit2]
+        cycles += c
+        instructions += i
+
+    if result['arm'] == 'rearmed':
+        if bit1 or bit2:
+            raise UnsupportedCandidate('state 19/18 scan rearm arm disagrees with EA23')
+        c, i = _S1918_REARM_CLEAR_ACTIVE
+        cycles += c
+        instructions += i
+        c, i = _S1918_REARM_STORE_KIND
+        cycles += c
+        instructions += i
+        for a, (v, s) in result['stores'].items():
+            order.update(dict(_bytes(a, v, s)))
+        sr = _logic_sr(sr, 1, 2)   # 005C2C move.w #1,6(a2) is the last flag-setter
+        c, i = _S1918_REARM_STORE_ONE
+        cycles += c
+        instructions += i
+        c, i = _S1918_REARM_BRA
+        cycles += c
+        instructions += i
+        exit_registers['a2'] = entry & 0xFFFFFFFF
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x005C32)
+
+    if not (bit1 or bit2):
+        raise UnsupportedCandidate('state 19/18 scan consume arm disagrees with EA23')
+    # jsr $1648 (005C4E) pushes its own return address (005C54) as part of running; the machine
+    # hands off to 001648 with a7 = entry a7 - 4, not entry a7 (no bsr/frame precedes it here).  This
+    # structural write goes into `order` FIRST and the semantic stores LAST (achievement_slot_reset's
+    # own convention), so a generic "flip the last write" mutant (_mutate_result) corrupts an
+    # observable game byte, never the return address 001648's own rts reads.
+    order.update(dict(_bytes((sp - 4) & 0xFFFFFF, 0x005C54, 4)))
+    for a, (v, s) in result['stores'].items():
+        order.update(dict(_bytes(a, v, s)))
+    c, i = _S1918_CONSUME_HEAD
+    cycles += c
+    instructions += i
+    from .game import achievements
+    # 005C36 move.w #1,f2e0.w (PENDING_HIGHLIGHT); 005C40-005C44: move.w f236.w,d5 (HIGHLIGHT_ID into
+    # d5's own lower half, upper already 0 from the scan's own far_y residue); move.w d5,d0 (D0's own
+    # upper half stays whatever movem.w left it at -- sign_extend(ex) above -- only the lower word
+    # becomes HIGHLIGHT_ID); 005C48 move.w d2,(a3,d5.w) stores the found entry's own kind into
+    # ACHIEVEMENT_SLOTS[HIGHLIGHT_ID].
+    highlight_id = read(achievements.HIGHLIGHT_ID, 2) & 0xFFFF
+    order.update(dict(_bytes(0xFFFFF2E0 & 0xFFFFFF, 1, 2)))
+    order.update(dict(_bytes((achievements.ACHIEVEMENT_SLOTS + 2 * highlight_id) & 0xFFFFFF, kind & 0xFFFF, 2)))
+    c, i = _S1918_CONSUME_MOVEQ_D1
+    cycles += c
+    instructions += i
+    c, i = _S1918_CONSUME_JSR
+    cycles += c
+    instructions += i
+    exit_registers['a2'] = entry & 0xFFFFFFFF
+    prefix_regs = dict(exit_registers)
+    prefix_regs.update({'d0': (exit_registers['d0'] & 0xFFFF0000) | highlight_id,
+                        'd1': 1, 'd2': exit_registers['d2'], 'a3': 0xFFFFF22E,
+                        'd5': (exit_registers['d5'] & 0xFFFF0000) | ((2 * highlight_id) & 0xFFFF),
+                        'a7': (sp32 - 4) & 0xFFFFFFFF, 'pc': STATE1918_ICON_UPLOAD,
+                        'sr': _logic_sr(sr, 1, 4)})   # 005C4C moveq #1,d1 is the last flag-setter
+    prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                        registers=prefix_regs, last_pc=0x005C4E)
+
+    def consume_suffix(machine2, registers2, _sp32=sp32):
+        if registers2['pc'] != 0x005C54:
+            raise UnsupportedCandidate('state 19/18 consume suffix needs the machine parked at 005C54')
+        c2, i2 = _S1918_CONSUME_TAIL_BRA
+        return AtomicPlan(cycles=c2, instructions=i2, writes=(),
+                          registers={'a7': _sp32, 'pc': 0x0075D6}, last_pc=0x005C54)
+
+    return Seam(prefix=prefix, resume_pc=0x005C54, stack_basis=sp32, guards=(((sp - 4) & 0xFFFFFF, 4),), suffix=consume_suffix)
+
+
+def _s1918_pending_idle_plan(machine, registers, head, cycles, instructions, sr, order):
+    """005C58-005C94: the SAME shared tail regardless of state or how it was reached (directly, or
+    via 005C58's own PENDING_HIGHLIGHT store)."""
+    sp32 = registers['a7']
+    for a, (v, s) in head.get('stores', {}).items():
+        order.update(dict(_bytes(a, v, s)))
+    c, i = _S1918_5C62_TST_PENDING
+    cycles += c
+    instructions += i
+    pending = head['arm'] in ('pending-hold', 'pending-cleared')
+    c, i = _S1918_5C66_BEQ_IDLE[not pending]
+    cycles += c
+    instructions += i
+    if pending:
+        c, i = _S1918_PEND_BIT1_TEST
+        cycles += c
+        instructions += i
+        c, i = _S1918_PEND_BIT1_BNE_NOT
+        cycles += c
+        instructions += i
+        c, i = _S1918_PEND_BIT2_TEST
+        cycles += c
+        instructions += i
+        if head['arm'] == 'pending-hold':
+            c, i = _S1918_PEND_BIT2_BNE[True]
+            cycles += c
+            instructions += i
+            sr = (sr & ~0x04)   # 005C72 btst #2,ea23.w: bit set -> Z=0; N/V/C/X retained
+            return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                              registers={'d7': 1, 'a7': sp32, 'pc': 0x0075D6, 'sr': sr}, last_pc=0x005C78)
+        c, i = _S1918_PEND_BIT2_BNE[False]
+        cycles += c
+        instructions += i
+        c, i = _S1918_PEND_CLEAR
+        cycles += c
+        instructions += i
+        sr = _logic_sr(sr, 0, 2)   # 005C7C clr.w f2e0.w is the last flag-setter
+        c, i = _S1918_PEND_BRA
+        cycles += c
+        instructions += i
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers={'d7': 1, 'a7': sp32, 'pc': 0x0075D6, 'sr': sr}, last_pc=0x005C80)
+    c, i = _S1918_IDLE_BIT1_TEST
+    cycles += c
+    instructions += i
+    c, i = _S1918_IDLE_BIT1_BNE_NOT
+    cycles += c
+    instructions += i
+    c, i = _S1918_IDLE_BIT2_TEST
+    cycles += c
+    instructions += i
+    if head['arm'] == 'idle-exit':
+        c, i = _S1918_IDLE_BIT2_BNE[False]
+        cycles += c
+        instructions += i
+        sr = (sr & ~0x04) | 0x04   # 005C8C btst #2,ea23.w: bit clear -> Z=1; N/V/C/X retained
+        c, i = _S1918_IDLE_EXIT_BRA
+        cycles += c
+        instructions += i
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers={'d7': 1, 'a7': sp32, 'pc': 0x0075D6, 'sr': sr}, last_pc=0x005C94)
+    c, i = _S1918_IDLE_BIT2_BNE[True]
+    cycles += c
+    instructions += i
+    return _s1918_idle_cycle_plan(machine, registers, cycles, instructions, order)
+
+
+def _s1918_idle_cycle_plan(machine, registers, cycles, instructions, order):
+    """005C98-005CEA: the sound-cued highlight-advance-and-clear-message arm, shared by states 19
+    and 18.  Two chained platform calls (a run of them, Aladdin's own platform-tail shape): per the
+    "never chain seams" rule, the prefix ends at the FIRST jsr and resume_pc is set past BOTH calls
+    (005CE0) -- the machine runs the whole span (jsr 1648 #1, the RAM work 005CB6-005CD8, jsr 1648
+    #2) uninterrupted, never re-gated in between, and the single suffix from 005CE0 is the region's
+    own final RAM-only tail, read live rather than predicted (HIGHLIGHT_ID's own new value included)."""
+    from .game import achievements
+    sp32 = registers['a7']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    # jsr $1648 (005CB0) pushes its own return address (005CB6) as part of running.  This structural
+    # write goes into `order` FIRST and the semantic sound-cue write LAST (achievement_slot_reset's
+    # own convention), so a generic "flip the last write" mutant (_mutate_result) corrupts an
+    # observable game byte, never the return address 001648's own rts reads.
+    order.update(dict(_bytes((sp - 4) & 0xFFFFFF, 0x005CB6, 4)))
+    c, i = _S1918_CYCLE_SOUND
+    cycles += c
+    instructions += i
+    from .game.pickups import MOVEMENT_SOUND_CUE
+    for a, b in _bytes(MOVEMENT_SOUND_CUE & 0xFFFFFF, STATE1918_CYCLE_SOUND_VALUE, 2):
+        order[a] = b
+    old_highlight = read(achievements.HIGHLIGHT_ID, 2) & 0xFFFF
+    c, i = _S1918_CYCLE_HEAD1
+    cycles += c
+    instructions += i
+    # 005CAA move.w (a3,d5.w),d2 is a WORD move: D2's own upper half survives from before it.
+    d2_old = (registers['d2'] & 0xFFFF0000) | (read((achievements.ACHIEVEMENT_SLOTS + 2 * old_highlight) & 0xFFFFFF, 2) & 0xFFFF)
+    c, i = _S1918_CYCLE_MOVEQ_D1_0
+    cycles += c
+    instructions += i
+    c, i = _S1918_CYCLE_JSR1
+    cycles += c
+    instructions += i
+    # 005CA6 lea.l f22e.w,a3 sets A3 for the rest of this activation (never reset); 005CAE moveq #0,d1
+    # is the last flag-setter before the jsr (N=0,Z=1,V=C=0 from the immediate zero).
+    sr_here = _logic_sr(registers['sr'], 0, 2)
+    prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                        registers={'d0': (registers['d0'] & 0xFFFF0000) | old_highlight, 'd1': 0, 'd2': d2_old,
+                                   'd5': (registers['d5'] & 0xFFFF0000) | ((2 * old_highlight) & 0xFFFF),
+                                   'a3': 0xFFFFF22E, 'd7': 1,
+                                   'a7': (sp32 - 4) & 0xFFFFFFFF, 'pc': STATE1918_ICON_UPLOAD, 'sr': sr_here},
+                        last_pc=0x005CB0)
+
+    def suffix(machine2, registers2, _sp32=sp32):
+        if registers2['pc'] != 0x005CE0:
+            raise UnsupportedCandidate('state 19/18 highlight-cycle suffix needs the machine parked at 005CE0')
+        read2 = _reader(machine2)
+        sr2 = registers2['sr']
+        order2 = {}
+        for a, b in _bytes(0xFFFFF16E & 0xFFFFFF, 0, 2):
+            order2[a] = b
+        sr2 = _logic_sr(sr2, 0, 2)   # 005CE0 clr.w f16e.w
+        buffer_full = read2(0xFFFFF166, 4) & 0xFFFFFFFF   # 005CE4 movea.l f166.w,a3 -- the full pointer
+        for a, b in _bytes(buffer_full & 0xFFFFFF, 0, 2):
+            order2[a] = b
+        sr2 = _logic_sr(sr2, 0, 2)   # 005CE8 clr.w (a3) is the last flag-setter
+        c5, i5 = _S1918_CYCLE_CLEAR_PENDING
+        c6, i6 = _S1918_CYCLE_LOAD_BUFFER
+        c7, i7 = _S1918_CYCLE_CLEAR_BUFFER
+        c8, i8 = _S1918_CYCLE_BRA
+        return AtomicPlan(cycles=c5 + c6 + c7 + c8, instructions=i5 + i6 + i7 + i8, writes=tuple(order2.items()),
+                          registers={'a3': buffer_full, 'a7': _sp32, 'pc': 0x0075D6, 'sr': sr2}, last_pc=0x005CEA)
+
+    # No guard: the ceded span's own second jsr (005CDA) legitimately reuses the SAME stack slot the
+    # first jsr's own return address (005CB6) occupied -- by design (a7 returns to entry a7 between
+    # the two real calls), not a violation.  There is no frame of this activation's own beneath that
+    # slot left to protect; stack_basis (checked unconditionally by run_seam) is the real identity
+    # check here.
+    return Seam(prefix=prefix, resume_pc=0x005CE0, stack_basis=sp32, guards=(), suffix=suffix)
+
+
+def _s1918_highlight_cycle_prefix(read, sr, cycles, instructions, frame_a7, entry_d4):
+    """005CEE-005D28: the achievement highlight cycle's own body, common to every caller (0058C6,
+    00588E, 005878).  ``frame_a7`` is the a7 value already in effect when 005CEE's own code starts
+    (after the caller's own bsr and its own d7 push).  Returns (cycles, instructions, writes,
+    icon_d0, exit_a7) up to and including the jsr 1648 instruction: the caller adds its own register
+    file (icon_d0 needs achievements.HIGHLIGHT_REFRESH_ICON_D2 et al -- kept out of this helper since
+    d7's own presence in the register file differs by caller).  Both the 'spawn' arm's own internal
+    jsr 10d7c and the final jsr 1648 push their own return address onto the stack as part of running
+    -- transient for 10d7c (its own rts pops it before 005D20), permanent for 1648 (the machine takes
+    over from exactly this pushed state) -- both real writes over the span this prefix claims."""
+    from .game import achievements, spawns
+    from .game.grid import GRID_X, GRID_Y
+    result = achievements.achievement_highlight_cycle(read)
+    hc, hi = _S1918_HIGHLIGHT_PUSH
+    hc2, hi2 = _S1918_HIGHLIGHT_HEAD
+    cycles += hc + hc2
+    instructions += hi + hi2
+    # jsr $1648 (005D28) pushes its own return address (005D2E) as part of running -- inserted FIRST,
+    # ahead of every semantic store, so a generic "flip the last write" mutant (_mutate_result)
+    # corrupts an observable game byte, never the return address 001648's own rts reads (the 'spawn'
+    # arm's own jsr 10d7c also pushes to this SAME slot transiently, but only the FINAL byte content
+    # at each address matters to the strict witness, and 005D2E is what is there once this prefix's
+    # own span ends, regardless of arm).
+    horder = dict(_bytes((frame_a7 - 4) & 0xFFFFFF, 0x005D2E, 4))
+    for a, (v, s) in result['stores'].items():
+        horder.update(dict(_bytes(a, v, s)))
+    if result['arm'] == 'refresh':
+        c, i = _S1918_HIGHLIGHT_BMI_EMPTY[True]
+        cycles += c
+        instructions += i
+    else:
+        c, i = _S1918_HIGHLIGHT_BMI_EMPTY[False]
+        cycles += c
+        instructions += i
+        c, i = _S1918_HIGHLIGHT_ADDI
+        cycles += c
+        instructions += i
+        c, i = _S1918_HIGHLIGHT_BMI2_NOT
+        cycles += c
+        instructions += i
+        c, i = _S1918_HIGHLIGHT_SPAWN_SETUP
+        cycles += c
+        instructions += i
+        x = (read(GRID_X, 2) + 8) & 0xFFFF
+        y = (read(GRID_Y, 2) + 0x20) & 0xFFFF
+        spawn = spawns.floating_icon_spawn(read, x, y, result['kind'])
+        if spawn['arm'] != 'spawn':
+            raise UnsupportedCandidate(f"floating icon spawn arm not witnessed: {spawn['arm']}")
+        for a, (v, s) in spawn['stores'].items():
+            horder.update(dict(_bytes(a, v, s)))
+        c, i = _S1918_HIGHLIGHT_JSR_SPAWN
+        cycles += c
+        instructions += i
+        # 010D7C's own body: the cmpi/beq special-kind test, the busy test, then the four-field store.
+        for cost in (_S1918_SPAWN_CMPI, _S1918_SPAWN_BEQ_NOT, _S1918_SPAWN_TST_BUSY, _S1918_SPAWN_BPL_NOT,
+                    _S1918_SPAWN_STORE, _S1918_SPAWN_RTS):
+            c, i = cost
+            cycles += c
+            instructions += i
+    c, i = _S1918_HIGHLIGHT_REFRESH_HEAD
+    cycles += c
+    instructions += i
+    c, i = _S1918_HIGHLIGHT_REFRESH_JSR   # 005D28 jsr 1648 -- the prefix's own last instruction
+    cycles += c
+    instructions += i
+    # Regardless of arm, the code converges at 005D20-005D28 (move f236,d0; moveq #1,d1; moveq #$ff,
+    # d2; jsr 1648): 005D26's own moveq #$ff,d2 is always the last flag-setter before the jsr
+    # (N=1,Z=V=C=0, the immediate -1's own sign).  005CF4/005CF8 (move f236,d4; add d4,d4) leave D4
+    # at icon_d0*2, never touched again before the jsr; 005CF0's own lea sets A3 to ACHIEVEMENT_SLOTS
+    # for the rest of the activation.
+    sr_final = _logic_sr(sr, 0xFFFFFFFF, 4)
+    # 005CF4 move.w f236.w,d4 / 005CF8 add.w d4,d4 are both WORD ops: D4's own upper half survives
+    # from whatever it held when 005CEE's own body started (the caller's own D4, untouched before it).
+    extra_registers = {'d4': (entry_d4 & 0xFFFF0000) | ((2 * result['icon_d0']) & 0xFFFF), 'a3': 0xFFFFF22E}
+    return cycles, instructions, tuple(horder.items()), result['icon_d0'], (frame_a7 - 4) & 0xFFFFFFFF, sr_final, extra_registers
+
+
+def _s1918_highlight_via_dispatch_plan(machine, registers, read, sr, cycles, instructions, resume_pc, tail_active_test, tail_bne_exit, tail_last_pc):
+    """0058C6 (state 19) / 005878 (state 18): the EA1E==1 arm's own bit-tests-both-clear case --
+    calls the achievement highlight cycle, then unconditionally exits (tst f238.w always finds it
+    still nonzero, since nothing between the outer test and here touches it)."""
+    from .game import achievements
+    sp32 = registers['a7']
+    sp = sp32 & 0xFFFFFF
+    # bsr.w $5cee pushes its own return address (resume_pc) at (entry a7 - 4); 005CEE's own first
+    # instruction, move.l d7,-(a7), then pushes d7 (already 1, this arm's own moveq having already
+    # run) at (entry a7 - 8): both real writes the prefix must include, and the machine hands off to
+    # 001648 with a7 = entry a7 - 8, not entry a7.
+    frame_a7 = (sp32 - 8) & 0xFFFFFFFF
+    frame_order = dict(_bytes((sp - 4) & 0xFFFFFF, resume_pc, 4))
+    frame_order.update(_bytes((sp - 8) & 0xFFFFFF, 1, 4))
+    cycles, instructions, writes, icon_d0, exit_a7, sr_final, extra_registers = _s1918_highlight_cycle_prefix(
+        read, sr, cycles, instructions, frame_a7, registers['d4'])
+    order = dict(frame_order)
+    order.update(writes)
+    prefix_registers = {'d0': (registers['d0'] & 0xFFFF0000) | icon_d0, 'd1': 1,
+                        'd2': achievements.HIGHLIGHT_REFRESH_ICON_D2 & 0xFFFFFFFF,
+                        'd7': 1, 'a7': exit_a7, 'pc': STATE1918_ICON_UPLOAD, 'sr': sr_final}
+    prefix_registers.update(extra_registers)
+    prefix = AtomicPlan(
+        cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+        registers=prefix_registers, last_pc=0x005D28)
+
+    def suffix(machine2, registers2, _sp32=sp32):
+        if registers2['pc'] != resume_pc:
+            raise UnsupportedCandidate('state 19/18 highlight suffix needs the machine parked at the resume PC')
+        f238 = _reader(machine2)(0xFFFFF238, 2) & 0xFFFF
+        c5, i5 = tail_active_test
+        c6, i6 = tail_bne_exit
+        sr2 = _logic_sr(registers2['sr'], f238, 2)   # the caller's own tst.w f238.w is the last flag-setter
+        return AtomicPlan(cycles=c5 + c6, instructions=i5 + i6, writes=(),
+                          registers={'d7': 1, 'a7': _sp32, 'pc': 0x0075D6, 'sr': sr2}, last_pc=tail_last_pc)
+
+    return Seam(prefix=prefix, resume_pc=resume_pc, stack_basis=sp32,
+               guards=(((sp - 8) & 0xFFFFFF, 8),), suffix=suffix)
+
+
+def _s1918_highlight_via_budget_plan(machine, registers, sr, cycles, instructions, *, resume_pc,
+                                     tail_arm_cost, tail_last_pc, tail_d7, tail_sr_fn, tail_writes=()):
+    """00588E (state 19) / 00583C (state 18): the "!=1" arm's own unconditional call, whose own tail
+    (a budget countdown, not a plain exit) runs AFTER the highlight cycle's own rts."""
+    from .game import achievements
+    sp32 = registers['a7']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    # bsr.w $5cee pushes its own return address (resume_pc) at (entry a7 - 4); 005CEE's own first
+    # instruction, move.l d7,-(a7), then pushes the caller's own (untouched) D7 at (entry a7 - 8):
+    # both real writes the prefix must include, and the machine hands off to 001648 with
+    # a7 = entry a7 - 8, not entry a7.
+    d7_entry = registers['d7'] & 0xFFFFFFFF
+    frame_a7 = (sp32 - 8) & 0xFFFFFFFF
+    frame_order = dict(_bytes((sp - 4) & 0xFFFFFF, resume_pc, 4))
+    frame_order.update(_bytes((sp - 8) & 0xFFFFFF, d7_entry, 4))
+    cycles, instructions, writes, icon_d0, exit_a7, sr_final, extra_registers = _s1918_highlight_cycle_prefix(
+        read, sr, cycles, instructions, frame_a7, registers['d4'])
+    order = dict(frame_order)
+    order.update(writes)
+    prefix_registers = {'d0': (registers['d0'] & 0xFFFF0000) | icon_d0, 'd1': 1,
+                        'd2': achievements.HIGHLIGHT_REFRESH_ICON_D2 & 0xFFFFFFFF,
+                        'a7': exit_a7, 'pc': STATE1918_ICON_UPLOAD, 'sr': sr_final}
+    prefix_registers.update(extra_registers)
+    prefix = AtomicPlan(
+        cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+        registers=prefix_registers, last_pc=0x005D28)
+
+    def suffix(machine2, registers2, _sp32=sp32):
+        if registers2['pc'] != resume_pc:
+            raise UnsupportedCandidate('state 19/18 highlight suffix needs the machine parked at the resume PC')
+        c5, i5 = tail_arm_cost
+        sr2 = tail_sr_fn(registers2['sr'])
+        regs = {'d7': tail_d7, 'a7': _sp32, 'pc': 0x0075D6}
+        if sr2 is not None:
+            regs['sr'] = sr2
+        return AtomicPlan(cycles=c5, instructions=i5, writes=tail_writes,
+                          registers=regs, last_pc=tail_last_pc)
+
+    return Seam(prefix=prefix, resume_pc=resume_pc, stack_basis=sp32,
+               guards=(((sp - 8) & 0xFFFFFF, 8),), suffix=suffix)
+
+
+def _state1918_body_plan(machine, registers, read, head, costs, dispatch_bsr_resume, dispatch_tail):
+    """0058A2-0058D2 (state 19) / 005852-005878 (state 18): the EA1E==1 arm's own outer dispatch,
+    then the shared body from 0058D2/005C14/005CEE onward."""
+    sr = registers['sr']
+    cycles, instructions = _S1918_DISPATCH_MOVEQ
+    c, i = costs.active_test
+    cycles += c
+    instructions += i
+    if head['arm'] == 'scan':
+        c, i = costs.beq_scan[True]
+        cycles += c
+        instructions += i
+        return _s1918_scan_plan(machine, registers, read, cycles, instructions, sr)
+    c, i = costs.beq_scan[False]
+    cycles += c
+    instructions += i
+    c, i = costs.empty_test
+    cycles += c
+    instructions += i
+    if head['arm'] == 'highlight':
+        c, i = costs.beq_direct[False]
+        cycles += c
+        instructions += i
+        c, i = costs.bit1_test
+        cycles += c
+        instructions += i
+        c, i = costs.bit1_bne_not
+        cycles += c
+        instructions += i
+        c, i = costs.bit2_test
+        cycles += c
+        instructions += i
+        c, i = costs.bit2_bne[False]
+        cycles += c
+        instructions += i
+        c, i = costs.bsr_highlight
+        cycles += c
+        instructions += i
+        return _s1918_highlight_via_dispatch_plan(machine, registers, read, sr, cycles, instructions,
+                                                  dispatch_bsr_resume, *dispatch_tail)
+    if head['arm'] not in ('pending-hold', 'pending-cleared', 'idle-cycle', 'idle-exit'):
+        raise UnsupportedCandidate(f"state 19/18 dispatch arm not witnessed: {head['arm']}")
+    set_pending = head['set_pending']
+    c, i = costs.beq_direct[not set_pending]
+    cycles += c
+    instructions += i
+    order = {}
+    if set_pending:
+        c, i = costs.bit1_test
+        cycles += c
+        instructions += i
+        c, i = costs.bit1_bne_not
+        cycles += c
+        instructions += i
+        c, i = costs.bit2_test
+        cycles += c
+        instructions += i
+        c, i = costs.bit2_bne[True]
+        cycles += c
+        instructions += i
+        c, i = _S1918_5C58_SET_PENDING
+        cycles += c
+        instructions += i
+    c, i = _S1918_5C5E_CLEAR_EMPTY
+    cycles += c
+    instructions += i
+    return _s1918_pending_idle_plan(machine, registers, head, cycles, instructions, sr, order)
+
+
+def state19_plan(machine, registers):
+    """005886: state 19's own outer head.  See game.player's own module note above state19_head."""
+    from .game import player
+    if registers['pc'] != STATE19_ENTRY:
+        raise UnsupportedCandidate('state 19 planner needs the machine parked at 005886')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    if registers['a6'] != 0xC00000:
+        raise UnsupportedCandidate('state 19 planner needs a6 = C00000 (the VDP data port)')
+    read = _reader(machine)
+    head = player.state19_head(read)
+
+    if head['head'] == 'dispatch':
+        cycles, instructions = _S19_HEAD_CMPI
+        c, i = _S19_HEAD_BEQ[True]
+        cycles += c
+        instructions += i
+        body = _state1918_body_plan(machine, registers, read, head, _S19_DISPATCH_COSTS, 0x0058CA,
+                                    (_S19_DISPATCH_TST_ACTIVE2, _S19_DISPATCH_BNE_EXIT, 0x0058CE))
+        return _prefix_atomic_or_seam(body, cycles, instructions)
+
+    # head['head'] == 'budget': EA1E != 1 -- calls the highlight cycle unconditionally, then a
+    # per-activation budget (D7) decides whether this activation just exits or resets STATE_INDEX.
+    cycles, instructions = _S19_HEAD_CMPI
+    c, i = _S19_HEAD_BEQ[False]
+    cycles += c
+    instructions += i
+    c, i = _S19_BUDGET_BSR
+    cycles += c
+    instructions += i
+    d7 = registers['d7'] & 0xFFFF
+    tail = player.state19_budget_tail(read, d7)
+    tail_order = {}
+    for a, (v, s) in tail.get('stores', {}).items():
+        tail_order.update(dict(_bytes(a, v, s)))
+
+    if tail['arm'] == 'budget-hold':
+        c2, i2 = _S19_BUDGET_SUBQ
+        c3, i3 = _S19_BUDGET_BPL[True]
+        tail_arm_cost = (c2 + c3, i2 + i3)
+
+        def tail_sr_fn(live_sr, _d7=d7):
+            return _sub_sr(live_sr, d7, 1, 2)   # 005892 subq.w #1,d7 is the last flag-setter
+
+        return _s1918_highlight_via_budget_plan(machine, registers, sr, cycles, instructions,
+                                                resume_pc=0x005892, tail_arm_cost=tail_arm_cost,
+                                                tail_last_pc=0x005894, tail_d7=(registers['d7'] & 0xFFFF0000) | tail['d7'], tail_sr_fn=tail_sr_fn,
+                                                tail_writes=tuple(tail_order.items()))
+
+    c2, i2 = _S19_BUDGET_SUBQ
+    c3, i3 = _S19_BUDGET_BPL[False]
+    c4, i4 = _S19_BUDGET_RESET_MOVEQ
+    c5, i5 = _S19_BUDGET_RESET_STORE
+    c6, i6 = _S19_BUDGET_RESET_BRA
+    tail_arm_cost = (c2 + c3 + c4 + c5 + c6, i2 + i3 + i4 + i5 + i6)
+
+    def tail_sr_fn(live_sr, _d7=d7):
+        # 005892 subq.w #1,d7 (the tail's own first instruction, X=C from the borrow) runs before
+        # 00589A clr.w f192.w (which retains X, touching only N/Z/V/C).
+        after_subq = _sub_sr(live_sr, _d7, 1, 2)
+        return _logic_sr(after_subq, player.STATE19_RESET_STATE_INDEX, 2)
+
+    return _s1918_highlight_via_budget_plan(machine, registers, sr, cycles, instructions,
+                                            resume_pc=0x005892, tail_arm_cost=tail_arm_cost,
+                                            tail_last_pc=0x00589E, tail_d7=2, tail_sr_fn=tail_sr_fn,
+                                            tail_writes=tuple(tail_order.items()))
+
+
+def _prefix_atomic_or_seam(result, extra_cycles, extra_instructions):
+    """Fold an outer head's own fixed cost into whichever plan/seam the shared body returned."""
+    if isinstance(result, Seam):
+        p = result.prefix
+        new_prefix = AtomicPlan(cycles=p.cycles + extra_cycles, instructions=p.instructions + extra_instructions,
+                                writes=p.writes, registers=p.registers, last_pc=p.last_pc)
+        return Seam(prefix=new_prefix, resume_pc=result.resume_pc, stack_basis=result.stack_basis,
+                   guards=result.guards, suffix=result.suffix)
+    return AtomicPlan(cycles=result.cycles + extra_cycles, instructions=result.instructions + extra_instructions,
+                      writes=result.writes, registers=result.registers, last_pc=result.last_pc)
+
+
+def state18_plan(machine, registers):
+    """005834: state 18's own outer head.  See game.player's own module note above state18_head."""
+    from .game import player
+    if registers['pc'] != STATE18_ENTRY:
+        raise UnsupportedCandidate('state 18 planner needs the machine parked at 005834')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    if registers['a6'] != 0xC00000:
+        raise UnsupportedCandidate('state 18 planner needs a6 = C00000 (the VDP data port)')
+    read = _reader(machine)
+    head = player.state18_head(read)
+
+    if head['head'] == 'dispatch':
+        cycles, instructions = _S18_HEAD_CMPI
+        c, i = _S18_HEAD_BEQ[True]
+        cycles += c
+        instructions += i
+        # state 18's own dispatch-triggered highlight call (005878) has an extra tail (00587C-005882)
+        # that re-tests SCAN_ACTIVE before exiting -- structurally always not-taken (SCAN_ACTIVE is
+        # untouched by the highlight cycle, so whatever made this activation reach 'highlight' -- i.e.
+        # SCAN_ACTIVE != 0 -- still holds), so it costs one extra byte-branch beyond state 19's own
+        # equivalent tail (which only re-tests, no further branch).
+        body = _state1918_body_plan(machine, registers, read, head, _S18_DISPATCH_COSTS, 0x00587C,
+                                    (_S18_DISPATCH_TST_ACTIVE2, _add(_S18_DISPATCH_BEQ_RESCAN_NOT, _S18_DISPATCH_BRA_EXIT),
+                                     0x005882))
+        return _prefix_atomic_or_seam(body, cycles, instructions)
+
+    # head['head'] == 'budget': EA1E != 1, the SAME shape as state 19's own, targeting state 1.
+    cycles, instructions = _S18_HEAD_CMPI
+    c, i = _S18_HEAD_BEQ[False]
+    cycles += c
+    instructions += i
+    c, i = _S18_BUDGET_BSR
+    cycles += c
+    instructions += i
+    d7 = registers['d7'] & 0xFFFF
+    tail = player.state18_budget_tail(read, d7)
+    tail_order = {}
+    for a, (v, s) in tail.get('stores', {}).items():
+        tail_order.update(dict(_bytes(a, v, s)))
+
+    if tail['arm'] == 'budget-hold':
+        c2, i2 = _S18_BUDGET_SUBQ
+        c3, i3 = _S18_BUDGET_BPL[True]
+        tail_arm_cost = (c2 + c3, i2 + i3)
+
+        def tail_sr_fn(live_sr, _d7=d7):
+            return _sub_sr(live_sr, d7, 1, 2)
+
+        return _s1918_highlight_via_budget_plan(machine, registers, sr, cycles, instructions,
+                                                resume_pc=0x005840, tail_arm_cost=tail_arm_cost,
+                                                tail_last_pc=0x005842, tail_d7=(registers['d7'] & 0xFFFF0000) | tail['d7'], tail_sr_fn=tail_sr_fn,
+                                                tail_writes=tuple(tail_order.items()))
+
+    c2, i2 = _S18_BUDGET_SUBQ
+    c3, i3 = _S18_BUDGET_BPL[False]
+    c4, i4 = _S18_BUDGET_RESET_MOVEQ
+    c5, i5 = _S18_BUDGET_RESET_STORE
+    c6, i6 = _S18_BUDGET_RESET_BRA
+    tail_arm_cost = (c2 + c3 + c4 + c5 + c6, i2 + i3 + i4 + i5 + i6)
+
+    def tail_sr_fn(live_sr, _d7=d7):
+        after_subq = _sub_sr(live_sr, _d7, 1, 2)
+        return _logic_sr(after_subq, player.STATE18_RESET_STATE_INDEX, 2)
+
+    return _s1918_highlight_via_budget_plan(machine, registers, sr, cycles, instructions,
+                                            resume_pc=0x005840, tail_arm_cost=tail_arm_cost,
+                                            tail_last_pc=0x00584E, tail_d7=2, tail_sr_fn=tail_sr_fn,
+                                            tail_writes=tuple(tail_order.items()))
+
 # --- 0066A8: state 9 (game.player.state9_step / state9_fall_tail / _state9_head / _row_gate_open) --
 #
 # Costed one instruction-block at a time from the tracer on nine real fixtures over
