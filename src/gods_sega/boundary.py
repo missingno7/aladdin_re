@@ -10438,3 +10438,69 @@ def state2_plan(machine, registers):
     exit_registers['sr'] = sr
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x007512)
+
+
+# --- 007516: state 3 -- a mirror of state 2's own countdown/gate shape.  Costed one instruction-
+# block at a time from the tracer on real fixtures over census-007516-* (all five recordings; 270
+# real path classes collapsing to exactly two real terminal shapes -- the transition-2 arm is real
+# ROM, unwitnessed by any recording, and declines by name).
+STATE3_ENTRY = 0x007516
+
+_S3_TEST = (16, 1)                           # 007516 cmpi.w #1,ea20.w
+_S3_BNE = {True: (10, 1), False: (8, 1)}     # 00751C bne.b -- taken(!=1): the counter arm (byte branch)
+_S3_COUNT = (4, 1)                           # 007528 subq.w #1,d7
+_S3_BPL = {True: (10, 1), False: (12, 1)}    # 00752A bpl.w -- taken(>=0): still counting (word branch)
+_S3_TO0_TAIL = (16 + 4 + 10, 3)              # 00752E clr.w f192.w; 007532 moveq #6,d7; 007534 bra.w
+
+
+def state3_plan(machine, registers):
+    """007516 (state 3): the player state machine's own dispatch table entry 3.  See
+    game.player's own module note above state3_step."""
+    from .game import player
+    if registers['pc'] != STATE3_ENTRY:
+        raise UnsupportedCandidate('state 3 planner needs the machine parked at 007516')
+    sr = registers['sr']
+    read = _reader(machine)
+    order = {}
+    exit_registers = {}
+
+    ea20 = read(player.EA20_WORD, 2) & 0xFFFF
+    if ea20 == 1:
+        raise UnsupportedCandidate('state 3 transition-2 arm (FFFFEA20 == 1) not witnessed by a recording')
+
+    result = player.state3_step(read, registers['d7'])
+    c, i = _S3_TEST
+    cycles, instructions = c, i
+    sr = _cmp_sr(sr, ea20, 1, 2)
+    c, i = _S3_BNE[True]
+    cycles += c
+    instructions += i
+
+    c, i = _S3_COUNT
+    cycles += c
+    instructions += i
+    counted = (registers['d7'] - 1) & 0xFFFF
+    sr = _sub_sr(sr, registers['d7'], 1, 2)
+    still_counting = result['arm'] == 'counting'
+    c, i = _S3_BPL[still_counting]
+    cycles += c
+    instructions += i
+
+    if still_counting:
+        exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | result['d7']   # subq.w: a word op, upper half survives
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x00752A)
+
+    c, i = _S3_TO0_TAIL
+    cycles += c
+    instructions += i
+    exit_registers['d7'] = result['d7']   # moveq #6,d7: a full 32-bit long move, clears the upper half
+    for a, b in _bytes(player.STATE_INDEX, player.STATE3_TO_STATE0, 2):
+        order[a] = b
+    sr = _logic_sr(sr, player.STATE3_RESET_COUNTER, 2)   # 007532's own moveq #6,d7 is the last flag-setter, after the clr
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x007534)

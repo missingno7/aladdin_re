@@ -1941,3 +1941,27 @@ def state2_step(read, d7):
     if _signed_word(counted) < STATE2_COUNT_CAP:
         return {'arm': 'counting', 'd7': counted}
     return {'arm': 'transition-1', 'd7': STATE2_RESET_COUNTER, 'counted': counted}
+
+
+# --- 007516: state 3 -- a mirror of state 2's own countdown/gate shape, one step further into the
+# player state machine's own EA20-driven cycle: `FFFFEA20 == 1` transitions to state 2 (real ROM
+# code, UNWITNESSED by any of 270 retained fixtures across all five recordings, declined by name);
+# otherwise a counter (`d7`) counts DOWN (state 2's own counts up) and, once it goes negative, is
+# forced to 6 and transitions to state 0 (state 2's own forces 6 and transitions to state 1).
+# Costed one instruction-block at a time from the tracer on real fixtures over census-007516-*.
+STATE3_ENTRY = 0x007516
+STATE3_TO_STATE2 = 0x2
+STATE3_TO_STATE0 = 0x0
+STATE3_RESET_COUNTER = 0x6
+
+
+def state3_step(read, d7):
+    """007516: the mirror counter/gate leaf. Returns the arm ('transition-2' / 'counting' /
+    'transition-0') and the new `d7`."""
+    ea20 = read(EA20_WORD, 2) & 0xFFFF
+    if ea20 == 1:
+        return {'arm': 'transition-2', 'd7': d7 & 0xFFFF}
+    counted = (d7 - 1) & 0xFFFF
+    if _signed_word(counted) >= 0:
+        return {'arm': 'counting', 'd7': counted}
+    return {'arm': 'transition-0', 'd7': STATE3_RESET_COUNTER, 'counted': counted}
