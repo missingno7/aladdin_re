@@ -1300,3 +1300,66 @@ def aim_target_resolve(read, type_ptr):
             continue
         slots.append(_resolve_slot(read, type_ptr, limit, snapshot_addr, flag_addr))
     return {'slots': slots}
+
+
+# --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (docs/gods/blockers/2026-09-18-
+# 00A578.md's own original scope -- 00A578's own spawn-init body's own unconditional `bsr $b920`,
+# independent of the whole 00AF52/00B588 chain escalated the same session).  A 10-slot, 6-byte table
+# (`FFFF0EF0`; reset by 00B88C, not itself needed here -- every witnessed occurrence finds a free slot
+# without ever seeing the table freshly reset) -- each slot a position long (offset 0) and a state word
+# (offset 4, negative meaning free, matching the table's own reset value 0xFFFF). 00B8C2 is the scan
+# (RTR is how the ROM returns its own CCR-only 'found'/'not found' result -- a plain register/CCR
+# contract from this recovery's own side, not a new mechanism); 00B920 is the ADD, storing the
+# creature's own tracked position (POSITION_X:POSITION_Y as one long) and two more fields on the
+# creature record itself (`$6(a5)`, `$8(a5)`) whose own downstream consumer this session did not
+# trace -- named minimally, the way `aim_cue_update`'s own 400-byte table was.
+SPAWN_TABLE_LOW = 0xFFFF0EF0
+SPAWN_TABLE_SLOTS = 10
+SPAWN_TABLE_STRIDE = 6
+SPAWN_TABLE_STATE_OFFSET = 4          # word: negative (the table's own reset value) means free
+SPAWN_TRIGGER_MARKER = 0xFFFFFDF4     # word: unconditional 0x36 on every 00B920 call, real purpose
+                                       # not traced this session (kept a fact, not a guess)
+SPAWN_TRIGGER_STATE_WORD = 7          # the state word 00B920 itself writes on a successful add
+SPAWN_ICON_STATE_OFFSET = 0x6         # instance_ptr word: written 5 -- the SAME offset LIFECYCLE_RESET
+                                       # and GROUND_HOLD_TIMER already name for other kind-contexts
+SPAWN_ICON_TIMER_OFFSET = 0x8         # instance_ptr word: written -3 -- the SAME offset LIFECYCLE
+                                       # already names for the pickup-check kind-context
+SPAWN_ICON_STATE_VALUE = 5
+SPAWN_ICON_TIMER_VALUE = 0xFFFFFFFD & 0xFFFF
+SPAWN_TABLE_BUSY_FLAG = 0xFFFFF292    # word: cleared alongside the table itself (00B88C's own reset),
+                                       # set to 1 by every witnessed 00B920 add
+
+
+def spawn_table_find_free(read):
+    """00B8C2: the first of SPAWN_TABLE_SLOTS whose own state word (offset SPAWN_TABLE_STATE_OFFSET)
+    is negative.  Returns ``'found'`` (every witnessed occurrence, all five recordings) or ``'full'``
+    (every slot occupied -- real ROM, never witnessed: declined)."""
+    from .grid import _signed_word
+    address = SPAWN_TABLE_LOW
+    skipped = 0
+    for index in range(SPAWN_TABLE_SLOTS):
+        state = read((address + SPAWN_TABLE_STATE_OFFSET) & 0xFFFFFF, 2) & 0xFFFF
+        if _signed_word(state) < 0:
+            return {'arm': 'found', 'index': index, 'address': address, 'skipped': skipped}
+        skipped += 1
+        address = (address + SPAWN_TABLE_STRIDE) & 0xFFFFFFFF
+    return {'arm': 'full', 'skipped': skipped}
+
+
+def spawn_table_add(read, instance_ptr):
+    """00B920: SPAWN_TRIGGER_MARKER is set unconditionally, then spawn_table_find_free's own 'found'
+    arm (the only one witnessed) stores the creature's own tracked position and SPAWN_TRIGGER_STATE_WORD
+    into the free slot, and two more fields onto the creature record itself.  'full' (spawn_table_find_
+    free's own decline) is real ROM, never witnessed: declined."""
+    instance_ptr &= 0xFFFFFF
+    scan = spawn_table_find_free(read)
+    if scan['arm'] != 'found':
+        return {'arm': scan['arm'], 'scan': scan}
+    position = read(instance_ptr, 4)
+    slot_addr = scan['address'] & 0xFFFFFF
+    stores = {SPAWN_TRIGGER_MARKER & 0xFFFFFF: (0x36, 2), slot_addr: (position, 4),
+             (slot_addr + 4) & 0xFFFFFF: (SPAWN_TRIGGER_STATE_WORD, 2),
+             (instance_ptr + SPAWN_ICON_STATE_OFFSET) & 0xFFFFFF: (SPAWN_ICON_STATE_VALUE, 2),
+             SPAWN_TABLE_BUSY_FLAG & 0xFFFFFF: (1, 2),
+             (instance_ptr + SPAWN_ICON_TIMER_OFFSET) & 0xFFFFFF: (SPAWN_ICON_TIMER_VALUE, 2)}
+    return {'arm': 'found', 'scan': scan, 'position': position, 'stores': stores}

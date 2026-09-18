@@ -18,6 +18,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_TARGET_SCAN_ENTRY, aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY, aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY, aim_target_resolve_plan,
+                       SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
@@ -140,6 +141,18 @@ def _mutate_address(plan: AtomicPlan) -> AtomicPlan:
     in the idle window the caller has long overwritten it, and the mutant passed.)"""
     registers = dict(plan.registers)
     registers['a0'] = (registers.get('a0', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_spawn_find_free(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00B8C2: A0 one WHOLE slot off (the module's own SPAWN_TABLE_STRIDE), not
+    one byte -- a plain +1 (``_mutate_address``) leaves A0 odd, and the caller's own `move.l (a5),(a0)+`
+    (00B920) faults the 68000 with an address error on a long write to an odd address instead of
+    diverging cleanly; a whole-slot offset stays long-aligned and lands the write in the ADJACENT slot,
+    a real consequence the game consumes without faulting."""
+    from .game import creatures
+    registers = dict(plan.registers)
+    registers['a0'] = (registers.get('a0', 0) + creatures.SPAWN_TABLE_STRIDE) & 0xFFFFFFFF
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
@@ -305,6 +318,8 @@ PLANNERS = {
     'aim-target-scan': {AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan},
     'aim-target-scan-backward': {AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan},
     'aim-target-resolve': {AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
+    'spawn-table-find-free': {SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
+    'spawn-table-add': {SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
@@ -397,7 +412,8 @@ PLANNERS = {
                        AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan,
                        AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan,
-                       AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
+                       AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan,
+                       SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -628,7 +644,9 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-window-address-mutant-result': ('aim-window-address', _mutate_aim_window_address),
              'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result),
              'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
-             'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve)}
+             'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),
+             'spawn-table-find-free-mutant-result': ('spawn-table-find-free', _mutate_spawn_find_free),
+             'spawn-table-add-mutant-result': ('spawn-table-add', _mutate_result)}
 
 
 @dataclass

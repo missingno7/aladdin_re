@@ -17259,3 +17259,118 @@ def aim_target_resolve_plan(machine, registers):
 
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
                       last_pc=AIM_TARGET_RESOLVE_STEP_PC)
+
+
+# --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (game/creatures.py: spawn_table_find_
+# free, spawn_table_add) -----------------------------------------------------------------------------
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-0X00B8C2-*, census-0X00B920-*, 19
+# retained fixtures over four recordings).
+SPAWN_FIND_FREE_ENTRY = 0x00B8C2
+SPAWN_FIND_FREE_FOUND_PC = 0x00B8DE     # rtr -- both 'found' and 'full' end here (only 'found' witnessed)
+SPAWN_TABLE_ADD_ENTRY = 0x00B920
+SPAWN_TABLE_ADD_DECLINE_PC = 0x00B942   # bmi taken (scan 'full', never witnessed) -- named for symmetry
+
+_SFF_LEA = (12, 1)                      # 00B8C2 lea.l $ffff0ef0.l,a0
+_SFF_MOVEQ = (4, 1)                     # 00B8C8 moveq #9,d0
+_SFF_TST = (12, 1)                      # 00B8CA tst.w $4(a0)
+_SFF_BMI = {True: (10, 1), False: (8, 1)}    # 00B8CE -- taken: found
+_SFF_ADDQ = (4, 1)                      # 00B8D0 addq.w #6,a0
+_SFF_DBRA_TAKEN = (10, 1)               # 00B8D2 -- only 'taken' (continue) ever witnessed
+_SFF_CLR = (14, 1)                      # 00B8DC clr.w -(a7) -- the 'found' tail's own CCR push
+_SFF_RTR = (20, 1)                      # 00B8DE
+
+_STA_MOVE_MARKER = (16, 1)              # 00B920 move.w #$36,$fdf4.w
+_STA_BSR = (18, 1)                      # 00B926 bsr.b $b8c2
+_STA_BMI = {False: (8, 1)}              # 00B928 -- only 'not taken' (found) ever witnessed
+_STA_MOVE_L = (20, 1)                   # 00B92A move.l (a5),(a0)+
+_STA_MOVE_STATE = (12, 1)               # 00B92C move.w #7,(a0)+
+_STA_MOVE_ICON_STATE = (16, 1)          # 00B930 move.w #5,$6(a5)
+_STA_MOVE_FLAG = (16, 1)                # 00B936 move.w #1,f292.w
+_STA_MOVE_ICON_TIMER = (16, 1)          # 00B93C move.w #$fffd,$8(a5)
+_STA_RTS = (16, 1)                      # 00B942
+
+
+def _spawn_find_free_cost(scan):
+    if scan['arm'] != 'found':
+        raise UnsupportedCandidate(f"spawn table find free: {scan['arm']}, not witnessed by a recording")
+    cycles, instructions = _add(_SFF_LEA, _SFF_MOVEQ)
+    for _ in range(scan['skipped']):
+        c, i = _add(_SFF_TST, _SFF_BMI[False], _SFF_ADDQ, _SFF_DBRA_TAKEN)
+        cycles += c
+        instructions += i
+    c, i = _add(_SFF_TST, _SFF_BMI[True], _SFF_CLR, _SFF_RTR)
+    cycles += c
+    instructions += i
+    return cycles, instructions
+
+
+def spawn_table_find_free_plan(machine, registers):
+    """00B8C2: see game/creatures.py's own module note above spawn_table_find_free.  'full' (every
+    slot occupied) is real ROM, never witnessed: declined."""
+    from .game import creatures
+    if registers['pc'] != SPAWN_FIND_FREE_ENTRY:
+        raise UnsupportedCandidate('spawn table find free planner needs the machine parked at 00B8C2')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    scan = creatures.spawn_table_find_free(read)
+    cycles, instructions = _spawn_find_free_cost(scan)
+    exit_a0 = (creatures.SPAWN_TABLE_LOW + creatures.SPAWN_TABLE_STRIDE * scan['skipped']) & 0xFFFFFFFF
+    d0_final = (0x9 - scan['skipped']) & 0xFFFF
+    # clr.w -(a7) (00B8DC) writes 0x0000 at (entry A7 - 2) -- real, transient stack data RTR itself
+    # then pops right back off (net stack effect +4, matching a plain RTS) -- and RTR does not merely
+    # set flags from that value, it LOADS the whole CCR (X,N,Z,V,C) from it directly, wholesale, not
+    # retaining X the way every other instruction here does: the pushed 0x0000 means every CCR bit
+    # clears, unconditionally, regardless of the entry SR.
+    writes = _bytes((sp - 2) & 0xFFFFFF, 0, 2)
+    exit_sr = sr & ~0x1F
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'a0': exit_a0, 'd0': d0_final,  # moveq #9,d0 clears the upper half
+                                 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=SPAWN_FIND_FREE_FOUND_PC)
+
+
+def spawn_table_add_plan(machine, registers):
+    """00B920: see game/creatures.py's own module note above spawn_table_add.  A 'full' scan (real ROM,
+    never witnessed) declines, matching spawn_table_find_free's own."""
+    from .game import creatures
+    if registers['pc'] != SPAWN_TABLE_ADD_ENTRY:
+        raise UnsupportedCandidate('spawn table add planner needs the machine parked at 00B920')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    instance_ptr = registers['a5'] & 0xFFFFFF
+    result = creatures.spawn_table_add(read, instance_ptr)
+    if result['arm'] != 'found':
+        raise UnsupportedCandidate(f"spawn table add: {result['arm']}, not witnessed by a recording")
+    scan = result['scan']
+    cycles, instructions = _STA_MOVE_MARKER
+    c, i = _STA_BSR
+    cycles += c
+    instructions += i
+    c, i = _spawn_find_free_cost(scan)
+    cycles += c
+    instructions += i
+    c, i = _STA_BMI[False]
+    cycles += c
+    instructions += i
+    c, i = _add(_STA_MOVE_L, _STA_MOVE_STATE, _STA_MOVE_ICON_STATE, _STA_MOVE_FLAG, _STA_MOVE_ICON_TIMER,
+               _STA_RTS)
+    cycles += c
+    instructions += i
+    # bsr.b $b8c2 (00B926) pushes its own return address (00B928) at (entry A7 - 4); 00B8C2's own
+    # clr.w -(a7) then writes 0x0000 at (entry A7 - 6) before its own rtr pops both back off, real,
+    # transient stack residue the SAME class of fact 00B724's own internal calls already model.
+    residue = _bytes((sp - 4) & 0xFFFFFF, 0x00B928, 4) + _bytes((sp - 6) & 0xFFFFFF, 0, 2)
+    writes = residue + tuple(pair for address, (value, size) in result['stores'].items()
+                  for pair in _bytes(address, value, size))
+    exit_a0 = (creatures.SPAWN_TABLE_LOW + creatures.SPAWN_TABLE_STRIDE * scan['skipped'] + 6) & 0xFFFFFFFF
+    d0_final = (0x9 - scan['skipped']) & 0xFFFF
+    # 00B8C2's own rtr loads CCR wholesale from its own clr.w -(a7) (X cleared, not retained); move.w
+    # #$fffd,$8(a5) (00B93C) is THIS activation's own last flag-setter, retaining that cleared X.
+    exit_sr = _logic_sr(sr & ~0x10, creatures.SPAWN_ICON_TIMER_VALUE, 2)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'a0': exit_a0, 'd0': d0_final,  # moveq #9,d0 clears the upper half
+                                 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=SPAWN_TABLE_ADD_DECLINE_PC)

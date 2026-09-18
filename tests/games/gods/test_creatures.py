@@ -89,6 +89,14 @@ AIM_TARGET_RESOLVE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('censu
 needs_aim_target_resolve_census = pytest.mark.skipif(not AIM_TARGET_RESOLVE_FIXTURES or not GODS.rom_path.is_file(),
                                                       reason='no local census of 00B6AE')
 
+SPAWN_FIND_FREE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B8C2-*/00B8C2-entry-p*.state'))
+needs_spawn_find_free_census = pytest.mark.skipif(not SPAWN_FIND_FREE_FIXTURES or not GODS.rom_path.is_file(),
+                                                   reason='no local census of 00B8C2')
+
+SPAWN_TABLE_ADD_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B920-*/00B920-entry-p*.state'))
+needs_spawn_table_add_census = pytest.mark.skipif(not SPAWN_TABLE_ADD_FIXTURES or not GODS.rom_path.is_file(),
+                                                   reason='no local census of 00B920')
+
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
 
@@ -1347,4 +1355,81 @@ def test_aim_target_resolve_candidate_matches_the_reference_and_its_mutant_diver
             break
     else:
         pytest.skip('no retained fixture/window makes aim-target-resolve produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (00A578's own spawn-init body's own
+# unconditional `bsr $b920`, independent of the whole 00AF52/00B588 chain).  See game/creatures.py's
+# own module note above spawn_table_find_free/spawn_table_add.
+
+def test_spawn_find_free_candidate_names_are_explicit():
+    assert recovery.Candidate('spawn-table-find-free').gate_pcs == (boundary.SPAWN_FIND_FREE_ENTRY,)
+    assert boundary.SPAWN_FIND_FREE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('spawn-table-find-free-mutant-result').mutation is recovery._mutate_spawn_find_free
+
+
+def test_spawn_table_add_candidate_names_are_explicit():
+    assert recovery.Candidate('spawn-table-add').gate_pcs == (boundary.SPAWN_TABLE_ADD_ENTRY,)
+    assert boundary.SPAWN_TABLE_ADD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('spawn-table-add-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_spawn_find_free_census
+@pytest.mark.parametrize('fixture', SPAWN_FIND_FREE_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_spawn_find_free_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.spawn_table_find_free_plan(machine, registers)
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_spawn_find_free_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in SPAWN_FIND_FREE_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='spawn-table-find-free',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00B8C2 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='spawn-table-find-free-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+@needs_spawn_table_add_census
+@pytest.mark.parametrize('fixture', SPAWN_TABLE_ADD_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_spawn_table_add_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.spawn_table_add_plan(machine, registers)
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_spawn_table_add_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in SPAWN_TABLE_ADD_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='spawn-table-add', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00B920 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='spawn-table-add-mutant-result',
+                                  reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'
