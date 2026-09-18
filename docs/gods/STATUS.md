@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with fifty-seven gates armed, the camera follow step `002806`, the
+  original with fifty-eight gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -180,7 +180,8 @@ one planner") is the next bite.
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
-  `state-2`, `state-3`, `state-4` and `state-17` arm each alone.
+  `state-2`, `state-3`, `state-4`, `state-17` and `state-21` arm each
+  alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -973,7 +974,7 @@ small leaf):
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
   state-13, state-12, state-16, state-11, state-2, state-3, state-4,
-  state-17 -- 10,763 of 13,488 activations (80%)
+  state-17, state-21 -- 10,900 of 13,488 activations (81%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1114,7 +1115,29 @@ small leaf):
   byte-identical to state 16's own code (the final store is `clr.w
   f192.w`, not a `move.w #imm`), so costed with its own constants.  298
   real path classes across all five recordings collapse to exactly three
-  real terminal shapes.  No defects.
+  real terminal shapes.  No defects.  State 21 (`006886`, recovered 18
+  Sep) is a genuinely large, three-way hybrid: state 9/26's own jump-arc
+  fall step (the SAME shared table `006414`, `_row_gate_open`, reused
+  verbatim) combined with state 12's own LEFT block-test gate
+  (`FFFFF18C & 0x1F == 0`, offsets -1/0x7F/0xFF, not state 9's own `< 8`
+  gate); the head is `FFFFF1BA`-gated exactly like state 26's own
+  (`_state26_head`'s own shape, but a genuinely separate ROM copy,
+  confirmed by a raw ROM diff); TWO ground-ahead probes, gated by state
+  9's own `STATE9_TRIGGER_GATE` (0x16, the first) and state 26's own
+  recheck value (0x12, the second) -- a hybrid pairing neither existing
+  state uses; and a THIRD real composition, a `jsr` into the already-
+  recovered movement-cluster consumer `012E5A` (not state 26's own
+  `012DA0`) when the post-head `d7` counter is exactly 1.  The X-advance
+  has no `FFFFF19C` gate at all, unlike state 9's own gated version.  The
+  doubled fall step (`FFFFF19E != 0`) is modelled directly (a second,
+  identical subtraction) rather than declined, since the adjacent ROM
+  code for it is trivial, not a guess.  448 real path classes across all
+  five recordings collapse to five real terminal shapes; the "D7 < 3, !=
+  1" tail's own cap-override (`006994`) is real ROM, unwitnessed, and
+  declines by name.  No defects: every composition (`_row_gate_cost`,
+  `_cc_resolve`, `GRID_CELL_COST`) was already fully tested by states
+  9/26's and the movement-cluster's own earlier sessions, and reusing
+  them directly caught every fact on the first attempt.
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least

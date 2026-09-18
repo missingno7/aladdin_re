@@ -2017,3 +2017,119 @@ def state4_step(read, d7):
     if ea20 < 0:
         return {'arm': 'transition-3', 'd7': 0}
     return {'arm': 'transition-2', 'd7': 2}
+
+
+# --- 006886: state 21 -- a hybrid of state 9/26's own jump-arc fall step (the SAME shared table
+# `006414`, `_row_gate_open`) and state 12's own LEFT block-test gate (`FFFFF18C & 0x1F == 0`,
+# offsets -1/0x7F/0xFF, NOT state 9's own `< 8` gate with offsets 1/0x81/0x101), plus a THIRD real
+# composition into the already-recovered movement-cluster consumer `012E5A`
+# (`contact_consume`/`CONTACT_CONSUME_SECONDARY_ENTRY`).  The head is BYTE-IDENTICAL in shape to
+# state 26's own (`_state26_head`, `FFFFF1BA`-gated), but this is a separate ROM copy (confirmed not
+# byte-identical to state 26's own code via a raw ROM diff), so it gets its own `_state21_head`
+# rather than reusing state 26's.  The X-advance here has NO `FFFFF19C` gate at all (unlike state
+# 9's own, which requires `f19c >= STATE9_ADVANCE_GATE`) -- it always applies once the block test
+# declines.  Two ground-ahead probes (before AND after the fall step, like state 9's own), the first
+# gated by `STATE9_TRIGGER_GATE` (0x16, state 9's own value), the second by `STATE21_RECHECK_GATE`
+# (0x12, state 26's own recheck value) -- a genuine hybrid of both gates, not a copy of either
+# state's own pairing.  The tail (`state21_tail` below) is D7-based like state 26's own, but targets
+# state 8 (not state 26's own hand-off into state 9) once the post-head D7 counter reaches 3, and
+# calls `012E5A` (not state 26's own `012DA0`) when it is exactly 1.  The doubled fall step
+# (`FFFFF19E != 0`) is modelled directly here (a second, identical subtraction) rather than declined
+# the way state 9's own version is, since the ROM code for it is trivial and adjacent, not a guess.
+STATE21_ENTRY = 0x006886
+STATE21_GROUND_INDEX = 0x11        # 17
+STATE21_LANDED_INDEX = 0xB         # 11 -- both the plain landing and the tail's own cap override
+STATE21_TRIGGER_INDEX = 0x8        # 8
+STATE21_TRIGGER_D7 = 6
+STATE21_GROUND_GATE = 0x16         # the first (before-the-fall) probe's own threshold, state 9's own value
+STATE21_RECHECK_GATE = 0x12        # the second (after-the-fall) probe's own threshold, state 26's own value
+STATE21_TAIL_GATE = 3              # post-head D7 at/past this: the trigger tail (state 8)
+STATE21_CONSUME_COUNTER = 1        # post-head D7 exactly this: calls 012E5A first
+STATE21_CAP = 0x2E                 # FFFFF19C's own cap, the same value state 9's own STATE9_COUNTDOWN_CAP uses
+
+
+def _state21_head(read, d7):
+    """006886-006896: D7 -= 1 (and FFFFF1BA cleared) when F1BA is set, else D7 += 1 -- both ADDQ/
+    SUBQ, the entry's own upper half survives either way.  The SAME shape `_state26_head` uses, but
+    a separate ROM copy (not byte-identical to state 26's own code)."""
+    if read(F1BA, 2) != 0:
+        return (d7 - 1) & 0xFFFF, True
+    return (d7 + 1) & 0xFFFF, False
+
+
+def state21_step(read, d7):
+    """006886-006946: state 21's own decision tree up to (but not including) its own D7-based tail
+    (`state21_tail` below).  Returns `'ground'` (state 17, the SAME four stores
+    `_state9_ground_stores` computes, just targeting `STATE21_GROUND_INDEX`), `'landed'` (state 11),
+    or `'tail'` (the caller reads `d7`/`f19c` -- already bumped by the head / advanced by the fall
+    step -- to choose between `state21_tail`'s own continuations)."""
+    from .grid import grid_cell
+    new_d7, f1ba_was_set = _state21_head(read, d7)
+    base = {'d7': new_d7, 'f1ba_was_set': f1ba_was_set}
+    cell1 = grid_cell(read)
+    address = cell1['address']
+    position_x = read(POSITION_X, 2)
+    low5 = position_x & 0x1F
+    base['cell1'] = cell1
+    blocked = False
+    if low5 == 0:
+        for offset in (-1, 0x7F, 0xFF):
+            if read((address + offset) & 0xFFFFFF, 1) == 1:
+                blocked = True
+                break
+    base['blocked'] = blocked
+    position_x_after = position_x
+    if not blocked:
+        step_x = read(F196, 2)
+        position_x_after = (position_x + step_x) & 0xFFFF
+    base['position_x'] = position_x_after
+
+    def _read_after_advance(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (POSITION_X & 0xFFFFFF) else read(a, s)
+
+    cell2 = grid_cell(_read_after_advance)
+    base['cell2'] = cell2
+    f19c = read(F19C, 2)
+    base['f19c'] = f19c
+    if f19c >= STATE21_GROUND_GATE and _row_gate_open(read, cell2['address'], position_x_after, 0x180):
+        return {'arm': 'ground', 'position_y': read(POSITION_Y, 2), **base}
+
+    if f19c > STATE9_FALL_TABLE_LIMIT:
+        raise ValueError('state 21 fall table index past its own last entry')
+    step_y = _signed_word(read((STATE9_FALL_TABLE + f19c) & 0xFFFFFF, 2))
+    new_y = (read(POSITION_Y, 2) - step_y) & 0xFFFF
+    doubled = read(F19E, 2) != 0
+    if doubled:
+        new_y = (new_y - step_y) & 0xFFFF
+    base['doubled'] = doubled
+    base['new_y'] = new_y
+
+    def _read_after_fall(a, s, _y=new_y):
+        return _y if (a & 0xFFFFFF) == (POSITION_Y & 0xFFFFFF) else read(a, s)
+
+    cell3 = grid_cell(_read_after_fall)
+    base['cell3'] = cell3
+    if _row_gate_open(read, cell3['address'], position_x_after, 0):
+        return {'arm': 'landed', **base}
+
+    if f19c >= STATE21_RECHECK_GATE and _row_gate_open(read, cell3['address'], position_x_after, 0x180):
+        return {'arm': 'ground', 'position_y': new_y, **base}
+
+    return {'arm': 'tail', **base}
+
+
+def state21_tail(d7, f19c):
+    """006946-0069A8: the shared FFFFF19C advance once neither ground check nor the landing check
+    fired.  `d7` here is the head's own post-adjustment value.  Returns `'trigger'` (state 8, D7
+    forced to 6), `'consume'` (the caller composes a call into 012E5A first), or `'countdown'`
+    (plain) -- plus, layered on any of the three, `capped` when the resulting FFFFF19C reaches
+    STATE21_CAP (a landing at state 11, F194/F1A0/F198 cleared, D7 forced to 0)."""
+    if d7 >= STATE21_TAIL_GATE:
+        base_arm = 'trigger'
+    elif d7 == STATE21_CONSUME_COUNTER:
+        base_arm = 'consume'
+    else:
+        base_arm = 'countdown'
+    new_f19c = (f19c + 2) & 0xFFFF
+    capped = new_f19c >= STATE21_CAP
+    return {'arm': base_arm, 'f19c': new_f19c, 'capped': capped}

@@ -10675,3 +10675,451 @@ def state17_plan(machine, registers):
     exit_registers['sr'] = _logic_sr(sr, 0, 2)   # 00667E clr.w f192.w is the last flag-setter
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x006682)
+
+
+# --- 006886: state 21 -- a hybrid of state 9/26's own jump-arc fall step and state 12's own LEFT
+# block-test gate, plus a THIRD real composition into the already-recovered movement-cluster
+# consumer 012E5A.  See game.player's own module note above state21_step/state21_tail.  Costed one
+# instruction-block at a time from the tracer on real fixtures over census-006886-* (all five
+# recordings; 448 real path classes collapsing to five real terminal shapes; the "<3, !=1" tail's
+# own cap-override, at 0x006994, is real ROM this session did not witness and declines by name).
+STATE21_ENTRY = 0x006886
+
+_S21_TST_F1BA = (12, 1)                          # 006886 tst.w f1ba.w
+_S21_BEQ_F1BA = {True: (10, 1), False: (8, 1)}   # beq.b -- taken: F1BA == 0 (the addq.w branch)
+_S21_SUBQ1 = (4, 1)                              # 00688C subq.w #1,d7
+_S21_CLR_F1BA = (16, 1)                          # 00688E clr.w f1ba.w
+_S21_HEAD_BRA = (10, 1)                          # 006892 bra.b $6896
+_S21_ADDQ1 = (4, 1)                              # 006894 addq.w #1,d7
+
+_S21_BSR_GRID = (18, 1)                          # 006896 bsr.w $63fa
+
+_S21_LOW_HEAD = (12 + 8, 2)                      # 00689A move.w f18c,d0; 00689E andi.w #1f,d0
+_S21_BNE_LOW = {True: (10, 1), False: (8, 1)}    # 0068A2 bne.b -- taken(low5!=0): skip the block test
+_S21_BLOCK_TEST = (16, 1)                        # cmpi.b #1,offset(a0)
+_S21_BLOCK_BEQ = {True: (10, 1), False: (8, 1)}  # beq.b -- taken: blocked
+
+_S21_ADVANCE = (12 + 16, 2)                      # 0068BC move.w f196.w,d0; 0068C0 add.w d0,f18c.w
+
+_S21_CMPI_GROUND_GATE = (16, 1)                  # 0068C4 cmpi.w #$16,f19c.w
+_S21_BLT_GROUND_GATE = {True: (10, 1), False: (8, 1)}   # 0068CA blt.b -- taken: skip the before-probe
+
+_S21_BSR_ROWGATE = (18, 1)                       # 0068CC/00693E bsr.w $6442 -- both ground-ahead call sites
+_S21_TST_D1 = (4, 1)                             # tst.w d1 (both probe return sites)
+_S21_BEQ_D1 = {True: (10, 1), False: (8, 1)}     # 0068D2 beq.b -- taken: not found (skip to the fall step)
+_S21_BNE_D1_RECHECK = {True: (10, 1), False: (8, 1)}    # 006944 bne.b -- taken: found (jump back to the ground tail)
+
+_S21_GROUND_TAIL = _add((16, 1), (20, 1), (4, 1), (16, 1), (16, 1), (10, 1))
+# 0068D4 move #$11,f192; 0068DA andi f18e,#$fff0; 0068E0 moveq #0,d7; 0068E2 clr f1b8;
+# 0068E6 move #$39,fdf6; 0068EC bra.w $75d6
+
+_S21_LEA = (8, 1)                                # 0068F0 lea.l $6414(pc),a1
+_S21_MOVE_F19C = (12, 1)                         # 0068F4 move.w f19c.w,d0
+_S21_TABLE_READ = (14, 1)                        # 0068F8 move.w (a1,d0.w),d0
+_S21_SUB = (16, 1)                               # 0068FC sub.w d0,f18e.w
+_S21_TST_F19E = (12, 1)                          # 006900 tst.w f19e.w
+_S21_BEQ_F19E = {True: (10, 1), False: (8, 1)}   # 006904 beq.b -- taken: no double
+_S21_SUB_DOUBLE = (16, 1)                        # 006906 sub.w d0,f18e.w -- the F19E-doubled path
+
+_S21_BEQ_LANDED = {True: (10, 1), False: (8, 1)}  # 006910 beq.b -- taken: not landed
+_S21_LANDED_TAIL = _add((20, 1), (20, 1), (16, 1), (16, 1), (16, 1), (16, 1))
+# 006912 andi f18e,#$fff0; 006918 addi f18e,#$10; 00691E move #$b,f192; 006924 clr f194;
+# 006928 clr f1a0; 00692C clr f198 -- moveq #0,d7 and the bra.w are separate, below
+_S21_LANDED_MOVEQ = (4, 1)
+_S21_LANDED_BRA = (10, 1)                        # 006932 bra.w $75d6
+
+_S21_CMPI_RECHECK_GATE = (16, 1)                 # 006936 cmpi.w #$12,f19c.w
+_S21_BLT_RECHECK_GATE = {True: (10, 1), False: (8, 1)}  # 00693C blt.b -- taken: skip the after-probe
+
+_S21_CMPI_TAIL_GATE = (8, 1)                     # 006946 cmpi.w #3,d7
+_S21_BLT_TAIL_GATE = {True: (10, 1), False: (8, 1)}     # 00694A blt.b -- taken(<3): the consume/countdown tail
+_S21_TRIGGER_HEAD = (4 + 16, 2)                  # 00694C moveq #6,d7; 00694E move.w #8,f192.w
+_S21_TAIL_ADDQ = (16, 1)                         # 006954/006986 addq.w #2,f19c.w -- both copies
+_S21_TAIL_CMPI = (16, 1)                         # 006958/00698A cmpi.w #$2e,f19c.w -- both copies
+_S21_TAIL_BLT = {True: (10, 1), False: (12, 1)}  # 00695E/006990 blt.w -- word branch, both copies
+_S21_CAP_TAIL = _add((16, 1), (4, 1), (16, 1), (16, 1), (16, 1), (10, 1))
+# 006962 move #$b,f192; 006968 moveq #0,d7; 00696A clr f1a0; 00696E clr f198; 006972 clr f194;
+# 006976 bra.w $75d6 -- the TRIGGER tail's own cap override
+
+_S21_CONSUME_CMPI1 = (8, 1)                      # 00697A cmpi.w #1,d7
+_S21_CONSUME_BNE1 = {True: (10, 1), False: (8, 1)}      # 00697E bne.b -- taken: D7 != 1, skip the jsr
+
+
+def state21_plan(machine, registers):
+    """006886 (state 21): the player state machine's own dispatch table entry 21.  See
+    game.player's own module note above state21_step/state21_tail."""
+    from .game import player
+    from .game.grid import grid_cell
+    if registers['pc'] != STATE21_ENTRY:
+        raise UnsupportedCandidate('state 21 planner needs the machine parked at 006886')
+    sr = registers['sr']
+    read = _reader(machine)
+    sp32 = registers['a7']
+    order = {}
+    exit_registers = {}
+
+    f1ba = read(player.F1BA, 2)
+    c, i = _S21_TST_F1BA
+    cycles, instructions = c, i
+    sr = _logic_sr(sr, f1ba, 2)
+    f1ba_set = f1ba != 0
+    c, i = _S21_BEQ_F1BA[not f1ba_set]
+    cycles += c
+    instructions += i
+    d7 = registers['d7'] & 0xFFFF
+    if f1ba_set:
+        c, i = _add(_S21_SUBQ1, _S21_CLR_F1BA, _S21_HEAD_BRA)
+        cycles += c
+        instructions += i
+        sr = _sub_sr(sr, d7, 1, 2)
+        new_d7 = (d7 - 1) & 0xFFFF
+        for a, b in _bytes(player.F1BA & 0xFFFFFF, 0, 2):
+            order[a] = b
+    else:
+        c, i = _S21_ADDQ1
+        cycles += c
+        instructions += i
+        sr = _add_sr(sr, d7, 1, 2)
+        new_d7 = (d7 + 1) & 0xFFFF
+
+    c, i = _S21_BSR_GRID
+    cycles += c
+    instructions += i
+    cycles += GRID_CELL_COST[0]
+    instructions += GRID_CELL_COST[1]
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x00689A, 4))
+    cell1 = grid_cell(read)
+    exit_registers['a0'] = cell1['address'] & 0xFFFFFFFF
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell1['d0']
+    exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cell1['d1']
+    sr = _asl_sr(sr, cell1['row_source'], 3, 2)
+
+    position_x = read(player.POSITION_X, 2)
+    low5 = position_x & 0x1F
+    c, i = _S21_LOW_HEAD
+    cycles += c
+    instructions += i
+    sr = _logic_sr(sr, low5, 2)   # andi.w: logic flags of the RESULT
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | low5
+    c, i = _S21_BNE_LOW[low5 != 0]
+    cycles += c
+    instructions += i
+    blocked = False
+    if low5 == 0:
+        for offset in (-1, 0x7F, 0xFF):
+            c, i = _S21_BLOCK_TEST
+            cycles += c
+            instructions += i
+            byte_val = read((cell1['address'] + offset) & 0xFFFFFF, 1)
+            sr = _cmp_sr(sr, byte_val, 1, 1)
+            hit = byte_val == 1
+            c, i = _S21_BLOCK_BEQ[hit]
+            cycles += c
+            instructions += i
+            if hit:
+                blocked = True
+                break
+
+    position_x_after = position_x
+    if not blocked:
+        c, i = _S21_ADVANCE
+        cycles += c
+        instructions += i
+        step_x = read(player.F196, 2)
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | step_x
+        position_x_after = (position_x + step_x) & 0xFFFF
+        for a, b in _bytes(player.POSITION_X, position_x_after, 2):
+            order[a] = b
+        sr = _add_sr(sr, position_x, step_x, 2)
+
+    def _read_after_advance(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (player.POSITION_X & 0xFFFFFF) else read(a, s)
+
+    # A pure-Python precompute of what 006442's/006468's OWN internal bsr.b $63fa will see (real RAM
+    # already carries the advanced POSITION_X by this point) -- not a separate boundary-plan cost;
+    # _row_gate_cost below already charges that inner call in full, the same way state9_plan's own
+    # 'address2'/'address3' are precomputed without their own top-level grid_cell cost.
+    cell2 = grid_cell(_read_after_advance)
+
+    f19c = read(player.F19C, 2)
+    c, i = _S21_CMPI_GROUND_GATE
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, f19c, player.STATE21_GROUND_GATE, 2)
+    ground_gate_open = f19c >= player.STATE21_GROUND_GATE
+    c, i = _S21_BLT_GROUND_GATE[not ground_gate_open]
+    cycles += c
+    instructions += i
+
+    found_before = False
+    if ground_gate_open:
+        c, i = _S21_BSR_ROWGATE
+        cycles += c
+        instructions += i
+        order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x0068D0, 4))
+        rc, ri, found_before, rowgate_order, rowgate_d0 = _row_gate_cost(
+            read, cell2['address'], position_x_after, 0x180, sp32 - 4, cell2['d0'])
+        cycles += rc
+        instructions += ri
+        order.update(rowgate_order)
+        exit_registers['a0'] = cell2['address'] & 0xFFFFFFFF
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | rowgate_d0
+        exit_registers['d1'] = 1 if found_before else 0   # moveq #0/#1,d1: a full 32-bit clear
+        sr = _asl_sr(sr, cell2['row_source'], 3, 2)
+        c, i = _S21_TST_D1
+        cycles += c
+        instructions += i
+        c, i = _S21_BEQ_D1[not found_before]
+        cycles += c
+        instructions += i
+
+    if found_before:
+        c, i = _S21_GROUND_TAIL
+        cycles += c
+        instructions += i
+        original_y = read(player.POSITION_Y, 2)
+        for a, b in _bytes(player.STATE_INDEX, player.STATE21_GROUND_INDEX, 2):
+            order[a] = b
+        for a, b in _bytes(player.POSITION_Y, original_y & 0xFFF0, 2):
+            order[a] = b
+        for a, b in _bytes(player.F1B8 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        from .game.pickups import MOVEMENT_SOUND_CUE
+        for a, b in _bytes(MOVEMENT_SOUND_CUE & 0xFFFFFF, 0x39, 2):
+            order[a] = b
+        exit_registers['d7'] = 0
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0x39, 2)   # 0068E6 move.w #$39,fdf6.w is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0068EC)
+
+    # The fall step.
+    c, i = _add(_S21_LEA, _S21_MOVE_F19C, _S21_TABLE_READ)
+    cycles += c
+    instructions += i
+    exit_registers['a1'] = player.STATE9_FALL_TABLE & 0xFFFFFFFF
+    if f19c > player.STATE9_FALL_TABLE_LIMIT:
+        raise UnsupportedCandidate('state 21 fall table index past its own last entry not witnessed')
+    step_y = player._signed_word(read((player.STATE9_FALL_TABLE + f19c) & 0xFFFFFF, 2))
+    original_y = read(player.POSITION_Y, 2)
+    c, i = _S21_SUB
+    cycles += c
+    instructions += i
+    sr = _sub_sr(sr, original_y, step_y & 0xFFFF, 2)
+    new_y = (original_y - step_y) & 0xFFFF
+    for a, b in _bytes(player.POSITION_Y, new_y, 2):
+        order[a] = b
+    c, i = _S21_TST_F19E
+    cycles += c
+    instructions += i
+    doubled = read(player.F19E, 2) != 0
+    c, i = _S21_BEQ_F19E[not doubled]
+    cycles += c
+    instructions += i
+    if doubled:
+        c, i = _S21_SUB_DOUBLE
+        cycles += c
+        instructions += i
+        sr = _sub_sr(sr, new_y, step_y & 0xFFFF, 2)
+        new_y = (new_y - step_y) & 0xFFFF
+        for a, b in _bytes(player.POSITION_Y, new_y, 2):
+            order[a] = b
+
+    c, i = _S21_BSR_ROWGATE
+    cycles += c
+    instructions += i
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x00690E, 4))
+
+    def _read_after_fall(a, s, _y=new_y, _x=position_x_after):
+        masked = a & 0xFFFFFF
+        if masked == (player.POSITION_Y & 0xFFFFFF):
+            return _y
+        if masked == (player.POSITION_X & 0xFFFFFF):
+            return _x
+        return read(a, s)
+    cell3 = grid_cell(_read_after_fall)
+    rc, ri, found_landed, rowgate_order, rowgate_d0 = _row_gate_cost(
+        read, cell3['address'], position_x_after, 0, sp32 - 4, cell3['d0'])
+    cycles += rc
+    instructions += ri
+    order.update(rowgate_order)
+    exit_registers['a0'] = cell3['address'] & 0xFFFFFFFF
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | rowgate_d0
+    exit_registers['d1'] = 1 if found_landed else 0   # moveq #0/#1,d1: a full 32-bit clear
+    sr = _asl_sr(sr, cell3['row_source'], 3, 2)
+    c, i = _S21_TST_D1
+    cycles += c
+    instructions += i
+    c, i = _S21_BEQ_LANDED[not found_landed]
+    cycles += c
+    instructions += i
+
+    if found_landed:
+        c, i = _S21_LANDED_TAIL
+        cycles += c
+        instructions += i
+        masked_y = new_y & 0xFFF0
+        sr = _add_sr(sr, masked_y, 0x10, 2)   # addi.w #$10,f18e.w
+        new_y_aligned = (masked_y + 0x10) & 0xFFFF
+        for a, b in _bytes(player.POSITION_Y, new_y_aligned, 2):
+            order[a] = b
+        for a, b in _bytes(player.STATE_INDEX, player.STATE21_LANDED_INDEX, 2):
+            order[a] = b
+        for a, b in _bytes(player.F194 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        for a, b in _bytes(player.F1A0 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        for a, b in _bytes(player.F198 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        c, i = _add(_S21_LANDED_MOVEQ, _S21_LANDED_BRA)
+        cycles += c
+        instructions += i
+        exit_registers['d7'] = 0
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0, 2)   # moveq #0,d7 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006932)
+
+    # The re-check ground-ahead probe, at the new position.
+    c, i = _S21_CMPI_RECHECK_GATE
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, f19c, player.STATE21_RECHECK_GATE, 2)
+    recheck_gate_open = f19c >= player.STATE21_RECHECK_GATE
+    c, i = _S21_BLT_RECHECK_GATE[not recheck_gate_open]
+    cycles += c
+    instructions += i
+    found_after = False
+    if recheck_gate_open:
+        c, i = _S21_BSR_ROWGATE
+        cycles += c
+        instructions += i
+        order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x006942, 4))
+        rc, ri, found_after, rowgate_order, rowgate_d0 = _row_gate_cost(
+            read, cell3['address'], position_x_after, 0x180, sp32 - 4, cell3['d0'])
+        cycles += rc
+        instructions += ri
+        order.update(rowgate_order)
+        exit_registers['a0'] = cell3['address'] & 0xFFFFFFFF
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | rowgate_d0
+        exit_registers['d1'] = 1 if found_after else 0   # moveq #0/#1,d1: a full 32-bit clear
+        sr = _asl_sr(sr, cell3['row_source'], 3, 2)
+        c, i = _S21_TST_D1
+        cycles += c
+        instructions += i
+        c, i = _S21_BNE_D1_RECHECK[found_after]
+        cycles += c
+        instructions += i
+
+    if found_after:
+        c, i = _S21_GROUND_TAIL
+        cycles += c
+        instructions += i
+        for a, b in _bytes(player.STATE_INDEX, player.STATE21_GROUND_INDEX, 2):
+            order[a] = b
+        for a, b in _bytes(player.POSITION_Y, new_y & 0xFFF0, 2):
+            order[a] = b
+        for a, b in _bytes(player.F1B8 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        from .game.pickups import MOVEMENT_SOUND_CUE
+        for a, b in _bytes(MOVEMENT_SOUND_CUE & 0xFFFFFF, 0x39, 2):
+            order[a] = b
+        exit_registers['d7'] = 0
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0x39, 2)   # 0068E6 move.w #$39,fdf6.w is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0068EC)
+
+    # Neither probe fired: the D7-based tail.
+    c, i = _S21_CMPI_TAIL_GATE
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, new_d7, player.STATE21_TAIL_GATE, 2)
+    to_trigger = new_d7 >= player.STATE21_TAIL_GATE
+    c, i = _S21_BLT_TAIL_GATE[not to_trigger]
+    cycles += c
+    instructions += i
+
+    if to_trigger:
+        c, i = _S21_TRIGGER_HEAD
+        cycles += c
+        instructions += i
+        for a, b in _bytes(player.STATE_INDEX, player.STATE21_TRIGGER_INDEX, 2):
+            order[a] = b
+        d7_out = player.STATE21_TRIGGER_D7
+        sr = _logic_sr(sr, player.STATE21_TRIGGER_INDEX, 2)   # 00694E move.w #8,f192.w
+    else:
+        c, i = _S21_CONSUME_CMPI1
+        cycles += c
+        instructions += i
+        calls_consumer = new_d7 == player.STATE21_CONSUME_COUNTER
+        c, i = _S21_CONSUME_BNE1[not calls_consumer]
+        cycles += c
+        instructions += i
+        d7_out = new_d7
+        if calls_consumer:
+            c, i = _S5_JSR_CONSUME
+            cycles += c
+            instructions += i
+            for a, b in _bytes((sp32 - 4) & 0xFFFFFF, 0x006986, 4):
+                order[a] = b
+
+            def _read_for_consume(a, s, _x=position_x_after, _y=new_y):
+                masked = a & 0xFFFFFF
+                if masked == (player.POSITION_X & 0xFFFFFF):
+                    return _x
+                if masked == (player.POSITION_Y & 0xFFFFFF):
+                    return _y
+                return read(a, s)
+            cc_cycles, cc_instructions, cc_order, cc_registers, _ = _cc_resolve(
+                machine, _read_for_consume, registers, 1, sp32 - 4)
+            cycles += cc_cycles
+            instructions += cc_instructions
+            order.update(cc_order)
+            exit_registers.update(cc_registers)
+
+    c, i = _S21_TAIL_ADDQ
+    cycles += c
+    instructions += i
+    new_f19c = (f19c + 2) & 0xFFFF
+    sr = _add_sr(sr, f19c, 2, 2)
+    for a, b in _bytes(player.F19C & 0xFFFFFF, new_f19c, 2):
+        order[a] = b
+    c, i = _S21_TAIL_CMPI
+    cycles += c
+    instructions += i
+    capped = new_f19c >= player.STATE21_CAP
+    c, i = _S21_TAIL_BLT[not capped]
+    cycles += c
+    instructions += i
+
+    if not capped:
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _cmp_sr(sr, new_f19c, player.STATE21_CAP, 2)
+        if to_trigger:
+            exit_registers['d7'] = d7_out   # moveq #6,d7: a full 32-bit clear
+        else:
+            exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | d7_out   # ADDQ/SUBQ (the head) or MOVEQ #1
+        last_pc = 0x00695E if to_trigger else 0x006990
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=last_pc)
+
+    if not to_trigger:
+        raise UnsupportedCandidate('state 21 tail cap-override at 006994 (the <3, !=1 tail) not witnessed by a recording')
+
+    c, i = _S21_CAP_TAIL
+    cycles += c
+    instructions += i
+    for a, b in _bytes(player.STATE_INDEX, player.STATE21_LANDED_INDEX, 2):
+        order[a] = b
+    for a, b in _bytes(player.F1A0 & 0xFFFFFF, 0, 2):
+        order[a] = b
+    for a, b in _bytes(player.F198 & 0xFFFFFF, 0, 2):
+        order[a] = b
+    for a, b in _bytes(player.F194 & 0xFFFFFF, 0, 2):
+        order[a] = b
+    exit_registers['d7'] = 0
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = _logic_sr(sr, 0, 2)   # 006972 clr.w f194.w is the last flag-setter
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x006976)
