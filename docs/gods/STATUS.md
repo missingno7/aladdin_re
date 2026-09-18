@@ -803,6 +803,39 @@ below, has the count and the milestone tree numbers).
   gates further), then `00A578` as the walk with its own
   semantic-operation card.
 
+- **19 September, grinder session opening on the `verify-camera-sprites-
+  leaves-2026-09-19-ac36` tree**: two arms this doc and `boundary.py`
+  called "real ROM, never witnessed" turned out to already have retained
+  census fixtures -- a boundary defect, not a missing census (confirmed by
+  re-running `census_all.py --max-classes 400` fresh on both `00B724` and
+  `00AF52`: 11-41 distinct path classes per recording, none anywhere near
+  the cap, matching the existing evidence exactly).  `00B724`'s own
+  `'pruned-start'` (declined 635 times on the `-ac36` tree) and `00B7DA`'s
+  own mirror (exposed once `00B724`'s fix let composed calls reach it) are
+  now admitted: the same early-exit `rts` (`00B7B8`/`00B862`) their own
+  continuing arms already model, one guard sooner, needing a new SR helper
+  (`_ats_window_sr`, reproducing `00B32E`'s own final `add.w d3,d2` --
+  X threading through the internal `00AF3C`/`00B32E` calls, caught by a
+  `-ccr01` fixture whose entry `X=1` exposed a first-draft bug).  `00AF52`'s
+  own `'Y-low bound exit'` (declined 192 times) is the SAME shape as the
+  already-admitted X-low/X-high/Y-high bounds -- wiring it to the same
+  `bound_exit` closure was the whole fix.  `factcheck check` and
+  `--perturb-upper-halves` clean on the full fixture sets (`aim-target-scan`
+  254/254 MATCH, `aim-target-scan-backward` 147/149 MATCH -- 2 correctly
+  declined `'found without a new best'`, `aim-search-dispatch` 253/351
+  MATCH -- the rest all cost-cap declines or the same backward sub-arm);
+  `run_tests.py gods`: 19,747 passed, 11 skipped.  All three candidates
+  reproduce the original on `f0ac19738f19…` and their mutants DIVERGENCE.
+  `camera-sprites` milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-aimfix`,
+  107,519 frames, current receipts): fallbacks 9,009 -> **8,215** (both
+  declined reasons gone; the rest of the drop is hits moving from `00B002`'s
+  own gate onto `00AF52`'s own, since a previously-declined `00AF52`
+  activation used to fall back to the real CPU, which then re-triggered
+  `00B002`'s own separate gate -- the whole span is now one atomic hit).
+  Next, per the Decision's own order (unchanged by this fix): `00AA76`/
+  `00AB50`, then `00A772` as the family, then `00A578` as the walk.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

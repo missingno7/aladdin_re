@@ -17685,6 +17685,21 @@ def _ats_window_d3(read, y0):
     return (16 * b) & 0xFFFF
 
 
+def _ats_window_sr(read, sr, x0, y0):
+    """00B32E's own exit SR through its own last flag-setter, add.w d3,d2 (00B34A) --
+    aim_window_address_plan's own note: X is fully replaced by this ADD's own carry regardless of the
+    incoming sr, so this is exact for 00B724/00B7DA's own pruned-start exit (whose next and last
+    instruction, cmp.b (a0),d7, retains X unchanged and overwrites only N/Z/V/C)."""
+    from .game import creatures
+    dx = (x0 - read(creatures.FOLLOW_X, 2)) & 0xFFFF
+    dy = (y0 - read(creatures.FOLLOW_Y, 2)) & 0xFFFF
+    a = creatures._signed_word(dx) >> 5
+    b = creatures._signed_word(dy) >> 4
+    d2_before_final = (a + 5 + 4 * b) & 0xFFFF
+    d3_final = (16 * b) & 0xFFFF
+    return _add_sr(sr, d2_before_final, d3_final, 2)
+
+
 def _ats_store_writes(stores):
     writes = ()
     for store in stores:
@@ -17793,9 +17808,17 @@ def _ats_walk(sr, checks):
 
 
 def aim_target_scan_plan(machine, registers):
-    """00B724: see game/creatures.py's own module note above aim_target_scan.  'blocked-start' and
-    'pruned-start' (the two initial guards) decline, unwitnessed; a 'found' whose own step index is not
-    (unsigned) less than AIM_SEARCH_BEST_INDEX declines too (00B7CE's own taken arm, never witnessed)."""
+    """00B724: see game/creatures.py's own module note above aim_target_scan.  'blocked-start' (the
+    starting cell's own two-rows-down footing guard) declines, unwitnessed by any recording;
+    'pruned-start' (the starting window-mark cell already holds a step index at or past the walk's own
+    starting index -- 00B746's own taken arm) IS witnessed (census-00B724-*, 7 retained fixtures over
+    three recordings: 7251bbd0ecf7, f40d7bcc9dda, fb408bc75597) and is admitted below: the RTS at
+    00B7B8 right after the tile0 compare, before either internal call's own D2 overwrite (00B74C, part
+    of _ATS_SETUP) ever runs, so D2/D3 leave the SAME window-scratch residue 00B32E (bsr $b32e, the
+    second internal call) left them -- _res_window_d2/_ats_window_d3, the same formulas
+    aim_target_resolve_plan already names for the identical internal call.  A 'found' whose own step
+    index is not (unsigned) less than AIM_SEARCH_BEST_INDEX declines too (00B7CE's own taken arm, never
+    witnessed)."""
     from .game import creatures
     if registers['pc'] != AIM_TARGET_SCAN_ENTRY:
         raise UnsupportedCandidate('aim target scan planner needs the machine parked at 00B724')
@@ -17805,8 +17828,29 @@ def aim_target_scan_plan(machine, registers):
     type_ptr = registers['a4'] & 0xFFFFFF
     x0, y0 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
     result = creatures.aim_target_scan(read, type_ptr, x0, y0)
-    if result['arm'] in ('blocked-start', 'pruned-start'):
+    if result['arm'] == 'blocked-start':
         raise UnsupportedCandidate(f"aim target scan: {result['arm']}, not witnessed by a recording")
+
+    if result['arm'] == 'pruned-start':
+        cycles, instructions = _ATS_HEAD
+        c, i = _ATS_BGT_TILE0[True]
+        cycles += c
+        instructions += i
+        c, i = _ATS_RTS
+        cycles += c
+        instructions += i
+        exit_registers = {
+            'a2': result['a2'], 'a0': result['a0'],
+            'a3': creatures.AIM_SEARCH_POOL_LOW & 0xFFFFFFFF,
+            'd2': (registers['d2'] & 0xFFFF0000) | _res_window_d2(read, x0, y0),
+            'd3': (registers['d3'] & 0xFFFF0000) | _ats_window_d3(read, y0),
+            'd7': (registers['d7'] & 0xFFFF0000) | (result['d7_start'] & 0xFFFF),
+            'sr': _cmp_sr(_ats_window_sr(read, sr, x0, y0), result['d7_start'] & 0xFF, result['tile0'], 1),
+            'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+        }
+        writes = _ats_stack_residue(sp)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_STEP_PC)
 
     cycles, instructions = _ATS_HEAD
     c, i = _ATS_BGT_TILE0[False]         # the initial prune guard, always 'not taken' to reach here
@@ -18138,9 +18182,12 @@ def _bw_walk(sr, checks):
 
 def aim_target_scan_backward_plan(machine, registers):
     """00B7DA: see game/creatures.py's own module note above aim_target_scan_backward.  'blocked-start'
-    and 'pruned-start' decline, unwitnessed, exactly as 00B724's own; a 'found' with an existing prior
-    best that is NOT an improvement (00B880's own skip arm) is the only witnessed 'found' sub-arm with
-    a prior best -- an improvement over an existing best is real ROM, never witnessed, and declines."""
+    declines, unwitnessed, exactly as 00B724's own; 'pruned-start' IS witnessed (census-00B7DA-*, three
+    recordings) and is admitted below, the same shape 00B724's own pruned-start uses -- A3 is untouched
+    (the caller's own cursor, never reloaded in this routine's own head, unlike 00B724's LEA_POOL); a
+    'found' with an existing prior best that is NOT an improvement (00B880's own skip arm) is the only
+    witnessed 'found' sub-arm with a prior best -- an improvement over an existing best is real ROM,
+    never witnessed, and declines."""
     from .game import creatures
     if registers['pc'] != AIM_TARGET_SCAN_BACKWARD_ENTRY:
         raise UnsupportedCandidate('aim target scan backward planner needs the machine parked at 00B7DA')
@@ -18151,8 +18198,28 @@ def aim_target_scan_backward_plan(machine, registers):
     x0, y0 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
     a3_in = registers['a3'] & 0xFFFFFFFF
     result = creatures.aim_target_scan_backward(read, type_ptr, x0, y0, a3_in)
-    if result['arm'] in ('blocked-start', 'pruned-start'):
+    if result['arm'] == 'blocked-start':
         raise UnsupportedCandidate(f"aim target scan backward: {result['arm']}, not witnessed by a recording")
+
+    if result['arm'] == 'pruned-start':
+        cycles, instructions = _BW_HEAD
+        c, i = _BW_BGT_TILE0[True]
+        cycles += c
+        instructions += i
+        c, i = _BW_RTS
+        cycles += c
+        instructions += i
+        exit_registers = {
+            'a2': result['a2'], 'a0': result['a0'], 'a3': a3_in,
+            'd2': (registers['d2'] & 0xFFFF0000) | _res_window_d2(read, x0, y0),
+            'd3': (registers['d3'] & 0xFFFF0000) | _bw_window_d3(read, y0),
+            'd7': (registers['d7'] & 0xFFFF0000) | (result['d7_start'] & 0xFFFF),
+            'sr': _cmp_sr(_ats_window_sr(read, sr, x0, y0), result['d7_start'] & 0xFF, result['tile0'], 1),
+            'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+        }
+        writes = _bw_stack_residue(sp)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_BACKWARD_STEP_PC)
 
     cycles, instructions = _BW_HEAD
     c, i = _BW_BGT_TILE0[False]
@@ -18933,7 +19000,7 @@ def aim_search_dispatch_plan(machine, registers):
     cycles += c
     instructions += i
     if y_low_fail:
-        raise UnsupportedCandidate('aim search dispatch: Y-low bound exit, not witnessed by a recording')
+        return bound_exit({'d0': d0, 'd1': d1})
 
     c, i = cost(0x00AF80)
     cycles += c

@@ -1457,9 +1457,10 @@ AIM_SEARCH_MARK_OFFSET = AIM_CUE_WINDOW_STRIDE_1   # a0 = aim_window_address(...
 
 def aim_target_scan(read, type_ptr, x0, y0):
     """00B724: see the module note above.  'blocked-start' (the starting cell's own two-rows-down
-    footing is not 1) and 'pruned-start' (the starting window-mark cell already holds a step index
-    greater than the walk's own starting index) are real ROM, never witnessed: declined.  Past those
-    two guards the routine ALWAYS stores at least once (unconditionally, before the first per-step
+    footing is not 1) is real ROM, never witnessed: declined.  'pruned-start' (the starting
+    window-mark cell already holds a step index greater than the walk's own starting index) IS
+    witnessed (census-00B724-*, three recordings) and is admitted (boundary.aim_target_scan_plan).
+    Past those two guards the routine ALWAYS stores at least once (unconditionally, before the first per-step
     continuation test), then at each subsequent column: 'step-limit' (the step index reaches
     AIM_SEARCH_STEP_LIMIT_OFFSET's own value), 'x-bound' (the camera-relative X leaves
     [0, AIM_SEARCH_X_LIMIT)), 'blocked' / 'blocked-below' (the next column's own layer 0 / layer 1 is
@@ -1583,8 +1584,9 @@ AIM_SEARCH_BACKWARD_X_LIMIT = -0x40             # camera-relative X must stay ab
 
 
 def aim_target_scan_backward(read, type_ptr, x0, y0, a3):
-    """00B7DA: see the module note above.  'blocked-start' and 'pruned-start' are real ROM, never
-    witnessed, exactly as 00B724's own.  Past those two guards the FIRST probe is a bare advance (no
+    """00B7DA: see the module note above.  'blocked-start' is real ROM, never witnessed, exactly as
+    00B724's own.  'pruned-start' IS witnessed (census-00B7DA-*, three recordings) and is admitted
+    (boundary.aim_target_scan_backward_plan).  Past those two guards the FIRST probe is a bare advance (no
     store): at each column, 'x-bound' (the camera-relative X leaves (AIM_SEARCH_BACKWARD_X_LIMIT, 0]),
     'blocked' / 'blocked-below' (layer 0 / layer 1 occupied), 'found' (the column's own window-mark
     cell already holds a negative signed byte), 'pruned' (it already holds a step index at or past this
