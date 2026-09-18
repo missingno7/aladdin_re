@@ -180,3 +180,29 @@ def attack_update(read, type_ptr, instance_ptr):
     else:
         result['arm'] = 'spawn-pool-full'
     return result
+
+
+# --- 00B944: the creature update's own probe into the already-recovered pickup check ------------
+#
+# 00A772's own second unconditional callee (18 Sep, real-index-26 session, per
+# docs/gods/blockers/2026-09-18-00A578.md's own ordering): unlike 010CD2's own camera-relative probe
+# (pickups.pickup_probe), this one calls pickup_check directly over the creature's own tracked
+# position (D0/D1, already read by 00A772's own head before the call), no camera add.  A single
+# unconditional write (FFFFF382.l = 0x00200020, a fixed constant this session did not trace further)
+# runs before the call every time.  LIFECYCLE (the creature's own +8 word, the SAME field
+# docs/gods/blockers/2026-09-18-00A578.md's own recon names "the lifecycle word $8(a5)" that 00A578's
+# own per-frame walk tests to decide whether to call 00A772 at all) is both the call's own D2
+# argument and its own result: on a negative pickup_check result, FRAME_STEP is forced to -1 and the
+# instance's own +6 word (LIFECYCLE_RESET below; what tracks it is not established this session) is
+# cleared.
+LIFECYCLE = 0x8                     # instance_ptr word: pickup_check's own D2 argument AND result
+LIFECYCLE_RESET = 0x6               # instance_ptr word: cleared alongside FRAME_STEP=-1 on a pickup hit
+
+
+def creature_pickup_check(read, x, y, lifecycle):
+    """00B944: probes the already-recovered pickup check over the creature's own tracked position
+    (no camera offset, unlike pickups.pickup_probe's own 010CD2).  Returns the check's own result and
+    whether it came back negative (the caller then forces FRAME_STEP=-1 and clears LIFECYCLE_RESET)."""
+    from . import pickups
+    check = pickups.pickup_check(read, x, y, lifecycle)
+    return {'check': check, 'negative': pickups._signed_word(check['d2']) < 0}

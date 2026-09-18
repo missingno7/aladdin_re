@@ -3945,6 +3945,139 @@ def pickup_probe_plan(machine, registers):
                       registers=exit_registers, last_pc=PICKUP_PROBE_LAST_PC)
 
 
+# --- 00B944: the creature update's own probe into the already-recovered pickup check ------------
+#
+# The SAME "push scratch, call 00BA8E, write D2 back, force -1 on a negative result" shape
+# pickup_probe_plan already proves over 010CD2, but with no camera add (D0/D1 are the creature's own
+# tracked position, unchanged) and one extra unconditional write before the call: FFFFF382.l =
+# 0x00200020, i.e. zones.HALF_WIDTH = zones.HALF_HEIGHT = 0x20 -- pickup_check's own caller-supplied
+# box half-extents (010CD2's own call trusts whatever an EARLIER, unrelated part of the frame already
+# left there instead).  Since this composition calls pickup_check_plan on the SAME live `machine`
+# (never literally applying its own prior writes to it -- an AtomicPlan is a description, not a
+# mutation), zone_check's own read of HALF_WIDTH/HALF_HEIGHT would otherwise see whatever was ACTUALLY
+# in RAM at the retained fixture's own entry, not the 0x20/0x20 this instruction really seeds on real
+# hardware; `_ConstMachine` below overrides exactly those two words for the composed sub-plan's own
+# reads, the same "read the value my own head just wrote, not the parked machine's" problem sprite_
+# emit_plan's own seam suffix and player_state_plan's own head-into-callee handoff both had to solve
+# in their own ways (a register overlay there; a RAM overlay here, since HALF_WIDTH/HEIGHT are read
+# by a callee two levels down, not by pickup_check_plan itself).  A second store
+# (creatures.LIFECYCLE_RESET) alongside FRAME_STEP on the negative arm is 00B944's own only other
+# difference from 010CD2.  Cost from the tracer (artifacts/gods/evidence/census-00B944-*, all five
+# recordings).
+CREATURE_PICKUP_CHECK_ENTRY, CREATURE_PICKUP_CHECK_LAST_PC = 0x00B944, 0x00B96C
+CREATURE_PICKUP_CHECK_BSR_RETURN = 0x00B958
+CREATURE_PICKUP_CHECK_HALF_EXTENT = 0x20   # both zones.HALF_WIDTH and zones.HALF_HEIGHT, seeded fixed
+_CPC_PUSH = (32, 1)                # movem.l d0-d2,-(a7)
+_CPC_STORE_CONST = (24, 1)         # move.l #$200020,f382.w
+_CPC_READ_D2 = (12, 1)             # move.w 8(a5),d2
+_CPC_BSR = (18, 1)                 # bsr.w $ba8e (00BA8E's own cost comes from the composed sub-plan)
+_CPC_WRITEBACK = (12, 1)           # move.w d2,8(a5)
+_CPC_BPL_TAKEN, _CPC_BPL_NOTTAKEN = (10, 1), (8, 1)     # byte branch: taken skips the -1/reset stores
+_CPC_STORE_NEGATIVE = (16, 1)      # move.w #$ffff,4(a5)
+_CPC_CLR_RESET = (16, 1)           # clr.w 6(a5)
+_CPC_TAIL = (36 + 16, 2)           # movem.l (a7)+,d0-d2; rts
+
+
+class _ConstMachine:
+    """A read-only view of `machine` with a few RAM bytes overridden -- for composing a callee's own
+    boundary plan when THIS region's own prior write (never literally applied to the live machine
+    during planning) feeds the callee's own read.  Only `peek_ram`/`peek_rom` are used by `_reader`
+    and the cost helpers this composes with; nothing here is ever written to."""
+    def __init__(self, machine, overrides):
+        self._machine = machine
+        self._overrides = overrides   # {address & 0xFFFF: byte_value}
+
+    def peek_ram(self, offset, size=1):
+        data = bytearray(self._machine.peek_ram(offset, size))
+        for i in range(size):
+            value = self._overrides.get(offset + i)
+            if value is not None:
+                data[i] = value
+        return bytes(data)
+
+    def peek_rom(self, offset, size=1):
+        return self._machine.peek_rom(offset, size)
+
+
+def creature_pickup_check_plan(machine, registers):
+    """00B944: 00A772's own second unconditional callee.  See game/creatures.py's own module note
+    above creature_pickup_check."""
+    from .game import creatures, pickups
+    if registers['pc'] != CREATURE_PICKUP_CHECK_ENTRY:
+        raise UnsupportedCandidate('creature pickup check planner needs the machine parked at 00B944')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    a5 = registers['a5'] & 0xFFFFFFFF
+    _ram_span('creature pickup check record', a5 & 0xFFFFFF, 9)
+    lifecycle = read((a5 + creatures.LIFECYCLE) & 0xFFFFFF, 2)
+    d0_entry, d1_entry = registers['d0'], registers['d1']
+    x, y = d0_entry & 0xFFFF, d1_entry & 0xFFFF
+
+    _ram_span('creature pickup check frame', sp - 12, 12)
+    order = {}
+    _pk_push(order, sp, [registers['d0'], registers['d1'], registers['d2']])
+    order.update(_bytes(0xFFF382, 0x00200020, 4))
+    _pk_push(order, sp - 12, [CREATURE_PICKUP_CHECK_BSR_RETURN])
+
+    virtual = dict(registers)
+    virtual.update(pc=PICKUP_CHECK_ENTRY, a7=(sp - 16) & 0xFFFFFFFF, d0=(registers['d0'] & 0xFFFF0000) | x,
+                   d1=(registers['d1'] & 0xFFFF0000) | y, d2=(registers['d2'] & 0xFFFF0000) | (lifecycle & 0xFFFF),
+                   sr=_logic_sr(sr, lifecycle, 2))
+    from .game import zones
+    seeded = _ConstMachine(machine, {
+        zones.HALF_WIDTH & 0xFFFF: (CREATURE_PICKUP_CHECK_HALF_EXTENT >> 8) & 0xFF,
+        (zones.HALF_WIDTH + 1) & 0xFFFF: CREATURE_PICKUP_CHECK_HALF_EXTENT & 0xFF,
+        zones.HALF_HEIGHT & 0xFFFF: (CREATURE_PICKUP_CHECK_HALF_EXTENT >> 8) & 0xFF,
+        (zones.HALF_HEIGHT + 1) & 0xFFFF: CREATURE_PICKUP_CHECK_HALF_EXTENT & 0xFF})
+    inner = pickup_check_plan(seeded, virtual)
+
+    for address, value in inner.writes:
+        order[address] = value
+    result_d2 = pickups._signed_word(inner.registers.get('d2', virtual['d2']))
+
+    cycles = (_CPC_PUSH[0] + _CPC_STORE_CONST[0] + _CPC_READ_D2[0] + _CPC_BSR[0] + inner.cycles + _CPC_WRITEBACK[0])
+    instructions = (_CPC_PUSH[1] + _CPC_STORE_CONST[1] + _CPC_READ_D2[1] + _CPC_BSR[1] + inner.instructions
+                    + _CPC_WRITEBACK[1])
+    for a, b in _bytes((a5 + creatures.LIFECYCLE) & 0xFFFFFF, result_d2, 2):
+        order[a] = b
+    base_sr = inner.registers.get('sr', virtual['sr'])
+    if result_d2 < 0:
+        c, i = _CPC_BPL_NOTTAKEN
+        cycles += c
+        instructions += i
+        c, i = _CPC_STORE_NEGATIVE
+        cycles += c
+        instructions += i
+        for a, b in _bytes((a5 + creatures.FRAME_STEP) & 0xFFFFFF, 0xFFFF, 2):
+            order[a] = b
+        c, i = _CPC_CLR_RESET
+        cycles += c
+        instructions += i
+        for a, b in _bytes((a5 + creatures.LIFECYCLE_RESET) & 0xFFFFFF, 0, 2):
+            order[a] = b
+        # clr.w 6(a5) is the LAST flag-setter on this arm (Z=1, N=V=C=0), not the writeback.
+        exit_sr = _logic_sr(base_sr, 0, 2)
+    else:
+        c, i = _CPC_BPL_TAKEN
+        cycles += c
+        instructions += i
+        # the writeback (move.w d2,8(a5)) is the LAST flag-setter on this arm.
+        exit_sr = _logic_sr(base_sr, result_d2, 2)
+    c, i = _CPC_TAIL
+    cycles += c
+    instructions += i
+    exit_registers = {'d0': registers['d0'], 'd1': registers['d1'], 'd2': registers['d2'],
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+    for name in ('a0', 'a1', 'a2', 'a3', 'a4', 'a6', 'd3', 'd4', 'd5', 'd6', 'd7'):
+        if name in inner.registers:
+            exit_registers[name] = inner.registers[name]
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=CREATURE_PICKUP_CHECK_LAST_PC)
+
+
 # --- 00FFF0: the line walker's resume, object copy (game/walker.py) ----------
 #
 # The animation step resumes a solid's walk: the record at A3 is loaded, the

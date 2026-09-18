@@ -277,6 +277,20 @@ below, has the count and the milestone tree numbers).
   The pre-existing candidate named `'state-26'` (`0069AC`, real index 20)
   is renamed `'state-20'`; the gate PC and every fixture/test are
   unchanged.
+- **The candidate `creature-pickup-check`** (`src/gods_sega/recovery.py`):
+  a single gate at `00B944`, the second of `00A772`'s own three
+  unconditional callees (18 Sep, `docs/gods/blockers/2026-09-18-00A578.md`'s
+  own ordering) -- a probe into the already-recovered pickup check
+  (`00BA8E`), the same shape `pickup_probe_plan` already proves over
+  `010CD2` but with no camera add and one extra unconditional seed write
+  (`zones.HALF_WIDTH`/`HALF_HEIGHT = 0x20`) before the call, composed via
+  a new `_ConstMachine` RAM-overlay helper (boundary.py, Gods-local) since
+  this region's own head write feeds a callee's own read two levels down.
+  Milestone tree PASS (`artifacts/gods/verify-creature-pickup-check-leaves-2026-09-18`,
+  standalone gate): 107,519 frames, 20,811 hits, 78 fallbacks (all
+  `ADAPTER_REFUSALS` but one already-known pickup_check decline).  `00A922`
+  (the last of `00A772`'s own three unconditional callees; full recon
+  already done this session) is the next bite.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
