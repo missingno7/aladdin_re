@@ -16685,6 +16685,488 @@ def aim_probe_mark_store_plan(machine, registers):
                       last_pc=last_pc)
 
 
+# --- 00B354 / 00B440: the directional ray march (game/creatures.py: aim_ray_march_forward,
+# aim_ray_march_backward) -- docs/gods/blockers/2026-09-18-00A578.md's own "Decision on 00B588", 19
+# Sep.  Each is a real internal call composition three levels deep (00B354/00B440 -> 00B524 ->
+# 00B32E), so the cost/CCR/stack-residue machinery below is a REPLAY of the semantics' own ``events``
+# list against a cost table the tracer derived directly (artifacts/gods/evidence/census-0X00B354-*,
+# census-0X00B440-*, 411 retained fixtures free of an interposed VBlank across the four recordings that
+# reach either routine) -- not hand-counted, and not re-derived from the ROM's own high-level shape
+# (the census showed 200+ real path classes per direction, an outer loop that revisits its own
+# table-lookup block from two different entry points: the exact control flow is the fact, not a
+# summary of it).  AF3C_ENTRY, AIM_PROBE_MARK_ENTRY and AIM_WINDOW_ADDRESS_ENTRY's own cost fragments
+# are reused verbatim; nothing here is a fresh guess at 68000 timings.
+AIM_RAY_MARCH_FORWARD_ENTRY, AIM_RAY_MARCH_FORWARD_LAST_PC = 0x00B354, 0x00B3DA
+AIM_RAY_MARCH_BACKWARD_ENTRY, AIM_RAY_MARCH_BACKWARD_LAST_PC = 0x00B440, 0x00B4BE
+
+_AIM_RAY_FWD = {
+    'MOVEQ_D2': 0x00B358, 'MOVEQ_D3': 0x00B35A, 'AND_D2': 0x00B35C, 'AND_D3': 0x00B35E,
+    'ADD_D5D5': 0x00B360, 'MOVEQ_D4': 0x00B362,
+    'ADDQ_D4': 0x00B364, 'CMP_NEAR': 0x00B366, 'BLT_NEAR': 0x00B36A,
+    'TST_D2': 0x00B36C, 'BNE_NUDGE': 0x00B36E, 'CMP_SOLID1': 0x00B370, 'BEQ_SOLID1': 0x00B376,
+    'CMP_SOLID2': 0x00B378, 'BEQ_SOLID2': 0x00B37E,
+    'ADDQ_D0': 0x00B380, 'ADDQ_D2': 0x00B382, 'ANDI_D2': 0x00B384, 'BNE_WRAP': 0x00B388, 'ADDQ_A2': 0x00B38A,
+    'TST_D5': 0x00B38C, 'BGT_TABLE': 0x00B38E, 'BLT_TAIL': 0x00B390, 'BSR_PROBE1': 0x00B392,
+    'CMP_TAIL100': 0x00B396, 'BEQ_TAIL100': 0x00B39C, 'CMP_D2_8': 0x00B39E, 'BLT_TABLE2': 0x00B3A2,
+    'CMP_TAIL101': 0x00B3A4, 'BNE_TABLE2': 0x00B3AA,
+    'ANDI_D1': 0x00B3AC, 'TST_D2B': 0x00B3B0, 'BEQ_SKIP_ALIGN': 0x00B3B2, 'ANDI_D0': 0x00B3B4,
+    'ADDI_D0': 0x00B3B8, 'ADDQ_A2B': 0x00B3BC, 'BSR_PROBE2': 0x00B3BE,
+    'CMP_ROWEXIT': 0x00B3C2, 'BEQ_ROWEXIT': 0x00B3C8, 'LEA_ROW': 0x00B3CA, 'ADDI_D1': 0x00B3CE,
+    'ADDQ_D4_ROW': 0x00B3D2, 'BRA_ROWLOOP': 0x00B3D4,
+    'MOVE_F2D4': 0x00B3D6, 'RTS': 0x00B3DA,
+    'LEA_TABLE': 0x00B3DC, 'ADD_D1TAB': 0x00B3E0, 'ADD_D3TAB': 0x00B3E4, 'BPL_ROWX': 0x00B3E8,
+    'ADDI_D3A': 0x00B3EA, 'LEA_ROWUP': 0x00B3EE, 'BRA_MERGE': 0x00B3F2,
+    'CMP_D3_F': 0x00B3F4, 'BLE_MERGE': 0x00B3F8, 'SUBI_D3': 0x00B3FA, 'LEA_ROWDN': 0x00B3FE,
+    'CMP_WALL': 0x00B402, 'BEQ_WALL': 0x00B406, 'CMP_D2_8B': 0x00B408, 'BLT_CONT': 0x00B40C,
+    'CMP_WALL2': 0x00B40E, 'BNE_CONT': 0x00B414,
+    'ANDI_D1B': 0x00B416, 'CLR_D3': 0x00B41A, 'ADDI_D1B': 0x00B41C, 'LEA_ROWB': 0x00B420,
+    'PUSH_D4': 0x00B424, 'MOVEQ_D4C': 0x00B426, 'ADD_D5D4': 0x00B428, 'ASR_D4': 0x00B42A, 'POP_D4': 0x00B42C,
+    'RESET_D5': 0x00B42E,
+    'SUBQ_D5': 0x00B430, 'CMP_D5END': 0x00B432, 'BGE_LOOP': 0x00B436, 'RESET_D5B': 0x00B43A,
+    'BRA_LOOPB': 0x00B43C,
+}
+_AIM_RAY_BWD = {
+    'MOVEQ_D2': 0x00B444, 'MOVEQ_D3': 0x00B446, 'AND_D2': 0x00B448, 'AND_D3': 0x00B44A,
+    'ADD_D5D5': 0x00B44C, 'MOVEQ_D4': 0x00B44E,
+    'ADDQ_D4': 0x00B450, 'CMP_NEAR': 0x00B452, 'BLT_NEAR': 0x00B456,
+    'TST_D2': 0x00B458, 'BNE_NUDGE': 0x00B45A, 'CMP_SOLID1': 0x00B45C, 'BEQ_SOLID1': 0x00B462,
+    'CMP_SOLID2': 0x00B464, 'BEQ_SOLID2': 0x00B46A,
+    'SUBQ_D0': 0x00B46C, 'SUBQ_D2': 0x00B46E, 'BPL_NOWRAP': 0x00B470, 'SUBQ_A2': 0x00B472,
+    'MOVEQ_D2B': 0x00B474,
+    'TST_D5': 0x00B476, 'BGT_TABLE': 0x00B478, 'BLT_TAIL': 0x00B47A, 'BSR_PROBE1': 0x00B47C,
+    'CMP_TAIL100': 0x00B480, 'BEQ_TAIL100': 0x00B486, 'CMP_D2_8': 0x00B488, 'BLT_TABLE2': 0x00B48C,
+    'CMP_TAIL101': 0x00B48E, 'BNE_TABLE2': 0x00B494,
+    'ANDI_D1': 0x00B496, 'TST_D2B': 0x00B49A, 'BEQ_SKIP_ALIGN': 0x00B49C, 'ANDI_D0': 0x00B49E,
+    'BSR_PROBE2': 0x00B4A2,
+    'CMP_ROWEXIT': 0x00B4A6, 'BEQ_ROWEXIT': 0x00B4AC, 'LEA_ROW': 0x00B4AE, 'ADDI_D1': 0x00B4B2,
+    'ADDQ_D4_ROW': 0x00B4B6, 'BRA_ROWLOOP': 0x00B4B8,
+    'MOVE_F2D4': 0x00B4BA, 'RTS': 0x00B4BE,
+    'LEA_TABLE': 0x00B4C0, 'ADD_D1TAB': 0x00B4C4, 'ADD_D3TAB': 0x00B4C8, 'BPL_ROWX': 0x00B4CC,
+    'ADDI_D3A': 0x00B4CE, 'LEA_ROWUP': 0x00B4D2, 'BRA_MERGE': 0x00B4D6,
+    'CMP_D3_F': 0x00B4D8, 'BLE_MERGE': 0x00B4DC, 'SUBI_D3': 0x00B4DE, 'LEA_ROWDN': 0x00B4E2,
+    'CMP_WALL': 0x00B4E6, 'BEQ_WALL': 0x00B4EA, 'CMP_D2_8B': 0x00B4EC, 'BLT_CONT': 0x00B4F0,
+    'CMP_WALL2': 0x00B4F2, 'BNE_CONT': 0x00B4F8,
+    'ANDI_D1B': 0x00B4FA, 'CLR_D3': 0x00B4FE, 'ADDI_D1B': 0x00B500, 'LEA_ROWB': 0x00B504,
+    'PUSH_D4': 0x00B508, 'MOVEQ_D4C': 0x00B50A, 'ADD_D5D4': 0x00B50C, 'ASR_D4': 0x00B50E, 'POP_D4': 0x00B510,
+    'RESET_D5': 0x00B512,
+    'SUBQ_D5': 0x00B514, 'CMP_D5END': 0x00B516, 'BGE_LOOP': 0x00B51A, 'RESET_D5B': 0x00B51E,
+    'BRA_LOOPB': 0x00B520,
+}
+assert len(set(_AIM_RAY_FWD.values())) == len(_AIM_RAY_FWD)
+assert len(set(_AIM_RAY_BWD.values())) == len(_AIM_RAY_BWD)
+
+# Cost fragments: (address, taken_or_None) -> cycles, mechanically extracted from the tracer's own
+# per-step cost over every retained fixture (both directions; artifacts/gods/evidence/census-0X00B354-*,
+# census-0X00B440-*) -- every instruction in both routines, verified against 411 real activations with
+# no variance once VBlank-interposed occurrences (7, region_only's own domain) were set aside.  One
+# instruction per event (the boundary's own instruction count is simply the length of the semantics'
+# own event list), so no separate instruction-count table is needed.
+_AIM_RAY_COST = {
+    (0x00B354, True): 18,
+    (0x00B358, None): 4,
+    (0x00B35A, None): 4,
+    (0x00B35C, None): 4,
+    (0x00B35E, None): 4,
+    (0x00B360, None): 4,
+    (0x00B362, None): 4,
+    (0x00B364, None): 4,
+    (0x00B366, None): 8,
+    (0x00B36A, False): 8,
+    (0x00B36A, True): 10,
+    (0x00B36C, None): 4,
+    (0x00B36E, False): 8,
+    (0x00B36E, True): 10,
+    (0x00B370, None): 16,
+    (0x00B376, False): 8,
+    (0x00B376, True): 10,
+    (0x00B378, None): 16,
+    (0x00B37E, False): 8,
+    (0x00B37E, True): 10,
+    (0x00B380, None): 4,
+    (0x00B382, None): 4,
+    (0x00B384, None): 8,
+    (0x00B388, False): 8,
+    (0x00B388, True): 10,
+    (0x00B38A, None): 4,
+    (0x00B38C, None): 4,
+    (0x00B38E, False): 8,
+    (0x00B38E, True): 10,
+    (0x00B390, False): 8,
+    (0x00B390, True): 10,
+    (0x00B392, True): 18,
+    (0x00B396, None): 16,
+    (0x00B39C, False): 8,
+    (0x00B39C, True): 10,
+    (0x00B39E, None): 8,
+    (0x00B3A2, False): 8,
+    (0x00B3A2, True): 10,
+    (0x00B3A4, None): 16,
+    (0x00B3AA, False): 8,
+    (0x00B3AA, True): 10,
+    (0x00B3AC, None): 8,
+    (0x00B3B0, None): 4,
+    (0x00B3B2, False): 8,
+    (0x00B3B2, True): 10,
+    (0x00B3B4, None): 8,
+    (0x00B3B8, None): 8,
+    (0x00B3BC, None): 4,
+    (0x00B3BE, True): 18,
+    (0x00B3C2, None): 16,
+    (0x00B3C8, False): 8,
+    (0x00B3C8, True): 10,
+    (0x00B3CA, None): 8,
+    (0x00B3CE, None): 8,
+    (0x00B3D2, None): 4,
+    (0x00B3D4, True): 10,
+    (0x00B3D6, None): 12,
+    (0x00B3DA, None): 16,
+    (0x00B3DC, None): 8,
+    (0x00B3E0, None): 14,
+    (0x00B3E4, None): 14,
+    (0x00B3E8, False): 8,
+    (0x00B3E8, True): 10,
+    (0x00B3EA, None): 8,
+    (0x00B3EE, None): 8,
+    (0x00B3F2, True): 10,
+    (0x00B3F4, None): 8,
+    (0x00B3F8, False): 8,
+    (0x00B3F8, True): 10,
+    (0x00B3FA, None): 8,
+    (0x00B3FE, None): 8,
+    (0x00B402, None): 12,
+    (0x00B406, False): 8,
+    (0x00B406, True): 10,
+    (0x00B408, None): 8,
+    (0x00B40C, False): 8,
+    (0x00B40C, True): 10,
+    (0x00B40E, None): 16,
+    (0x00B414, False): 8,
+    (0x00B414, True): 10,
+    (0x00B416, None): 8,
+    (0x00B41A, None): 4,
+    (0x00B41C, None): 8,
+    (0x00B420, None): 8,
+    (0x00B424, None): 8,
+    (0x00B426, None): 4,
+    (0x00B428, None): 4,
+    (0x00B42A, None): 8,
+    (0x00B42C, None): 8,
+    (0x00B42E, None): 4,
+    (0x00B430, None): 4,
+    (0x00B432, None): 8,
+    (0x00B436, False): 12,
+    (0x00B436, True): 10,
+    (0x00B43A, None): 4,
+    (0x00B43C, True): 10,
+    (0x00B440, True): 18,
+    (0x00B444, None): 4,
+    (0x00B446, None): 4,
+    (0x00B448, None): 4,
+    (0x00B44A, None): 4,
+    (0x00B44C, None): 4,
+    (0x00B44E, None): 4,
+    (0x00B450, None): 4,
+    (0x00B452, None): 8,
+    (0x00B456, False): 8,
+    (0x00B456, True): 10,
+    (0x00B458, None): 4,
+    (0x00B45A, False): 8,
+    (0x00B45A, True): 10,
+    (0x00B45C, None): 16,
+    (0x00B462, False): 8,
+    (0x00B462, True): 10,
+    (0x00B464, None): 16,
+    (0x00B46A, False): 8,
+    (0x00B46A, True): 10,
+    (0x00B46C, None): 4,
+    (0x00B46E, None): 4,
+    (0x00B470, False): 8,
+    (0x00B470, True): 10,
+    (0x00B472, None): 8,
+    (0x00B474, None): 4,
+    (0x00B476, None): 4,
+    (0x00B478, False): 8,
+    (0x00B478, True): 10,
+    (0x00B47A, False): 8,
+    (0x00B47A, True): 10,
+    (0x00B47C, True): 18,
+    (0x00B480, None): 16,
+    (0x00B486, False): 8,
+    (0x00B486, True): 10,
+    (0x00B488, None): 8,
+    (0x00B48C, False): 8,
+    (0x00B48C, True): 10,
+    (0x00B48E, None): 16,
+    (0x00B494, False): 8,
+    (0x00B494, True): 10,
+    (0x00B496, None): 8,
+    (0x00B49A, None): 4,
+    (0x00B49C, False): 8,
+    (0x00B49C, True): 10,
+    (0x00B49E, None): 8,
+    (0x00B4A2, True): 18,
+    (0x00B4A6, None): 16,
+    (0x00B4AC, False): 8,
+    (0x00B4AC, True): 10,
+    (0x00B4AE, None): 8,
+    (0x00B4B2, None): 8,
+    (0x00B4B6, None): 4,
+    (0x00B4B8, True): 10,
+    (0x00B4BA, None): 12,
+    (0x00B4BE, None): 16,
+    (0x00B4C0, None): 8,
+    (0x00B4C4, None): 14,
+    (0x00B4C8, None): 14,
+    (0x00B4CC, False): 8,
+    (0x00B4CC, True): 10,
+    (0x00B4CE, None): 8,
+    (0x00B4D2, None): 8,
+    (0x00B4D6, True): 10,
+    (0x00B4D8, None): 8,
+    (0x00B4DC, False): 8,
+    (0x00B4DC, True): 10,
+    (0x00B4DE, None): 8,
+    (0x00B4E2, None): 8,
+    (0x00B4E6, None): 12,
+    (0x00B4EA, False): 8,
+    (0x00B4EA, True): 10,
+    (0x00B4EC, None): 8,
+    (0x00B4F0, False): 8,
+    (0x00B4F0, True): 10,
+    (0x00B4F2, None): 16,
+    (0x00B4F8, False): 8,
+    (0x00B4F8, True): 10,
+    (0x00B4FA, None): 8,
+    (0x00B4FE, None): 4,
+    (0x00B500, None): 8,
+    (0x00B504, None): 8,
+    (0x00B508, None): 8,
+    (0x00B50A, None): 4,
+    (0x00B50C, None): 4,
+    (0x00B50E, None): 8,
+    (0x00B510, None): 8,
+    (0x00B512, None): 4,
+    (0x00B514, None): 4,
+    (0x00B516, None): 8,
+    (0x00B51A, False): 12,
+    (0x00B51A, True): 10,
+    (0x00B51E, None): 4,
+    (0x00B520, True): 10,
+}
+
+
+def _asr1_sr(sr, value, width):
+    """68000 ASR by a shift count of 1: X=C the bit shifted out (bit 0 of the pre-shift value), N/Z
+    from the arithmetic-shifted result, V always clear (only a left shift can set it)."""
+    mask, sign = (1 << (8 * width)) - 1, 1 << (8 * width - 1)
+    value &= mask
+    bit_out = value & 1
+    signed = value - (mask + 1) if value & sign else value
+    result = (signed >> 1) & mask
+    out = sr & ~0x1F
+    if result == 0:
+        out |= 0x04
+    if result & sign:
+        out |= 0x08
+    if bit_out:
+        out |= 0x11
+    return out
+
+
+def _aim_probe_window_add_sr_from_dxdy(sr, dx, dy):
+    """The SAME 00B32E-internal-add SR _aim_probe_window_add_sr computes, taking the already-known
+    dx/dy (aim_probe_mark's own `result`) instead of re-deriving them from D0/D1 -- used when composing
+    a probe call whose own d0/d1 are not otherwise needed."""
+    d2 = (dx >> 5) & 0xFFFF
+    d3 = (dy >> 4) & 0xFFFF
+    d2 = (d2 + 5) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d2 = (d2 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    return _add_sr(sr, d2, d3, 2)
+
+
+def _aim_probe_mark_exit_sr(sr, read, result, d1, d4, a3, a4):
+    """The SR aim_probe_mark (00B524) leaves at its own exit, given its already-computed `result` --
+    for a REAL internal call composition (the ray march calls it directly, not through a gate) where
+    the callee's own CCR persists into the caller exactly as the machine leaves it.  A parallel copy of
+    aim_probe_mark_plan's own dispatch (not a shared call, to leave that already-sealed plan untouched);
+    aim_probe_mark itself is never called by the ray march with a 'store'/'pruned'/'dedup' arm (those
+    belong to aim_probe_mark_store, 00B62A. a different callee), so only its own five arms appear here."""
+    from .game import creatures
+    arm = result['arm']
+    if arm == 'step-limit':
+        # X is set fresh by add.w $4(a3),d7 (the SAME instruction aim_probe_mark_plan's own 'step-limit'
+        # exit prices), never retained from the caller's own running sr -- the asr before it is always
+        # overwritten before any exit can read it, same fact as a direct gate.
+        asr_result = (creatures._signed_word(d4 & 0xFFFF) >> 1) & 0xFFFF
+        route_word = read(((a3 & 0xFFFFFF) + 4) & 0xFFFFFF, 2) & 0xFFFF
+        base = _add_sr(sr, asr_result, route_word, 2)
+        limit = read(((a4 & 0xFFFFFF) + creatures.AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1) & 0xFF
+        return _cmp_sr(base, result['d7'] & 0xFF, limit, 1)
+    if arm.startswith('bound'):
+        sr_after_subs = _sub_sr(sr, d1 & 0xFFFF, read(creatures.FOLLOW_Y, 2) & 0xFFFF, 2)
+        bound_value = result['dy'] if arm.endswith('y-low') or arm.endswith('y-high') else result['dx']
+        bound_limit = (creatures.AIM_PROBE_LOW_BIAS if arm.endswith('low')
+                        else (creatures.AIM_SEARCH_X_LIMIT if 'x' in arm else creatures.AIM_PROBE_Y_HIGH))
+        return _cmp_sr(sr_after_subs, bound_value & 0xFFFF, bound_limit & 0xFFFF, 2)
+    base = _aim_probe_window_add_sr_from_dxdy(sr, result['dx'], result['dy'])
+    if arm == 'clear':
+        return _logic_sr(base, result['tile'], 1)
+    if arm == 'found':
+        return _logic_sr(base, result['d7'] & 0xFFFF, 2)
+    return _cmp_sr(base, result['d7'] & 0xFFFF, read(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFFFF, 2) & 0xFFFF, 2)
+
+
+def _aim_probe_call_cost_and_writes(result, sp_call, return_pc, d2_at_call, d3_at_call, read, a3):
+    """The cost and RAM writes of one real internal call to aim_probe_mark (00B524) from a caller with
+    no stack frame of its own at the call site (00B354/00B440's own two probe calls): `sp_call` is the
+    caller's own A7 AT the bsr (before its own 4-byte push).  A parallel copy of aim_probe_mark_plan's
+    own cost accumulation (not a shared call, to leave that already-sealed plan untouched) plus the
+    residue only a composed call carries: the caller's own bsr return address, the callee's own
+    movem.l d2-d3,-(a7) frame (the CALLER's own D2/D3 at the moment of the call -- real even though
+    aim_probe_mark's own tail pops them straight back), and, when the callee itself calls 00B32E, ITS
+    OWN return address one level deeper."""
+    arm = result['arm']
+    cycles, instructions = _add(_AIM_PROBE_MOVEM_PUSH, _AIM_PROBE_MARK_D7_MOVE, _AIM_PROBE_MARK_D7_ASR,
+                                 _AIM_PROBE_MARK_D7_ADD, _AIM_PROBE_CMP_LIMIT)
+    c, i = _AIM_PROBE_BGT_LIMIT[arm == 'step-limit']
+    cycles += c
+    instructions += i
+    sp = sp_call & 0xFFFFFF
+    writes = _bytes((sp - 4) & 0xFFFFFF, return_pc & 0xFFFFFFFF, 4)
+    writes += _bytes((sp - 12) & 0xFFFFFF, d2_at_call & 0xFFFFFFFF, 4)
+    writes += _bytes((sp - 8) & 0xFFFFFF, d3_at_call & 0xFFFFFFFF, 4)
+    if arm != 'step-limit':
+        c, i = _aim_probe_box_cost(arm if arm.startswith('bound') else None)
+        cycles += c
+        instructions += i
+        if not arm.startswith('bound'):
+            c, i = _add(_AIM_PROBE_BSR_WINDOW, _AIM_WINDOW_ADDRESS_COST, _AIM_PROBE_LEA_MARK, _AIM_PROBE_TST_TILE)
+            cycles += c
+            instructions += i
+            writes += _bytes((sp - 16) & 0xFFFFFF, AIM_PROBE_MARK_WINDOW_RETURN, 4)
+            c, i = _AIM_PROBE_BPL_CLEAR[arm == 'clear']
+            cycles += c
+            instructions += i
+            if arm != 'clear':
+                if arm == 'found':
+                    result = dict(result)
+                    result['_route'] = read(((a3 & 0xFFFFFF) + 4) & 0xFFFFFF, 2) & 0xFFFF
+                c, i = _aim_probe_found_tail_cost(result)
+                cycles += c
+                instructions += i
+                if arm == 'found':
+                    writes += _aim_probe_found_writes(result)
+    c, i = _add(_AIM_PROBE_MOVEM_POP, _AIM_PROBE_RTS)
+    cycles += c
+    instructions += i
+    return cycles, instructions, writes
+
+
+def _aim_ray_march_plan(machine, registers, forward):
+    from .game import creatures, grid
+    entry = AIM_RAY_MARCH_FORWARD_ENTRY if forward else AIM_RAY_MARCH_BACKWARD_ENTRY
+    last_pc = AIM_RAY_MARCH_FORWARD_LAST_PC if forward else AIM_RAY_MARCH_BACKWARD_LAST_PC
+    if registers['pc'] != entry:
+        raise UnsupportedCandidate('aim ray march planner needs the machine parked at the right entry')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    d0, d1 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
+    d5_in = registers['d5'] & 0xFFFF
+    a3, a4 = registers['a3'], registers['a4']
+    a2 = grid.grid_cell_at(d0, d1)['address'] & 0xFFFFFFFF
+
+    if forward:
+        result = creatures.aim_ray_march_forward(read, d0, d1, d5_in, a2, a3, a4)
+    else:
+        result = creatures.aim_ray_march_backward(read, d0, d1, d5_in, a2, a3, a4)
+
+    ADDR = _AIM_RAY_FWD if forward else _AIM_RAY_BWD
+
+    # bsr $af3c: the routine's own first instruction, then 00AF3C's own body (creature_grid_cell_d0d1).
+    # Its own return-address residue (sp - 4) shares the SAME address every probe call's own residue
+    # will use (00B354/00B440 never change their own sp before any of these calls), so all of it is
+    # tracked in one ordered dict below -- whichever call happened LAST leaves the final byte.
+    cycles, instructions = _add((18, 1), _AF3C_COST)
+    af3c_return_pc = (entry + 4) & 0xFFFFFF
+    writes_dict = dict(_bytes((sp - 4) & 0xFFFFFF, af3c_return_pc, 4))
+
+    for name, taken, sr_op in result['events']:
+        if not name.startswith('_'):
+            cycles += _AIM_RAY_COST[(ADDR[name], taken)]
+            instructions += 1
+        if sr_op is None:
+            continue
+        kind = sr_op[0]
+        if kind == 'cmp':
+            sr = _cmp_sr(sr, sr_op[1], sr_op[2], sr_op[3])
+        elif kind == 'add':
+            sr = _add_sr(sr, sr_op[1], sr_op[2], sr_op[3])
+        elif kind == 'sub':
+            sr = _sub_sr(sr, sr_op[1], sr_op[2], sr_op[3])
+        elif kind == 'logic':
+            sr = _logic_sr(sr, sr_op[1], sr_op[2])
+        elif kind == 'asr1':
+            sr = _asr1_sr(sr, sr_op[1], sr_op[2])
+        elif kind == 'probe':
+            _, d0c, d1c, d2c, d3c, d4c, presult = result['probes'][sr_op[1]]
+            sr = _aim_probe_mark_exit_sr(sr, read, presult, d1c, d4c, a3, a4)
+        else:
+            raise AssertionError(f'unknown ray-march sr_op kind {kind!r}')
+
+    # Every probe call's own cost and residue, in call order (a LATER call's own residue overwrites an
+    # earlier one's at the same stack addresses -- 00B354/00B440 have no frame of their own, so sp is
+    # back at (routine entry sp) before each bsr).
+    for label, d0c, d1c, d2c, d3c, d4c, presult in result['probes']:
+        return_pc = (ADDR['BSR_PROBE1' if label == 'PROBE1' else 'BSR_PROBE2'] + 4) & 0xFFFFFF
+        c, i, w = _aim_probe_call_cost_and_writes(presult, sp, return_pc, d2c, d3c, read, a3)
+        cycles += c
+        instructions += i
+        for addr, value in w:
+            writes_dict[addr] = value
+    # move.w d4,f2d4.w (MOVE_F2D4): the routine's own real, observable output -- always the LAST write,
+    # after every probe call's own residue (F2D4 does not alias any stack address either range uses).
+    for addr, value in _bytes(creatures.AIM_RAY_STEP_INDEX & 0xFFFFFF, result['d4'] & 0xFFFF, 2):
+        writes_dict[addr] = value
+    writes = tuple(writes_dict.items())
+
+    exit_registers = {
+        'd0': (registers['d0'] & 0xFFFF0000) | (result['d0'] & 0xFFFF),
+        'd1': (registers['d1'] & 0xFFFF0000) | (result['d1'] & 0xFFFF),
+        'd2': result['d2'] & 0xFFFF,     # moveq clears the upper half fresh; nothing later restores it
+        'd3': result['d3'] & 0xFFFF,     # (same fact)
+        'd4': result['d4'] & 0xFFFF,     # (same fact -- moveq #0,d4 at entry, moveq #$c,d4 on a wall)
+        'd5': ((0xFFFF0000 if result['d5_upper_reset'] else (registers['d5'] & 0xFFFF0000))
+               | (result['d5'] & 0xFFFF)),
+        'a0': result['a0'] & 0xFFFFFFFF,
+        'a2': result['a2'] & 0xFFFFFFFF,
+        # D7 is aim_probe_mark's own scratch register, never reloaded by 00B354/00B440 itself, so the
+        # LAST probe call's own exit D7 (word-only, entry upper half preserved -- the SAME fact
+        # aim_probe_mark_plan's own D7 handling already prices) persists through to this routine's own
+        # exit -- always present, since the tail's own second probe call is never skipped.
+        'd7': (registers['d7'] & 0xFFFF0000) | (result['probes'][-1][-1]['d7'] & 0xFFFF),
+        'a7': (sp32 + 4) & 0xFFFFFFFF,
+        'pc': _return(machine, sp),
+        'sr': sr,
+    }
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=last_pc)
+
+
+def aim_ray_march_forward_plan(machine, registers):
+    """00B354: see game/creatures.py's own module note above _aim_ray_march."""
+    return _aim_ray_march_plan(machine, registers, forward=True)
+
+
+def aim_ray_march_backward_plan(machine, registers):
+    """00B440: see game/creatures.py's own module note above aim_ray_march_backward."""
+    return _aim_ray_march_plan(machine, registers, forward=False)
+
+
 # --- 00B724: the aim target scan (game/creatures.py: aim_target_scan) -------------------------------
 #
 # Cost fragments from the tracer (artifacts/gods/evidence/census-00B724-*, 127 retained fixtures over

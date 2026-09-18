@@ -1071,6 +1071,354 @@ def aim_probe_mark_store(read, d0, d1, a3, a4, a5):
             'add_result': add_result}
 
 
+# --- 00B354 / 00B440: the directional ray march (docs/gods/blockers/2026-09-18-00A578.md's own
+# "Decision on 00B588", 19 Sep) -- 00B588's own outer loop runs each of these, one per AIM_POOL entry,
+# for a caller-supplied starting D5 (7 or 13, doubled here to 14 or 26) over the SAME eleven-word table
+# at 00AE4C the Decision itself read (eight real (dx, dy) steps, an upward arc; what follows is other
+# ROM data).  Neither routine has a save/restore frame of its own: A3 (the current AIM_POOL entry) and
+# A4 (the creature TYPE pointer) pass straight through to every aim_probe_mark call, and the two probe
+# calls' own internal CCR and stack residue persist into the caller exactly as the machine leaves them
+# -- a real internal call composition, the same class of fact 00B082's own session first found.
+#
+# This is a literal transcription of the ROM's own block structure (the census showed 200+ real path
+# classes per direction on four recordings -- an outer loop that revisits its own table-lookup block
+# from two different entry points, not a simple bounded count), not a shape this module tries to
+# summarize: each named block below is one ROM label, walked exactly as 00B354/00B440 walk it, so that
+# every real occurrence the tracer replays is also a real path through this function.  Grid solid tests
+# read the SAME FOOTPRINT_GRID layer 0063FA/00FDB8/aim_target_scan already prove.
+AIM_RAY_TABLE = 0x00AE4C                # ROM: eight real (dx, dy) word-pair steps, then other data;
+                                         # read at a SIGNED word offset (D5), so entries at and before
+                                         # the label are real too (the routine's own D5 walk goes
+                                         # negative before it stops)
+AIM_RAY_ROW_STRIDE = 0x80               # == grid.GRID_ROW_BYTES
+AIM_RAY_TAIL_OFFSET = 0x100             # two rows down -- the SAME footing aim_target_scan's own walk
+                                         # gates on
+AIM_RAY_NEAR_STEP = 4                   # the per-outer-step micro x-nudge (phase A), 1/8 of a cell
+AIM_RAY_SENTINEL = -0xA                 # moveq #$f6 -- forced on a wall hit, and once more at natural
+                                         # exhaustion
+AIM_RAY_SENTINEL_STOP = -0xC            # the value that ends the outer loop (sentinel - 2)
+
+
+def _aim_ray_march(read, d0, d1, d5_in, a2, a3, a4, forward):
+    """00B354 (``forward=True``) / 00B440 (``forward=False``): see the module note above.  Returns a
+    dict with the exit register values (``d0``..``d5``, ``a0``, ``a2``), ``events`` (every ROM
+    instruction executed, as ``(symbolic_name, taken_or_None, sr_op)`` in order -- the boundary's own
+    cost and CCR bookkeeping replays this list against a cost table the tracer itself derived; `sr_op`
+    is ``None`` for an instruction that does not touch the CCR, ``('probe', index)`` for a call whose
+    own exit CCR becomes the running one, or a ``(kind, ...)`` tuple ('cmp'/'add'/'sub'/'logic'/'asr1')
+    naming the exact flags the boundary's own helpers already compute for every other Gods region) and
+    ``probes`` (the aim_probe_mark calls made, in order, each ``(symbolic_name, d0, d1, d2, d3, d4,
+    result)`` -- the caller's own register file AT the call, needed to reproduce the callee's own exit
+    CCR and stack residue exactly, plus its already-computed `result`)."""
+    d0 &= 0xFFFF
+    d1 &= 0xFFFF
+    a2 &= 0xFFFFFFFF
+    events = []
+
+    def emit(name, taken=None, sr=None):
+        events.append((name, taken, sr))
+
+    d2 = d0 & 0x1F
+    emit('MOVEQ_D2', sr=('logic', 0x1F, 2))
+    d3 = d1 & 0xF
+    emit('MOVEQ_D3', sr=('logic', 0xF, 2))
+    emit('AND_D2', sr=('logic', d2, 2))
+    emit('AND_D3', sr=('logic', d3, 2))
+    d5 = (d5_in + d5_in) & 0xFFFF
+    emit('ADD_D5D5', sr=('add', d5_in & 0xFFFF, d5_in & 0xFFFF, 2))
+    d4 = 0
+    emit('MOVEQ_D4', sr=('logic', 0, 2))
+
+    probes = []
+    d5_upper_reset = False   # moveq #$f6,d5 (a wall hit, or the never-witnessed d5-underflow fallback)
+                              # sign-extends -- the ONLY thing that ever changes D5's own upper half
+                              # away from the caller's own entry value (add.w/subq.w never touch it)
+    a0 = AIM_RAY_TABLE & 0xFFFFFFFF   # only meaningful once TABLE runs at least once -- always does
+    block = 'HEAD'
+    steps = 0
+    while True:
+        steps += 1
+        if steps > 5000:
+            raise RuntimeError('aim ray march: block dispatch did not terminate (a real translation bug)')
+
+        if block == 'HEAD':
+            d4_before = d4
+            d4 = (d4 + 1) & 0xFFFF
+            emit('ADDQ_D4', sr=('add', d4_before, 1, 2))
+            emit('CMP_NEAR', sr=('cmp', d5, AIM_RAY_SENTINEL & 0xFFFF, 2))
+            near_skip = _signed_word(d5) < AIM_RAY_SENTINEL
+            emit('BLT_NEAR', near_skip)
+            block = 'DISPATCH' if near_skip else 'PHASE_A'
+            continue
+
+        if block == 'PHASE_A':
+            emit('TST_D2', sr=('logic', d2, 2))
+            has_nudge = d2 != 0
+            emit('BNE_NUDGE', has_nudge)
+            blocked = False
+            if not has_nudge:
+                if forward:
+                    solid_addrs = ((a2 + 1) & 0xFFFFFF, (a2 + 1 + AIM_RAY_ROW_STRIDE) & 0xFFFFFF)
+                else:
+                    solid_addrs = ((a2 - 1) & 0xFFFFFF, (a2 - 1 + AIM_RAY_ROW_STRIDE) & 0xFFFFFF)
+                s1 = read(solid_addrs[0], 1) & 0xFF
+                emit('CMP_SOLID1', sr=('cmp', s1, 1, 1))
+                t1 = s1 == 1
+                emit('BEQ_SOLID1', t1)
+                if t1:
+                    blocked = True
+                else:
+                    s2 = read(solid_addrs[1], 1) & 0xFF
+                    emit('CMP_SOLID2', sr=('cmp', s2, 1, 1))
+                    t2 = s2 == 1
+                    emit('BEQ_SOLID2', t2)
+                    if t2:
+                        blocked = True
+            if not blocked:
+                if forward:
+                    d0_before = d0
+                    d0 = (d0 + AIM_RAY_NEAR_STEP) & 0xFFFF
+                    emit('ADDQ_D0', sr=('add', d0_before, AIM_RAY_NEAR_STEP, 2))
+                    d2_before = d2
+                    d2raw = (d2 + AIM_RAY_NEAR_STEP) & 0xFFFF
+                    emit('ADDQ_D2', sr=('add', d2_before, AIM_RAY_NEAR_STEP, 2))
+                    d2 = d2raw & 0x1F
+                    emit('ANDI_D2', sr=('logic', d2, 2))
+                    wrapped = d2 == 0
+                    emit('BNE_WRAP', not wrapped)
+                    if wrapped:
+                        emit('ADDQ_A2')
+                        a2 = (a2 + 1) & 0xFFFFFFFF
+                else:
+                    d0_before = d0
+                    d0 = (d0 - AIM_RAY_NEAR_STEP) & 0xFFFF
+                    emit('SUBQ_D0', sr=('sub', d0_before, AIM_RAY_NEAR_STEP, 2))
+                    d2_before = d2
+                    d2raw = (d2 - AIM_RAY_NEAR_STEP) & 0xFFFF
+                    emit('SUBQ_D2', sr=('sub', d2_before, AIM_RAY_NEAR_STEP, 2))
+                    wrapped = bool(d2raw & 0x8000)
+                    emit('BPL_NOWRAP', not wrapped)
+                    if wrapped:
+                        emit('SUBQ_A2')
+                        a2 = (a2 - 1) & 0xFFFFFFFF
+                        emit('MOVEQ_D2B', sr=('logic', 0x1C, 2))
+                        d2 = 0x1C
+                    else:
+                        d2 = d2raw
+            block = 'DISPATCH'
+            continue
+
+        if block == 'DISPATCH':
+            emit('TST_D5', sr=('logic', d5, 2))
+            gt = _signed_word(d5) > 0
+            emit('BGT_TABLE', gt)
+            if gt:
+                block = 'TABLE'
+                continue
+            lt = _signed_word(d5) < 0
+            emit('BLT_TAIL', lt)
+            if lt:
+                block = 'TAIL'
+                continue
+            emit('BSR_PROBE1', True)
+            result = aim_probe_mark(read, d0, d1, d4, a3, a4)
+            probes.append(('PROBE1', d0, d1, d2, d3, d4, result))
+            emit('_PROBE_SR', sr=('probe', len(probes) - 1))
+            if 'a0' in result:
+                a0 = result['a0'] & 0xFFFFFFFF
+            read = _overlay(read, _aim_probe_overlay_stores(result))
+            block = 'TAIL'
+            continue
+
+        if block == 'TABLE':
+            emit('LEA_TABLE')
+            a0 = AIM_RAY_TABLE & 0xFFFFFFFF
+            table_addr = (AIM_RAY_TABLE + _signed_word(d5)) & 0xFFFFFF
+            table_val = read(table_addr, 2)
+            table_val = table_val - 0x10000 if table_val & 0x8000 else table_val
+            d1_before = d1
+            d1 = (d1 + table_val) & 0xFFFF
+            emit('ADD_D1TAB', sr=('add', d1_before, table_val & 0xFFFF, 2))
+            d3_before = d3
+            d3 = (d3 + table_val) & 0xFFFF
+            emit('ADD_D3TAB', sr=('add', d3_before, table_val & 0xFFFF, 2))
+            up = bool(d3 & 0x8000)
+            emit('BPL_ROWX', not up)
+            if up:
+                d3_before2 = d3
+                d3 = (d3 + 0x10) & 0xFFFF
+                emit('ADDI_D3A', sr=('add', d3_before2, 0x10, 2))
+                a2 = (a2 - AIM_RAY_ROW_STRIDE) & 0xFFFFFFFF
+                emit('LEA_ROWUP')
+                emit('BRA_MERGE', True)
+            else:
+                emit('CMP_D3_F', sr=('cmp', d3, 0xF, 2))
+                down = _signed_word(d3) > 0xF
+                emit('BLE_MERGE', not down)
+                if down:
+                    d3_before2 = d3
+                    d3 = (d3 - 0x10) & 0xFFFF
+                    emit('SUBI_D3', sr=('sub', d3_before2, 0x10, 2))
+                    a2 = (a2 + AIM_RAY_ROW_STRIDE) & 0xFFFFFFFF
+                    emit('LEA_ROWDN')
+            block = 'WALL'
+            continue
+
+        if block == 'WALL':
+            solid_here = read(a2, 1) & 0xFF
+            emit('CMP_WALL', sr=('cmp', solid_here, 1, 1))
+            hit = solid_here == 1
+            emit('BEQ_WALL', hit)
+            if not hit:
+                low = _signed_word(d2) < 8
+                emit('CMP_D2_8B', sr=('cmp', d2, 8, 2))
+                emit('BLT_CONT', low)
+                if low:
+                    block = 'LOOPBACK'
+                    continue
+                adj = read((a2 + 1) & 0xFFFFFF, 1) & 0xFF
+                emit('CMP_WALL2', sr=('cmp', adj, 1, 1))
+                hit = adj == 1
+                emit('BNE_CONT', not hit)
+                if not hit:
+                    block = 'LOOPBACK'
+                    continue
+            d1 = d1 & 0xFFF0
+            emit('ANDI_D1B', sr=('logic', d1, 2))
+            d3 = 0
+            emit('CLR_D3', sr=('logic', 0, 2))
+            d1_before = d1
+            d1 = (d1 + 0x10) & 0xFFFF
+            emit('ADDI_D1B', sr=('add', d1_before, 0x10, 2))
+            a2 = (a2 + AIM_RAY_ROW_STRIDE) & 0xFFFFFFFF
+            emit('LEA_ROWB')
+            emit('PUSH_D4', sr=('logic', d4, 2))
+            d4_saved = d4
+            d4_new = 0xC
+            emit('MOVEQ_D4C', sr=('logic', 0xC, 2))
+            d4_new_before = d4_new
+            d4_new = (d4_new + d5) & 0xFFFF
+            emit('ADD_D5D4', sr=('add', d4_new_before, d5, 2))
+            d4_shift_before = d4_new
+            d4_new = _signed_word(d4_new) >> 1
+            emit('ASR_D4', sr=('asr1', d4_shift_before, 2))
+            d4_new &= 0xFFFF
+            d4 = (d4_new + d4_saved) & 0xFFFF
+            emit('POP_D4', sr=('add', d4_new, d4_saved, 2))
+            d5 = AIM_RAY_SENTINEL & 0xFFFF
+            d5_upper_reset = True
+            emit('RESET_D5', sr=('logic', d5, 2))
+            block = 'LOOPBACK'
+            continue
+
+        if block == 'LOOPBACK':
+            d5_before = d5
+            d5 = (d5 - 2) & 0xFFFF
+            emit('SUBQ_D5', sr=('sub', d5_before, 2, 2))
+            emit('CMP_D5END', sr=('cmp', d5, AIM_RAY_SENTINEL_STOP & 0xFFFF, 2))
+            cont = _signed_word(d5) >= AIM_RAY_SENTINEL_STOP
+            emit('BGE_LOOP', cont)
+            if not cont:
+                d5 = AIM_RAY_SENTINEL & 0xFFFF
+                d5_upper_reset = True
+                emit('RESET_D5B', sr=('logic', d5, 2))
+                emit('BRA_LOOPB', True)
+            block = 'HEAD'
+            continue
+
+        if block == 'TAIL':
+            solid_100 = read((a2 + AIM_RAY_TAIL_OFFSET) & 0xFFFFFF, 1) & 0xFF
+            emit('CMP_TAIL100', sr=('cmp', solid_100, 1, 1))
+            setup = solid_100 == 1
+            emit('BEQ_TAIL100', setup)
+            if not setup:
+                low = _signed_word(d2) < 8
+                emit('CMP_D2_8', sr=('cmp', d2, 8, 2))
+                emit('BLT_TABLE2', low)
+                if low:
+                    block = 'TABLE'
+                    continue
+                solid_101 = read((a2 + AIM_RAY_TAIL_OFFSET + 1) & 0xFFFFFF, 1) & 0xFF
+                emit('CMP_TAIL101', sr=('cmp', solid_101, 1, 1))
+                setup = solid_101 == 1
+                emit('BNE_TABLE2', not setup)
+                if not setup:
+                    block = 'TABLE'
+                    continue
+            d1 = d1 & 0xFFF0
+            emit('ANDI_D1', sr=('logic', d1, 2))
+            skip_align = d2 == 0
+            emit('TST_D2B', sr=('logic', d2, 2))
+            emit('BEQ_SKIP_ALIGN', skip_align)
+            if not skip_align:
+                d0 = d0 & 0xFFE0
+                emit('ANDI_D0', sr=('logic', d0, 2))
+                if forward:
+                    d0_before = d0
+                    d0 = (d0 + 0x20) & 0xFFFF
+                    emit('ADDI_D0', sr=('add', d0_before, 0x20, 2))
+                    a2 = (a2 + 1) & 0xFFFFFFFF
+                    emit('ADDQ_A2B')
+            emit('BSR_PROBE2', True)
+            result = aim_probe_mark(read, d0, d1, d4, a3, a4)
+            probes.append(('PROBE2', d0, d1, d2, d3, d4, result))
+            emit('_PROBE_SR', sr=('probe', len(probes) - 1))
+            if 'a0' in result:
+                a0 = result['a0'] & 0xFFFFFFFF
+            read = _overlay(read, _aim_probe_overlay_stores(result))
+            block = 'ROWLOOP'
+            continue
+
+        if block == 'ROWLOOP':
+            solid = read((a2 + AIM_RAY_TAIL_OFFSET) & 0xFFFFFF, 1) & 0xFF
+            emit('CMP_ROWEXIT', sr=('cmp', solid, 1, 1))
+            done = solid == 1
+            emit('BEQ_ROWEXIT', done)
+            if done:
+                emit('MOVE_F2D4', sr=('logic', d4, 2))
+                emit('RTS')
+                break
+            emit('LEA_ROW')
+            a2 = (a2 + AIM_RAY_ROW_STRIDE) & 0xFFFFFFFF
+            d1_before = d1
+            d1 = (d1 + 0x10) & 0xFFFF
+            emit('ADDI_D1', sr=('add', d1_before, 0x10, 2))
+            d4_before = d4
+            d4 = (d4 + 8) & 0xFFFF
+            emit('ADDQ_D4_ROW', sr=('add', d4_before, 8, 2))
+            emit('BRA_ROWLOOP', True)
+            continue
+
+        raise RuntimeError(f'aim ray march: unknown block {block!r}')
+
+    return {'d0': d0, 'd1': d1, 'd2': d2, 'd3': d3, 'd4': d4, 'd5': d5, 'a0': a0, 'a2': a2,
+            'd5_upper_reset': d5_upper_reset, 'events': events, 'probes': probes}
+
+
+def _aim_probe_overlay_stores(result):
+    """The RAM an earlier aim_probe_mark call inside the SAME ray march wrote (AIM_SEARCH_BEST_FLAG/
+    INDEX on 'found'), in ``_overlay``'s own {address: (value, size)} form, so a SECOND probe call in
+    the same activation sees it -- real hardware, not this module's own bookkeeping."""
+    if result['arm'] != 'found':
+        return {}
+    return {AIM_SEARCH_BEST_FLAG & 0xFFFFFF: (result['flag'] & 0xFFFF, 2),
+            AIM_SEARCH_BEST_INDEX & 0xFFFFFF: (result['d7'] & 0xFFFF, 2)}
+
+
+def aim_ray_march_forward(read, d0, d1, d5, a2, a3, a4):
+    """00B354: see the module note above _aim_ray_march."""
+    return _aim_ray_march(read, d0, d1, d5, a2, a3, a4, forward=True)
+
+
+def aim_ray_march_backward(read, d0, d1, d5, a2, a3, a4):
+    """00B440: 00B354's own mirror -- NOT byte-identical: phase A's own cell-boundary wrap is computed
+    the same way (word SUBQ's own sign, not an AND mask) but the near-check reads the column already
+    behind the ray (A2 - 1 / A2 - 1 + 0x80, not + 1), and the second probe's own setup skips the extra
+    32-pixel alignment nudge and grid-pointer advance 00B354's own forward setup makes (real ROM: two
+    fewer instructions, not a guess)."""
+    return _aim_ray_march(read, d0, d1, d5, a2, a3, a4, forward=False)
+
+
 # --- 00B724: the aim target scan (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
 # 00AF52", 19 Sep -- the first of the three further callees, 00B002's own reconnaissance found bounded
 # over {00AF3C, 00B32E} on every one of 1,772 witnessed occurrences across four recordings).  A

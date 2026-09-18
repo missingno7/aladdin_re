@@ -566,6 +566,57 @@ below, has the count and the milestone tree numbers).
   over every `AIM_POOL` entry, then `00B002`, `00AF52`, `00AC36`,
   `00AA76`/`00AB50`, `00A772` as the family, `00A578` as the walk.
 
+- **19 September, grinder session continuing the Decision's own order**:
+  `00B354`/`00B440` (candidates `'aim-ray-march-forward'`/
+  `'aim-ray-march-backward'`) are recovered -- a real directional ray-march
+  loop over the eight-entry `00AE4C` table (the upward arc the Decision
+  itself read), `00B588`'s own outer loop running each once (twice
+  conditionally) per `AIM_POOL` entry.  A full-tree census (all five
+  recordings) showed 200 (forward) / 218 (backward) real path classes, no
+  declines: the ROM's own control flow is genuinely an outer loop that
+  revisits its own table-lookup block from a SECOND entry point (a
+  near-exhaustion tail redirects back into the table lookup whenever
+  neither of its own two solid tests finds anything), not a simple bounded
+  step count, so the semantics (`game/creatures.py: _aim_ray_march`, one
+  shared interpreter parameterised on direction per the Decision's own
+  instruction, branching only where the ROM genuinely differs -- the
+  near-check's own column offset, and the second probe's own setup, which
+  backward skips two real instructions of) is a literal block-by-block
+  transcription of the ROM, verified by replaying its own event trace
+  against 411 real fixtures before any cost or CCR work began.  Two real
+  internal calls per activation into the already-recovered `aim_probe_mark`
+  (00B524, itself calling 00B32E on non-bound/non-step-limit arms) -- three
+  levels of composition, each level's own CCR and stack residue persisting
+  into its caller exactly as the machine leaves it.  `factcheck check` and
+  `--perturb-upper-halves` both clean on all 418 fixtures after fixing four
+  real defects this session found in turn: A2's own exit value needs the
+  full 32-bit work-RAM representation (`0xFFFFxxxx`), not a 24-bit
+  truncation that silently drops the top byte on re-widening; D7 (aim_probe_
+  mark's own scratch register) persists from the LAST probe call's own exit
+  into the ray march's own exit register file; the `'step-limit'` arm's own
+  composed exit SR needs aim_probe_mark's own internal `add.w $4(a3),d7`
+  recomputed fresh, not the caller's own retained X; and `AIM_RAY_STEP_INDEX`
+  (F2D4) itself was missing from the plan's own writes entirely on the first
+  pass.  `camera-sprites` reached sixty-four gates -- the adapter's own
+  cap, exactly: no further leaf can be armed until a family composition
+  (`00B588` composing `00B354`/`00B440`/`00B62A`, or later `00A772`) frees
+  gates back, the same shape `005700`'s own composition already proved.
+  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19k`, 107,519
+  frames): 1,196,792 hits, 8,650 fallbacks, no decline at either new gate.
+  Both reproduce the original on `f0ac19738f19…`: `aim-ray-march-forward`
+  PASS, 229 hits, 17 fallbacks (all `ADAPTER_REFUSALS`);
+  `aim-ray-march-backward` PASS, 230 hits, 16 fallbacks (all
+  `ADAPTER_REFUSALS`); both mutants (`_mutate_aim_ray_march`, shared:
+  `AIM_RAY_STEP_INDEX`'s own low byte off by 4, not 1 -- 00B62A's own D7
+  derives it through `>>2`, so a plain +1 only changes the shifted result on
+  one of four occurrences) DIVERGENCE (frame 12,361 and 12,314).  Next, per
+  the Decision's own order: `00B588` composing `00B354`/`00B440`/`00B62A`
+  over every `AIM_POOL` entry (this is also the family composition that
+  frees gates back below the cap), then `00B002`, `00AF52`, `00AC36`,
+  `00AA76`/`00AB50`, `00A772` as the family, `00A578` as the walk with its
+  own semantic-operation card.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

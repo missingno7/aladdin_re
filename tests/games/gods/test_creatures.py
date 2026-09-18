@@ -97,6 +97,14 @@ AIM_PROBE_MARK_STORE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('cen
 needs_aim_probe_mark_store_census = pytest.mark.skipif(not AIM_PROBE_MARK_STORE_FIXTURES or not GODS.rom_path.is_file(),
                                                         reason='no local census of 00B62A')
 
+AIM_RAY_MARCH_FORWARD_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B354-*/00B354-entry-p*.state'))
+needs_aim_ray_march_forward_census = pytest.mark.skipif(not AIM_RAY_MARCH_FORWARD_FIXTURES or not GODS.rom_path.is_file(),
+                                                        reason='no local census of 00B354')
+
+AIM_RAY_MARCH_BACKWARD_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B440-*/00B440-entry-p*.state'))
+needs_aim_ray_march_backward_census = pytest.mark.skipif(not AIM_RAY_MARCH_BACKWARD_FIXTURES or not GODS.rom_path.is_file(),
+                                                         reason='no local census of 00B440')
+
 SPAWN_FIND_FREE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B8C2-*/00B8C2-entry-p*.state'))
 needs_spawn_find_free_census = pytest.mark.skipif(not SPAWN_FIND_FREE_FIXTURES or not GODS.rom_path.is_file(),
                                                    reason='no local census of 00B8C2')
@@ -1450,6 +1458,91 @@ def test_aim_probe_mark_store_candidate_matches_the_reference_and_its_mutant_div
             break
     else:
         pytest.skip('no retained fixture/window makes aim-probe-mark-store produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B354 / 00B440: the directional ray march (docs/gods/blockers/2026-09-18-00A578.md's own
+# "Decision on 00B588", 19 Sep) -- a real internal call composition three levels deep (the ray march
+# calls aim_probe_mark, which calls aim_window_address).  See game/creatures.py's own module note above
+# _aim_ray_march.
+
+def test_aim_ray_march_forward_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-ray-march-forward').gate_pcs == (boundary.AIM_RAY_MARCH_FORWARD_ENTRY,)
+    assert boundary.AIM_RAY_MARCH_FORWARD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-ray-march-forward-mutant-result').mutation is recovery._mutate_aim_ray_march
+
+
+def test_aim_ray_march_backward_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-ray-march-backward').gate_pcs == (boundary.AIM_RAY_MARCH_BACKWARD_ENTRY,)
+    assert boundary.AIM_RAY_MARCH_BACKWARD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-ray-march-backward-mutant-result').mutation is recovery._mutate_aim_ray_march
+
+
+@needs_aim_ray_march_forward_census
+@pytest.mark.parametrize('fixture', AIM_RAY_MARCH_FORWARD_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_ray_march_forward_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.aim_ray_march_forward_plan(machine, registers)
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc']))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_aim_ray_march_backward_census
+@pytest.mark.parametrize('fixture', AIM_RAY_MARCH_BACKWARD_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_ray_march_backward_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.aim_ray_march_backward_plan(machine, registers)
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc']))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_ray_march_forward_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_RAY_MARCH_FORWARD_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-ray-march-forward',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        assert report['status'] == 'PASS', report
+        assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-ray-march-forward-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-ray-march-forward produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+@needs_reference
+def test_aim_ray_march_backward_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_RAY_MARCH_BACKWARD_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-ray-march-backward',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        assert report['status'] == 'PASS', report
+        assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-ray-march-backward-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-ray-march-backward produce an observable effect')
     assert mutant['status'] == 'DIVERGENCE'
 
 

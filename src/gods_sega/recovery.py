@@ -17,6 +17,8 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_WINDOW_ADDRESS_ENTRY, aim_window_address_plan,
                        AIM_PROBE_MARK_ENTRY, aim_probe_mark_plan,
                        AIM_PROBE_MARK_STORE_ENTRY, aim_probe_mark_store_plan,
+                       AIM_RAY_MARCH_FORWARD_ENTRY, aim_ray_march_forward_plan,
+                       AIM_RAY_MARCH_BACKWARD_ENTRY, aim_ray_march_backward_plan,
                        AIM_TARGET_SCAN_ENTRY, aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY, aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY, aim_target_resolve_plan,
@@ -208,6 +210,23 @@ def _mutate_aim_probe(plan: AtomicPlan) -> AtomicPlan:
     return plan
 
 
+def _mutate_aim_ray_march(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00B354/00B440: AIM_RAY_STEP_INDEX's own low byte (F2D4, the routine's own
+    real output -- 00B62A's own D7 is derived straight from it, every witnessed occurrence) off by 4,
+    not 1: 00B62A's own D7 = (F2D4 >> 2) + ..., so a plain +1 changes the shifted result on only one of
+    four occurrences (the SAME "flip across the test, not by one" caution grinder-protocol.md already
+    names for a value consumed through a shift/mask) -- +4 changes >>2's own result by exactly 1 on
+    every occurrence.  Always present (the routine's own last write, every activation): no fallback
+    needed, unlike _mutate_aim_probe's own 'about half the occurrences write nothing real' shape."""
+    from .game import creatures
+    target = (creatures.AIM_RAY_STEP_INDEX + 1) & 0xFFFFFF
+    for index, (address, value) in enumerate(plan.writes):
+        if address == target:
+            writes = plan.writes[:index] + ((address, (value + 4) & 0xFF),) + plan.writes[index + 1:]
+            return AtomicPlan(plan.cycles, plan.instructions, writes, plan.registers, plan.last_pc, plan.direct_calls)
+    return plan
+
+
 def _mutate_aim_window_address(plan: AtomicPlan) -> AtomicPlan:
     """Negative control for 00B32E: A0 (the computed address, this leaf's own real output -- every
     known caller dereferences or stores through it) off by one, the SAME shape
@@ -338,6 +357,8 @@ PLANNERS = {
     'aim-window-address': {AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan},
     'aim-probe-mark': {AIM_PROBE_MARK_ENTRY: aim_probe_mark_plan},
     'aim-probe-mark-store': {AIM_PROBE_MARK_STORE_ENTRY: aim_probe_mark_store_plan},
+    'aim-ray-march-forward': {AIM_RAY_MARCH_FORWARD_ENTRY: aim_ray_march_forward_plan},
+    'aim-ray-march-backward': {AIM_RAY_MARCH_BACKWARD_ENTRY: aim_ray_march_backward_plan},
     'aim-target-scan': {AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan},
     'aim-target-scan-backward': {AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan},
     'aim-target-resolve': {AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
@@ -435,6 +456,8 @@ PLANNERS = {
                        AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan,
                        AIM_PROBE_MARK_ENTRY: aim_probe_mark_plan,
                        AIM_PROBE_MARK_STORE_ENTRY: aim_probe_mark_store_plan,
+                       AIM_RAY_MARCH_FORWARD_ENTRY: aim_ray_march_forward_plan,
+                       AIM_RAY_MARCH_BACKWARD_ENTRY: aim_ray_march_backward_plan,
                        AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan,
@@ -669,6 +692,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-window-address-mutant-result': ('aim-window-address', _mutate_aim_window_address),
              'aim-probe-mark-mutant-result': ('aim-probe-mark', _mutate_aim_probe),
              'aim-probe-mark-store-mutant-result': ('aim-probe-mark-store', _mutate_aim_probe),
+             'aim-ray-march-forward-mutant-result': ('aim-ray-march-forward', _mutate_aim_ray_march),
+             'aim-ray-march-backward-mutant-result': ('aim-ray-march-backward', _mutate_aim_ray_march),
              'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result),
              'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),
