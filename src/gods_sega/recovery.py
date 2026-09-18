@@ -23,6 +23,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_TARGET_SCAN_ENTRY, aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY, aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY, aim_target_resolve_plan,
+                       AIM_SEARCH_SCAN_ENTRY, aim_search_scan_plan,
                        SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
@@ -364,6 +365,7 @@ PLANNERS = {
     'aim-target-scan': {AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan},
     'aim-target-scan-backward': {AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan},
     'aim-target-resolve': {AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
+    'aim-search-scan': {AIM_SEARCH_SCAN_ENTRY: aim_search_scan_plan},
     'spawn-table-find-free': {SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
     'spawn-table-add': {SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
@@ -467,10 +469,18 @@ PLANNERS = {
                        # player-state gates and 005700 already established above; their own PLANNERS
                        # entries and gate PCs are unchanged.  Frees three gates for AIM_POOL_SCAN_ENTRY's
                        # own one (64 -> 62; docs/gods/STATUS.md's 19 September entry).
-                       AIM_POOL_SCAN_ENTRY: aim_pool_scan_plan,
-                       AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan,
-                       AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan,
-                       AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan,
+                       #
+                       # AIM_POOL_SCAN_ENTRY (00B588) and the aim-target-scan family (00B724/00B7DA/
+                       # 00B6AE) are RETIRED here too, 19 September, the same day: every witnessed
+                       # occurrence of all four returns to (or reaches) a fixed address inside 00B002's
+                       # own body -- confirmed against every one of their own census fixtures' exits,
+                       # one caller each -- and 00B002 itself never executes its own rts, tail-jumping
+                       # straight into 00B588 once its own three calls return.  AIM_SEARCH_SCAN_ENTRY's
+                       # own atomic plan (aim_search_scan_plan) composes all four, so once IT is armed
+                       # here the native machine never independently reaches any of their own four PCs
+                       # as a gate hit.  62 -> 59 gates; their own PLANNERS entries and standalone tests
+                       # are unchanged, the same retirement shape as above.
+                       AIM_SEARCH_SCAN_ENTRY: aim_search_scan_plan,
                        SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
@@ -705,6 +715,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-ray-march-forward-mutant-result': ('aim-ray-march-forward', _mutate_aim_ray_march),
              'aim-ray-march-backward-mutant-result': ('aim-ray-march-backward', _mutate_aim_ray_march),
              'aim-pool-scan-mutant-result': ('aim-pool-scan', _mutate_aim_ray_march),
+             'aim-search-scan-mutant-result': ('aim-search-scan', _mutate_aim_ray_march),
              'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result),
              'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),

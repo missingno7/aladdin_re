@@ -1239,7 +1239,10 @@ def test_aim_target_scan_semantics_walk_matches_a_fresh_scan():
 
 def test_aim_target_scan_candidate_names_are_explicit():
     assert recovery.Candidate('aim-target-scan').gate_pcs == (boundary.AIM_TARGET_SCAN_ENTRY,)
-    assert boundary.AIM_TARGET_SCAN_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 19 September -- see test_aim_probe_mark_store_candidate_names_are_explicit
+    # (00B002's own aim_search_scan_plan now covers the whole span; every witnessed occurrence of
+    # 00B724 returns to a fixed address inside 00B002's own body, one caller).
+    assert boundary.AIM_TARGET_SCAN_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-target-scan-mutant-result').mutation is recovery._mutate_result
 
 
@@ -1285,7 +1288,8 @@ def test_aim_target_scan_candidate_matches_the_reference_and_its_mutant_diverges
 
 def test_aim_target_scan_backward_candidate_names_are_explicit():
     assert recovery.Candidate('aim-target-scan-backward').gate_pcs == (boundary.AIM_TARGET_SCAN_BACKWARD_ENTRY,)
-    assert boundary.AIM_TARGET_SCAN_BACKWARD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 19 September -- see test_aim_probe_mark_store_candidate_names_are_explicit.
+    assert boundary.AIM_TARGET_SCAN_BACKWARD_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-target-scan-backward-mutant-result').mutation is recovery._mutate_result
 
 
@@ -1333,7 +1337,8 @@ def test_aim_target_scan_backward_candidate_matches_the_reference_and_its_mutant
 
 def test_aim_target_resolve_candidate_names_are_explicit():
     assert recovery.Candidate('aim-target-resolve').gate_pcs == (boundary.AIM_TARGET_RESOLVE_ENTRY,)
-    assert boundary.AIM_TARGET_RESOLVE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 19 September -- see test_aim_probe_mark_store_candidate_names_are_explicit.
+    assert boundary.AIM_TARGET_RESOLVE_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-target-resolve-mutant-result').mutation is recovery._mutate_aim_target_resolve
 
 
@@ -1562,7 +1567,9 @@ def test_aim_ray_march_backward_candidate_matches_the_reference_and_its_mutant_d
 
 def test_aim_pool_scan_candidate_names_are_explicit():
     assert recovery.Candidate('aim-pool-scan').gate_pcs == (boundary.AIM_POOL_SCAN_ENTRY,)
-    assert boundary.AIM_POOL_SCAN_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 19 September -- see test_aim_probe_mark_store_candidate_names_are_explicit
+    # (00B002's own bra.w $b588 tail jump means aim_search_scan_plan now covers this span too).
+    assert boundary.AIM_POOL_SCAN_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-pool-scan-mutant-result').mutation is recovery._mutate_aim_ray_march
 
 
@@ -1605,6 +1612,63 @@ def test_aim_pool_scan_candidate_matches_the_reference_and_its_mutant_diverges()
             break
     else:
         pytest.skip('no retained fixture/window makes aim-pool-scan produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B002: reset both AIM_SEARCH snapshot slots, run the target-scan family, then tail-jump into
+# 00B588 (docs/gods/blockers/2026-09-18-00A578.md's own 19 September progress note).  See boundary.py's
+# own module note above aim_search_scan_plan.
+
+AIM_SEARCH_SCAN_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0XB002-*/00B002-entry-p*.state'))
+needs_aim_search_scan_census = pytest.mark.skipif(not AIM_SEARCH_SCAN_FIXTURES or not GODS.rom_path.is_file(),
+                                                   reason='no local census of 00B002')
+
+
+def test_aim_search_scan_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-search-scan').gate_pcs == (boundary.AIM_SEARCH_SCAN_ENTRY,)
+    assert boundary.AIM_SEARCH_SCAN_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-search-scan-mutant-result').mutation is recovery._mutate_aim_ray_march
+
+
+@needs_aim_search_scan_census
+@pytest.mark.parametrize('fixture', AIM_SEARCH_SCAN_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_search_scan_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_search_scan_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            # Either an unwitnessed arm inside the composed scan family (the same declines
+            # aim_target_scan_plan/aim_target_scan_backward_plan already make on their own), or the
+            # SAME native atomic-plan cost cap aim_pool_scan_plan's own test already documents --
+            # 00B002's own prefix only makes a busy pool more likely to cross it, not less real.
+            assert any(needle in str(error) for needle in ('aim target scan', 'aim search scan', 'aim pool scan')), error
+            return
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc']))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_search_scan_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_SEARCH_SCAN_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-search-scan',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        if report['status'] != 'PASS':
+            continue
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-search-scan-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-search-scan produce an observable effect')
     assert mutant['status'] == 'DIVERGENCE'
 
 

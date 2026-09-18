@@ -676,6 +676,50 @@ below, has the count and the milestone tree numbers).
   creature gates further), then `00A578` as the walk with its own
   semantic-operation card.
 
+- **19 September, later the same session**: `00B002` recovered -- the
+  progress note's own scoping confirmed exactly, fresh against the ROM
+  (`census-0XB002-*`, five recordings): `clr.w f2b0.w`
+  (`AIM_SEARCH_COUNT`), `clr.l f2b2.w` (`AIM_SEARCH_SNAPSHOT`'s own
+  leading D0/D1 long), `clr.l f2b6.w` (its own trailing D7 word paired
+  with `AIM_SEARCH_SNAPSHOT_FLAG`), `clr.l f2ba.w`
+  (`AIM_SEARCH_BACKWARD_SNAPSHOT`'s own leading D0/D1 long -- its own
+  trailing D7/flag are NOT cleared here, real ROM, read as whatever the
+  prior activation left), then `movem.l d0-d1,-(a7)` / `bsr 00B724` /
+  `movem.l (a7)+,d0-d1` (restoring the original x0/y0) / `bsr 00B7DA` (A3
+  a genuine pass-through from `00B724`'s own exit) / `bsr 00B6AE`, then
+  `bra.w $b588` -- `00B002` never executes its own `rts`.
+  `gods_sega.boundary.aim_search_scan_plan` composes the four
+  already-sealed gate plans (`00B724`/`00B7DA`/`00B6AE`/`00B588`) as real
+  internal calls and a tail jump, the same `_ConstMachine` overlay
+  technique `00B588`'s own composition established, one level higher --
+  five levels deep at its busiest arm.  Every one of the four's own
+  census fixtures returns to (or reaches) a fixed address inside
+  `00B002`'s own body, one caller each, confirming the whole span is
+  covered: `candidate 'aim-search-scan'` replaces
+  `'aim-target-scan'`/`'aim-target-scan-backward'`/`'aim-target-resolve'`/
+  `'aim-pool-scan'` in `camera-sprites` -- **sixty-two gates to
+  fifty-nine** (their own `PLANNERS` entries and standalone tests
+  unchanged, the same retirement shape as `00B588`'s own).
+  `aim_search_scan_plan` also carries its own combined-cost decline (the
+  SAME `al_atomic` cap `aim_pool_scan_plan`'s own decline already prices,
+  checked again here since the inner check only ever sees its own local
+  total, never this routine's own three-call prefix ahead of it).  One
+  real defect this session's own `factcheck check` found: the backward
+  scan and resolve calls run AFTER the `movem.l (a7)+` pop restores this
+  routine's own entry stack depth, so their own return-address residue
+  lands one stack slot shallower than the forward call's own (the first
+  draft used a single shared slot throughout, matching every fixture
+  whose own residue never differed from the forward call's, and
+  mismatching every fixture where it did).  Milestone tree PASS on all
+  five leaves (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-
+  b002`, 107,519 frames, current receipts).  Reproduces the original on
+  `f0ac19738f19…`: PASS, 15 hits, 27 fallbacks (23 atomic-plan-cap
+  declines, 4 observation deadline, both `ADAPTER_REFUSALS`); mutant
+  (`_mutate_aim_ray_march`, shared) DIVERGENCE at frame 13,905.  Next, per
+  the Decision's own order: `00AF52`, `00AC36`, `00AA76`/`00AB50`, then
+  `00A772` as the family (frees the creature gates further), then
+  `00A578` as the walk with its own semantic-operation card.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

@@ -18598,6 +18598,174 @@ def aim_target_resolve_plan(machine, registers):
                       last_pc=AIM_TARGET_RESOLVE_STEP_PC)
 
 
+# --- 00B002: reset both AIM_SEARCH snapshot slots, run the target-scan family, then tail-jump into
+# 00B588 -- docs/gods/blockers/2026-09-18-00A578.md's own 19 September progress note.  Disassembled
+# fresh (census-0XB002-*, five recordings): `clr.w f2b0.w` (AIM_SEARCH_COUNT), `clr.l f2b2.w`
+# (AIM_SEARCH_SNAPSHOT's own leading D0/D1 long), `clr.l f2b6.w` (AIM_SEARCH_SNAPSHOT's own trailing D7
+# word paired with AIM_SEARCH_SNAPSHOT_FLAG), `clr.l f2ba.w` (AIM_SEARCH_BACKWARD_SNAPSHOT's own leading
+# D0/D1 long -- its own trailing D7/flag are NOT cleared here, real ROM, read as whatever the PRIOR
+# activation left, exactly as every sub-call's own 'empty' arm already treats an unclear snapshot: a
+# zero leading long), then `movem.l d0-d1,-(a7)` / `bsr $b724` / `movem.l (a7)+,d0-d1` (restoring the
+# ORIGINAL (x0, y0) -- 00B724's own internal D0/D1 use is scratch by this point) / `bsr $b7da` (A3 a
+# genuine pass-through from 00B724's own exit, the SAME fact ledger.md's own 00B724/00B7DA entries
+# already price) / `bsr $b6ae`, then `bra.w $b588` -- 00B002 never executes its own `rts`.  Every
+# witnessed occurrence of 00B724/00B7DA/00B6AE/00B588 returns to (or reaches) the SAME addresses inside
+# this routine's own body (00B01A/00B022/00B026, and 00B588's own eventual exit is bit-identical to
+# 00B002's own caller's return slot) -- confirmed against every one of their own census fixtures'
+# exits, one caller each: none of the four is ever reached any other way, so this composition covers
+# their own combined span exactly.
+AIM_SEARCH_SCAN_ENTRY = 0x00B002
+
+# Cost fragments from the tracer (census-0XB002-*): every one of these six instructions is
+# unconditional and data-independent -- constant across every occurrence.
+_AIM_SEARCH_SCAN_CLR_COUNT = (16, 1)          # clr.w f2b0.w
+_AIM_SEARCH_SCAN_CLR_SNAPSHOT0 = (24, 1)      # clr.l f2b2.w
+_AIM_SEARCH_SCAN_CLR_SNAPSHOT1 = (24, 1)      # clr.l f2b6.w
+_AIM_SEARCH_SCAN_CLR_BACKWARD = (24, 1)       # clr.l f2ba.w
+_AIM_SEARCH_SCAN_MOVEM_PUSH = (24, 1)         # movem.l d0-d1,-(a7)
+_AIM_SEARCH_SCAN_BSR_FORWARD = (18, 1)        # bsr $b724 (the call instruction itself)
+_AIM_SEARCH_SCAN_MOVEM_POP = (28, 1)          # movem.l (a7)+,d0-d1
+_AIM_SEARCH_SCAN_BSR_BACKWARD = (18, 1)       # bsr $b7da
+_AIM_SEARCH_SCAN_BSR_RESOLVE = (18, 1)        # bsr $b6ae
+_AIM_SEARCH_SCAN_BRA_POOL = (10, 1)           # bra.w $b588
+
+
+def aim_search_scan_plan(machine, registers):
+    """00B002: see the module note above.  Composes the four already-sealed gate plans
+    (aim_target_scan_plan, aim_target_scan_backward_plan, aim_target_resolve_plan, aim_pool_scan_plan)
+    as real internal calls/a tail jump, the SAME `_ConstMachine` overlay technique 00B588's own
+    composition already established, one level higher (five levels deep at its busiest arm).  Declines
+    the same way aim_pool_scan_plan does, and for the same reason, once the COMBINED running cost
+    (this routine's own prefix plus every composed plan) would cross native/machine.cpp's own al_atomic
+    cap -- checked here too because aim_pool_scan_plan's own internal check only ever sees its own
+    local total, never this routine's own prefix cost ahead of it."""
+    if registers['pc'] != AIM_SEARCH_SCAN_ENTRY:
+        raise UnsupportedCandidate('aim search scan planner needs the machine parked at 00B002')
+    from .game import creatures
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    d0_in, d1_in = registers['d0'], registers['d1']
+    overlay = {}
+    cycles, instructions = 0, 0
+
+    def charge(fragment):
+        nonlocal cycles, instructions
+        cycles += fragment[0]
+        instructions += fragment[1]
+
+    charge(_AIM_SEARCH_SCAN_CLR_COUNT)
+    overlay[creatures.AIM_SEARCH_COUNT & 0xFFFF] = 0
+    overlay[(creatures.AIM_SEARCH_COUNT + 1) & 0xFFFF] = 0
+    charge(_AIM_SEARCH_SCAN_CLR_SNAPSHOT0)
+    for offset in range(4):
+        overlay[(creatures.AIM_SEARCH_SNAPSHOT + offset) & 0xFFFF] = 0
+    charge(_AIM_SEARCH_SCAN_CLR_SNAPSHOT1)
+    for offset in range(4):
+        overlay[(creatures.AIM_SEARCH_SNAPSHOT + 4 + offset) & 0xFFFF] = 0
+    charge(_AIM_SEARCH_SCAN_CLR_BACKWARD)
+    for offset in range(4):
+        overlay[(creatures.AIM_SEARCH_BACKWARD_SNAPSHOT + offset) & 0xFFFF] = 0
+
+    charge(_AIM_SEARCH_SCAN_MOVEM_PUSH)
+    movem_sp = (sp - 8) & 0xFFFFFF
+    for offset in range(4):
+        overlay[(movem_sp + offset) & 0xFFFF] = (d0_in >> (8 * (3 - offset))) & 0xFF
+    for offset in range(4):
+        overlay[(movem_sp + 4 + offset) & 0xFFFF] = (d1_in >> (8 * (3 - offset))) & 0xFF
+
+    # The forward call's own return address lands one level DEEPER than the other two: it runs before
+    # the movem.l (a7)+ pop restores sp to this routine's own entry value, so its own push slot is
+    # movem_sp - 4.  The backward and resolve calls both run AFTER that pop, back at this routine's own
+    # entry depth, so THEY share sp - 4 -- a real, witnessed difference (census-0XB002-* fixtures'
+    # own "calls" trace: 00B724's own return slot is 4 bytes below 00B7DA's/00B6AE's own, not the same
+    # slot) this session's own first factcheck run caught, having assumed one shared slot throughout.
+    push_sp_inner = (movem_sp - 4) & 0xFFFFFF
+    push_sp = (sp - 4) & 0xFFFFFF
+    # `current` tracks every register's own live value the way the real machine would -- seeded from
+    # this routine's own entry (nothing before the first bsr touches any register beyond d0/d1, already
+    # in scope above), then updated after each composed call from its own exit registers, in call
+    # order.  Every sub-call's own synthetic `registers` dict is built from this, so it sees exactly
+    # what a real bsr would hand it -- the same "whichever call happened last" rule the ray march and
+    # pool scan already rely on, one level higher.
+    current = dict(registers)
+    exit_registers = {}
+
+    def cap_check(index):
+        if cycles > 100000 or instructions > 10000:
+            raise UnsupportedCandidate(
+                'aim search scan: projected cost exceeds the native adapter\'s own atomic-plan cap '
+                f'({cycles} cycles, {instructions} instructions after call {index})')
+
+    charge(_AIM_SEARCH_SCAN_BSR_FORWARD)
+    for offset in range(4):
+        overlay[(push_sp_inner + offset) & 0xFFFF] = (0x00B01A >> (8 * (3 - offset))) & 0xFF
+    forward_regs = dict(current, pc=AIM_TARGET_SCAN_ENTRY, a7=push_sp_inner, sr=sr)
+    forward_plan = aim_target_scan_plan(_ConstMachine(machine, overlay), forward_regs)
+    cycles += forward_plan.cycles
+    instructions += forward_plan.instructions
+    for addr, value in forward_plan.writes:
+        overlay[addr & 0xFFFF] = value
+    sr = forward_plan.registers['sr']
+    current.update({k: v for k, v in forward_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    exit_registers.update({k: v for k, v in forward_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    cap_check(1)
+
+    # movem.l (a7)+,d0-d1: restores the ORIGINAL (x0, y0) this routine's own caller supplied -- full
+    # 32-bit longs (a movem word-size load still moves 32 bits per register, unlike a plain move.w).
+    charge(_AIM_SEARCH_SCAN_MOVEM_POP)
+    current['d0'] = d0_in
+    current['d1'] = d1_in
+    exit_registers['d0'] = d0_in
+    exit_registers['d1'] = d1_in
+
+    charge(_AIM_SEARCH_SCAN_BSR_BACKWARD)
+    for offset in range(4):
+        overlay[(push_sp + offset) & 0xFFFF] = (0x00B022 >> (8 * (3 - offset))) & 0xFF
+    backward_regs = dict(current, pc=AIM_TARGET_SCAN_BACKWARD_ENTRY, a7=push_sp, sr=sr)
+    backward_plan = aim_target_scan_backward_plan(_ConstMachine(machine, overlay), backward_regs)
+    cycles += backward_plan.cycles
+    instructions += backward_plan.instructions
+    for addr, value in backward_plan.writes:
+        overlay[addr & 0xFFFF] = value
+    sr = backward_plan.registers['sr']
+    current.update({k: v for k, v in backward_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    exit_registers.update({k: v for k, v in backward_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    cap_check(2)
+
+    charge(_AIM_SEARCH_SCAN_BSR_RESOLVE)
+    for offset in range(4):
+        overlay[(push_sp + offset) & 0xFFFF] = (0x00B026 >> (8 * (3 - offset))) & 0xFF
+    resolve_regs = dict(current, pc=AIM_TARGET_RESOLVE_ENTRY, a7=push_sp, sr=sr)
+    resolve_plan = aim_target_resolve_plan(_ConstMachine(machine, overlay), resolve_regs)
+    cycles += resolve_plan.cycles
+    instructions += resolve_plan.instructions
+    for addr, value in resolve_plan.writes:
+        overlay[addr & 0xFFFF] = value
+    sr = resolve_plan.registers['sr']
+    current.update({k: v for k, v in resolve_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    exit_registers.update({k: v for k, v in resolve_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    cap_check(3)
+
+    # bra.w $b588: no stack effect at all -- 00B588 is entered with the SAME a7 this routine itself
+    # entered with (every bsr above popped its own return address via its own callee's rts), and every
+    # register not touched by forward/backward/resolve above is still whatever this routine's own
+    # caller supplied.
+    charge(_AIM_SEARCH_SCAN_BRA_POOL)
+    pool_registers = dict(current, pc=AIM_POOL_SCAN_ENTRY, a7=sp32, sr=sr)
+    pool_plan = aim_pool_scan_plan(_ConstMachine(machine, overlay), pool_registers)
+    cycles += pool_plan.cycles
+    instructions += pool_plan.instructions
+    for addr, value in pool_plan.writes:
+        overlay[addr & 0xFFFF] = value
+    exit_registers.update({k: v for k, v in pool_plan.registers.items() if k != 'pc'})
+    exit_registers['pc'] = pool_plan.registers['pc']
+    cap_check(4)
+
+    writes = tuple((addr | 0xFF0000, value) for addr, value in overlay.items())
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=pool_plan.last_pc)
+
+
 # --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (game/creatures.py: spawn_table_find_
 # free, spawn_table_add) -----------------------------------------------------------------------------
 #
