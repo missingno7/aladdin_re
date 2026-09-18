@@ -4169,6 +4169,271 @@ def launch_plan(machine, registers):
                       last_pc=LAUNCH_LAST_PC)
 
 
+# --- 009D6C: the creature attack update (game/creatures.py: attack_update) --
+#
+# Cost from the tracer (artifacts/gods/evidence/census-009D6C*, the full-tree census over all five
+# recordings, 273 retained fixtures, 18 Sep): every arm shares a head (the attack-byte read, the two
+# early 'skip' exits, the countdown decrement/'waiting' exit, and -- past that -- the reload and
+# quadrant read).  Quadrants 1-3 launch a projectile: both share the identical setup/frame/restore
+# instructions (a movem.l d0-d7/a0-a5 SAVE shields every register the caller owns from whatever the
+# launch call itself does internally, so the RESTORE afterward makes every register but d0-d5 an exact
+# entry passthrough -- d0/d1 the launch's own x0/y0, d2/d3 quadrant 1's own jittered target (unchanged
+# from entry on quadrants 2-3, where d2/d3 are never touched before the save except d3's own kind
+# residue), d4/d5 the attack byte's own high nibble); the launch itself (0091BC direct, or 0091C8 with
+# quadrant 1's own jittered target already loaded into D2/D3) is ``launch_plan``'s own body, reused
+# verbatim including its 'pool-full' decline.  Quadrant 0 never launches: it hands off to
+# ``timers._spawn``'s own already-recovered BACK/FORWARD hazard-pool fill (0115x8C/0115D4, the shape
+# ``countdown_check_plan`` prices as ``_CC_CALLEE_HEAD``/``_CC_WINDOW_*``/``_CC_POOL_*``, reused here
+# too) through a tail-JUMP (not a call): 009D6C's own frame never unwinds an extra level, so 01158C's
+# own inner rts returns straight past 009D6C to 00A772.  The window-reject and hazard-pool-exhausted
+# arms are ``_CC_*``'s own shapes; the pool-exhausted one is unwitnessed and declined, matching
+# ``countdown_check_plan``.  ``'skip-quadrant0'`` (TRACKED_SIGN non-negative and the instance's own
+# FORWARD_BACK word exactly zero) is real ROM code no recording reaches: declined.
+ATTACK_UPDATE_ENTRY = 0x009D6C
+ATTACK_UPDATE_SKIP_LAST_PC = 0x009DCC
+ATTACK_UPDATE_JITTERED_JSR_RETURN = 0x009D66         # jsr $91c8.l's own return address (pushed on the stack)
+ATTACK_UPDATE_DIRECT_JSR_RETURN = 0x009D16           # jsr $91bc.l's own return address
+# Two near-identical but DISTINCT ROM copies of "movem.l (a7)+,d0-d7/a0-a5; rts" -- not a shared tail:
+ATTACK_UPDATE_JITTERED_LAST_PC = 0x009D6A            # the jittered arm's own copy, right after ATTACK_UPDATE_JITTERED_JSR_RETURN
+ATTACK_UPDATE_DIRECT_LAST_PC = 0x009D1A              # the direct arm's own copy, right after ATTACK_UPDATE_DIRECT_JSR_RETURN
+ATTACK_UPDATE_SPAWN_BACK_LAST_PC = 0x0115D2          # tail-jump into 01158C
+ATTACK_UPDATE_SPAWN_FORWARD_LAST_PC = 0x01161C       # tail-jump into 0115D4
+_CU_ATTACK_READ = (12, 1)                     # move.b $6(a4),d3
+_CU_ATTACK_ZERO_TAKEN, _CU_ATTACK_ZERO_NOT = (10, 1), (8, 1)     # beq.b $9dcc (byte==0)
+_CU_SAVE_BYTE = (4, 1)                         # move.b d3,d5
+_CU_MASK_KIND = (8, 1)                         # andi.w #$f,d3
+_CU_KIND_ZERO_TAKEN, _CU_KIND_ZERO_NOT = (10, 1), (8, 1)         # beq.b $9dcc (kind==0)
+_CU_COUNTDOWN_DEC = (16, 1)                    # subq.w #1,$e(a5)
+_CU_WAITING_TAKEN, _CU_WAITING_NOT = (10, 1), (8, 1)             # bne.b $9dcc (still counting)
+_CU_RTS = (16, 1)
+_CU_RELOAD = (4 + 4 + 4 + 4 + 4 + 12, 6)       # moveq #$10,d4; sub.b d3,d4; ext.w; add.w x2; move.w d4,$e(a5)
+_CU_QUADRANT_READ = (12 + 14 + 8, 3)           # move.w $4(a4),d4; lsr.w #4,d4; andi.w #3,d4
+_CU_HEAD_TO_RELOAD = _add(_CU_ATTACK_READ, _CU_ATTACK_ZERO_NOT, _CU_SAVE_BYTE, _CU_MASK_KIND,
+                          _CU_KIND_ZERO_NOT, _CU_COUNTDOWN_DEC, _CU_WAITING_NOT)
+_CU_HEAD_TO_QUADRANT = _add(_CU_HEAD_TO_RELOAD, _CU_RELOAD, _CU_QUADRANT_READ)
+_CU_Q_TAKEN, _CU_Q_NOT_TAKEN = (10, 1), (12, 1)                  # bne.w $9cf2 (quadrant!=0 / ==0)
+_CU_SUBDISPATCH = (8, 1)                       # cmpi.w #1,d4 (at 9cf2)
+_CU_SUBDISPATCH_TAKEN, _CU_SUBDISPATCH_NOT = (10, 1), (8, 1)     # beq.b $9d1c (quadrant==1 / 2-3)
+_CU_Q1_TARGET_HEAD = (12 + 12 + 4 + 4, 4)      # move.w f18c,d2; move.w f18e,d3; addq#8,d2; addq#6,d3
+_CU_Q1_JITTER_JSR = (20, 1)                    # jsr $14a3c.l (014A3C's own body cost via _NR_COST)
+_CU_Q1_JITTER_APPLY = (8 + 8 + 4, 3)           # andi.w #$3f,d0; subi.w #$1f,d0; add.w d0,d2-or-d3
+_CU_LAUNCH_SETUP = (8 + 12 + 8 + 8 + 14 + 4 + 120 + 4, 8)        # position+bias, power, the movem save, moveq #0,d6
+_CU_LAUNCH_JSR = (20, 1)                       # jsr $91bc.l / $91c8.l
+_CU_LAUNCH_RESTORE = (124 + 16, 2)             # movem.l (a7)+,d0-d7/a0-a5; rts
+_CU_LAUNCH_TOWARD_HEAD = (12 + 4 + 8, 3)       # 0091C8's own remaining head: move.w d4,f1fe; moveq d5; lea a3
+_CU_Q0_FREQUENCY = (8 + 14 + 62 + 4 + 4, 5)    # andi.w #$f0,d5; lsr.w #4,d5; mulu.w $eebe.w,d5; swap; addq.w #1,d5
+_CU_Q0_TRACKED_TEST = (12, 1)                  # tst.w $f1be.w
+_CU_Q0_TRACKED_TAKEN, _CU_Q0_TRACKED_NOT = (10, 1), (8, 1)       # bmi.b $9dce
+_CU_Q0_TABLE_READ = (12, 1)                    # move.w $a(a5),d0 (F1BE<0 arm)
+_CU_Q0_TABLE_BTST = (12, 1)                    # btst.l d0,$9dea(pc)
+_CU_Q0_TABLE_TAKEN, _CU_Q0_TABLE_NOT = (10, 1), (8, 1)           # bne.b $9db8
+_CU_Q0_SELECT_TEST = (12, 1)                   # tst.w $12(a5) (F1BE>=0 arm)
+_CU_Q0_SELECT_ZERO_TAKEN = (10, 1)             # beq.b $9dcc ($12(a5)==0, declined)
+_CU_Q0_SELECT_ZERO_NOT = (8, 1)
+_CU_Q0_SELECT_TAKEN, _CU_Q0_SELECT_NOT = (10, 1), (8, 1)         # bpl.b $9dd8
+_CU_Q0_NEG = (4, 1)                            # neg.w d5 (BACK only)
+_CU_Q0_STORE_AND_BIAS_FWD = (12 + 4 + 8 + 12, 4)      # move.w d5,f1c2; moveq #$20,d0; add.w (a5),d0; move.w 2(a5),d1
+_CU_Q0_STORE_AND_BIAS_BACK = (12 + 8 + 12, 3)         # move.w d5,f1c2; move.w (a5),d0; move.w 2(a5),d1 (bias is a subq below)
+_CU_Q0_BIAS_BACK = (4, 1)                      # subq.w #8,d0
+_CU_Q0_JMP = (12, 1)                           # jmp $1158c.l / $115d4.l
+
+
+def _cu_frame_writes(sp, values):
+    """movem.l d0-d7/a0-a5,-(a7): fourteen longs, ascending register order at ascending addresses."""
+    names = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5')
+    base = sp - len(names) * 4
+    return tuple(pair for index, name in enumerate(names)
+                 for pair in _bytes((base + 4 * index) & 0xFFFFFF, values[name] & 0xFFFFFFFF, 4))
+
+
+def _cu_launch_writes(sp, jsr_return):
+    """The jsr's own return address, then (inside 0091BC/0091C8 itself) the bsr $93e4's own -- the same
+    single extra write ``launch_plan`` adds on top of the semantics' own ``stores``."""
+    jsr_sp = sp - len(('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5')) * 4 - 4
+    return _bytes(jsr_sp & 0xFFFFFF, jsr_return, 4) + _bytes((jsr_sp - 4) & 0xFFFFFF, _CC_DEEP_LAUNCH_RETURN, 4)
+
+
+def _cu_launch_cost(launch_result, budget):
+    """The pool scan, the walk's own steps and the tail -- ``launch_plan``'s own composition, reused."""
+    if launch_result['arm'] != 'launched':
+        return None
+    steps, counter_before_subq = _walk_steps(launch_result['walk'], budget, 'projectile')
+    toward, slope = launch_result['walk'].phase
+    y_negative = launch_result['walk'].y_sign == 0xFFFF
+    setup_cost = _add(_PL_OUTER[toward], _PL_XSETUP[toward], _PL_YSIGN[(toward, y_negative)],
+                      _PL_SLOPE_TEST[slope], _PL_PRELOOP)
+    call_cost = _add(setup_cost, *(_WR_STEP[step] for step in steps), _WR_TAIL)
+    tries_cost = _add(*([_PL_SKIP] * launch_result['tries']))
+    cost = _add(_PL_FOUND, tries_cost, _PL_STORE_AND_CALL, call_cost, _PL_TAIL)
+    x = 0x10 if counter_before_subq == 0 else 0
+    return cost, x
+
+
+def attack_update_plan(machine, registers):
+    """009D6C: one creature's own attack-timer tick (called from 00A772, itself 00A578's own per-slot
+    walk)."""
+    from .game import creatures, timers
+    if registers['pc'] != ATTACK_UPDATE_ENTRY:
+        raise UnsupportedCandidate('attack update planner needs the machine parked at 009D6C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    type_ptr, instance_ptr = registers['a4'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
+    read = _reader(machine)
+    result = creatures.attack_update(read, type_ptr, instance_ptr)
+    arm = result['arm']
+    exit_pc = _return(machine, sp)
+    base_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': exit_pc}
+
+    if arm == 'skip':
+        attack_byte = read(type_ptr + creatures.ATTACK_BYTE, 1)
+        if attack_byte == 0:
+            cost = _add(_CU_ATTACK_READ, _CU_ATTACK_ZERO_TAKEN, _CU_RTS)
+            d3 = (registers['d3'] & 0xFFFFFF00) | attack_byte
+            exit_sr = _logic_sr(sr, attack_byte, 1)
+            registers_out = dict(base_registers, d3=d3, sr=exit_sr)
+        else:
+            kind = attack_byte & 0xF
+            cost = _add(_CU_ATTACK_READ, _CU_ATTACK_ZERO_NOT, _CU_SAVE_BYTE, _CU_MASK_KIND,
+                       _CU_KIND_ZERO_TAKEN, _CU_RTS)
+            d3 = (registers['d3'] & 0xFFFF0000) | kind
+            d5 = (registers['d5'] & 0xFFFFFF00) | attack_byte
+            exit_sr = _logic_sr(sr, kind, 2)
+            registers_out = dict(base_registers, d3=d3, d5=d5, sr=exit_sr)
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=(), registers=registers_out,
+                          last_pc=ATTACK_UPDATE_SKIP_LAST_PC)
+
+    if arm == 'waiting':
+        attack_byte = read(type_ptr + creatures.ATTACK_BYTE, 1)
+        kind = attack_byte & 0xF
+        cost = _add(_CU_ATTACK_READ, _CU_ATTACK_ZERO_NOT, _CU_SAVE_BYTE, _CU_MASK_KIND, _CU_KIND_ZERO_NOT,
+                   _CU_COUNTDOWN_DEC, _CU_WAITING_TAKEN, _CU_RTS)
+        d3 = (registers['d3'] & 0xFFFF0000) | kind
+        d5 = (registers['d5'] & 0xFFFFFF00) | attack_byte
+        exit_sr = _sub_sr(sr, result['before'], 1, 2)
+        writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers=dict(base_registers, d3=d3, d5=d5, sr=exit_sr),
+                          last_pc=ATTACK_UPDATE_SKIP_LAST_PC)
+
+    if arm == 'skip-quadrant0':
+        raise UnsupportedCandidate('attack update quadrant-0 arm: FORWARD_BACK==0 not witnessed by a recording')
+    if arm.endswith('pool-full'):
+        raise UnsupportedCandidate(f'attack update {arm} arm: pool exhausted, not witnessed by a recording')
+
+    reload_writes = tuple(pair for address, (value, size) in result['stores'].items() if address == (instance_ptr + creatures.COUNTDOWN) & 0xFFFFFF
+                          for pair in _bytes(address, value, size))
+
+    if arm in ('launch-jittered', 'launch-direct'):
+        jittered = arm == 'launch-jittered'
+        x0 = (read(instance_ptr + creatures.POSITION_X, 2) + creatures.LAUNCH_POSITION_BIAS) & 0xFFFF
+        y0 = read(instance_ptr + creatures.POSITION_Y, 2) & 0xFFFF
+        power = result['power']
+        cost = _add(_CU_HEAD_TO_QUADRANT, _CU_Q_TAKEN, _CU_SUBDISPATCH)
+        if jittered:
+            cost = _add(cost, _CU_SUBDISPATCH_TAKEN, _CU_Q1_TARGET_HEAD,
+                       _CU_Q1_JITTER_JSR, _NR_COST, _CU_Q1_JITTER_APPLY,
+                       _CU_Q1_JITTER_JSR, _NR_COST, _CU_Q1_JITTER_APPLY)
+        else:
+            cost = _add(cost, _CU_SUBDISPATCH_NOT)
+        cost = _add(cost, _CU_LAUNCH_SETUP, _CU_LAUNCH_JSR)
+        cost = _add(cost, _CU_LAUNCH_TOWARD_HEAD if jittered else _PL_HEAD)
+        launch_cost = _cu_launch_cost(result['launch'], power)
+        launch_body, x_flag = launch_cost
+        cost = _add(cost, launch_body, _CU_LAUNCH_RESTORE)
+
+        entry_a0 = registers['a0']
+        movem_values = dict(registers)
+        movem_values['d0'] = (registers['d0'] & 0xFFFF0000) | x0
+        movem_values['d1'] = (registers['d1'] & 0xFFFF0000) | y0
+        if jittered:
+            x1, y1 = result['launch']['target']
+            movem_values['d2'] = (registers['d2'] & 0xFFFF0000) | x1
+            movem_values['d3'] = (registers['d3'] & 0xFFFF0000) | y1
+            jsr_return = ATTACK_UPDATE_JITTERED_JSR_RETURN
+        else:
+            movem_values['d3'] = (registers['d3'] & 0xFFFF0000) | result['kind']
+            jsr_return = ATTACK_UPDATE_DIRECT_JSR_RETURN
+        movem_values['d4'] = power              # moveq #$10,d4 (the reload's own head) already zeroed d4's upper word
+        movem_values['d5'] = (registers['d5'] & 0xFFFF0000) | power
+        movem_values['d6'] = registers['d6']   # moveq #0,d6 runs AFTER this movem save
+        writes = reload_writes + _cu_frame_writes(sp, movem_values) + _cu_launch_writes(sp, jsr_return)
+        writes += tuple(pair for address, (value, size) in result['launch']['stores'].items() for pair in _bytes(address, value, size))
+        if jittered:
+            for draw in result['draws']:
+                writes += tuple(pair for address, (value, size) in draw['stores'].items() for pair in _bytes(address, value, size))
+        exit_registers = dict(base_registers)
+        for name in ('d0', 'd1', 'd2', 'd3', 'd4', 'd5'):
+            exit_registers[name] = movem_values.get(name, registers[name]) & 0xFFFFFFFF
+        exit_registers['a0'] = entry_a0
+        exit_registers['sr'] = (sr & ~0x1F) | x_flag
+        last_pc = ATTACK_UPDATE_JITTERED_LAST_PC if jittered else ATTACK_UPDATE_DIRECT_LAST_PC
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers, last_pc=last_pc)
+
+    # 'spawn-window' or 'spawn-reject': the quadrant-0 hazard-pool tail-jump into 01158C/0115D4.
+    from .game import timers as _timers
+    variant = result['variant']
+    back = variant is _timers.BACK
+    tracked = read(creatures.TRACKED_SIGN, 2)
+    tracked_negative = creatures._signed_word(tracked) < 0
+    cost = _add(_CU_HEAD_TO_QUADRANT, _CU_Q_NOT_TAKEN, _CU_Q0_FREQUENCY, _CU_Q0_TRACKED_TEST)
+    if tracked_negative:
+        table_taken = _CU_Q0_TABLE_TAKEN if back else _CU_Q0_TABLE_NOT
+        cost = _add(cost, _CU_Q0_TRACKED_TAKEN, _CU_Q0_TABLE_READ, _CU_Q0_TABLE_BTST, table_taken)
+    else:
+        select_taken = _CU_Q0_SELECT_NOT if back else _CU_Q0_SELECT_TAKEN
+        cost = _add(cost, _CU_Q0_TRACKED_NOT, _CU_Q0_SELECT_TEST, _CU_Q0_SELECT_ZERO_NOT, select_taken)
+    if back:
+        cost = _add(cost, _CU_Q0_NEG, _CU_Q0_STORE_AND_BIAS_BACK, _CU_Q0_BIAS_BACK, _CU_Q0_JMP)
+    else:
+        cost = _add(cost, _CU_Q0_STORE_AND_BIAS_FWD, _CU_Q0_JMP)
+    cost = _add(cost, _CC_CALLEE_HEAD)
+    camera_y = int.from_bytes(machine.peek_ram(_timers.CAMERA_Y & 0xFFFF, 2), 'big')
+    sr_x = _sub_sr(sr, result['spawn']['pos_y'], camera_y, 2)
+    window_cycles, window_instructions, reject_ccr = _cc_window_cost_and_ccr(sr_x, result['spawn'], variant)
+    cost = _add(cost, (window_cycles, window_instructions))
+    if arm == 'spawn-window':
+        cost = _add(cost, _CC_POOL_SETUP)
+        cost = _add(cost, (result['spawn']['tries'] * _CC_POOL_ITER[0], result['spawn']['tries'] * _CC_POOL_ITER[1]))
+        cost = _add(cost, _CC_POOL_FOUND, _CC_POOL_STORE, _CC_POOL_EXIT_BRA)
+        exit_ccr = _logic_sr(sr_x, variant['marker'], 2)
+    else:
+        exit_ccr = reject_ccr
+    cost = _add(cost, _CC_POP_A0, _CC_RTS_INNER)
+    # The jmp itself pushes nothing; 01158C/0115D4's own frame is the ONLY nested call (move.l a0,-(a7),
+    # popped by movea.l before its own rts) -- the same durable residue _cc_call_writes prices, but with
+    # 009D6C's own caller-return slot (never a fresh bsr here) as the resume value.  Ordered first (the
+    # structural residue), with the real gameplay-visible stores last -- a mutant flipping the LAST
+    # write must corrupt something the oracle can actually see, not dead stack residue.
+    writes = reload_writes + _bytes((sp - 4) & 0xFFFFFF, registers['a0'] & 0xFFFFFFFF, 4)
+    writes += tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    spawn = result['spawn']
+    # 01158C/0115D4's own head copies D0/D1 (the biased position, already loaded before the jmp) into
+    # D2/D3 without touching D0/D1 themselves; D4 stays at the reload's own moveq-cleared 0 throughout
+    # (nothing here ever writes it again); D5 keeps FREQUENCY_UPPER in its own upper word until the pool
+    # scan's own ``moveq #$13,d5`` replaces it entirely (spawn-window only) -- reject leaves D5 exactly
+    # as the jmp found it (negated for BACK, untouched for FORWARD).
+    frequency_signed = result['frequency']   # already negated for BACK by creatures.attack_update itself
+    # D3 never carries the frequency here (unlike countdown_check_plan's own D3): the creature code's
+    # own D5 does, and D3 still holds "kind" (an earlier word-op residue) right up to the jmp, so 01158C's
+    # word-only touches (move.w d1,d3; sub.w f3f0,d3) preserve D3's own entry upper word throughout.
+    # D0's own upper word survives only on the BACK tail (move.w (a5),d0); FORWARD's own head is
+    # moveq #$20,d0 -- a full 32-bit replacement -- so D0 loses it there (confirmed via
+    # --perturb-upper-halves, 18 Sep).
+    d0 = (registers['d0'] & 0xFFFF0000) | spawn['pos_x'] if back else spawn['pos_x']
+    exit_registers = dict(base_registers, sr=exit_ccr,
+                          d0=d0 & 0xFFFFFFFF,
+                          d1=(registers['d1'] & 0xFFFF0000) | spawn['pos_y'],
+                          d2=(registers['d2'] & 0xFFFF0000) | (spawn['screen_x'] & 0xFFFF),
+                          d3=(registers['d3'] & 0xFFFF0000) | (spawn['screen_y'] & 0xFFFF),
+                          d4=0)
+    if arm == 'spawn-window':
+        exit_registers['d5'] = (0x13 - spawn['tries']) & 0xFFFFFFFF
+    else:
+        exit_registers['d5'] = ((result['frequency_upper'] & 0xFFFF) << 16) | frequency_signed
+    last_pc = ATTACK_UPDATE_SPAWN_BACK_LAST_PC if back else ATTACK_UPDATE_SPAWN_FORWARD_LAST_PC
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers, last_pc=last_pc)
+
+
 # --- 0044C0/004550: the trail check (game/trail.py) -- event kind 6 ---------------------------------
 #
 # Raised the same way kind 3 (00462C) is: the tile scan's own preamble (0077BE-007876) jsr's straight

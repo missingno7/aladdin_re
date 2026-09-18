@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
-                       ANIMATION_STEP_ENTRY, CAMERA_FOLLOW_ENTRY,
+                       ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
@@ -22,7 +22,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
-                       animation_step_plan, camera_follow_plan,
+                       animation_step_plan, attack_update_plan, camera_follow_plan,
                        collision_gate_plan, contact_consume_primary_plan, contact_consume_secondary_plan, contact_search_plan,
                        countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
@@ -222,6 +222,7 @@ PLANNERS = {
     'state-10': {STATE10_ENTRY: state10_plan},
     'state-19': {STATE19_ENTRY: state19_plan},
     'state-18': {STATE18_ENTRY: state18_plan},
+    'creature-attack': {ATTACK_UPDATE_ENTRY: attack_update_plan},
     'state-2': {STATE2_ENTRY: state2_plan},
     'state-3': {STATE3_ENTRY: state3_plan},
     'state-4': {STATE4_ENTRY: state4_plan},
@@ -442,7 +443,16 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # touches the stack.
              'state-19-mutant-result': ('state-19', _mutate_register),
              'state-18-mutant-result': ('state-18', _mutate_register),
-             'state-14-mutant-result': ('state-14', _mutate_state14_counter)}
+             'state-14-mutant-result': ('state-14', _mutate_state14_counter),
+             # _mutate_result (not _mutate_register): every register 009D6C itself sets is dead on
+             # return -- 00A772's own very next instruction (move.w $a(a5),d0) clobbers D0 unconditionally,
+             # and the kind-handler jsr between there and 00A794 clobbers D1-D5 before anything reads
+             # them, so a register mutant is unobservable however many times it hits (confirmed: PASS
+             # over 1200 real frames, 102 hits, 18 Sep).  Every arm's last write is ordered to be a real
+             # gameplay effect (the countdown reload, the projectile pool fill, LAUNCHED_FLAG, or the
+             # random cursor advance) rather than the tail-jump's own dead stack residue, so
+             # _mutate_result's one-byte flip is genuinely observable.
+             'creature-attack-mutant-result': ('creature-attack', _mutate_result)}
 
 
 @dataclass

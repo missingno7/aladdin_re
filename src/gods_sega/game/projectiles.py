@@ -41,6 +41,14 @@ def launch(read, x0, y0, budget, flag):
     """
     x1 = (read(GRID_X, 2) + TARGET_BIAS_X) & 0xFFFF
     y1 = (read(GRID_Y, 2) + TARGET_BIAS_Y) & 0xFFFF
+    return launch_toward(read, x0, y0, x1, y1, budget, flag)
+
+
+def launch_toward(read, x0, y0, x1, y1, budget, flag):
+    """0091C8: ``0091BC``'s own pool-scan-and-fill body entered directly with an already-computed target
+    (``x1``, ``y1``) instead of the tracked position -- ``game/creatures.py``'s own jittered-aim arm (kind 1
+    of ``009D6C``) tail-jumps in exactly here, past ``0091BC``'s own two GRID_X/GRID_Y reads and biases (the
+    12 bytes ``0091BC``-``0091C8`` covers).  Same pool, same walk, same ``'pool-full'`` decline."""
     budget &= 0xFFFF
     stores = {BUDGET_WORD & 0xFFFFFF: (budget, 2)}
     for tries in range(POOL_COUNT):

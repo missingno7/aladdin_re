@@ -195,6 +195,40 @@ one planner") is the next bite.
 - **The candidate `state-18`** (`src/gods_sega/recovery.py`): a single gate
   at `005834`, fully recovered and verified through the whole ladder but
   kept out of `camera-sprites` (above) for native gate capacity.
+- **The candidate `creature-attack`** (`src/gods_sega/recovery.py`): a
+  single gate at `009D6C`, the creature update's own attack timer (18
+  Sep) -- called once per active creature per frame from `00A772`.  A
+  full-tree census (273 retained fixtures across all five recordings)
+  found no seam at all (every native/device boundary this leaf touches is
+  itself already-recovered pure 68000 code) and four real dispatch
+  families past the two early 'skip' exits and 'waiting': aim quadrant 1
+  jitters the tracked position with two draws from the shared random table
+  (`game/effects.py: next_random`) and launches through the projectile
+  pool's own body entered directly at `0091C8` (`game/projectiles.py:
+  launch_toward`, a new public split of `launch`'s own head so both
+  `0091BC` and `0091C8` share one planner); quadrants 2-3 launch at the
+  tracked position with no jitter, through `0091BC` (`launch`) itself;
+  quadrant 0 never launches -- it hands the already-recovered
+  `timers._spawn` BACK/FORWARD hazard-pool fill a locally-derived
+  frequency through a tail-JUMP (not a call), so `01158C`/`0115D4`'s own
+  inner `rts` returns straight past `009D6C` to `00A772` (the same shape
+  `countdown_check_plan` already prices, reused here).  Kept out of
+  `camera-sprites` for the same native gate cap `state-18` is.  Every
+  register this leaf itself sets is dead on return (`00A772`'s own very
+  next instruction clobbers D0 unconditionally, and the kind-handler jsr
+  between there and its own next read clobbers D1-D5), so its mutant is
+  `_mutate_result` (one write byte off by one), not a register mutant --
+  confirmed observationally, not assumed.  Milestone tree PASS (18 Sep,
+  `artifacts/gods/verify-creature-attack-2026-09-18`): 20,865 hits, 24
+  fallbacks, all `ADAPTER_REFUSALS` (`machine admission` 1, `vblank in
+  span` 1, `z80 bank guard` 21, `observation deadline` 1); mutant
+  DIVERGENCE confirmed on the longest recording (frame 12,922).  `00A772`
+  (the per-creature family calling `009D6C` then a kind table) and `00A578`
+  (the 9-slot creature-list walk) are NOT recovered -- see the Resolution
+  in `docs/gods/blockers/2026-09-18-00A578.md` for the shape and sub-parts
+  found while scoping them (six new unrecovered helpers `00A578`'s own
+  spawn-init loop and `00A772`'s own tail call into, past `009D6C` and the
+  kind table).
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
