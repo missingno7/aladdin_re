@@ -1149,9 +1149,17 @@ small leaf):
   shared beyond the achievement tracker, not owned by it; and a wholly new,
   unrecovered leaf `010D7C`, independently flagged two days earlier from
   `010CD2`'s own investigation), comparable in scope to states 0/1/14's own
-  dedicated sessions.  Deferred rather than forced through in this sweep;
-  the remaining witnessed states continue in frequency order (2, 3, 4, 17,
-  21, 18, 28, 22, 27, 23, 10) -- state 20 is already gated (a real
+  dedicated sessions.  State 18 (`005834`, 63 occurrences) turned out to
+  be additional scope inside this SAME blocker, not a separate one: its
+  own short head calls the SAME `005CEE` leaf and several of its own
+  retained fixtures' terminal PCs are the IDENTICAL addresses state 19's
+  own are, evidence of a shared-fallthrough jump into state 19's own body
+  (the same "one region, two gates" shape states 4/15, 5/1, 6/0 already
+  established), not a duplicated copy (a raw ROM diff of the two heads
+  shows they are NOT byte-identical the way states 11/12 or 8/9 are).
+  Both states 18 and 19 deferred together, rather than forced through in
+  this sweep; the remaining witnessed states continue in frequency order
+  (28, 22, 27, 23, 10) -- state 20 is already gated (a real
   STATE_TABLE reconstruction from `005700`'s own dispatch code, 18 Sep,
   found `FFFFF192 == 20` reaches `0069AC`, the entry the existing
   `'state-26'` candidate already owns end to end; the candidate's own name
