@@ -2307,3 +2307,82 @@ def state23_step(read, d7):
     if new_d7 == STATE23_CONSUME_D7_GATE:
         return {'arm': 'consume', **base}
     return {'arm': 'unchanged', **base}
+
+
+# --- 005EA2: state 10 -- state 12's own oscillation head and BOTH block tests, reused verbatim (no
+# FFFFF1BA-gated head this time -- state 10 goes straight into the oscillation), with its OWN,
+# genuinely new ground tail (005FBC-005FF0, not a jump into any already-recovered state's own
+# shared code): STATE_INDEX is set to 0x11 unconditionally, then conditionally DECREMENTED to 0x10
+# when FFFFF1A8 is non-negative (a mechanic no other state's own ground handling uses); the COOLDOWN
+# adjustment's own three sub-cases (exit within the tick gate, suppressed, apply) all converge on
+# the SAME single exit (`d7` forced to 0, the sound cue queued, unlike state 12's own three separate
+# exits where the first two skip the sound cue and the d7 store).  No D7-based trigger/consume tail
+# either: failing to find ground exits unchanged directly (`blt.w $75d6` on the ALT test's own low
+# bits, or a plain `bra.w $75d6` when the ALT ground byte itself is clear).
+STATE10_ENTRY = 0x005EA2
+STATE10_GROUND_INDEX = 0x11
+STATE10_GROUND_INDEX_ADJUSTED = 0x10
+
+
+def state10_step(read):
+    """005EA2-005FB8: state 10's own decision tree up to (but not including) the ground tail
+    (`state10_ground_tail` below).  Returns `'ground'` (the caller composes `state10_ground_tail`)
+    or `'unchanged'`."""
+    from .grid import grid_cell
+    osc = state12_oscillate(read)
+    position_x = read(POSITION_X, 2)
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    cell1 = grid_cell(read)
+    provisional_state_index = None
+    position_x_after = position_x
+    f1a0 = read(F1A0, 2)
+    f1a0_after = f1a0
+    if ea20 == -1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xB
+        blocked = state12_block_test_left(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x - 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+    elif ea20 == 1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xC
+        blocked = state12_block_test_right(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x + 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+
+    def _read_after_move(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (POSITION_X & 0xFFFFFF) else read(a, s)
+
+    cell2 = grid_cell(_read_after_move)
+    address2 = cell2['address']
+    base = {'osc': osc, 'ea20': ea20, 'provisional_state_index': provisional_state_index,
+            'position_x': position_x_after, 'f1a0': f1a0_after, 'cell1': cell1, 'cell2': cell2}
+
+    ground = read((address2 + 0x180) & 0xFFFFFF, 1) == 1
+    checked_alt = False
+    if not ground:
+        low = _read_after_move(POSITION_X, 2) & 0x1F
+        if low < 8:
+            return {'arm': 'unchanged', **base}
+        checked_alt = True
+        ground = read((address2 + 0x181) & 0xFFFFFF, 1) == 1
+    base['checked_alt'] = checked_alt
+    if not ground:
+        return {'arm': 'unchanged', **base}
+
+    f1a8 = read(F1A8, 2)
+    return {'arm': 'ground', 'f1a8_negative': _signed_word(f1a8) < 0, **base}
+
+
+def state10_ground_tail(read, f198_value):
+    """005FCC-005FF0: state 10's own ground-found tail.  All three sub-cases (exit within the tick
+    gate, suppressed, apply) converge on the SAME exit, unlike state 12's own three separate ones."""
+    excess = (f198_value - 0x14) & 0xFFFF
+    excess_signed = _signed_word(excess)
+    if excess_signed <= 0:
+        return {'cooldown_delta': None}
+    from .zones import SUPPRESS_COOLDOWN
+    if read(SUPPRESS_COOLDOWN, 2) & 0xFFFF != 0:
+        return {'cooldown_delta': None}
+    half = excess_signed >> 1
+    return {'cooldown_delta': half}

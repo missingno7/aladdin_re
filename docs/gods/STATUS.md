@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with sixty-two gates armed, the camera follow step `002806`, the
+  original with sixty-three gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -181,7 +181,7 @@ one planner") is the next bite.
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
   `state-2`, `state-3`, `state-4`, `state-17`, `state-21`, `state-28`,
-  `state-22`, `state-27` and `state-23` arm each alone.
+  `state-22`, `state-27`, `state-23` and `state-10` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -974,8 +974,8 @@ small leaf):
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
   state-13, state-12, state-16, state-11, state-2, state-3, state-4,
-  state-17, state-21, state-28, state-22, state-27, state-23 -- 11,006
-  of 13,488 activations (82%)
+  state-17, state-21, state-28, state-22, state-27, state-23, state-10
+  -- 11,012 of 13,488 activations (82%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1179,7 +1179,29 @@ small leaf):
   22's own `012DA0` PRIMARY).  34 real path classes collapse to five
   real terminal shapes.  No defects: every `_S22_*`/`_S12_*`/`_S12G_*`
   cost constant was reused directly, confirmed byte-identical via a
-  direct disassembly, and caught every fact on the first attempt.
+  direct disassembly, and caught every fact on the first attempt.  State
+  10 (`005EA2`, recovered 18 Sep, the LAST witnessed state in the
+  coordinator's own frequency-order list) is state 12's own oscillation
+  head and BOTH block tests, reused verbatim, but with NO `FFFFF1BA`-
+  gated head this time (state 10 goes straight into the oscillation) and
+  its own, genuinely NEW ground tail (`005FBC`-`005FF0`, not a jump into
+  any already-recovered state's own shared code): `STATE_INDEX` is set
+  to 0x11 unconditionally, then conditionally DECREMENTED to 0x10 when
+  `FFFFF1A8` is non-negative -- a mechanic no other state's own ground
+  handling uses.  The cooldown adjustment's own three sub-cases (exit
+  within the tick gate, suppressed, apply) all converge on the SAME
+  single exit (`d7` forced to 0, the sound cue queued into
+  `pickups.MOVEMENT_SOUND_CUE`, unlike state 12's own three separate
+  exits where the first two skip both).  No D7-based trigger/consume
+  tail either: failing to find ground exits unchanged directly.  22 real
+  path classes across all five recordings collapse to two real terminal
+  shapes.  Two real defects: the RIGHT arm's own gate test
+  (`cmpi.w #1,ea20.w`) was missing its own cost entirely (copied from a
+  template that already had it inlined into the `if`, an easy one-line
+  omission caught immediately by the plain factcheck sweep); and the
+  ground tail's own final sound cue used `hazard.SOUND_COMMAND` (FDF4,
+  the oscillation head's own cue) instead of `pickups.MOVEMENT_SOUND_CUE`
+  (FDF6, the actual target `005FEA move.w #$39,fdf6.w` writes).
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least
