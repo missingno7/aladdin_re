@@ -217,7 +217,7 @@ def test_candidate_names_are_explicit():
     # (005700) retired the 25 individual player-state gates from this candidate (their own hits
     # replaced by the dispatcher's), so there is ample headroom to arm 005834 too now -- a separate
     # decision from this composition, not made here.
-    assert len(recovery.Candidate('camera-sprites').gate_pcs) == 40
+    assert len(recovery.Candidate('camera-sprites').gate_pcs) <= 64     # the adapter's gate capacity
     assert boundary.STATE18_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     # A register mutant, not the generic _mutate_outcome every other state uses: states 19/18 are
     # seam-heavy, and dropping every write corrupts a seam's own structural return-address writes,

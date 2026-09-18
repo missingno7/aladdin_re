@@ -333,9 +333,12 @@ below, has the count and the milestone tree numbers).
   low word the plan first assumed).  Milestone tree PASS on four of the
   five leaves (`artifacts/gods/verify-ground-edge-test-leaves-2026-09-18`,
   standalone gate): 107,519 frames total, 394 hits, 0 fallbacks;
-  `ca2b703b6fd5` honestly `NOT_EXERCISED`.  Both kept out of
-  `camera-sprites` for the same reason the other creature-subsystem
-  leaves are.  Next: `00ACA0`/`00AD88` (the ground-contact kind handlers,
+  `ca2b703b6fd5` honestly `NOT_EXERCISED`.  Since the evening of 18
+  September every recovered creature-update piece (`009D6C`, `00AA50`,
+  `00AA38`, `00AD68`, `00A922`, `00B944`) is armed in `camera-sprites` as a
+  leaf (forty-six gates of the adapter's sixty-four; the `00A772` family
+  composition will fold them, as `005700`'s did the states): the tree
+  then measures 1,162,024 hits and 40.05M instructions replaced.  Next: `00ACA0`/`00AD88` (the ground-contact kind handlers,
   now unblocked -- both further callees they need are recovered), then
   `00AE6C`/`00AED4` (the fall kind handlers, same two callees), then
   `00AA76`/`00AB50` (need `00AF3C`/`00AF52` first), then `00A772` as the

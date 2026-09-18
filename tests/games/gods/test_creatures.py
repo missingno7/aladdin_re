@@ -174,7 +174,7 @@ def test_candidate_names_are_explicit():
     assert recovery.Candidate('creature-attack').gate_pcs == (boundary.ATTACK_UPDATE_ENTRY,)
     # native/machine.cpp caps the gate set at 64; camera-sprites is already there (state 19 took the
     # last slot) -- creature-attack stays its own standalone candidate, per state-18's own precedent.
-    assert boundary.ATTACK_UPDATE_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.ATTACK_UPDATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('creature-attack-mutant-result').mutation is recovery._mutate_result
 
 
@@ -243,7 +243,7 @@ def test_kind_frame_offset_plan_reproduces_every_witnessed_occurrence(fixture):
 
 def test_kind_frame_offset_candidate_names_are_explicit():
     assert recovery.Candidate('creature-frame-offset').gate_pcs == (boundary.KIND_FRAME_OFFSET_ENTRY,)
-    assert boundary.KIND_FRAME_OFFSET_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.KIND_FRAME_OFFSET_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     # D2, not the generic D0 register mutant: this leaf's own D0 is dispatch scratch it fully
     # overwrites from a moveq before ever using it, dead by the time any caller could read it back.
     assert recovery.Candidate('creature-frame-offset-mutant-result').mutation is recovery._mutate_kind_frame_offset
@@ -303,7 +303,7 @@ def test_creature_grid_cell_plan_reproduces_every_witnessed_occurrence(fixture):
 
 def test_creature_grid_cell_candidate_names_are_explicit():
     assert recovery.Candidate('creature-grid-cell').gate_pcs == (boundary.CREATURE_GRID_CELL_ENTRY,)
-    assert boundary.CREATURE_GRID_CELL_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.CREATURE_GRID_CELL_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     # A1 (the address), not the generic D0 register mutant: D0/D1 are dead residue at both real call
     # sites (00ACA0/00AD88's own tails immediately overwrite D0, and neither reads D1).
     assert recovery.Candidate('creature-grid-cell-mutant-result').mutation is recovery._mutate_creature_grid_cell
@@ -368,7 +368,7 @@ def test_ground_edge_test_plan_reproduces_every_witnessed_arm(fixture):
 
 def test_ground_edge_test_candidate_names_are_explicit():
     assert recovery.Candidate('ground-edge-test').gate_pcs == (boundary.GROUND_EDGE_TEST_ENTRY,)
-    assert boundary.GROUND_EDGE_TEST_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.GROUND_EDGE_TEST_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     # D1 (the 0/1 outcome), XOR 1 not a blind +1: both are always exactly 0 or 1 (contact_search's
     # own reasoning), and D0 (x_low5) is dead residue at both real call sites.
     assert recovery.Candidate('ground-edge-test-mutant-result').mutation is recovery._mutate_ground_edge_outcome

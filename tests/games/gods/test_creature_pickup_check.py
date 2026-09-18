@@ -61,7 +61,7 @@ def test_plan_reproduces_every_witnessed_arm(fixture):
 
 def test_candidate_name_is_explicit():
     assert recovery.Candidate('creature-pickup-check').gate_pcs == (boundary.CREATURE_PICKUP_CHECK_ENTRY,)
-    assert boundary.CREATURE_PICKUP_CHECK_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.CREATURE_PICKUP_CHECK_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('creature-pickup-check-mutant-result').mutation is recovery._mutate_result
 
 

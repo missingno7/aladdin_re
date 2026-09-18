@@ -384,6 +384,12 @@ seal at once regardless of the count: an edit to a shared helper or a
 `game/` module several plans read, a change to an already-sealed arm, a
 `DECLINED` on a recording the census had not covered.
 
+Every recovered region is armed in `camera-sprites` as soon as it is
+sealed, while the combined gate count stays within the adapter's
+sixty-four (`al_gates`); a family composition (the `005700` shape) then
+replaces its callees' gates with its own.  A region left outside the
+combined candidate is ownership the tree does not measure.
+
 What no tier skips: the strict witness on every retained fixture (the
 32-bit register file, the CCR, every write, the cost) before a region is
 called recovered; a fresh-process cold run with hits before its commit; a

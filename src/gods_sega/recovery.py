@@ -333,7 +333,12 @@ PLANNERS = {
                        # docs/gods/ledger.md's 18 September entry) and stays its own standalone
                        # candidate ('state-18'); with the 25 gates retired there is ample headroom to
                        # arm it too, but that is a separate decision from this composition.
-                       PLAYER_STATE_ENTRY: player_state_plan},
+                       PLAYER_STATE_ENTRY: player_state_plan,
+                       # The creature update's recovered pieces, armed as leaves until 00A772 composes them
+                       # (the adapter holds 64 gates; the family composition frees them, as 005700's did).
+                       ATTACK_UPDATE_ENTRY: attack_update_plan, KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan,
+                       CREATURE_GRID_CELL_ENTRY: creature_grid_cell_plan, GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan,
+                       EVENT_CONSUME_ENTRY: event_consume_plan, CREATURE_PICKUP_CHECK_ENTRY: creature_pickup_check_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
