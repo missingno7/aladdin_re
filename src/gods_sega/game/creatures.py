@@ -429,18 +429,29 @@ KIND_FALL = 2                      # KIND_TABLE index 2 == 00AE6C, the fall kind
                                     # renamed record field: confirmed against docs/gods/blockers/
                                     # 2026-09-18-00A578.md's own eight-entry table order)
 
+# --- 00AD88: kind 5's own ground-contact tick, the SAME shape as 00ACA0 mirrored (ground_contact_update_mirror,
+# below) -- its own skip-test offsets and KIND transition targets.
+MIRROR_SKIP_TEST_LOW_OFFSET = 1    # cell_addr byte: the mirror's own first probe (00ACA0's own is -1)
+MIRROR_SKIP_TEST_HIGH_OFFSET = 0x81  # cell_addr byte: its own second probe (00ACA0's own is +0x7F)
+MIRROR_KIND_FALL = 3               # KIND_TABLE index 3 == 00AED4, the SECOND fall kind handler --
+                                    # distinct from KIND_FALL (2, 00AE6C), 00ACA0's own target
 
-def ground_contact_update(read, type_ptr, instance_ptr):
-    """00ACA0: one creature's own ground-contact tick.
+
+def _ground_contact_step(read, type_ptr, instance_ptr, *, x_delta, skip_low_offset, skip_high_offset,
+                         near_kind, far_kind):
+    """The shared shape 00ACA0 and 00AD88 both run, parameterised on what differs between them: the
+    sign of the POSITION_X step, the skip-test's own two cell-byte offsets, and the KIND value a
+    trigger hands the creature off to (``ground_contact_update``/``ground_contact_update_mirror``, both
+    below, supply the ROM's own real constants -- nothing here is guessed).
 
     Returns the arm (``'idle'`` -- the hold timer stayed non-negative; ``'near-trigger'`` -- the
-    (d16,An) edge test's own 'cell-low' match, KIND cleared to 0 and POSITION_Y masked; the DECLINED,
-    unwitnessed ``'near-trigger-cell-high'``, ``'far-trigger-cell-low'``/``'far-trigger-cell-high'``;
-    or ``'settle-continue'``/``'settle-reset'`` -- the table-driven POSITION_Y step, the far edge test
-    (0/1(a1)) not triggering, and FALL_PHASE's own decrement landing at or above / below
-    GROUND_SETTLE_FLOOR) plus every intermediate fact the boundary's own cost needs (whether
-    POSITION_X's own -4 step applied or which cell test skipped it, the near/far ground_edge_test
-    results, the table read)."""
+    (d16,An) edge test's own match (either probe: the ROM only tests the routine's own D1 result, never
+    which byte set it), KIND set to ``near_kind`` and POSITION_Y masked; the DECLINED, unwitnessed
+    ``'far-trigger-cell-low'``/``'far-trigger-cell-high'``; or ``'settle-continue'``/``'settle-reset'``
+    -- the table-driven POSITION_Y step, the far edge test (0/1(a1)) not triggering, and FALL_PHASE's
+    own decrement landing at or above / below GROUND_SETTLE_FLOOR) plus every intermediate fact the
+    boundary's own cost needs (whether POSITION_X's own step applied or which cell test skipped it, the
+    near/far ground_edge_test results, the table read)."""
     type_ptr &= 0xFFFFFF
     instance_ptr &= 0xFFFFFF
     timer_before = read(instance_ptr + GROUND_HOLD_TIMER, 2) & 0xFFFF
@@ -455,34 +466,35 @@ def ground_contact_update(read, type_ptr, instance_ptr):
     cell_addr = grid['a1'] & 0xFFFFFF
     x = read(instance_ptr + POSITION_X, 2) & 0xFFFF
     low5 = x & 0x1F
-    subq_applied, skip_test = True, None
+    step_applied, skip_test = True, None
     if low5 == 0:
-        low_byte = read((cell_addr + GROUND_SKIP_TEST_LOW_OFFSET) & 0xFFFFFF, 1) & 0xFF
+        low_byte = read((cell_addr + skip_low_offset) & 0xFFFFFF, 1) & 0xFF
         if low_byte == GROUND_EDGE_FLAG:
-            subq_applied, skip_test = False, 'cell-low'
+            step_applied, skip_test = False, 'cell-low'
         else:
-            high_byte = read((cell_addr + GROUND_SKIP_TEST_HIGH_OFFSET) & 0xFFFFFF, 1) & 0xFF
+            high_byte = read((cell_addr + skip_high_offset) & 0xFFFFFF, 1) & 0xFF
             if high_byte == GROUND_EDGE_FLAG:
-                subq_applied, skip_test = False, 'cell-high'
+                step_applied, skip_test = False, 'cell-high'
     x_before = x
-    if subq_applied:
-        x = (x - 4) & 0xFFFF
+    if step_applied:
+        x = (x + x_delta) & 0xFFFF
         stores[(instance_ptr + POSITION_X) & 0xFFFFFF] = (x, 2)
     result = {'timer_before': timer_before, 'reload': reload, 'low5': low5, 'grid': grid,
-              'subq_applied': subq_applied, 'skip_test': skip_test, 'x': x, 'x_before': x_before}
+              'subq_applied': step_applied, 'skip_test': skip_test, 'x': x, 'x_before': x_before}
     fall_phase = _signed_word(read(instance_ptr + FALL_PHASE, 2))
     result['fall_phase'] = fall_phase
     if fall_phase <= 0:
         near = ground_edge_test(read, cell_addr + 0x100, x)
         result['near'] = near
         if near['arm'] in ('cell-low', 'cell-high'):
-            if near['arm'] == 'cell-high':
-                result['arm'] = 'near-trigger-cell-high'
-                result['stores'] = stores
-                return result
+            # The ROM only tests D1 (0 or 1) after the call, never which of the two probes set it: a
+            # 'cell-low' and a 'cell-high' match run the SAME two stores below -- confirmed from the
+            # disassembly, not merely unwitnessed for one of the two callers (00ACA0 witnesses only
+            # 'cell-low' here, 00AD88 only 'cell-high'; together they witness both real arms of
+            # ground_edge_test's own d1==1 outcome, so neither declines).
             y = read(instance_ptr + POSITION_Y, 2) & 0xFFFF
             new_y = y & 0xFFF0
-            stores[(instance_ptr + KIND) & 0xFFFFFF] = (0, 2)
+            stores[(instance_ptr + KIND) & 0xFFFFFF] = (near_kind, 2)
             stores[(instance_ptr + POSITION_Y) & 0xFFFFFF] = (new_y, 2)
             result.update(arm='near-trigger', y=y, new_y=new_y, stores=stores)
             return result
@@ -503,7 +515,7 @@ def ground_contact_update(read, type_ptr, instance_ptr):
     new_fall_phase = (fall_phase - 1) & 0xFFFF
     stores[(instance_ptr + FALL_PHASE) & 0xFFFFFF] = (new_fall_phase, 2)
     if _signed_word(new_fall_phase) < GROUND_SETTLE_FLOOR:
-        stores[(instance_ptr + KIND) & 0xFFFFFF] = (KIND_FALL, 2)
+        stores[(instance_ptr + KIND) & 0xFFFFFF] = (far_kind, 2)
         stores[(instance_ptr + FALL_PHASE) & 0xFFFFFF] = (GROUND_SETTLE_RESET, 2)
         result['arm'] = 'settle-reset'
     else:
@@ -511,3 +523,26 @@ def ground_contact_update(read, type_ptr, instance_ptr):
     result['new_fall_phase'] = new_fall_phase
     result['stores'] = stores
     return result
+
+
+def ground_contact_update(read, type_ptr, instance_ptr):
+    """00ACA0: kind 4's own ground-contact tick -- POSITION_X steps by -4, the skip test's own two
+    cell probes are at -1(a1)/+0x7F(a1), a near trigger sets KIND to 0 (00AA76), a far trigger or a
+    settled fall sets KIND to KIND_FALL (2, 00AE6C)."""
+    return _ground_contact_step(read, type_ptr, instance_ptr, x_delta=-4,
+                                skip_low_offset=GROUND_SKIP_TEST_LOW_OFFSET,
+                                skip_high_offset=GROUND_SKIP_TEST_HIGH_OFFSET,
+                                near_kind=0, far_kind=KIND_FALL)
+
+
+def ground_contact_update_mirror(read, type_ptr, instance_ptr):
+    """00AD88: kind 5's own ground-contact tick -- the SAME shape as 00ACA0 (``ground_contact_update``),
+    mirrored: POSITION_X steps by +4, the skip test's own two cell probes are at +1(a1)/+0x81(a1)
+    (MIRROR_SKIP_TEST_LOW_OFFSET/MIRROR_SKIP_TEST_HIGH_OFFSET), a near trigger sets KIND to 1 (00AB50),
+    a far trigger or a settled fall sets KIND to MIRROR_KIND_FALL (3, 00AED4) -- a second, distinct fall
+    kind handler from 00ACA0's own (docs/gods/STATUS.md's own creature-family notes: "00AE6C and
+    00AED4... at a DIFFERENT record offset")."""
+    return _ground_contact_step(read, type_ptr, instance_ptr, x_delta=4,
+                                skip_low_offset=MIRROR_SKIP_TEST_LOW_OFFSET,
+                                skip_high_offset=MIRROR_SKIP_TEST_HIGH_OFFSET,
+                                near_kind=1, far_kind=MIRROR_KIND_FALL)

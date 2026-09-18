@@ -41,6 +41,10 @@ GROUND_CONTACT_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00
 needs_ground_contact_census = pytest.mark.skipif(not GROUND_CONTACT_FIXTURES or not GODS.rom_path.is_file(),
                                                  reason='no local census of 00ACA0')
 
+GROUND_CONTACT_MIRROR_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AD88-*/00AD88-entry-p*.state'))
+needs_ground_contact_mirror_census = pytest.mark.skipif(not GROUND_CONTACT_MIRROR_FIXTURES or not GODS.rom_path.is_file(),
+                                                        reason='no local census of 00AD88')
+
 GROUND_EDGE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AD68-*/00AD68-entry-p*.state'))
 needs_ground_edge_census = pytest.mark.skipif(not GROUND_EDGE_FIXTURES or not GODS.rom_path.is_file(),
                                               reason='no local census of 00AD68')
@@ -457,13 +461,18 @@ def test_ground_contact_update_near_trigger_clears_kind_and_masks_position_y():
     assert stores[(INSTANCE_PTR + creatures.POSITION_Y) & 0xFFFFFF] == (0x40 & 0xFFF0, 2)
 
 
-def test_ground_contact_update_near_trigger_cell_high_declines_by_name():
+def test_ground_contact_update_near_trigger_admits_the_second_probes_own_match_too():
+    # The ROM only tests D1 after the call, never which of the two probes set it -- a 'cell-high' match
+    # (00AD88's own witnessed near-trigger arm) takes the SAME two stores as 'cell-low' (00ACA0's own).
     values = _reload_base(x=0x214, y=0x40, fall_phase=0)                # post-subq low5 (0x210) is >= 8
     cell = _grid_address(0x214, 0x40)                                   # creature_grid_cell reads the ENTRY x
     values[(cell + 0x100) & 0xFFFFFF, 1] = 0                            # first probe misses
     values[(cell + 0x101) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG   # second probe matches
     result = creatures.ground_contact_update(_reader(values), TYPE_PTR, INSTANCE_PTR)
-    assert result['arm'] == 'near-trigger-cell-high'
+    assert result['arm'] == 'near-trigger' and result['near']['arm'] == 'cell-high'
+    assert result['new_y'] == 0x40 & 0xFFF0
+    stores = result['stores']
+    assert stores[(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (0, 2)
 
 
 def test_ground_contact_update_far_trigger_declines_by_name():
@@ -542,5 +551,126 @@ def test_ground_contact_update_candidate_matches_the_reference_and_its_mutant_di
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-ground-contact-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00AD88: kind 5's own ground-contact kind handler -- the SAME shape as 00ACA0, mirrored (19 Sep).
+# POSITION_X steps by +4 (ADDQ, not SUBQ), the skip test's own two probes are at +1(a1)/+0x81(a1), a
+# near trigger sets KIND to 1 (00AB50), a far trigger or a settled fall sets KIND to 3 (00AED4, a
+# SECOND fall kind handler, distinct from 00ACA0's own KIND_FALL=2/00AE6C).  Its own census (39
+# retained fixtures over four recordings) witnesses the near test's own 'cell-high' match (never
+# 'cell-low') -- the OTHER real arm of ground_edge_test's own d1==1 outcome from 00ACA0's own 'cell-low'
+# (never 'cell-high'): together the two callers witness both, so neither declines either arm any more
+# (a real correction 19 Sep: 00ACA0's own first-draft plan wrongly declined 'cell-high' by name, and
+# its own d0 exit was wrong for that arm -- 00AD46's own SECOND probe re-loads d0 from the current x
+# before testing it, unlike the first probe's own early return).
+
+def test_ground_contact_update_mirror_idle_arm_only_decrements_the_hold_timer():
+    values = {(INSTANCE_PTR + creatures.GROUND_HOLD_TIMER, 2): 5}
+    result = creatures.ground_contact_update_mirror(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result == {'arm': 'idle', 'timer_before': 5, 'timer_after': 4,
+                      'stores': {(INSTANCE_PTR + creatures.GROUND_HOLD_TIMER) & 0xFFFFFF: (4, 2)}}
+
+
+def _mirror_reload_base(x=0x204, y=0x40, fall_phase=3):
+    return {(INSTANCE_PTR + creatures.GROUND_HOLD_TIMER, 2): 0,
+            (TYPE_PTR + creatures.TYPE_GROUND_RELOAD_BYTE, 1): 0xA,
+            (INSTANCE_PTR + creatures.POSITION_X, 2): x,
+            (INSTANCE_PTR + creatures.POSITION_Y, 2): y,
+            (INSTANCE_PTR + creatures.FALL_PHASE, 2): fall_phase}
+
+
+def test_ground_contact_update_mirror_reload_steps_position_x_by_plus_four():
+    values = _mirror_reload_base(x=0x204)                                # low5 == 4: the cell test never runs
+    values[(creatures.GROUND_STATE_TABLE + 2 * 3) & 0xFFFFFF, 2] = 0
+    cell2 = _grid_address(0x208, 0x40)
+    values[(cell2, 1)] = 0
+    result = creatures.ground_contact_update_mirror(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['subq_applied'] and result['x'] == 0x208
+
+
+def test_ground_contact_update_mirror_position_x_step_skips_on_a_matching_low_cell():
+    values = _mirror_reload_base(x=0x200, y=0x40)                        # low5 == 0: the cell test runs
+    cell = _grid_address(0x200, 0x40)
+    values[(cell + creatures.MIRROR_SKIP_TEST_LOW_OFFSET) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    values[(creatures.GROUND_STATE_TABLE + 2 * 3) & 0xFFFFFF, 2] = 0
+    cell2 = _grid_address(0x200, 0x40)
+    values[(cell2, 1)] = 0
+    result = creatures.ground_contact_update_mirror(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert not result['subq_applied'] and result['skip_test'] == 'cell-low' and result['x'] == 0x200
+
+
+def test_ground_contact_update_mirror_near_trigger_sets_kind_to_one():
+    values = _mirror_reload_base(x=0x204, y=0x40, fall_phase=0)
+    cell = _grid_address(0x204, 0x40)
+    values[(cell + 0x100) & 0xFFFFFF, 1] = creatures.GROUND_EDGE_FLAG
+    result = creatures.ground_contact_update_mirror(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'near-trigger'
+    assert result['stores'][(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (1, 2)
+
+
+def test_ground_contact_update_mirror_far_trigger_declines_by_name():
+    values = _mirror_reload_base(x=0x204, y=0x40, fall_phase=3)
+    values[(creatures.GROUND_STATE_TABLE + 2 * 3) & 0xFFFFFF, 2] = 0
+    cell2 = _grid_address(0x208, 0x40)
+    values[(cell2, 1)] = creatures.GROUND_EDGE_FLAG
+    result = creatures.ground_contact_update_mirror(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'far-trigger-cell-low'
+
+
+def test_ground_contact_update_mirror_settle_reset_transitions_kind_to_the_second_fall_handler():
+    fall_phase = -5
+    values = _mirror_reload_base(x=0x204, y=0x40, fall_phase=fall_phase & 0xFFFF)
+    cell = _grid_address(0x204, 0x40)
+    values[(cell + 0x100) & 0xFFFFFF, 1] = 0
+    values[(creatures.GROUND_STATE_TABLE + 2 * fall_phase) & 0xFFFFFF, 2] = 8
+    cell2 = _grid_address(0x208, 0x48)
+    values[(cell2, 1)] = 0
+    result = creatures.ground_contact_update_mirror(_reader(values), TYPE_PTR, INSTANCE_PTR)
+    assert result['arm'] == 'settle-reset'
+    stores = result['stores']
+    assert stores[(INSTANCE_PTR + creatures.KIND) & 0xFFFFFF] == (creatures.MIRROR_KIND_FALL, 2)
+    assert stores[(INSTANCE_PTR + creatures.FALL_PHASE) & 0xFFFFFF] == (creatures.GROUND_SETTLE_RESET, 2)
+
+
+# --- boundary: gods_sega.boundary.ground_contact_update_mirror_plan over every retained fixture -----
+
+@needs_ground_contact_mirror_census
+@pytest.mark.parametrize('fixture', GROUND_CONTACT_MIRROR_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_ground_contact_update_mirror_plan_reproduces_every_witnessed_arm(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.ground_contact_update_mirror_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'ground contact update mirror' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_ground_contact_update_mirror_candidate_names_are_explicit():
+    assert recovery.Candidate('creature-ground-contact-mirror').gate_pcs == (boundary.GROUND_CONTACT_UPDATE_MIRROR_ENTRY,)
+    assert boundary.GROUND_CONTACT_UPDATE_MIRROR_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('creature-ground-contact-mirror-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_reference
+def test_ground_contact_update_mirror_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in GROUND_CONTACT_MIRROR_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='creature-ground-contact-mirror', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00AD88 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-ground-contact-mirror-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

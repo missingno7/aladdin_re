@@ -5151,6 +5151,11 @@ GROUND_CONTACT_UPDATE_EARLY_LAST_PC = 0x00ACEC   # idle (early bpl) and near-tri
 GROUND_CONTACT_UPDATE_TABLE_LAST_PC = 0x00AD42   # every table-tail exit (settle-continue/-reset) ends
                                                   # at the SAME bra.w -- settle-reset's own two extra
                                                   # stores run before it, not after
+# 00AD88: kind 5's own ground-contact tick, the SAME shape as 00ACA0 mirrored (POSITION_X steps by +4,
+# ADDQ not SUBQ; its own skip-test/KIND constants are in game/creatures.py).
+GROUND_CONTACT_UPDATE_MIRROR_ENTRY = 0x00AD88
+GROUND_CONTACT_UPDATE_MIRROR_EARLY_LAST_PC = 0x00ADD4    # idle and near-trigger both end here
+GROUND_CONTACT_UPDATE_MIRROR_TABLE_LAST_PC = 0x00AE2A    # every table-tail exit ends at the SAME bra.w
 _GCU_DEC = (16, 1)                        # 00ACA0 subq.w #1,$6(a5)
 _GCU_BPL = {True: (10, 1), False: (8, 1)}  # 00ACA4 bpl.b $acec
 _GCU_HANDOFF_BRA = (10, 1)                # bra.w $aa50 -- shared by every exit
@@ -5191,6 +5196,10 @@ _GCU_RESET_FALL = (16, 1)                 # 00AD3C move.w #8,$12(a5)
 _GCU_NEAR_CMP_LOW = (16, 1)               # 00AD48 cmpi.b #1,$100(a1)
 _GCU_NEAR_MOVEQ_ONE = (4, 1)              # 00AD64 moveq #1,d1 -- the near test's own triggered result
 _GCU_NEAR_TRIGGER_COST = _add(_GET_MOVEQ_D1, _GCU_NEAR_CMP_LOW, _GET_BEQ_LOW[True], _GCU_NEAR_MOVEQ_ONE, _GET_RTS)
+# The 'cell-high' match (witnessed by 00AD88, never by 00ACA0): both probes run before the trigger.
+_GCU_NEAR_TRIGGER_HIGH_COST = _add(_GET_MOVEQ_D1, _GCU_NEAR_CMP_LOW, _GET_BEQ_LOW[False], _GET_LOAD_X, _GET_MASK_X,
+                                   _GET_CMP_EDGE, _GET_BLT_EDGE[False], _GET_CMP_HIGH, _GET_BNE_HIGH[False],
+                                   _GCU_NEAR_MOVEQ_ONE, _GET_RTS)
 _GCU_NEAR_EDGE_COST = _add(_GET_MOVEQ_D1, _GCU_NEAR_CMP_LOW, _GET_BEQ_LOW[False], _GET_LOAD_X, _GET_MASK_X,
                           _GET_CMP_EDGE, _GET_BLT_EDGE[True], _GET_RTS)
 _GCU_NEAR_NO_MATCH_COST = _add(_GET_MOVEQ_D1, _GCU_NEAR_CMP_LOW, _GET_BEQ_LOW[False], _GET_LOAD_X, _GET_MASK_X,
@@ -5199,16 +5208,20 @@ _GCU_NEAR_NO_MATCH_COST = _add(_GET_MOVEQ_D1, _GCU_NEAR_CMP_LOW, _GET_BEQ_LOW[Fa
 # offsets (0/1(a1)) as ground_edge_test_plan's own gate, so the SAME cost.
 
 
-def ground_contact_update_plan(machine, registers):
-    """00ACA0: the ground-contact kind handler, composed over creature_grid_cell and ground_edge_test
-    (both entry points), ending at a hand-off to kind_frame_offset's own separately-armed gate."""
+def _ground_contact_plan(machine, registers, *, entry, semantics, step_sr, early_last_pc, table_last_pc,
+                         near_residue_pc, far_residue_pc, error_name):
+    """The shared shape ``ground_contact_update_plan``/``ground_contact_update_mirror_plan`` both run:
+    composed over creature_grid_cell and ground_edge_test (both entry points), ending at a hand-off to
+    kind_frame_offset's own separately-armed gate.  ``step_sr(sr, x_before)`` supplies the POSITION_X
+    step's own flag computation (SUBQ for 00ACA0, ADDQ for 00AD88 -- otherwise byte-for-byte identical,
+    so every cost constant below is shared, not duplicated, between the two regions)."""
     from .game import creatures
-    if registers['pc'] != GROUND_CONTACT_UPDATE_ENTRY:
-        raise UnsupportedCandidate('ground contact update planner needs the machine parked at 00ACA0')
+    if registers['pc'] != entry:
+        raise UnsupportedCandidate(f'{error_name} planner needs the machine parked at {entry:06X}')
     sr = registers['sr']
     read = _reader(machine)
     type_ptr, instance_ptr = registers['a4'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
-    result = creatures.ground_contact_update(read, type_ptr, instance_ptr)
+    result = semantics(read, type_ptr, instance_ptr)
     arm = result['arm']
     sp = registers['a7'] & 0xFFFFFF
     base_registers = {'a7': registers['a7'] & 0xFFFFFFFF, 'pc': KIND_FRAME_OFFSET_ENTRY}
@@ -5223,10 +5236,10 @@ def ground_contact_update_plan(machine, registers):
         exit_sr = _sub_sr(sr, result['timer_before'], 1, 2)
         return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
                           registers=dict(base_registers, sr=exit_sr),
-                          last_pc=GROUND_CONTACT_UPDATE_EARLY_LAST_PC)
+                          last_pc=early_last_pc)
 
-    if arm in ('near-trigger-cell-high', 'far-trigger-cell-low', 'far-trigger-cell-high'):
-        raise UnsupportedCandidate(f'ground contact update arm not witnessed by a recording: {arm}')
+    if arm in ('far-trigger-cell-low', 'far-trigger-cell-high'):
+        raise UnsupportedCandidate(f'{error_name} arm not witnessed by a recording: {arm}')
 
     grid = result['grid']
     # asl.w #3,d1 (creature_grid_cell's own last instruction) is the first real X-setter along every
@@ -5234,16 +5247,16 @@ def ground_contact_update_plan(machine, registers):
     # own standalone exit_sr does for an external caller.
     sr = _asl_sr(sr, grid['row_source'], 3, 2)
     cost = _add(_GCU_DEC, _GCU_BPL[False], _GCU_RELOAD_HEAD, _GCU_BSR_GRID, _CGC_COST, _GCU_LOAD_X, _GCU_MASK_X)
-    subq_applied, skip_test, low5 = result['subq_applied'], result['skip_test'], result['low5']
-    if subq_applied:
+    step_applied, skip_test, low5 = result['subq_applied'], result['skip_test'], result['low5']
+    if step_applied:
         if low5 != 0:
             cost = _add(cost, _GCU_BNE_LOW5[True])
         else:
             cost = _add(cost, _GCU_BNE_LOW5[False], _GCU_CMP_SKIP_LOW, _GCU_BEQ_SKIP_LOW[False],
                        _GCU_CMP_SKIP_HIGH, _GCU_BEQ_SKIP_HIGH[False])
         cost = _add(cost, _GCU_SUBQ_X)
-        # subq.w #4,(a5) is a real X-setter (SUBQ), overwriting whatever grid_cell's own asl left.
-        sr = _sub_sr(sr, result['x_before'], 4, 2)
+        # subq.w/addq.w #4,(a5) is a real X-setter, overwriting whatever grid_cell's own asl left.
+        sr = step_sr(sr, result['x_before'])
     else:
         cost = _add(cost, _GCU_BNE_LOW5[False], _GCU_CMP_SKIP_LOW, _GCU_BEQ_SKIP_LOW[skip_test == 'cell-low'])
         if skip_test == 'cell-high':
@@ -5259,18 +5272,22 @@ def ground_contact_update_plan(machine, registers):
 
     if arm == 'near-trigger':
         near = result['near']
-        cost = _add(cost, _GCU_BGT_FALL[False], _GCU_BSR_NEAR, _GCU_NEAR_TRIGGER_COST,
+        near_trigger_cost = _GCU_NEAR_TRIGGER_COST if near['arm'] == 'cell-low' else _GCU_NEAR_TRIGGER_HIGH_COST
+        cost = _add(cost, _GCU_BGT_FALL[False], _GCU_BSR_NEAR, near_trigger_cost,
                    _GCU_TST_NEAR, _GCU_BEQ_NEAR[False], _GCU_CLR_KIND, _GCU_MASK_Y_NEAR, _GCU_HANDOFF_BRA)
         # 00AD46's own body and clr.w/andi.w never touch X: andi.w #$fff0,$2(a5) is the last NZVC
         # setter, X threads straight through from the subq/asl above.
         exit_sr = _logic_sr(sr, result['new_y'], 2)
         # d0's own last write is 00ACBC's own andi.w #$1f,d0 (LOAD_X/MASK_X, before the subq/skip-test
-        # block): neither the skip-test cmpi's nor 00AD46's own cell-low body ever touch d0 again.
-        exit_registers = dict(base_registers, sr=exit_sr, d0=d0_upper | result['low5'], d1=near['d1'] & 0xFFFFFFFF,
+        # block) UNLESS 00AD46's own body reaches its own second probe (the 'cell-high' match): its own
+        # move.w (a5),d0; andi.w #$1f,d0 (00AD50/00AD52) re-loads d0 from the CURRENT x (after the
+        # step, if applied) before testing it -- confirmed a real defect the fixture sweep caught, 19 Sep.
+        near_d0 = result['low5'] if near['arm'] == 'cell-low' else (result['x'] & 0x1F)
+        exit_registers = dict(base_registers, sr=exit_sr, d0=d0_upper | near_d0, d1=near['d1'] & 0xFFFFFFFF,
                               a1=grid['a1'] & 0xFFFFFFFF)
-        residue = _bytes((sp - 4) & 0xFFFFFF, 0x00ACDE, 4)
+        residue = _bytes((sp - 4) & 0xFFFFFF, near_residue_pc, 4)
         return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes + residue, registers=exit_registers,
-                          last_pc=GROUND_CONTACT_UPDATE_EARLY_LAST_PC)
+                          last_pc=early_last_pc)
 
     fall_phase = result['fall_phase']
     if fall_phase > 0:
@@ -5302,9 +5319,36 @@ def ground_contact_update_plan(machine, registers):
     else:  # 'settle-reset'
         cost = _add(cost, _GCU_BGE_SETTLE[False], _GCU_RESET_KIND, _GCU_RESET_FALL, _GCU_HANDOFF_BRA)
         exit_registers['sr'] = _logic_sr(sr, creatures.GROUND_SETTLE_RESET, 2)
-    residue = _bytes((sp - 4) & 0xFFFFFF, 0x00AD0A, 4)
+    residue = _bytes((sp - 4) & 0xFFFFFF, far_residue_pc, 4)
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes + residue, registers=exit_registers,
-                      last_pc=GROUND_CONTACT_UPDATE_TABLE_LAST_PC)
+                      last_pc=table_last_pc)
+
+
+def ground_contact_update_plan(machine, registers):
+    """00ACA0: the ground-contact kind handler, composed over creature_grid_cell and ground_edge_test
+    (both entry points), ending at a hand-off to kind_frame_offset's own separately-armed gate."""
+    from .game import creatures
+    return _ground_contact_plan(machine, registers, entry=GROUND_CONTACT_UPDATE_ENTRY,
+                                semantics=creatures.ground_contact_update,
+                                step_sr=lambda sr, x_before: _sub_sr(sr, x_before, 4, 2),
+                                early_last_pc=GROUND_CONTACT_UPDATE_EARLY_LAST_PC,
+                                table_last_pc=GROUND_CONTACT_UPDATE_TABLE_LAST_PC,
+                                near_residue_pc=0x00ACDE, far_residue_pc=0x00AD0A,
+                                error_name='ground contact update')
+
+
+def ground_contact_update_mirror_plan(machine, registers):
+    """00AD88: kind 5's own ground-contact kind handler -- the SAME shape as 00ACA0
+    (``ground_contact_update_plan``), mirrored: POSITION_X steps by +4 (ADDQ, not SUBQ), so the flag
+    computation differs; every cost constant is shared, confirmed identical instruction encodings."""
+    from .game import creatures
+    return _ground_contact_plan(machine, registers, entry=GROUND_CONTACT_UPDATE_MIRROR_ENTRY,
+                                semantics=creatures.ground_contact_update_mirror,
+                                step_sr=lambda sr, x_before: _add_sr(sr, x_before, 4, 2),
+                                early_last_pc=GROUND_CONTACT_UPDATE_MIRROR_EARLY_LAST_PC,
+                                table_last_pc=GROUND_CONTACT_UPDATE_MIRROR_TABLE_LAST_PC,
+                                near_residue_pc=0x00ADC4, far_residue_pc=0x00ADF2,
+                                error_name='ground contact update mirror')
 
 
 # --- 0044C0/004550: the trail check (game/trail.py) -- event kind 6 ---------------------------------
