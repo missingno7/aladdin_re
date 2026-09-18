@@ -1965,3 +1965,33 @@ def state3_step(read, d7):
     if _signed_word(counted) >= 0:
         return {'arm': 'counting', 'd7': counted}
     return {'arm': 'transition-0', 'd7': STATE3_RESET_COUNTER, 'counted': counted}
+
+
+# --- 007538: state 4 -- `FFFFEA20 == 0` jumps DIRECTLY into state 15's own entry (`006D68`, the
+# STATE_TABLE's own index-15 address -- confirmed against the reconstructed table) via a plain
+# `beq.w`, the SAME "one region, two gates" shared-fallthrough shape states 5/6 use into 1/0: no
+# `FFFFF192` write happens, `d7` is untouched, and this is the FIRST real evidence of state 15's own
+# semantics, though state 15 remains unwitnessed as an independent dispatch (no recording has ever
+# shown `FFFFF192 == 15`).  State 15's own body (as reached this way) re-runs the already-recovered
+# grid cell lookup (`0063FA`) and tests its own ground byte (`+0x180`): found exits unchanged; NOT
+# found is real ROM this session did not trace further and declines by name.  `FFFFEA20 != 0`
+# transitions to state 3 (`d7` forced to 0) when negative, or state 2 (`d7` forced to 2) when
+# positive.  Costed one instruction-block at a time from the tracer on real fixtures over
+# census-007538-*.
+STATE4_ENTRY = 0x007538
+STATE15_ENTRY = 0x006D68
+STATE4_TO_STATE3 = 0x3
+STATE4_TO_STATE2 = 0x2
+
+
+def state4_step(read, d7):
+    """007538: the head gate. Returns the arm ('ground-found' / 'transition-3' / 'transition-2')."""
+    from .grid import grid_cell
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    if ea20 == 0:
+        cell = grid_cell(read)
+        ground = read((cell['address'] + 0x180) & 0xFFFFFF, 1) == 1
+        return {'arm': 'ground-found' if ground else 'not-found', 'd7': d7 & 0xFFFF, 'cell': cell}
+    if ea20 < 0:
+        return {'arm': 'transition-3', 'd7': 0}
+    return {'arm': 'transition-2', 'd7': 2}

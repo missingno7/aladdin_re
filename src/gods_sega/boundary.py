@@ -10504,3 +10504,103 @@ def state3_plan(machine, registers):
     exit_registers['sr'] = sr
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x007534)
+
+
+# --- 007538: state 4 -- FFFFEA20 == 0 jumps directly into state 15's own entry (006D68), the SAME
+# "one region, two gates" shared-fallthrough shape as states 5/6 into 1/0.  Costed one instruction-
+# block at a time from the tracer on real fixtures over census-007538-* (all five recordings; 81
+# real path classes collapsing to exactly three real terminal shapes -- the composed "ground not
+# found" continuation into state 15's own further, untraced body is real ROM, unwitnessed by any
+# recording, and declines by name).
+STATE4_ENTRY = 0x007538
+
+_S4_TEST = (12, 1)                            # 007538 tst.w ea20.w
+_S4_BEQ = {True: (10, 1), False: (12, 1)}     # 00753C beq.w -- taken(==0): the state-15 composition (word branch)
+_S4_BSR_GRID = (18, 1)                        # 006D68 bsr.w $63fa
+_S4_GROUND_TEST = (16, 1)                     # 006D6C cmpi.b #1,$180(a0)
+_S4_GROUND_BEQ = {True: (10, 1), False: (12, 1)}   # 006D72 beq.w -- taken: ground found (word branch)
+_S4_BMI = {True: (10, 1), False: (8, 1)}      # 007540 bmi.b -- taken(<0): transition-3 (byte branch)
+_S4_TO2_TAIL = (16 + 4 + 10, 3)               # 007542 move.w #2,f192.w; 007548 moveq #2,d7; 00754A bra.w
+_S4_TO3_TAIL = (16 + 4 + 10, 3)               # 00754E move.w #3,f192.w; 007554 moveq #0,d7; 007556 bra.w
+
+
+def state4_plan(machine, registers):
+    """007538 (state 4): the player state machine's own dispatch table entry 4.  See
+    game.player's own module note above state4_step."""
+    from .game import player
+    from .game.grid import grid_cell
+    if registers['pc'] != STATE4_ENTRY:
+        raise UnsupportedCandidate('state 4 planner needs the machine parked at 007538')
+    sr = registers['sr']
+    read = _reader(machine)
+    sp32 = registers['a7']
+    order = {}
+    exit_registers = {}
+
+    ea20 = player._signed_word(read(player.EA20_WORD, 2))
+    c, i = _S4_TEST
+    cycles, instructions = c, i
+    sr = _logic_sr(sr, ea20, 2)
+    zero = ea20 == 0
+    c, i = _S4_BEQ[zero]
+    cycles += c
+    instructions += i
+
+    if zero:
+        c, i = _S4_BSR_GRID
+        cycles += c
+        instructions += i
+        cycles += GRID_CELL_COST[0]
+        instructions += GRID_CELL_COST[1]
+        order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x006D6C, 4))
+        cell = grid_cell(read)
+        exit_registers['a0'] = cell['address'] & 0xFFFFFFFF
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell['d0']
+        exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cell['d1']
+        sr = _asl_sr(sr, cell['row_source'], 3, 2)
+
+        c, i = _S4_GROUND_TEST
+        cycles += c
+        instructions += i
+        ground_byte = read((cell['address'] + 0x180) & 0xFFFFFF, 1)
+        sr = _cmp_sr(sr, ground_byte, 1, 1)
+        ground = ground_byte == 1
+        if not ground:
+            raise UnsupportedCandidate('state 4/state 15 composition: ground not found at 006D72 not witnessed by a recording')
+        c, i = _S4_GROUND_BEQ[True]
+        cycles += c
+        instructions += i
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006D72)
+
+    negative = ea20 < 0
+    c, i = _S4_BMI[negative]
+    cycles += c
+    instructions += i
+
+    if negative:
+        c, i = _S4_TO3_TAIL
+        cycles += c
+        instructions += i
+        exit_registers['d7'] = 0   # moveq #0,d7: a full 32-bit long move, clears the upper half
+        for a, b in _bytes(player.STATE_INDEX, player.STATE4_TO_STATE3, 2):
+            order[a] = b
+        sr = _logic_sr(sr, 0, 2)   # 007554's own moveq #0,d7 is the last flag-setter, after the move.w
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x007556)
+
+    c, i = _S4_TO2_TAIL
+    cycles += c
+    instructions += i
+    exit_registers['d7'] = 2   # moveq #2,d7: a full 32-bit long move, clears the upper half
+    for a, b in _bytes(player.STATE_INDEX, player.STATE4_TO_STATE2, 2):
+        order[a] = b
+    sr = _logic_sr(sr, 2, 2)   # 007548's own moveq #2,d7 is the last flag-setter, after the move.w
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x00754A)

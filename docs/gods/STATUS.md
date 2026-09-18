@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with fifty-five gates armed, the camera follow step `002806`, the
+  original with fifty-six gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -180,7 +180,7 @@ one planner") is the next bite.
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
-  `state-2` and `state-3` arm each alone.
+  `state-2`, `state-3` and `state-4` arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -972,8 +972,8 @@ small leaf):
   (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
-  state-13, state-12, state-16, state-11, state-2, state-3 -- 10,468 of
-  13,488 activations (78%)
+  state-13, state-12, state-16, state-11, state-2, state-3, state-4 --
+  10,618 of 13,488 activations (79%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1093,7 +1093,21 @@ small leaf):
   negative, is forced to 6 and transitions to state 0 (state 2's own
   transitions to state 1).  No defects this time -- the upper-half
   lesson from state 2's own `moveq` vs `addq.w` distinction carried
-  straight over.
+  straight over.  State 4 (`007538`, recovered 18 Sep) is a genuinely
+  different shape: `FFFFEA20 == 0` jumps DIRECTLY into state 15's own
+  entry (`006D68`, the STATE_TABLE's own index-15 address) via a plain
+  `beq.w`, the SAME "one region, two gates" shared-fallthrough shape
+  states 5/6 already use into 1/0 -- the FIRST real evidence of state
+  15's own semantics, though state 15 remains unwitnessed as an
+  independent dispatch (no recording has ever shown `FFFFF192 == 15`
+  directly).  State 15's own body, as reached this way, re-runs the
+  already-recovered grid cell lookup (`0063FA`) and tests its own ground
+  byte: found exits unchanged (`d7` untouched, no `FFFFF192` write at
+  all); NOT found is real ROM this session did not trace further and
+  declines by name.  `FFFFEA20 != 0` transitions to state 3 (`d7` forced
+  to 0) when negative, or state 2 (`d7` forced to 2) when positive.  81
+  real path classes across all five recordings collapse to exactly three
+  real terminal shapes.
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least
