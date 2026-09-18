@@ -11629,3 +11629,429 @@ def state27_plan(machine, registers):
                        'sr': _logic_sr(sr, player.STATE27_TO_STATE0, 2)}   # 005820 clr.w f192.w is the last flag-setter
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x005824)
+
+
+# --- 006164: state 23 -- state 21/22's own FFFFF1BA-gated head and D7-based tail shape, structurally
+# identical to state 22's own body (confirmed via a direct disassembly of 006164-0062AC, which sits
+# immediately before state 22's own 0062B0), reusing every _S22_*/_S12_*/_S12G_* cost constant
+# directly.  See game.player's own module note above state23_step.  Costed against census-006164-*
+# (all five recordings; 34 real path classes collapsing to five real terminal shapes).
+STATE23_ENTRY = 0x006164
+
+
+def state23_plan(machine, registers):
+    """006164 (state 23): the player state machine's own dispatch table entry 23.  See
+    game.player's own module note above state23_step."""
+    from .game import player
+    from .game.grid import grid_cell
+    if registers['pc'] != STATE23_ENTRY:
+        raise UnsupportedCandidate('state 23 planner needs the machine parked at 006164')
+    sr = registers['sr']
+    read = _reader(machine)
+    sp32 = registers['a7']
+    order = {}
+    exit_registers = {}
+
+    d7 = registers['d7'] & 0xFFFF
+    f1ba = read(player.F1BA, 2)
+    c, i = _S22_TST_F1BA
+    cycles, instructions = c, i
+    sr = _logic_sr(sr, f1ba, 2)
+    f1ba_set = f1ba != 0
+    c, i = _S22_BEQ_F1BA[not f1ba_set]
+    cycles += c
+    instructions += i
+    if f1ba_set:
+        c, i = _add(_S22_SUBQ1, _S22_CLR_F1BA, _S22_HEAD_BRA)
+        cycles += c
+        instructions += i
+        sr = _sub_sr(sr, d7, 1, 2)
+        new_d7 = (d7 - 1) & 0xFFFF
+        for a, b in _bytes(player.F1BA & 0xFFFFFF, 0, 2):
+            order[a] = b
+    else:
+        c, i = _S22_ADDQ1
+        cycles += c
+        instructions += i
+        sr = _add_sr(sr, d7, 1, 2)
+        new_d7 = (d7 + 1) & 0xFFFF
+    exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | new_d7   # ADDQ/SUBQ: a word op, the upper half survives
+
+    hc, hi, osc = _state12_head_cost(read)
+    cycles += hc
+    instructions += hi
+    new_y = (read(player.POSITION_Y, 2) + osc['position_y_delta']) & 0xFFFF
+    for a, b in _bytes(player.POSITION_Y, new_y, 2):
+        order[a] = b
+    for a, b in _bytes(player.F194 & 0xFFFFFF, osc['f194'], 2):
+        order[a] = b
+    for a, b in _bytes(player.F198 & 0xFFFFFF, osc['f198'], 2):
+        order[a] = b
+    if osc['sound']:
+        from .game.hazard import SOUND_COMMAND
+        for a, b in _bytes(SOUND_COMMAND & 0xFFFFFF, 0x50, 2):
+            order[a] = b
+    sr = _cmp_sr(sr, osc['f198'], player.STATE12_TICK_CAP, 2)
+
+    read_orig = read
+
+    def read(a, s, _y=new_y):
+        return _y if (a & 0xFFFFFF) == (player.POSITION_Y & 0xFFFFFF) else read_orig(a, s)
+
+    ea20 = player._signed_word(read(player.EA20_WORD, 2))
+    position_x = read(player.POSITION_X, 2)
+    f1a0 = read(player.F1A0, 2)
+
+    c, i = _S12_BSR_GRID
+    cycles += c
+    instructions += i
+    cycles += GRID_CELL_COST[0]
+    instructions += GRID_CELL_COST[1]
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x0061B8, 4))
+    cell1 = grid_cell(read)
+    exit_registers['a0'] = cell1['address'] & 0xFFFFFFFF
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell1['d0']
+    exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cell1['d1']
+    sr = _asl_sr(sr, cell1['row_source'], 3, 2)
+
+    c, i = _S12_LEFT_GATE_TEST
+    cycles += c
+    instructions += i
+    retry_open = f1a0 < player.STATE12_RETRY_CAP
+    provisional_state = None
+    position_x_after = position_x
+    if ea20 == -1:
+        c, i = _S12_LEFT_GATE_BNE[False]
+        cycles += c
+        instructions += i
+        c, i = _S12_RETRY_TEST
+        cycles += c
+        instructions += i
+        c, i = _S12_RETRY_BGE[not retry_open]
+        cycles += c
+        instructions += i
+        if retry_open:
+            provisional_state = 0xB
+            c, i = _S12_LEFT_SET_STATE
+            cycles += c
+            instructions += i
+            address = cell1['address']
+            low = position_x & 0x1F
+            c, i = _S12_LR_HEAD
+            cycles += c
+            instructions += i
+            c, i = _S12_LEFT_BNE_LOW[low != 0]
+            cycles += c
+            instructions += i
+            blocked = False
+            if low == 0:
+                for offset in (-1, 0x7F, 0xFF):
+                    c, i = _S12_GRID_TEST
+                    cycles += c
+                    instructions += i
+                    hit = read((address + offset) & 0xFFFFFF, 1) == 1
+                    c, i = _S12_GRID_BEQ[hit]
+                    cycles += c
+                    instructions += i
+                    if hit:
+                        blocked = True
+                        break
+                if not blocked:
+                    nibble = read(player.POSITION_Y, 2) & 0xF
+                    c, i = _S12_NIBBLE_HEAD
+                    cycles += c
+                    instructions += i
+                    c, i = _S12_NIBBLE_BEQ[nibble == 0]
+                    cycles += c
+                    instructions += i
+                    if nibble != 0:
+                        c, i = _S12_NIBBLE_TEST
+                        cycles += c
+                        instructions += i
+                        blocked = read((address + 0x17F) & 0xFFFFFF, 1) == 1
+                        c, i = _S12_NIBBLE_BEQ2[blocked]
+                        cycles += c
+                        instructions += i
+            if not blocked:
+                c, i = _S12_LEFT_ADVANCE
+                cycles += c
+                instructions += i
+                position_x_after = (position_x - 4) & 0xFFFF
+                for a, b in _bytes(player.POSITION_X, position_x_after, 2):
+                    order[a] = b
+                for a, b in _bytes(player.F1A0 & 0xFFFFFF, (f1a0 + 1) & 0xFFFF, 2):
+                    order[a] = b
+    else:
+        c, i = _S12_LEFT_GATE_BNE[True]
+        cycles += c
+        instructions += i
+
+    c, i = _S12_RIGHT_GATE_TEST
+    cycles += c
+    instructions += i
+    if ea20 == 1:
+        c, i = _S12_RIGHT_GATE_BNE[False]
+        cycles += c
+        instructions += i
+        c, i = _S12_RETRY_TEST
+        cycles += c
+        instructions += i
+        c, i = _S12_RETRY_BGE[not retry_open]
+        cycles += c
+        instructions += i
+        if retry_open:
+            provisional_state = 0xC
+            c, i = _S12_RIGHT_SET_STATE
+            cycles += c
+            instructions += i
+            address = cell1['address']
+            low = position_x & 0x1C
+            c, i = _add(_S12_LR_HEAD, _S12_RIGHT_MASK_TEST)
+            cycles += c
+            instructions += i
+            mask_match = low == 0x1C
+            c, i = _S12_RIGHT_MASK_BEQ[mask_match]
+            cycles += c
+            instructions += i
+            run_test = mask_match
+            if not mask_match:
+                c, i = _S12_RIGHT_LOW_TEST
+                cycles += c
+                instructions += i
+                skip_test = low >= 8
+                c, i = _S12_RIGHT_LOW_BGE[skip_test]
+                cycles += c
+                instructions += i
+                run_test = not skip_test
+            blocked = False
+            if run_test:
+                for offset in (1, 0x81, 0x101):
+                    c, i = _S12_GRID_TEST
+                    cycles += c
+                    instructions += i
+                    hit = read((address + offset) & 0xFFFFFF, 1) == 1
+                    c, i = _S12_GRID_BEQ[hit]
+                    cycles += c
+                    instructions += i
+                    if hit:
+                        blocked = True
+                        break
+                if not blocked:
+                    nibble = read(player.POSITION_Y, 2) & 0xF
+                    c, i = _S12_NIBBLE_HEAD
+                    cycles += c
+                    instructions += i
+                    c, i = _S12_NIBBLE_BEQ[nibble == 0]
+                    cycles += c
+                    instructions += i
+                    if nibble != 0:
+                        c, i = _S12_NIBBLE_TEST
+                        cycles += c
+                        instructions += i
+                        blocked = read((address + 0x181) & 0xFFFFFF, 1) == 1
+                        c, i = _S12_NIBBLE_BEQ2[blocked]
+                        cycles += c
+                        instructions += i
+            if not blocked:
+                c, i = _S12_RIGHT_ADVANCE
+                cycles += c
+                instructions += i
+                position_x_after = (position_x + 4) & 0xFFFF
+                for a, b in _bytes(player.POSITION_X, position_x_after, 2):
+                    order[a] = b
+                for a, b in _bytes(player.F1A0 & 0xFFFFFF, (f1a0 + 1) & 0xFFFF, 2):
+                    order[a] = b
+    else:
+        c, i = _S12_RIGHT_GATE_BNE[True]
+        cycles += c
+        instructions += i
+
+    if provisional_state is not None:
+        for a, b in _bytes(player.STATE_INDEX, provisional_state, 2):
+            order[a] = b
+
+    def _read_after_move(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (player.POSITION_X & 0xFFFFFF) else read(a, s)
+    c, i = _S12_BSR_GRID
+    cycles += c
+    instructions += i
+    cycles += GRID_CELL_COST[0]
+    instructions += GRID_CELL_COST[1]
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x00626A, 4))
+    cell2 = grid_cell(_read_after_move)
+    address2 = cell2['address']
+    exit_registers['a0'] = cell2['address'] & 0xFFFFFFFF
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell2['d0']
+    exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cell2['d1']
+    sr = _asl_sr(sr, cell2['row_source'], 3, 2)
+
+    c, i = _S12_GROUND_TEST
+    cycles += c
+    instructions += i
+    ground = read((address2 + 0x180) & 0xFFFFFF, 1) == 1
+    c, i = _S22_GROUND_BEQ[ground]
+    cycles += c
+    instructions += i
+    alt_low = None
+    if not ground:
+        low = _read_after_move(player.POSITION_X, 2) & 0x1F
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | low
+        c, i = _add(_S22_ALT_HEAD, _S22_ALT_TEST)
+        cycles += c
+        instructions += i
+        sr = _cmp_sr(sr, low, 8, 2)
+        alt_low = low < 8
+        c, i = _S22_ALT_BLT[alt_low]
+        cycles += c
+        instructions += i
+        if not alt_low:
+            c, i = _S22_ALT_GROUND_TEST
+            cycles += c
+            instructions += i
+            alt_byte = read((address2 + 0x181) & 0xFFFFFF, 1)
+            ground = alt_byte == 1
+            sr = _cmp_sr(sr, alt_byte, 1, 1)
+            c, i = _S22_ALT_GROUND_BEQ[ground]
+            cycles += c
+            instructions += i
+
+    if ground:
+        for a, b in _bytes(player.STATE_INDEX, player.STATE11_GROUND_INDEX, 2):
+            order[a] = b
+        masked_y = new_y & 0xFFF0
+        for a, b in _bytes(player.POSITION_Y, masked_y, 2):
+            order[a] = b
+        from .game.pickups import MOVEMENT_SOUND_CUE
+        for a, b in _bytes(player.F1B8 & 0xFFFFFF, 0, 2):
+            order[a] = b
+        for a, b in _bytes(MOVEMENT_SOUND_CUE & 0xFFFFFF, 0x39, 2):
+            order[a] = b
+        from .game.zones import COOLDOWN, SUPPRESS_COOLDOWN
+        c, i = _S12G_HEAD
+        cycles += c
+        instructions += i
+        c, i = _S12G_TICK_TEST
+        cycles += c
+        instructions += i
+        d0 = player._signed_word((osc['f198'] - 0x14) & 0xFFFF)
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | ((osc['f198'] - 0x14) & 0xFFFF)
+        c, i = _S12G_TICK_BLE[d0 <= 0]
+        cycles += c
+        instructions += i
+        if d0 <= 0:
+            sr = _sub_sr(sr, osc['f198'], 0x14, 2)
+            exit_registers['d7'] = 0
+            exit_registers['pc'] = 0x0075D6
+            exit_registers['sr'] = sr
+            return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                              registers=exit_registers, last_pc=0x005E8C)
+        suppress = read(SUPPRESS_COOLDOWN, 2) & 0xFFFF != 0
+        c, i = _S12G_SUPPRESS_TEST
+        cycles += c
+        instructions += i
+        c, i = _S12G_SUPPRESS_BNE[suppress]
+        cycles += c
+        instructions += i
+        if suppress:
+            sr = _logic_sr(sr, read(SUPPRESS_COOLDOWN, 2), 2)
+            exit_registers['pc'] = 0x0075D6
+            exit_registers['sr'] = sr
+            exit_registers['d7'] = 0
+            return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                              registers=exit_registers, last_pc=0x005E94)
+        half = d0 >> 1
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | (half & 0xFFFF)
+        cooldown = (read(COOLDOWN, 2) - half) & 0xFFFF
+        for a, b in _bytes(COOLDOWN & 0xFFFFFF, cooldown, 2):
+            order[a] = b
+        c, i = _S12G_APPLY
+        cycles += c
+        instructions += i
+        sr = _sub_sr(sr, read(COOLDOWN, 2), half, 2)
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        exit_registers['d7'] = 0
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x005E9E)
+
+    # Neither ground test fired: the D7-based tail.
+    c, i = _S22_TAIL_CMPI3
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, new_d7, player.STATE23_TRIGGER_D7_GATE, 2)
+    to_trigger = new_d7 == player.STATE23_TRIGGER_D7_GATE
+    c, i = _S22_TAIL_BEQ3[to_trigger]
+    cycles += c
+    instructions += i
+
+    if to_trigger:
+        c, i = _S22_TRIGGER_TAIL
+        cycles += c
+        instructions += i
+        for a, b in _bytes(player.STATE_INDEX, player.STATE23_TRIGGER_INDEX, 2):
+            order[a] = b
+        exit_registers['d7'] = 0   # moveq #0,d7: a full 32-bit clear
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = _logic_sr(sr, 0, 2)   # moveq #0,d7 is the last flag-setter
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0062AC)
+
+    c, i = _S22_TAIL_CMPI1
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, new_d7, player.STATE23_CONSUME_D7_GATE, 2)
+    to_consume = new_d7 == player.STATE23_CONSUME_D7_GATE
+    c, i = _S22_TAIL_BNE1[not to_consume]
+    cycles += c
+    instructions += i
+
+    if not to_consume:
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006296)
+
+    c, i = _S5_JSR_CONSUME
+    cycles += c
+    instructions += i
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, 0x0062A0, 4):
+        order[a] = b
+
+    def _read_for_consume(a, s, _x=position_x_after, _y=new_y):
+        masked = a & 0xFFFFFF
+        if masked == (player.POSITION_X & 0xFFFFFF):
+            return _x
+        if masked == (player.POSITION_Y & 0xFFFFFF):
+            return _y
+        return read(a, s)
+    cc_cycles, cc_instructions, cc_order, cc_registers, last_slot = _cc_resolve(
+        machine, _read_for_consume, registers, 1, sp32 - 4)
+    cycles += cc_cycles
+    instructions += cc_instructions
+    order.update(cc_order)
+    exit_registers.update(cc_registers)
+
+    from .game import pickups
+    if last_slot['arm'] == 'empty':
+        last_value = read(pickups.CONTACT_SLOTS[2], 4) & 0xFFFFFFFF
+        width = 4
+    elif last_slot['type'] == 9:
+        last_value, width = 0x2F, 2
+    else:
+        num_groups = len(last_slot['groups'])
+        if num_groups < 3:
+            last_value = 0
+        elif last_slot['pooled']:
+            last_value = 0xFFFA
+        else:
+            last_value = _CC_GROUP2_CONST[1]
+        width = 2
+    sr = (_logic_sr(sr, last_value, width) & ~0x10) | (sr & 0x10)
+
+    c, i = _S22_CONSUME_BRA
+    cycles += c
+    instructions += i
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x0062A0)

@@ -2235,3 +2235,75 @@ STATE27_D7 = 2
 def state27_step(read):
     """00581E-005824: unconditional -- always transitions to state 0 with d7 forced to 2."""
     return {'arm': 'transition-0', 'd7': STATE27_D7}
+
+
+# --- 006164: state 23 -- state 21/22's own FFFFF1BA-gated head and D7-based tail shape, sitting
+# IMMEDIATELY BEFORE state 22's own code in ROM (0x006164-0x0062AC, then 0x0062B0 is STATE22_ENTRY
+# itself, confirmed via a direct disassembly).  Structurally identical to state 22's own body (the
+# SAME oscillation, the SAME LEFT/RIGHT block tests, the SAME ALT ground test with its own 0x1F
+# mask), but the ground-found jump lands on state 11's own PHYSICAL ground tail (`005E6C`, not state
+# 12's own `00612E`) and the D7-based tail differs in its own two targets: exactly 3 transitions to
+# state 11 (`0xB`, not state 22's own state 12), and exactly 1 calls the already-recovered
+# movement-cluster consumer `012E5A` (SECONDARY, not state 22's own `012DA0` PRIMARY -- state 21's
+# own choice, not state 22's).
+STATE23_ENTRY = 0x006164
+STATE23_TRIGGER_D7_GATE = 3
+STATE23_CONSUME_D7_GATE = 1
+STATE23_TRIGGER_INDEX = 0xB
+
+
+def _state23_head(read, d7):
+    """006164-006172: D7 -= 1 (and FFFFF1BA cleared) when F1BA is set, else D7 += 1 -- the SAME
+    shape _state21_head/_state22_head/_state26_head use, a separate ROM copy of each."""
+    if read(F1BA, 2) != 0:
+        return (d7 - 1) & 0xFFFF, True
+    return (d7 + 1) & 0xFFFF, False
+
+
+def state23_step(read, d7):
+    """006164-006296: state 23's own decision tree.  Returns `'ground'` (state 11's own shared
+    ground tail, `state11_ground_tail`), `'trigger'` (state 11, D7 forced to 0), `'consume'` (the
+    caller composes a call into 012E5A first), or `'unchanged'`."""
+    from .grid import grid_cell
+    new_d7, f1ba_was_set = _state23_head(read, d7)
+    osc = state12_oscillate(read)
+    position_x = read(POSITION_X, 2)
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    cell1 = grid_cell(read)
+    provisional_state_index = None
+    position_x_after = position_x
+    f1a0 = read(F1A0, 2)
+    f1a0_after = f1a0
+    if ea20 == -1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xB
+        blocked = state12_block_test_left(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x - 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+    elif ea20 == 1 and f1a0 < STATE12_RETRY_CAP:
+        provisional_state_index = 0xC
+        blocked = state12_block_test_right(read, position_x, cell1['address'])
+        if not blocked:
+            position_x_after = (position_x + 4) & 0xFFFF
+            f1a0_after = (f1a0 + 1) & 0xFFFF
+
+    def _read_after_move(a, s, _x=position_x_after):
+        return _x if (a & 0xFFFFFF) == (POSITION_X & 0xFFFFFF) else read(a, s)
+
+    cell2 = grid_cell(_read_after_move)
+    address2 = cell2['address']
+    base = {'d7': new_d7, 'f1ba_was_set': f1ba_was_set, 'osc': osc, 'ea20': ea20,
+            'provisional_state_index': provisional_state_index, 'position_x': position_x_after,
+            'f1a0': f1a0_after, 'cell1': cell1, 'cell2': cell2}
+    ground = read((address2 + 0x180) & 0xFFFFFF, 1) == 1
+    if not ground:
+        low = _read_after_move(POSITION_X, 2) & 0x1F
+        if low >= 8 and read((address2 + 0x181) & 0xFFFFFF, 1) == 1:
+            ground = True
+    if ground:
+        return {'arm': 'ground', **base}
+    if new_d7 == STATE23_TRIGGER_D7_GATE:
+        return {'arm': 'trigger', **base}
+    if new_d7 == STATE23_CONSUME_D7_GATE:
+        return {'arm': 'consume', **base}
+    return {'arm': 'unchanged', **base}
