@@ -1201,7 +1201,16 @@ small leaf):
   omission caught immediately by the plain factcheck sweep); and the
   ground tail's own final sound cue used `hazard.SOUND_COMMAND` (FDF4,
   the oscillation head's own cue) instead of `pickups.MOVEMENT_SOUND_CUE`
-  (FDF6, the actual target `005FEA move.w #$39,fdf6.w` writes).
+  (FDF6, the actual target `005FEA move.w #$39,fdf6.w` writes).  State 10
+  was the LAST state in the coordinator's own frequency-order list
+  (8, 13, 12, 16, 20, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10):
+  every witnessed state on that list now has its own gated candidate
+  except 19 and 18 (escalated together, see the blocker below); state 20
+  needed no work of its own (already `state-26`).  States 7 and 15
+  remain unwitnessed by any of the eight recordings and decline by name;
+  nothing in this session found evidence either is ever reached.  82% of
+  all real `005700` activations (11,012 of 13,488, `fb408bc75597`'s own
+  tally) are now directly reproduced by their own candidate.
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least
