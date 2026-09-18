@@ -266,6 +266,17 @@ below, has the count and the milestone tree numbers).
   corruption" class states 22/23's own mutants hit, not a control
   failure.  `00A922` and `00B944` (the remaining two of `00A772`'s own
   unconditional callees) are the next bites.
+- **The candidate `state-26`** (`src/gods_sega/recovery.py`): a single
+  gate at `005724`, real STATE_TABLE index 26 -- the tree's largest single
+  decline before its own recovery (1,975 of 8,857 fallbacks), folded into
+  `_PLAYER_STATE_PLANNERS` so `player_state_plan` composes it directly
+  (its own hits are counted under `camera-sprites`, which dropped from
+  8,857 to 6,970 fallbacks); kept as its own standalone candidate too, the
+  same shape every other individual player state is.  See `ledger.md`'s
+  own 18 September entry for the four top-level arms and their counts.
+  The pre-existing candidate named `'state-26'` (`0069AC`, real index 20)
+  is renamed `'state-20'`; the gate PC and every fixture/test are
+  unchanged.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -1362,15 +1373,32 @@ small leaf):
   fixtures reach it, and a full cold run of `ca2b703b6fd5` shows 314 of
   366 fallbacks are this decline (the coordinator's own tally already
   named it the seventh most frequent state, 634 of 13,488 activations).
-  **This is the clear next bite** for the player state machine: recover
-  `005724` as its own leaf (census it directly; it is real STATE_TABLE
-  index 26, not the address the `'state-26'` name suggests) and fold it
-  into `_PLAYER_STATE_PLANNERS`.  Milestone tree PASS (18 Sep,
-  `artifacts/gods/verify-camera-sprites-leaves-2026-09-18t`): 107,519
-  frames bit-exact; fallbacks 8,857, of which 1,975 are the state-26
-  decline (second only to 4,468 z80 bank guard).  No further card
-  revision needed unless a later state surfaces persistent state or
-  platform interaction this card does not already cover.
+  Milestone tree PASS (18 Sep, `artifacts/gods/verify-camera-sprites-leaves-2026-09-18t`):
+  107,519 frames bit-exact; fallbacks 8,857, of which 1,975 were the
+  state-26 decline (second only to 4,468 z80 bank guard).
+
+  **Resolved, later the same day**: real STATE_TABLE index 26 (`005724`)
+  is recovered -- `game.player.state_26_step`/`state_26_box_scan`/
+  `state_26_actor_scan` (named with an underscore, `state_26_*`, to stay
+  distinct from the pre-existing misnomer's own `state26_*` at `0069AC`,
+  which is renamed `'state-20'` in `recovery.py`; the gate PC and every
+  fixture/test there are unchanged), `boundary.state_26_plan`, folded into
+  `_PLAYER_STATE_PLANNERS` and wired as its own standalone candidate
+  `'state-26'`.  Four top-level arms (an unconditional transition to
+  state 27/28; a bounded 200-entry actor scan over the already-recovered
+  `game.movement.BOX_SCAN_TABLE` through `achievements.RECORD_TABLE` and
+  `conditions.FLAGGED`; a plain fallthrough into state 15's own shared
+  body, factored out of `state4_plan` into `_state15_ground_probe` so both
+  callers share it; a 20-entry proximity table distinct from
+  `BOX_SCAN_TABLE`, then a grid-cell-driven transition to state 14) --
+  see `ledger.md`'s own 18 September entry for the full arm/count
+  breakdown.  Milestone tree PASS (`tree-26-leaves-2026-09-18`, standalone
+  gate): 107,519 frames, 1,883 hits, 92 fallbacks (22 z80 bank guard, 70 a
+  narrow, never-witnessed sub-decline).  `camera-sprites` re-sealed for
+  the shared-helper edit: PASS, 107,519 frames, bit-exact, fallbacks 8,857
+  -> **6,970** (`artifacts/gods/verify-camera-sprites-leaves-2026-09-18u`).
+  No further card revision needed unless a later state surfaces persistent
+  state or platform interaction this card does not already cover.
 
 ## Open questions
 

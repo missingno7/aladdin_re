@@ -10,13 +10,13 @@ the callee's own AtomicPlan/Seam is reused directly, never ceded to the machine.
 individual player-state gates `camera-sprites` used to arm (0-6, 8-14, 16-28 except 18, and the
 movement-cluster pair 24/25) into this one gate: their own hits are replaced by this candidate's.
 
-Two real gaps declined by name, not guessed: states 7 and 15 (`game.player.UNWITNESSED_STATES`,
-never FFFFF192's own value on any of the eight recordings) and real STATE_TABLE index 26 (ROM
-005724) -- the 'state-26' candidate's own name is a misnomer for index 20 (ROM 0069AC,
-`docs/gods/STATUS.md`'s own 18 September entry); index 26's own handler has never been recovered as
-its own leaf, despite being the seventh most frequent state in the coordinator's own tally.  The
-census over `fb408bc75597` retains six real occurrences of it, all declined here, confirming the gap
-is real and witnessed, not merely unexercised.
+One real gap remains, declined by name, not guessed: states 7 and 15 (`game.player.
+UNWITNESSED_STATES`, never FFFFF192's own value on any of the eight recordings).  Real STATE_TABLE
+index 26 (ROM 005724) -- the coordinator's own seventh most frequent state, the tree's largest single
+decline before its own recovery session (1,975 of 8,857 fallbacks) -- is now recovered
+(`game.player.state_26_step` and friends, `boundary.state_26_plan`, candidate `'state-26'`); the
+candidate PREVIOUSLY named 'state-26' targeted index 20 (ROM 0069AC) and is renamed 'state-20'
+(`test_state26.py`), a misnomer `docs/gods/STATUS.md`'s own 18 September entry first recorded.
 """
 from pathlib import Path
 
@@ -64,8 +64,9 @@ def test_player_state_plan_reproduces_every_witnessed_state(fixture):
         try:
             plan = boundary.player_state_plan(machine, registers)
         except UnsupportedCandidate as error:
-            # The two real gaps: states 7/15 (never FFFFF192's own value on any recording) and real
-            # STATE_TABLE index 26 (005724, never recovered as its own leaf).
+            # The two real remaining gaps: states 7/15 (never FFFFF192's own value on any recording),
+            # plus real STATE_TABLE index 26's (005724) own narrow unwitnessed sub-arms (recovered 18
+            # Sep) -- see game/player.py's own module note above state_26_step.
             assert 'not witnessed by a recording' in str(error) or 'outside the 29-entry STATE_TABLE' in str(error), error
             return
     if isinstance(plan, Seam):
@@ -76,26 +77,28 @@ def test_player_state_plan_reproduces_every_witnessed_state(fixture):
     assert problems == [], problems
 
 
-def test_state_26_is_declined_by_name_not_guessed():
-    """The census over fb408bc75597 retains real occurrences of STATE_TABLE index 26 (005724):
-    a genuine gap the coordinator's own frequency tally names (634 of 13,488 activations), not the
-    'state-26' candidate's own misnomer for index 20 (0069AC)."""
+def test_state_26_is_recovered_not_declined():
+    """18 September (real-index-26 recovery session): the census over fb408bc75597 retains real
+    occurrences of STATE_TABLE index 26 (005724) -- the coordinator's own frequency tally named it
+    634 of 13,488 activations, the tree's largest single decline (1,975 of 8,857 fallbacks) before
+    this session.  Every one of those occurrences now MATCHes through player_state_plan; not the
+    'state-26' candidate's own former misnomer for index 20 (0069AC), renamed 'state-20'."""
     fixtures = [f for f in FIXTURES if f.parent.name == 'census-005700-fb408bc75597']
-    seen_state_26 = False
+    plans = []
     with Machine(GODS.read_rom()) as machine:
         for fixture in fixtures:
-            machine.restore(fixture.read_bytes())
+            state = fixture.read_bytes()
+            machine.restore(state)
             registers = machine.registers()
             index = int.from_bytes(machine.peek_ram(player.STATE_INDEX & 0xFFFF, 2), 'big')
             if index != 26:
                 continue
-            seen_state_26 = True
-            try:
-                boundary.player_state_plan(machine, registers)
-                pytest.fail('state 26 (005724) was expected to decline')
-            except UnsupportedCandidate as error:
-                assert '005724' in str(error)
-    assert seen_state_26, 'no retained fixture reached real STATE_TABLE index 26; the census may have changed'
+            plans.append((state, boundary.player_state_plan(machine, registers)))
+    assert plans, 'no retained fixture reached real STATE_TABLE index 26; the census may have changed'
+    for state, plan in plans:
+        facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc']))
+        problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+        assert problems == [], problems
 
 
 def test_candidate_names_are_explicit():
@@ -109,9 +112,10 @@ def test_candidate_names_are_explicit():
                   boundary.STATE13_ENTRY, boundary.STATE14_ENTRY, boundary.STATE16_ENTRY, boundary.STATE17_ENTRY,
                   boundary.STATE19_ENTRY, boundary.STATE21_ENTRY, boundary.STATE22_ENTRY, boundary.STATE23_ENTRY,
                   boundary.STATE26_ENTRY, boundary.STATE27_ENTRY, boundary.STATE28_ENTRY, boundary.STATE24_ENTRY,
-                  boundary.STATE25_ENTRY):
+                  boundary.STATE25_ENTRY, boundary.STATE_26_ENTRY):
         assert entry not in recovery.Candidate('camera-sprites').gate_pcs
     assert len(recovery.Candidate('camera-sprites').gate_pcs) == 40
+    assert recovery.Candidate('state-26').gate_pcs == (boundary.STATE_26_ENTRY,)
     # A d7 (STATE_COUNTER) mutant, the same shape states 0/1/14's own already draw: every witnessed
     # activation (100% of the coordinator's own tally is the active dispatch arm) hands d7 on to the
     # separately-armed player-tail gate one step later, whose own first instruction stores it into

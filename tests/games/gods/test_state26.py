@@ -75,23 +75,27 @@ def test_plan_reproduces_every_witnessed_arm(fixture):
 
 
 def test_candidate_name_is_explicit():
-    assert recovery.Candidate('state-26').gate_pcs == (boundary.STATE26_ENTRY,)
+    # Renamed from 'state-26' to 'state-20' (18 Sep, real-index-26 recovery session): this gate
+    # (0069AC) is real STATE_TABLE index 20, not 26 -- see boundary.py's own _PLAYER_STATE_PLANNERS
+    # comment.  The gate PC and every fixture/test here are unchanged; only the candidate's own name
+    # moved, freeing 'state-26' for the real index-26 handler (005724, test_state_26.py).
+    assert recovery.Candidate('state-20').gate_pcs == (boundary.STATE26_ENTRY,)
     # Retired 18 September: player_state_plan (005700) now owns the jump into state 26's
     # own handler; this candidate's own hits replace the direct gate's.
     assert boundary.STATE26_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert boundary.PLAYER_STATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
-    assert recovery.Candidate('state-26-mutant-result').mutation is recovery._mutate_outcome
+    assert recovery.Candidate('state-20-mutant-result').mutation is recovery._mutate_outcome
 
 
 @needs_reference
 def test_state_26_candidate_matches_the_reference_from_a_retained_fixture_and_its_mutant_diverges():
     for fixture in FIXTURES:
-        report = segment_verify.check(fixture, game=GODS, frames=120, candidate='state-26', reference=EVIDENCE)
+        report = segment_verify.check(fixture, game=GODS, frames=120, candidate='state-20', reference=EVIDENCE)
         if report['candidate_hits'] >= 1:
             break
     else:
         pytest.skip('no retained fixture reaches state 26 within 120 frames')
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
-    mutant = segment_verify.check(fixture, game=GODS, frames=120, candidate='state-26-mutant-result', reference=EVIDENCE)
+    mutant = segment_verify.check(fixture, game=GODS, frames=120, candidate='state-20-mutant-result', reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

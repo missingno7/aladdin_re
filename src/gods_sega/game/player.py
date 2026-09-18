@@ -1282,6 +1282,280 @@ def state26_tail(read, d7):
     return {'arm': 'consume' if calls_consumer else 'wait', 'calls_consumer': calls_consumer}
 
 
+# --- 005724: the REAL STATE_TABLE index 26 -- not `STATE26_ENTRY`/`state26_step` above, which target
+# `0069AC` (real index 20; `docs/gods/STATUS.md`'s own 18 September "misnomer" entries, resolved by
+# renaming that CANDIDATE to `'state-20'`, never the PC-keyed names above, since every gate and fixture
+# is keyed by PC, not by name).  Named here with an underscore (`STATE_26_ENTRY`, `state_26_*`) to stay
+# visually distinct from the misnomer's own names without touching them.  The tree's largest single
+# decline (1,975 of 8,857 fallbacks, `artifacts/gods/verify-camera-sprites-leaves-2026-09-18t`),
+# recovered 18 September: `census_all.py --entry 005724` over all five recordings (606 real path
+# classes; every one falls into the shared tail at `0075D6`, `factcheck.py facts --path` confirms no
+# arm here ever returns any other way).
+#
+# Four top-level arms, selected by `FFFFEA20`/`FFFFEA23` bit 2/`FFFFEA1E`:
+#   - `FFFFEA20 != 0` (126 fixtures): an unconditional transition to state 28 (positive) or 27
+#     (negative), `d7` forced to 0 -- no calls, no further tests.
+#   - `FFFFEA20 == 0`, `FFFFEA23` bit 2 SET (202 fixtures): `state_26_actor_scan` below, `d7` left 0.
+#   - `FFFFEA20 == 0`, bit 2 clear, `FFFFEA1E >= 0` (115 fixtures): `FFFFF24A` cleared, then a plain
+#     fallthrough into state 15's own entry (`006D68`) -- the SAME shared body `state4_step`'s own
+#     `FFFFEA20 == 0` arm already reaches (`_state15_ground_probe` in `boundary.py`, factored out of
+#     `state4_plan` this session so both callers share it); every one of these 115 fixtures finds
+#     ground on the first test (`+0x180(a0) == 1`) -- the routine's own further body (a second ground
+#     test at `+0x181(a0)`, and a genuine transition to state 12 when neither finds ground) is real ROM
+#     this session did not witness here either, and stays declined exactly as `state4_step`'s own
+#     module note already declines it.
+#   - `FFFFEA20 == 0`, bit 2 clear, `FFFFEA1E < 0` (186 fixtures): `FFFFF24A` cleared, then
+#     `state_26_box_scan` below (a 20-entry table distinct from `game.movement.BOX_SCAN_TABLE`); a
+#     match (14 fixtures) stores it and exits unchanged; no match re-runs the already-recovered grid
+#     cell lookup and tests `POSITION_X`'s own low 5 bits.  Below `0x10` (85 fixtures): the FIRST of
+#     two grid-byte tests (`+0(a0)`) transitions to state 14 -- the SAME `578E` merge point the
+#     high-low5 arm's own double-pass reaches, but WITHOUT its `+0x20` advance (14 fixtures, every one
+#     via this first test, never the second); neither test hits (71 fixtures, unchanged); the SECOND
+#     test alone hitting is real ROM, unwitnessed, declines by name -- the SAME asymmetry
+#     `state0_step`'s own low5-driven three-way dispatch already lives with.  At or above `0x10` (64
+#     fixtures): a two-test chain exits unchanged (first test misses, 55; first hits but second
+#     misses, 3) or transitions to state 14 WITH `POSITION_X` advanced by `0x20` first (both hit, 6) --
+#     the SAME stores `state0_step`'s own `'transition-14'` arm already computes,
+#     `_state0_state14_stores` reused directly, a separate ROM copy of identical logic.
+STATE_26_ENTRY = 0x005724
+STATE_26_TO_28, STATE_26_TO_27 = 0x1C, 0x1B
+STATE_26_BOX_SCAN_TABLE = 0xFFFFDAD4       # 20 entries, 8 bytes: x, y, status (>0 eligible), payload
+STATE_26_BOX_SCAN_COUNT = 20
+STATE_26_BOX_SCAN_STRIDE = 8
+STATE_26_BOX_X_MARGIN, STATE_26_BOX_Y_MARGIN = 0x10, 8
+STATE_26_BOX_FOUND = 0xFFFFEF54            # word: 1 once state_26_box_scan finds an eligible entry
+STATE_26_BOX_STATUS = 0xFFFFEF56           # word: the found entry's own status field (+4), copied
+STATE_26_BOX_PAYLOAD = 0xFFFFEF58          # word: the found entry's own payload field (+6), copied
+STATE_26_BOX_SOUND_CUE = 0x69              # into pickups.MOVEMENT_SOUND_CUE
+STATE_26_HIGH_LOW5_GATE = 0x10             # POSITION_X & 0x1F: below this, the low-address box test;
+                                            # at/above, the high-address one (with the transition-14 tail)
+
+PROXIMITY_ACTIVE = F24A                    # already player.F24A: 0069AC/006FFC's own transitions clear
+                                            # it too, so it is shared, not state 26's own alone
+PROXIMITY_BUSY = 0xFFFFF17C                # byte, bit 2: an unrelated busy/lock flag state_26_actor_scan
+                                            # also gates on; never witnessed as the deciding gate
+PROXIMITY_PENDING = 0xFFFFF248             # word: state_26_actor_scan only scans while this is negative;
+                                            # never witnessed as the deciding gate either
+PROXIMITY_FOUND_PTR = 0xFFFFF24C           # long: the matched game.movement.BOX_SCAN_TABLE slot's own
+                                            # address, on an id match
+PROXIMITY_ID_COUNT = 64                    # conditions.FLAGGED's own extent, walked linearly here
+PROXIMITY_MATCH_IDS = (0x76, 0x78, 0x7A, 0x3E)   # the found id table entry's own payload word (+4)
+
+
+def state_26_step(read):
+    """005724: the real STATE_TABLE index 26 handler's own head (D7's own entry value is discarded
+    unconditionally by its own `moveq #0,d7`, so this takes no `d7` argument).  Returns the arm and,
+    where the arm changes state, the stores; `d7` in the result is 0 on every arm but the two
+    transition-14s (0x1A)."""
+    ea20 = _signed_word(read(EA20_WORD, 2))
+    if ea20 != 0:
+        target = STATE_26_TO_28 if ea20 > 0 else STATE_26_TO_27
+        return {'arm': 'transition-28' if ea20 > 0 else 'transition-27', 'd7': 0,
+                'stores': {STATE_INDEX: (target, 2)}}
+    if read(EA23_WORD, 1) & 4:
+        return {'arm': 'actor-scan', 'd7': 0}   # the caller composes state_26_actor_scan(read)
+    clear_f24a = {PROXIMITY_ACTIVE & 0xFFFFFF: (0, 2)}
+    ea1e = _signed_word(read(EA1E_WORD, 2))
+    if ea1e >= 0:
+        return {'arm': 'state15-body', 'd7': 0, 'stores': clear_f24a}
+    scan = state_26_box_scan(read)
+    if scan['arm'] == 'found':
+        stores = dict(clear_f24a)
+        stores.update(scan['stores'])
+        return {'arm': 'box-found', 'd7': 0, 'stores': stores, 'scan': scan}
+    from .grid import grid_cell
+    cell = grid_cell(read)
+    address = cell['address']
+    position_x = read(POSITION_X, 2)
+    low5 = position_x & 0x1F
+    if low5 < STATE_26_HIGH_LOW5_GATE:
+        if read(address & 0xFFFFFF, 1) == 2:
+            # 0057B0-0057B4: jumps directly into the SAME 578E merge point the high-low5 arm's own
+            # double-pass reaches, but WITHOUT the +0x20 advance -- every one of 14 witnessed
+            # occurrences takes this exact test, never the second (below).
+            stores = dict(clear_f24a)
+            stores[POSITION_X] = (position_x & 0xFFE0, 2)
+            stores.update(_state0_state14_stores())
+            return {'arm': 'transition-14-low', 'd7': 0x1A, 'stores': stores, 'cell': cell, 'low5': low5}
+        if read((address + 0x80) & 0xFFFFFF, 1) == 2:
+            # real ROM, unwitnessed by any recording (the low5<0x10 arm's own SECOND test): declined.
+            return {'arm': 'box-not-found-low-second-found', 'd7': 0x1A, 'cell': cell, 'low5': low5}
+        return {'arm': 'box-not-found-low', 'd7': 0, 'stores': clear_f24a, 'cell': cell, 'low5': low5}
+    if read((address + 1) & 0xFFFFFF, 1) != 2:
+        return {'arm': 'box-not-found-high-first', 'd7': 0, 'stores': clear_f24a, 'cell': cell, 'low5': low5}
+    if read((address + 0x81) & 0xFFFFFF, 1) != 2:
+        return {'arm': 'box-not-found-high-second', 'd7': 0, 'stores': clear_f24a, 'cell': cell, 'low5': low5}
+    new_x = (position_x + 0x20) & 0xFFE0
+    stores = dict(clear_f24a)
+    stores[POSITION_X] = (new_x, 2)
+    stores.update(_state0_state14_stores())
+    return {'arm': 'transition-14-high', 'd7': 0x1A, 'stores': stores, 'cell': cell, 'low5': low5}
+
+
+def state_26_box_scan(read):
+    """0057C2-00581C: a bounded 20-entry, 8-byte-stride scan at `STATE_26_BOX_SCAN_TABLE` (distinct
+    from `game.movement.BOX_SCAN_TABLE`, though it shares the shape) against a box around the player's
+    own tracked position (`POSITION_X`/`POSITION_Y` +/- `STATE_26_BOX_X_MARGIN`/`_Y_MARGIN`).  Stops at
+    the first entry whose own status field (+4) is positive AND whose (x, y) falls inside the box;
+    exhausts otherwise.  A found entry's own status and payload fields are copied out and a sound cue
+    queued; every witnessed occurrence (`census-005724-*`) either matches the very first eligible entry
+    or exhausts without one."""
+    x, y = read(POSITION_X, 2), read(POSITION_Y, 2)
+    near_x = (x - STATE_26_BOX_X_MARGIN) & 0xFFFF
+    far_x = (x + STATE_26_BOX_X_MARGIN) & 0xFFFF
+    near_y = (y - STATE_26_BOX_Y_MARGIN) & 0xFFFF
+    far_y = (y + STATE_26_BOX_Y_MARGIN) & 0xFFFF
+    entries = []
+    found = None
+    entry_addr = STATE_26_BOX_SCAN_TABLE
+    for index in range(STATE_26_BOX_SCAN_COUNT):
+        status = _signed_word(read((entry_addr + 4) & 0xFFFFFF, 2))
+        if status <= 0:
+            # 0057DE-0057E4: two separate tests (bmi then beq) -- a negative status costs less than a
+            # zero one, so the boundary needs the distinction even though both mean "skip".
+            entries.append({'index': index, 'arm': 'skip-negative' if status < 0 else 'skip-zero', 'entry': entry_addr})
+        else:
+            ex = read(entry_addr & 0xFFFFFF, 2)
+            ey = read((entry_addr + 2) & 0xFFFFFF, 2)
+            pass_x_near = _signed_word(ex) >= _signed_word(near_x)
+            pass_x_far = pass_x_near and _signed_word(ex) <= _signed_word(far_x)
+            pass_y_near = pass_x_far and _signed_word(ey) >= _signed_word(near_y)
+            pass_y_far = pass_y_near and _signed_word(ey) <= _signed_word(far_y)
+            step = {'index': index, 'entry': entry_addr, 'x': ex, 'y': ey, 'pass_x_near': pass_x_near,
+                    'pass_x_far': pass_x_far, 'pass_y_near': pass_y_near}
+            if pass_y_far:
+                step['arm'] = 'found'
+                entries.append(step)
+                found = step
+                break
+            step['arm'] = 'tested'
+            entries.append(step)
+        entry_addr = (entry_addr + STATE_26_BOX_SCAN_STRIDE) & 0xFFFFFFFF
+    if found is None:
+        return {'arm': 'not-found', 'entries': entries}
+    from . import pickups
+    status_value = read((found['entry'] + 4) & 0xFFFFFF, 2)
+    payload_value = read((found['entry'] + 6) & 0xFFFFFF, 2)
+    stores = {STATE_26_BOX_FOUND & 0xFFFFFF: (1, 2), STATE_26_BOX_STATUS & 0xFFFFFF: (status_value, 2),
+              STATE_26_BOX_PAYLOAD & 0xFFFFFF: (payload_value, 2),
+              pickups.MOVEMENT_SOUND_CUE & 0xFFFFFF: (STATE_26_BOX_SOUND_CUE, 2)}
+    return {'arm': 'found', 'entries': entries, 'found': found, 'stores': stores}
+
+
+def _state_26_id_search(read, key):
+    """002E0A: a linear 64-entry search of `conditions.FLAGGED` (6 bytes each) for a 4-byte `key`
+    (the candidate entry's own (x << 16 | y), built the same way the ROM's `swap d0; move.w d1,d0`
+    does).  Returns the matching entry's own address, or `None` once all 64 are checked."""
+    from . import conditions
+    entry_addr = conditions.FLAGGED
+    for _ in range(PROXIMITY_ID_COUNT):
+        if read(entry_addr & 0xFFFFFF, 4) == key:
+            return entry_addr
+        entry_addr = (entry_addr + conditions.FLAGGED_STRIDE) & 0xFFFFFFFF
+    return None
+
+
+def _state_26_actor_box_test(read, entry_addr):
+    """0081EA-008220: a two-part box test between a `game.movement.BOX_SCAN_TABLE` entry's own (x, y)
+    and the player's tracked position, returning True (the ROM's `clr.w -(a7); rtr`) or False (`move.w
+    #8,-(a7); rtr`, the caller's own `bmi`)."""
+    ex = read(entry_addr & 0xFFFFFF, 2)
+    ey = read((entry_addr + 2) & 0xFFFFFF, 2)
+    far_x = (ex + 0x10) & 0xFFFF
+    far_y = (ey + 0x10) & 0xFFFF
+    px = (read(POSITION_X, 2) + 0xC) & 0xFFFF
+    py = read(POSITION_Y, 2)
+    if _signed_word(px) > _signed_word(far_x):
+        return False
+    if _signed_word(py) > _signed_word(far_y):
+        return False
+    px2 = (px + 8) & 0xFFFF
+    py2 = (py + 0x30) & 0xFFFF
+    if _signed_word(px2) < _signed_word(ex):
+        return False
+    if _signed_word(py2) < _signed_word(ey):
+        return False
+    return True
+
+
+def state_26_actor_scan(read):
+    """008148-0081E8: gated by `PROXIMITY_ACTIVE` (already active this tick -- a debounce; the ONLY
+    gate any recording witnesses as the deciding one), `PROXIMITY_BUSY` bit 2 and `PROXIMITY_PENDING`
+    (only witnessed passing; a decline, not a guess, when either blocks instead).  Once past the gates,
+    `PROXIMITY_ACTIVE` is set UNCONDITIONALLY (regardless of whether the scan below finds anything), and
+    a bounded 200-entry scan of `game.movement.BOX_SCAN_TABLE` runs: each eligible entry (its own status
+    fields, the SAME `game.movement.box_overlap_scan` already reads) is looked up in
+    `achievements.RECORD_TABLE` (`achievements._record_address`'s own two-step ADDA.W index, by the
+    entry's own status-A field as a kind -- a THIRD consumer of that shared table, gated on status `3`
+    here, `2` at `004790`) for a definition; a definition-3 entry is tested against `conditions.FLAGGED`
+    for a position-keyed id (`_state_26_id_search`) and, if one exists, against the player's own
+    position (`_state_26_actor_box_test`) -- the first entry passing BOTH stops the scan (an id match
+    among `PROXIMITY_MATCH_IDS` or not, the scan always concludes there, playing `hazard.SOUND_COMMAND`
+    either way); anything else (ineligible, an unmatched kind, an exhausted id search, a failed box
+    test) continues to the next slot."""
+    from . import achievements, conditions, hazard
+    from .movement import BOX_SCAN_TABLE, BOX_SCAN_COUNT, BOX_SCAN_STRIDE, BOX_SCAN_STATUS_A, BOX_SCAN_STATUS_B
+    if read(PROXIMITY_ACTIVE, 2) != 0:
+        return {'arm': 'already-active', 'entries': []}
+    if read(PROXIMITY_BUSY, 1) & 4:
+        return {'arm': 'busy-declined', 'entries': []}   # real ROM, unwitnessed; the boundary declines
+    if _signed_word(read(PROXIMITY_PENDING, 2)) >= 0:
+        return {'arm': 'pending-declined', 'entries': []}   # real ROM, unwitnessed; the boundary declines
+    entries = []
+    entry_addr = BOX_SCAN_TABLE
+    for index in range(BOX_SCAN_COUNT):
+        status_b = read((entry_addr + BOX_SCAN_STATUS_B) & 0xFFFFFF, 2)
+        if status_b == 0:
+            entries.append({'index': index, 'arm': 'skip-inactive', 'entry': entry_addr})
+            entry_addr = (entry_addr + BOX_SCAN_STRIDE) & 0xFFFFFFFF
+            continue
+        status_a = read((entry_addr + BOX_SCAN_STATUS_A) & 0xFFFFFF, 2)
+        if _signed_word(status_a) < 0:
+            # never witnessed: every one of 269 real entries reaching this test (across all five
+            # recordings) has a non-negative status-A once status-B is nonzero; the boundary declines.
+            entries.append({'index': index, 'arm': 'skip-negative', 'entry': entry_addr})
+            return {'arm': 'skip-negative', 'entries': entries}
+        kind = status_a & 0xFFFF
+        record = achievements._record_address(kind)
+        if read((record + 4) & 0xFFFFFF, 2) != 3:
+            entries.append({'index': index, 'arm': 'skip-kind', 'entry': entry_addr, 'record': record})
+            entry_addr = (entry_addr + BOX_SCAN_STRIDE) & 0xFFFFFFFF
+            continue
+        ex = read(entry_addr & 0xFFFFFF, 2)
+        ey = read((entry_addr + 2) & 0xFFFFFF, 2)
+        key = ((ex & 0xFFFF) << 16) | (ey & 0xFFFF)
+        found_id = _state_26_id_search(read, key)
+        if found_id is None:
+            # never witnessed: no recording's own state_26_actor_scan ever runs the 64-entry search
+            # to exhaustion (confirmed directly -- 002E20's own ori.b #8,ccr never executes); the
+            # boundary declines rather than guessing its cost.
+            entries.append({'index': index, 'arm': 'id-exhausted', 'entry': entry_addr, 'record': record})
+            return {'arm': 'id-exhausted', 'entries': entries}
+        if not _state_26_actor_box_test(read, entry_addr):
+            entries.append({'index': index, 'arm': 'box-failed', 'entry': entry_addr, 'record': record,
+                            'found_id': found_id})
+            entry_addr = (entry_addr + BOX_SCAN_STRIDE) & 0xFFFFFFFF
+            continue
+        # 0081AC-0081BE's own four chained comparisons read (a1) -- the F8C2 RECORD's own word at
+        # offset 0, not the FLAGGED id table's own found entry (a3, only ever eori'd, never compared).
+        payload = read(record & 0xFFFFFF, 2)
+        matched = payload in PROXIMITY_MATCH_IDS
+        if matched:
+            # a3 (the id table's own found entry, not the game.movement.BOX_SCAN_TABLE slot) is what
+            # 0081C4's own move.l stores -- confirmed by tracking the exg.l a0,a3 at 0081A2.
+            stores = {PROXIMITY_FOUND_PTR & 0xFFFFFF: (found_id, 4), PROXIMITY_PENDING & 0xFFFFFF: (0, 2)}
+            arm = 'matched'
+        else:
+            toggled_entry = read((entry_addr + 4) & 0xFFFFFF, 2) ^ 1
+            toggled_found = read((found_id + 4) & 0xFFFFFF, 2) ^ 1
+            stores = {(entry_addr + 4) & 0xFFFFFF: (toggled_entry, 2), (found_id + 4) & 0xFFFFFF: (toggled_found, 2)}
+            arm = 'unmatched'
+        stores[hazard.SOUND_COMMAND & 0xFFFFFF] = (0x60, 2)
+        entries.append({'index': index, 'arm': arm, 'entry': entry_addr, 'record': record, 'found_id': found_id})
+        return {'arm': arm, 'entries': entries, 'stores': stores}
+    return {'arm': 'exhausted', 'entries': entries}
+
+
 # --- 00648C: state 8 -- state 9's own sibling, sharing the SAME jump-arc table (STATE9_FALL_TABLE)
 # and the SAME two row-gate leaves (006442/006468, `_row_gate_open`) verbatim, not copied
 # (`factcheck.py facts --path` on real fixtures over `census-00648C-*` covering every witnessed arm,

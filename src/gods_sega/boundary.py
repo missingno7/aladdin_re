@@ -9508,6 +9508,827 @@ def state26_plan(machine, registers):
                       registers=exit_registers, last_pc=last_pc)
 
 
+# --- 005724: the REAL STATE_TABLE index 26 (game.player.state_26_step and friends) -- not
+# `STATE26_ENTRY`/`state26_plan` above, which target `0069AC` (real index 20; the misnomer, kept
+# as-is: every gate and fixture is keyed by PC, not by name, `docs/gods/STATUS.md`'s own 18 September
+# entries).  The tree's largest single decline (1,975 of 8,857 fallbacks) before this session; see
+# game/player.py's own module note above `state_26_step` for the full arm breakdown and counts.
+STATE_26_ENTRY = 0x005724
+
+_S26_MOVEQ0_D7 = (4, 1)                        # 005724 moveq #0,d7
+_S26_MOVEQ_D0 = (4, 1)                         # 005726 moveq #$1c,d0
+_S26_TST_EA20 = (12, 1)                        # 005728 tst.w ea20.w
+_S26_BEQ_EA20 = {True: (10, 1), False: (8, 1)}     # 00572C beq.b 573a (byte)
+_S26_BPL_EA20 = {True: (10, 1), False: (8, 1)}     # 00572E bpl.b 5732 (byte, EA20 != 0 branch only)
+_S26_MOVEQ_NEG = (4, 1)                        # 005730 moveq #$1b,d0 (EA20 < 0 only)
+_S26_MOVE_STATE = (12, 1)                      # 005732 move.w d0,f192.w
+_S26_BRA_TAIL = (10, 1)                        # bra.w 75d6 (every use: 005736/005746/0057BE/0057AC)
+
+_S26_BTST_EA23 = (16, 1)                       # 00573A btst.b #2,ea23.w
+_S26_BEQ_EA23 = {True: (10, 1), False: (8, 1)}     # 005740 beq.b 574a (byte)
+_S26_BSR_8148 = (18, 1)                        # 005742 bsr.w 8148
+
+_S26_CLR_F24A = (16, 1)                        # 00574A clr.w f24a.w
+_S26_TST_EA1E = (12, 1)                        # 00574E tst.w ea1e.w
+_S26_BPL_EA1E = {True: (10, 1), False: (12, 1)}    # 005752 bpl.w 6d68 (word)
+_S26_BSR_57C2 = (18, 1)                        # 005756 bsr.w 57c2
+
+_S26_TST_EF54 = (12, 1)                        # 00575A tst.w ef54.w
+_S26_BNE_EF54 = {True: (10, 1), False: (12, 1)}    # 00575E bne.w 75d6 (word)
+_S26_BSR_63FA = (18, 1)                        # 005762 bsr.w 63fa
+_S26_LOAD_POSX = (12, 1)                       # 005766 move.w f18c.w,d0
+_S26_ANDI_1F = (8, 1)                          # 00576A andi.w #$1f,d0
+_S26_CMP_10 = (8, 1)                           # 00576E cmpi.w #$10,d0
+_S26_BLT_10 = {True: (10, 1), False: (8, 1)}       # 005772 blt.b 57b0 (byte)
+
+_S26_CMP_A0 = (12, 1)                          # 0057B0 cmpi.b #2,(a0)
+_S26_BEQ_A0 = {True: (10, 1), False: (8, 1)}       # 0057B4 beq.b 578e (byte)
+_S26_CMP_A0_80 = (16, 1)                       # 0057B6 cmpi.b #2,$80(a0)
+_S26_BEQ_A0_80 = {True: (10, 1), False: (8, 1)}    # 0057BC beq.b 578e (byte)
+
+_S26_CMP_A0_1 = (16, 1)                        # 005774 cmpi.b #2,$1(a0)
+_S26_BNE_A0_1 = {True: (10, 1), False: (12, 1)}    # 00577A bne.w 75d6 (word)
+_S26_CMP_A0_81 = (16, 1)                       # 00577E cmpi.b #2,$81(a0)
+_S26_BNE_A0_81 = {True: (10, 1), False: (12, 1)}   # 005784 bne.w 75d6 (word)
+_S26_ADDI_20 = (20, 1)                         # 005788 addi.w #$20,f18c.w (high-arm advance only)
+_S26_ANDI_MASK = (20, 1)                       # 00578E andi.w #$ffe0,f18c.w
+_S26_MOVE_STATE14 = (16, 1)                    # 005794 move.w #$e,f192.w
+_S26_MOVEQ_1A = (4, 1)                         # 00579A moveq #$1a,d7
+_S26_CLR_FIELD = (16, 1)                       # 00579C/A0/A4/A8 clr.w f1ae/f1a4/f1a6/f1a8.w (each)
+
+_S26B_HEAD = (64, 10)                          # 0057C2-0057DC: the box scan's own fixed setup
+_S26B_TEST_STATUS = (12, 1)                    # 0057DE tst.w $4(a0)
+_S26B_BMI = {True: (10, 1), False: (8, 1)}         # 0057E2 bmi.b 5816 (byte)
+_S26B_BEQ = {True: (10, 1), False: (8, 1)}         # 0057E4 beq.b 5816 (byte, only when bmi not taken)
+_S26B_LOAD_X = (8, 1)                          # 0057E6 move.w (a0),d4
+_S26B_LOAD_Y = (12, 1)                         # 0057E8 move.w $2(a0),d5
+_S26B_CMP = (4, 1)
+_S26B_COND_TAKEN = (10, 1)                     # blt/bgt taken -- the chain's own failing branch
+_S26B_COND_PASS = (8, 1)                       # not taken -- continue the chain
+_S26B_FOUND_STORE = (16 + 20 + 20 + 16, 4)     # move#1,ef54; move 4(a0),ef56; move 6(a0),ef58; move#$69,fdf6
+_S26B_RTS = (16, 1)
+_S26B_ADVANCE = (4, 1)                         # 005816 addq.w #8,a0
+_S26B_DBRA_TAKEN = (10, 1)
+_S26B_DBRA_LAST = (14, 1)
+
+_S26A_TST_ACTIVE = (12, 1)                     # 008148 tst.w f24a.w
+_S26A_BNE_ACTIVE = {True: (10, 1), False: (12, 1)}     # 00814C bne.w 81e8 (word)
+_S26A_BTST_BUSY = (16, 1)                      # 008150 btst.b #2,f17c.w
+_S26A_BNE_BUSY = {True: (10, 1), False: (12, 1)}       # 008156 bne.w 81e8 (word, never witnessed taken)
+_S26A_TST_PENDING = (12, 1)                    # 00815A tst.w f248.w
+_S26A_BPL_PENDING = {True: (10, 1), False: (12, 1)}    # 00815E bpl.w 81e8 (word, never witnessed taken)
+_S26A_RTS_EARLY = (16, 1)                      # 0081E8 rts (already-active / busy / pending declines)
+_S26A_SET_ACTIVE = (16, 1)                     # 008162 move.w #1,f24a.w
+_S26A_LEA_TABLE = (12, 1)                      # 008168 lea.l $ffff4342.l,a0
+_S26A_LOAD_COUNT = (8, 1)                      # 00816E move.w #$c7,d6
+
+_S26A_TST_B = (12, 1)                          # 008172 tst.w $6(a0)
+_S26A_BEQ_B = {True: (10, 1), False: (12, 1)}      # 008176 beq.w 81e2 (word)
+_S26A_TST_A = (12, 1)                          # 00817A tst.w $4(a0)
+_S26A_BMI_A = {True: (10, 1), False: (8, 1)}       # 00817E bmi.b 81e2 (byte, never witnessed taken)
+_S26A_MOVEM = (24, 1)                          # 008180 movem.w (a0),d0-d2
+_S26A_MOVE_D3 = (4, 1)                         # 008184 move.w d2,d3
+_S26A_LEA_RECORD = (8, 1)                      # 008186 lea.l $f8c2.w,a1
+_S26A_ADD_D3 = (4, 1)                          # 00818A/8E/90 add.w d3,d3 (x3)
+_S26A_ADDA_D3 = (8, 1)                         # 00818C/92 adda.w d3,a1 (x2)
+_S26A_CMP_KIND = (16, 1)                       # 008194 cmpi.w #3,$4(a1)
+_S26A_BNE_KIND = {True: (10, 1), False: (8, 1)}    # 00819A bne.b 81e2 (byte)
+_S26A_MOVEA_A3 = (4, 1)                        # 00819C movea.l a0,a3
+_S26A_BSR_2E0A = (18, 1)                       # 00819E bsr.w 2e0a
+_S26A_EXG = (6, 1)                             # 0081A2 exg.l a0,a3
+_S26A_TST_D1 = (4, 1)                          # 0081A4 tst.w d1
+_S26A_BMI_D1 = {True: (10, 1), False: (8, 1)}      # 0081A6 bmi.b 81e2 (byte, never witnessed taken)
+_S26A_BSR_81EA = (18, 1)                       # 0081A8 bsr.b 81ea
+_S26A_BMI_BOX = {True: (10, 1), False: (8, 1)}     # 0081AA bmi.b 81e2 (byte)
+_S26A_ID_CMP = (12, 1)                         # 0081AC/B2/B8/BE cmpi.w #imm,(a1) (each)
+_S26A_ID_BEQ = {True: (10, 1), False: (8, 1)}      # 0081B0/B6/BC beq.b 81c4 (byte)
+_S26A_BNE_FINAL = {True: (10, 1), False: (8, 1)}   # 0081C2 bne.b 81ce (byte)
+_S26A_MOVE_FOUND = (16, 1)                     # 0081C4 move.l a3,f24c.w
+_S26A_CLR_PENDING = (16, 1)                    # 0081C8 clr.w f248.w
+_S26A_BRA_SOUND = (10, 1)                      # 0081CC bra.b 81da
+_S26A_EORI = (20, 1)                           # 0081CE/D4 eori.w #1,$4(a0)/$4(a3) (each)
+_S26A_SOUND = (16, 1)                          # 0081DA move.w #$60,fdf4.w
+_S26A_RTS = (16, 1)                            # 0081E0 rts
+_S26A_ADVANCE = (4, 1)                         # 0081E2 addq.w #8,a0
+_S26A_DBRA_TAKEN = (10, 1)
+_S26A_DBRA_LAST = (14, 1)
+
+_S26_ID_KEY_COST = (4 + 4 + 12 + 4, 4)         # 002E0A swap; move.w d1,d0; lea $ffff62f6.l,a0; moveq #$3f,d1
+_S26_ID_CMP = (14, 1)                          # 002E16 cmp.l (a0),d0
+_S26_ID_BEQ = {True: (10, 1), False: (8, 1)}       # 002E18 beq.b 2e24 (byte)
+_S26_ID_ADVANCE = (4, 1)                       # 002E1A addq.w #6,a0
+_S26_ID_DBRA_TAKEN = (10, 1)
+_S26_ID_RTS = (16, 1)                          # 002E24 rts
+
+_S26_BOX_LOAD_XY = (8 + 12, 2)                 # 0081EA move.w (a0),d0; 0081EC move.w $2(a0),d1
+_S26_BOX_MOVEQ = (4 + 4, 2)                    # 0081F0/F2 moveq #$10,d2/d3
+_S26_BOX_ADD = (4 + 4, 2)                      # 0081F4/F6 add.w d0,d2 / d1,d3
+_S26_BOX_MOVEQ_C = (4, 1)                      # 0081F8 moveq #$c,d4
+_S26_BOX_ADD_POSX = (12, 1)                    # 0081FA add.w f18c.w,d4
+_S26_BOX_LOAD_POSY = (12, 1)                   # 0081FE move.w f18e.w,d5
+_S26_BOX_CMP1 = (4, 1)                         # 008202 cmp.w d2,d4
+_S26_BOX_BGT1 = {True: (10, 1), False: (8, 1)}     # 008204 bgt.b 821c (byte)
+_S26_BOX_CMP2 = (4, 1)                         # 008206 cmp.w d3,d5
+_S26_BOX_BGT2 = {True: (10, 1), False: (8, 1)}     # 008208 bgt.b 821c (byte)
+_S26_BOX_ADDQ = (4, 1)                         # 00820A addq.w #8,d4
+_S26_BOX_ADDI = (8, 1)                         # 00820C addi.w #$30,d5
+_S26_BOX_CMP3 = (4, 1)                         # 008210 cmp.w d0,d4
+_S26_BOX_BLT1 = {True: (10, 1), False: (8, 1)}     # 008212 blt.b 821c (byte)
+_S26_BOX_CMP4 = (4, 1)                         # 008214 cmp.w d1,d5
+_S26_BOX_BLT2 = {True: (10, 1), False: (8, 1)}     # 008216 blt.b 821c (byte)
+_S26_BOX_PASS_EXIT = (14 + 20, 2)              # 008218 clr.w -(a7); 00821A rtr
+_S26_BOX_FAIL_EXIT = (12 + 20, 2)              # 00821C move.w #8,-(a7); 008220 rtr
+
+
+def _s26_box_entry_cost(step, is_last):
+    """One entry's own cost through `game.player.state_26_box_scan`'s own 20-entry table, from its
+    own tst.w $4(a0) through whichever tail (skip / found) it reaches."""
+    cycles, instructions = _S26B_TEST_STATUS
+    if step['arm'] in ('skip-negative', 'skip-zero'):
+        neg = step['arm'] == 'skip-negative'
+        c, i = _S26B_BMI[neg]
+        cycles += c
+        instructions += i
+        if not neg:
+            c, i = _S26B_BEQ[True]
+            cycles += c
+            instructions += i
+        c, i = _S26B_DBRA_LAST if is_last else _S26B_DBRA_TAKEN
+        return cycles + _S26B_ADVANCE[0] + c, instructions + _S26B_ADVANCE[1] + i
+    c, i = _S26B_BMI[False]
+    cycles += c
+    instructions += i
+    c, i = _S26B_BEQ[False]
+    cycles += c
+    instructions += i
+    c, i = _S26B_LOAD_X
+    cycles += c
+    instructions += i
+    c, i = _S26B_LOAD_Y
+    cycles += c
+    instructions += i
+    for passed, is_last_test in ((step['pass_x_near'], False), (step['pass_x_far'], False),
+                                 (step['pass_y_near'], False), (step['arm'] == 'found', True)):
+        c, i = _S26B_CMP
+        cycles += c
+        instructions += i
+        if not passed:
+            c, i = _S26B_COND_TAKEN
+            cycles += c
+            instructions += i
+            break
+        if is_last_test:
+            c, i = _S26B_COND_PASS   # the fourth test's own PASS falls straight into the store block
+            cycles += c
+            instructions += i
+            c, i = _S26B_FOUND_STORE
+            cycles += c
+            instructions += i
+            c, i = _S26B_RTS
+            return cycles + c, instructions + i
+        c, i = _S26B_COND_PASS
+        cycles += c
+        instructions += i
+    c, i = _S26B_DBRA_LAST if is_last else _S26B_DBRA_TAKEN
+    return cycles + _S26B_ADVANCE[0] + c, instructions + _S26B_ADVANCE[1] + i
+
+
+def _s26_box_scan_cost(entries):
+    from .game import player
+    cycles, instructions = _S26B_HEAD
+    for index, step in enumerate(entries):
+        c, i = _s26_box_entry_cost(step, index == player.STATE_26_BOX_SCAN_COUNT - 1)
+        cycles += c
+        instructions += i
+    if entries[-1]['arm'] != 'found':
+        # 00581C's own rts: the found arm's own rts is already inside _s26_box_entry_cost's own
+        # _S26B_FOUND_STORE/_S26B_RTS tail; the exhausted arm's own final rts is a standalone
+        # instruction reached only once, after the last entry's own dbra falls through.
+        c, i = _S26B_RTS
+        cycles += c
+        instructions += i
+    return cycles, instructions
+
+
+def _s26_id_search_cost(found_id):
+    """002E0A: the 64-entry `conditions.FLAGGED` search's own cost, walking the SAME entries
+    `game.player._state_26_id_search` reads to find `found_id` (or confirm it as the first match)."""
+    from .game import conditions
+    cycles, instructions = _S26_ID_KEY_COST
+    entry_addr = conditions.FLAGGED
+    while True:
+        c, i = _S26_ID_CMP
+        cycles += c
+        instructions += i
+        matched = entry_addr == found_id
+        c, i = _S26_ID_BEQ[matched]
+        cycles += c
+        instructions += i
+        if matched:
+            c, i = _S26_ID_RTS
+            return cycles + c, instructions + i
+        c, i = _S26_ID_ADVANCE
+        cycles += c
+        instructions += i
+        c, i = _S26_ID_DBRA_TAKEN
+        cycles += c
+        instructions += i
+        entry_addr = (entry_addr + conditions.FLAGGED_STRIDE) & 0xFFFFFFFF
+
+
+def _s26_box_test_cost(passed_first_pair, passed):
+    """0081EA-008220.  Every return path (early-fail or the fourth test) falls into the SAME
+    `move.w #8,-(a7); rtr` (fail, `_S26_BOX_FAIL_EXIT`) or `clr.w -(a7); rtr` (pass,
+    `_S26_BOX_PASS_EXIT`) tail -- easy to lose track of since each early-exit branch reaches a
+    DIFFERENT one of the four comparisons but the SAME two-instruction exit."""
+    cycles, instructions = _add(_S26_BOX_LOAD_XY, _S26_BOX_MOVEQ, _S26_BOX_ADD, _S26_BOX_MOVEQ_C,
+                                _S26_BOX_ADD_POSX, _S26_BOX_LOAD_POSY, _S26_BOX_CMP1)
+    if not passed_first_pair[0]:
+        c, i = _add(_S26_BOX_BGT1[True], _S26_BOX_FAIL_EXIT)
+        return cycles + c, instructions + i
+    c, i = _S26_BOX_BGT1[False]
+    cycles += c
+    instructions += i
+    c, i = _S26_BOX_CMP2
+    cycles += c
+    instructions += i
+    if not passed_first_pair[1]:
+        c, i = _add(_S26_BOX_BGT2[True], _S26_BOX_FAIL_EXIT)
+        return cycles + c, instructions + i
+    c, i = _add(_S26_BOX_BGT2[False], _S26_BOX_ADDQ, _S26_BOX_ADDI, _S26_BOX_CMP3)
+    cycles += c
+    instructions += i
+    if not passed_first_pair[2]:
+        c, i = _add(_S26_BOX_BLT1[True], _S26_BOX_FAIL_EXIT)
+        return cycles + c, instructions + i
+    c, i = _add(_S26_BOX_BLT1[False], _S26_BOX_CMP4)
+    cycles += c
+    instructions += i
+    c, i = _add(_S26_BOX_BLT2[not passed], _S26_BOX_PASS_EXIT if passed else _S26_BOX_FAIL_EXIT)
+    return cycles + c, instructions + i
+
+
+def _s26_actor_entry_cost(read, entry, is_last):
+    """One `game.movement.BOX_SCAN_TABLE` entry's own cost through `game.player.state_26_actor_scan`,
+    from its own `tst.w $6(a0)` through whichever tail it reaches.  Returns (cycles, instructions,
+    continues) -- `continues` is False for 'matched'/'unmatched' (the scan ends there, no advance/loop
+    suffix) and True for every skip arm (the caller adds the loop's own advance+dbra)."""
+    from .game import player
+    cycles, instructions = _S26A_TST_B
+    if entry['arm'] == 'skip-inactive':
+        c, i = _S26A_BEQ_B[True]
+        return cycles + c, instructions + i, True
+    c, i = _S26A_BEQ_B[False]
+    cycles += c
+    instructions += i
+    c, i = _S26A_TST_A
+    cycles += c
+    instructions += i
+    c, i = _S26A_BMI_A[False]
+    cycles += c
+    instructions += i
+    c, i = _add(_S26A_MOVEM, _S26A_MOVE_D3, _S26A_LEA_RECORD, _S26A_ADD_D3, _S26A_ADDA_D3, _S26A_ADD_D3,
+               _S26A_ADD_D3, _S26A_ADDA_D3, _S26A_CMP_KIND)
+    cycles += c
+    instructions += i
+    if entry['arm'] == 'skip-kind':
+        c, i = _S26A_BNE_KIND[True]
+        return cycles + c, instructions + i, True
+    c, i = _S26A_BNE_KIND[False]
+    cycles += c
+    instructions += i
+    c, i = _add(_S26A_MOVEA_A3, _S26A_BSR_2E0A)
+    cycles += c
+    instructions += i
+    c, i = _s26_id_search_cost(entry['found_id'])
+    cycles += c
+    instructions += i
+    c, i = _add(_S26A_EXG, _S26A_TST_D1, _S26A_BMI_D1[False], _S26A_BSR_81EA)
+    cycles += c
+    instructions += i
+    box_passed = entry['arm'] != 'box-failed'
+    ex = read(entry['entry'] & 0xFFFFFF, 2)
+    ey = read((entry['entry'] + 2) & 0xFFFFFF, 2)
+    px = (read(player.POSITION_X, 2) + 0xC) & 0xFFFF
+    py = read(player.POSITION_Y, 2)
+    far_x = (ex + 0x10) & 0xFFFF
+    far_y = (ey + 0x10) & 0xFFFF
+    px2 = (px + 8) & 0xFFFF
+    py2 = (py + 0x30) & 0xFFFF
+    pairs = (player._signed_word(px) <= player._signed_word(far_x),
+             player._signed_word(py) <= player._signed_word(far_y),
+             player._signed_word(px2) >= player._signed_word(ex))
+    c, i = _s26_box_test_cost(pairs, box_passed)
+    cycles += c
+    instructions += i
+    c, i = _S26A_BMI_BOX[not box_passed]
+    cycles += c
+    instructions += i
+    if not box_passed:
+        return cycles, instructions, True
+    # 0081AC-0081BE: up to four chained ID comparisons (0x76/0x78/0x7A/0x3E); the first match short-
+    # circuits straight to 0081C4, so only the matching id's own position (or all four, unmatched)
+    # costs a comparison.
+    payload = read(entry['record'] & 0xFFFFFF, 2)   # (a1): the F8C2 record's own word, not the id table's
+    matched_at = next((i for i, value in enumerate(player.PROXIMITY_MATCH_IDS) if value == payload), None)
+    last_index = matched_at if matched_at is not None else 3
+    for test_index in range(last_index + 1):
+        c, i = _S26A_ID_CMP
+        cycles += c
+        instructions += i
+        if test_index < 3:
+            c, i = _S26A_ID_BEQ[test_index == matched_at]
+        else:
+            # the fourth id (0x3E) is tested with 'bne': taken means NOT matched (falls to eori).
+            c, i = _S26A_BNE_FINAL[matched_at is None]
+        cycles += c
+        instructions += i
+    matched = matched_at is not None
+    if matched:
+        c, i = _add(_S26A_MOVE_FOUND, _S26A_CLR_PENDING, _S26A_BRA_SOUND)
+    else:
+        c, i = _add(_S26A_EORI, _S26A_EORI)
+    cycles += c
+    instructions += i
+    c, i = _add(_S26A_SOUND, _S26A_RTS)
+    return cycles + c, instructions + i, False
+
+
+def _s26_actor_scan_cost(read, result):
+    """`game.player.state_26_actor_scan`'s own cost: the three head gates (only `PROXIMITY_ACTIVE`
+    ever witnessed as the deciding one; the other two decline before reaching here) then, once armed,
+    the 200-entry loop over `game.movement.BOX_SCAN_TABLE`."""
+    from .game import movement
+    if result['arm'] == 'already-active':
+        cycles, instructions = _add(_S26A_TST_ACTIVE, _S26A_BNE_ACTIVE[True], _S26A_RTS_EARLY)
+        return cycles, instructions
+    cycles, instructions = _add(_S26A_TST_ACTIVE, _S26A_BNE_ACTIVE[False], _S26A_BTST_BUSY, _S26A_BNE_BUSY[False],
+                                _S26A_TST_PENDING, _S26A_BPL_PENDING[False], _S26A_SET_ACTIVE, _S26A_LEA_TABLE,
+                                _S26A_LOAD_COUNT)
+    entries = result['entries']
+    for index, entry in enumerate(entries):
+        is_last = index == movement.BOX_SCAN_COUNT - 1
+        c, i, continues = _s26_actor_entry_cost(read, entry, is_last)
+        cycles += c
+        instructions += i
+        if continues:
+            c, i = _S26A_DBRA_LAST if is_last else _S26A_DBRA_TAKEN
+            cycles += c + _S26A_ADVANCE[0]
+            instructions += i + _S26A_ADVANCE[1]
+    if result['arm'] == 'exhausted':
+        c, i = _S26A_RTS_EARLY
+        cycles += c
+        instructions += i
+    return cycles, instructions
+
+
+def _s26_actor_scan_exit_sr(read, sr, result):
+    """`game.player.state_26_actor_scan`'s own exit CCR.  'matched'/'unmatched' both end at
+    `0081DA move.w #$60,fdf4.w` -- a constant, so the flags are fixed regardless of how the scan
+    got there.  'already-active' exits on its own `tst.w f24a.w` (F24A's own live, nonzero value).
+    'exhausted' exits on whichever the LAST processed entry's own last flag-setter was; `game.
+    movement.BOX_SCAN_TABLE`'s own address-register `addq.w`/`dbra` never touch CCR, so the loop's
+    own advance-and-continue steps are transparent."""
+    from .game import player
+    if result['arm'] == 'already-active':
+        return _logic_sr(sr, read(player.PROXIMITY_ACTIVE, 2), 2)
+    if result['arm'] in ('matched', 'unmatched'):
+        return _logic_sr(sr, 0x60, 2)
+    last = result['entries'][-1]
+    if last['arm'] == 'skip-inactive':
+        return _logic_sr(sr, 0, 2)   # tst.w $6(a0): status-B, == 0
+    if last['arm'] == 'skip-kind':
+        value = read((last['record'] + 4) & 0xFFFFFF, 2)
+        return _cmp_sr(sr, value, 3, 2)   # cmpi.w #3,$4(a1)
+    if last['arm'] == 'box-failed':
+        return (sr & ~0x1F) | 0x08   # 0081EA's own move.w #8,-(a7); rtr (fail) leaves N set, X cleared
+    raise UnsupportedCandidate(f"state 26 actor scan exit CCR not modelled for entry arm: {last['arm']}")
+
+
+_S26_ACTOR_DECLINED = ('busy-declined', 'pending-declined', 'skip-negative', 'id-exhausted')
+
+
+def _s26_apply_stores(order, stores):
+    """Expand a semantics-layer `{address: (value, width)}` stores dict into `order`'s own per-byte
+    writes, the same shape `state0_plan` and friends already apply for `game.player`'s own helpers."""
+    for address, (value, width) in stores.items():
+        for a, b in _bytes(address & 0xFFFFFF, value, width):
+            order[a] = b
+
+
+def state_26_plan(machine, registers):
+    """005724: the real STATE_TABLE index 26.  See game/player.py's own module note above
+    `state_26_step` for the full arm breakdown and counts.  Every witnessed arm ends at
+    `pc = 0x0075D6`; the boundary declines the arms `state_26_step`/`state_26_actor_scan` name but
+    do not compute (real ROM, unwitnessed by any recording)."""
+    from .game import player
+    if registers['pc'] != STATE_26_ENTRY:
+        raise UnsupportedCandidate('state 26 (real index 26) planner needs the machine parked at 005724')
+    sr = registers['sr']
+    read = _reader(machine)
+    sp32 = registers['a7']
+    order = {}
+    exit_registers = {'d7': 0, 'd0': 0x1C}   # 005726's own moveq #$1c,d0 runs unconditionally, first
+
+    result = player.state_26_step(read)
+    arm = result['arm']
+    cycles, instructions = _add(_S26_MOVEQ0_D7, _S26_MOVEQ_D0, _S26_TST_EA20)
+
+    if arm in ('transition-27', 'transition-28'):
+        c, i = _S26_BEQ_EA20[False]
+        cycles += c
+        instructions += i
+        negative = arm == 'transition-27'
+        c, i = _S26_BPL_EA20[not negative]
+        cycles += c
+        instructions += i
+        target = player.STATE_26_TO_27 if negative else player.STATE_26_TO_28
+        if negative:
+            c, i = _S26_MOVEQ_NEG
+            cycles += c
+            instructions += i
+        c, i = _S26_MOVE_STATE
+        cycles += c
+        instructions += i
+        for a, b in _bytes(player.STATE_INDEX, target, 2):
+            order[a] = b
+        sr = _logic_sr(sr, target, 2)   # 005732's own move.w d0,f192.w is the last flag-setter
+        c, i = _S26_BRA_TAIL
+        cycles += c
+        instructions += i
+        exit_registers['d0'] = target   # moveq #imm,d0: a full 32-bit sign-extending load, not a merge
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x005736)
+
+    c, i = _S26_BEQ_EA20[True]
+    cycles += c
+    instructions += i
+    c, i = _S26_BTST_EA23
+    cycles += c
+    instructions += i
+    ea23_bit2 = read(player.EA23_WORD, 1) & 4
+
+    if arm == 'actor-scan':
+        c, i = _S26_BEQ_EA23[False]
+        cycles += c
+        instructions += i
+        c, i = _S26_BSR_8148
+        cycles += c
+        instructions += i
+        order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x005746, 4))
+        scan = player.state_26_actor_scan(read)
+        if scan['arm'] in _S26_ACTOR_DECLINED:
+            raise UnsupportedCandidate(f'state 26 actor scan arm not witnessed by a recording: {scan["arm"]}')
+        c, i = _s26_actor_scan_cost(read, scan)
+        cycles += c
+        instructions += i
+        if scan['arm'] != 'already-active':
+            order.update(_bytes(player.PROXIMITY_ACTIVE & 0xFFFFFF, 1, 2))   # 008162 move.w #1,f24a.w
+            reached_id = next((e for e in reversed(scan['entries']) if 'found_id' in e), None)
+            # 008180's own movem.w (a0),d0-d2 SIGN-EXTENDS each word into the full register, for
+            # every entry reaching skip-kind or deeper; 008184's own move.w d2,d3 then copies d2's
+            # LOW word into d3, preserving d3's own upper half.  The LAST such entry (which may be
+            # LATER than the last one to reach 2E0A/81EA, if it never gets past skip-kind itself)
+            # decides d0/d1/d2 outright; d3's own upper half is 0 once ANY entry in the whole scan
+            # ever reaches 81EA (its own moveq #$10,d2 clears d3 too, transitively, and nothing
+            # later un-clears a word op's own untouched upper half), else the entry's own original.
+            last_movem = next((e for e in reversed(scan['entries'])
+                               if e['arm'] in ('skip-kind', 'box-failed', 'matched', 'unmatched')), None)
+            any_reached_81ea = any('found_id' in e for e in scan['entries'])
+            if last_movem is not None:
+                mx = player._signed_word(read(last_movem['entry'] & 0xFFFFFF, 2))
+                my = player._signed_word(read((last_movem['entry'] + 2) & 0xFFFFFF, 2))
+                mk = player._signed_word(read((last_movem['entry'] + 4) & 0xFFFFFF, 2))
+                exit_registers['d0'] = mx & 0xFFFFFFFF
+                exit_registers['d1'] = my & 0xFFFFFFFF
+                exit_registers['d2'] = mk & 0xFFFFFFFF
+                # 008184-008192's own record-address arithmetic doubles d3 three times (*2, *4, *8)
+                # in place while building a1 (achievements._record_address's own shape) -- this runs
+                # for EVERY entry reaching skip-kind or deeper, not only ones that reach 2E0A/81EA.
+                d3_upper = 0 if any_reached_81ea else (registers['d3'] & 0xFFFF0000)
+                exit_registers['d3'] = d3_upper | ((mk & 0xFFFF) * 8 & 0xFFFF)
+            if reached_id is not None:
+                # bsr.w 2e0a then bsr.b 81ea both push a 4-byte return address at the SAME slot
+                # (sp32-8): 81EA's own 0081AA overwrites 2E0A's own 0081A2 there, then its own
+                # rtr-pushed CCR word leaves a 2-byte residue at sp32-10.
+                order.update(_bytes((sp32 - 8) & 0xFFFFFF, 0x0081AA, 4))
+                box_passed = reached_id['arm'] != 'box-failed'
+                order.update(_bytes((sp32 - 10) & 0xFFFFFF, 0 if box_passed else 8, 2))
+                # 0081EA's own body runs for reached_id's own entry regardless of whether a LATER
+                # entry then reaches skip-kind (which touches d0-d3 again but never d4/d5) -- so d4/
+                # d5 always come from reached_id, but d0-d3 only survive to the exit if reached_id IS
+                # the last entry to reach skip-kind or deeper (last_movem); otherwise a later entry's
+                # own fresh movem/record-address arithmetic (already applied above) wins instead.
+                ex = read(reached_id['entry'] & 0xFFFFFF, 2)
+                ey = read((reached_id['entry'] + 2) & 0xFFFFFF, 2)
+                far_x = (ex + 0x10) & 0xFFFF
+                far_y = (ey + 0x10) & 0xFFFF
+                if last_movem is reached_id:
+                    # 002E0A's own cmp.l (a0),d0 leaves d0 = the (x<<16|y) key it built (never
+                    # restored); 0081EA's own move.w (a0),d0 then overwrites d0's LOW word with the
+                    # SAME entry's own x again (a0 restored to the FFFF4342 slot by 0081A2's own
+                    # exg.l) -- both halves end up holding the entry's own x.  d1-d3's own upper
+                    # halves are 0 (each cleared by its own moveq before the word op that follows).
+                    exit_registers['d0'] = ((ex & 0xFFFF) << 16) | (ex & 0xFFFF)
+                    exit_registers['d1'] = ey
+                    exit_registers['d2'] = far_x
+                    exit_registers['d3'] = far_y
+                px = (read(player.POSITION_X, 2) + 0xC) & 0xFFFF
+                py = read(player.POSITION_Y, 2)
+                first_pair_passed = (player._signed_word(px) <= player._signed_word(far_x)
+                                     and player._signed_word(py) <= player._signed_word(far_y))
+                if first_pair_passed:
+                    px = (px + 8) & 0xFFFF
+                    py = (py + 0x30) & 0xFFFF
+                exit_registers['d4'] = px   # 0081F8-FA's own moveq #$c,d4 clears the upper half
+                exit_registers['d5'] = (registers['d5'] & 0xFFFF0000) | py   # never touched before ENTRY
+                exit_registers['a3'] = reached_id['found_id'] & 0xFFFFFFFF   # 0081A2's own exg.l a0,a3
+            reached_record = next((e for e in reversed(scan['entries']) if 'record' in e), None)
+            if reached_record is not None:
+                exit_registers['a1'] = reached_record['record'] & 0xFFFFFFFF   # 008186's own lea + adda chain
+            last_entry = scan['entries'][-1]
+            if last_entry['arm'] in ('matched', 'unmatched'):
+                # the terminal entry's own iteration never reaches its own dbra or addq.w #8,a0.
+                dbra_count = last_entry['index']
+                exit_registers['a0'] = last_entry['entry'] & 0xFFFFFFFF
+            else:
+                dbra_count = len(scan['entries'])
+                from .game import movement
+                exit_registers['a0'] = (movement.BOX_SCAN_TABLE + movement.BOX_SCAN_STRIDE * dbra_count) & 0xFFFFFFFF
+            exit_registers['d6'] = (registers['d6'] & 0xFFFF0000) | ((0xC7 - dbra_count) & 0xFFFF)   # move.w #$c7,d6 is a word op: the entry's own upper half survives
+        if scan['arm'] in ('matched', 'unmatched'):
+            for a, b in scan['stores'].items():
+                order.update(_bytes(a, b[0], b[1]))
+        sr = _s26_actor_scan_exit_sr(read, sr, scan)
+        last_pc = 0x005746
+        c, i = _S26_BRA_TAIL
+        cycles += c
+        instructions += i
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=last_pc)
+
+    c, i = _S26_BEQ_EA23[True]
+    cycles += c
+    instructions += i
+    c, i = _S26_CLR_F24A
+    cycles += c
+    instructions += i
+    for a, b in _bytes(player.PROXIMITY_ACTIVE & 0xFFFFFF, 0, 2):
+        order[a] = b
+    c, i = _S26_TST_EA1E
+    cycles += c
+    instructions += i
+    ea1e = player._signed_word(read(player.EA1E_WORD, 2))
+
+    if arm == 'state15-body':
+        c, i = _S26_BPL_EA1E[True]
+        cycles += c
+        instructions += i
+        # 005726's own moveq #$1c,d0 already cleared d0's upper half before this shared body reads
+        # it; state4's own call site has no such head, so the merge base must be per-caller.
+        probe_regs = dict(registers, d0=0x1C)
+        c, i, probe_writes, overlay, sr, last_pc = _state15_ground_probe(read, sp32, sr, probe_regs)
+        cycles += c
+        instructions += i
+        order.update(probe_writes)
+        exit_registers.update(overlay)
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=last_pc)
+
+    c, i = _S26_BPL_EA1E[False]
+    cycles += c
+    instructions += i
+    c, i = _S26_BSR_57C2
+    cycles += c
+    instructions += i
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x00575A, 4))
+    scan = player.state_26_box_scan(read)
+    c, i = _s26_box_scan_cost(scan['entries'])
+    cycles += c
+    instructions += i
+    # d0-d3 (near_x/near_y/far_x/far_y) are set once at the head and never touched again.  d4/d5
+    # hold the LAST examined entry's own (x, y) (the fourth chained comparison's own operands, or a
+    # 'found' entry's own) -- unchanged from ENTRY if every entry skipped via the status test alone,
+    # never reaching that read.  d6 is the loop counter at the point the scan stopped (a 'found'
+    # entry's own iteration never reaches its own dbra; full exhaustion runs it 20 times, ending at
+    # -1).  a0 is the last examined entry's own address (never advanced past a 'found' one).
+    x, y = read(player.POSITION_X, 2), read(player.POSITION_Y, 2)
+    near_x = (x - player.STATE_26_BOX_X_MARGIN) & 0xFFFF
+    far_x = (x + player.STATE_26_BOX_X_MARGIN) & 0xFFFF
+    near_y = (y - player.STATE_26_BOX_Y_MARGIN) & 0xFFFF
+    far_y = (y + player.STATE_26_BOX_Y_MARGIN) & 0xFFFF
+    # d0/d1: move.w then subi.w/subq.w, both word ops -- the entry's own upper half survives.
+    # d2/d3: moveq (a full 32-bit clear) then add.w -- the upper half is 0, not the entry's own.
+    exit_registers['d0'] = near_x   # d0's upper half has been 0 since 005726's own moveq #$1c,d0
+    exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | near_y
+    exit_registers['d2'] = far_x
+    exit_registers['d3'] = far_y
+    last_tested = next((e for e in reversed(scan['entries']) if e['arm'] in ('tested', 'found')), None)
+    if last_tested is not None:
+        exit_registers['d4'] = (registers['d4'] & 0xFFFF0000) | last_tested['x']
+        exit_registers['d5'] = (registers['d5'] & 0xFFFF0000) | last_tested['y']
+    last_entry = scan['entries'][-1]
+    if last_entry['arm'] == 'found':
+        # the found entry's own iteration never reaches its own dbra or its own addq.w #8,a0.
+        dbra_count = last_entry['index']
+        exit_registers['a0'] = last_entry['entry'] & 0xFFFFFFFF
+    else:
+        # every entry through the scan's own end (found or not) runs its own advance+dbra.
+        dbra_count = len(scan['entries'])
+        exit_registers['a0'] = (player.STATE_26_BOX_SCAN_TABLE + player.STATE_26_BOX_SCAN_STRIDE * dbra_count) & 0xFFFFFFFF
+    exit_registers['d6'] = (0x13 - dbra_count) & 0xFFFF   # moveq #$13,d6 clears the upper half
+
+    c, i = _S26_TST_EF54
+    cycles += c
+    instructions += i
+    found = arm == 'box-found'
+    # 00575A's own tst.w ef54.w is a fresh flag-setter that overrides whatever the box scan (a plain
+    # rts, not a Seam) internally left -- the store block's own last write (a MOVE too) never
+    # survives to be observed here.
+    sr = _logic_sr(sr, 1 if found else 0, 2)
+
+    if found:
+        c, i = _S26_BNE_EF54[True]
+        cycles += c
+        instructions += i
+        for a, b in scan['stores'].items():
+            order.update(_bytes(a, b[0], b[1]))
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x00575E)
+
+    c, i = _S26_BNE_EF54[False]
+    cycles += c
+    instructions += i
+    c, i = _S26_BSR_63FA
+    cycles += c
+    instructions += i
+    c, i = GRID_CELL_COST
+    cycles += c
+    instructions += i
+    order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x005766, 4))
+    from .game.grid import grid_cell
+    cell = grid_cell(read)
+    exit_registers['a0'] = cell['address'] & 0xFFFFFFFF
+    # d0's upper half has been 0 since 005726's own moveq #$1c,d0; d1's own upper half is whatever
+    # the box scan's own subq.w #8,d1 left (the entry's own, since that too is a word op).
+    exit_registers['d0'] = cell['d0']
+    exit_registers['d1'] = (exit_registers['d1'] & 0xFFFF0000) | cell['d1']
+    sr = _asl_sr(sr, cell['row_source'], 3, 2)
+    c, i = _S26_LOAD_POSX
+    cycles += c
+    instructions += i
+    c, i = _S26_ANDI_1F
+    cycles += c
+    instructions += i
+    position_x = read(player.POSITION_X, 2)
+    low5 = position_x & 0x1F
+    exit_registers['d0'] = low5   # 005766's own move.w f18c.w,d0 is a word op, but d0's upper half
+                                    # has been 0 since 005726's own moveq #$1c,d0 either way
+    sr = _logic_sr(sr, low5, 2)
+    c, i = _S26_CMP_10
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, low5, 0x10, 2)
+    low = low5 < player.STATE_26_HIGH_LOW5_GATE
+    c, i = _S26_BLT_10[low]
+    cycles += c
+    instructions += i
+
+    if low:
+        c, i = _S26_CMP_A0
+        cycles += c
+        instructions += i
+        first_byte = read(cell['address'] & 0xFFFFFF, 1)
+        sr = _cmp_sr(sr, first_byte, 2, 1)
+        if arm == 'transition-14-low':
+            c, i = _S26_BEQ_A0[True]
+            cycles += c
+            instructions += i
+            # 0057B4's own beq.b jumps straight into 578E (the SAME merge point the high-low5 arm's
+            # own double-pass falls into from 005788), so the SAME tail (andi/move/moveq/4x clr/bra)
+            # runs here too -- just without the +0x20 advance beforehand.
+            masked_x = position_x & 0xFFE0
+            c, i = _S26_ANDI_MASK
+            cycles += c
+            instructions += i
+            order.update(_bytes(player.POSITION_X, masked_x, 2))
+            sr = _logic_sr(sr, masked_x, 2)
+            c, i = _S26_MOVE_STATE14
+            cycles += c
+            instructions += i
+            order.update(_bytes(player.STATE_INDEX, 0xE, 2))
+            c, i = _S26_MOVEQ_1A
+            cycles += c
+            instructions += i
+            _s26_apply_stores(order, player._state0_state14_stores())
+            for _ in range(4):
+                c, i = _S26_CLR_FIELD
+                cycles += c
+                instructions += i
+            exit_registers['d7'] = 0x1A
+            sr = _logic_sr(sr, 0, 2)   # 00579C-0057A8's own last clr.w is the last flag-setter
+            c, i = _S26_BRA_TAIL
+            cycles += c
+            instructions += i
+            exit_registers['pc'] = 0x0075D6
+            exit_registers['sr'] = sr
+            return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                              registers=exit_registers, last_pc=0x0057AC)
+        c, i = _S26_BEQ_A0[False]
+        cycles += c
+        instructions += i
+        if arm == 'box-not-found-low-second-found':
+            raise UnsupportedCandidate('state 26 low5<0x10 second-test transition-14 arm not witnessed by a recording')
+        c, i = _S26_CMP_A0_80
+        cycles += c
+        instructions += i
+        second_byte = read((cell['address'] + 0x80) & 0xFFFFFF, 1)
+        sr = _cmp_sr(sr, second_byte, 2, 1)
+        c, i = _S26_BEQ_A0_80[False]
+        cycles += c
+        instructions += i
+        c, i = _S26_BRA_TAIL
+        cycles += c
+        instructions += i
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x0057BE)
+
+    c, i = _S26_CMP_A0_1
+    cycles += c
+    instructions += i
+    first_byte = read((cell['address'] + 1) & 0xFFFFFF, 1)
+    sr = _cmp_sr(sr, first_byte, 2, 1)
+    first_hit = first_byte == 2
+    c, i = _S26_BNE_A0_1[not first_hit]
+    cycles += c
+    instructions += i
+    if not first_hit:
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x00577A)
+    c, i = _S26_CMP_A0_81
+    cycles += c
+    instructions += i
+    second_byte = read((cell['address'] + 0x81) & 0xFFFFFF, 1)
+    sr = _cmp_sr(sr, second_byte, 2, 1)
+    second_hit = second_byte == 2
+    c, i = _S26_BNE_A0_81[not second_hit]
+    cycles += c
+    instructions += i
+    if not second_hit:
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x005784)
+    c, i = _S26_ADDI_20
+    cycles += c
+    instructions += i
+    new_x = (position_x + 0x20) & 0xFFFF
+    for a, b in _bytes(player.POSITION_X, new_x, 2):
+        order[a] = b
+    sr = _logic_sr(sr, new_x, 2)
+    c, i = _S26_ANDI_MASK
+    cycles += c
+    instructions += i
+    masked_x = new_x & 0xFFE0
+    for a, b in _bytes(player.POSITION_X, masked_x, 2):
+        order[a] = b
+    sr = _logic_sr(sr, masked_x, 2)
+    c, i = _S26_MOVE_STATE14
+    cycles += c
+    instructions += i
+    for a, b in _bytes(player.STATE_INDEX, 0xE, 2):
+        order[a] = b
+    c, i = _S26_MOVEQ_1A
+    cycles += c
+    instructions += i
+    _s26_apply_stores(order, player._state0_state14_stores())
+    for _ in range(4):
+        c, i = _S26_CLR_FIELD
+        cycles += c
+        instructions += i
+    exit_registers['d7'] = 0x1A
+    sr = _logic_sr(sr, 0, 2)   # 0057A8's own final clr.w f1a8.w is the last flag-setter
+    c, i = _S26_BRA_TAIL
+    cycles += c
+    instructions += i
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x0057AC)
+
+
 # --- 00648C: state 8 (game.player.state8_step / state8_fall_tail / _state8_head) -- state 9's own
 # sibling, sharing state 9's own row-gate cost helper (`_row_gate_cost`) and jump-arc table constants
 # verbatim, the same shape state 26 already established for reuse.  Costed one instruction-block at a
@@ -11685,19 +12506,51 @@ STATE4_ENTRY = 0x007538
 
 _S4_TEST = (12, 1)                            # 007538 tst.w ea20.w
 _S4_BEQ = {True: (10, 1), False: (12, 1)}     # 00753C beq.w -- taken(==0): the state-15 composition (word branch)
-_S4_BSR_GRID = (18, 1)                        # 006D68 bsr.w $63fa
-_S4_GROUND_TEST = (16, 1)                     # 006D6C cmpi.b #1,$180(a0)
-_S4_GROUND_BEQ = {True: (10, 1), False: (12, 1)}   # 006D72 beq.w -- taken: ground found (word branch)
+_STATE15_BSR_GRID = (18, 1)                   # 006D68 bsr.w $63fa
+_STATE15_GROUND_TEST = (16, 1)                # 006D6C cmpi.b #1,$180(a0)
+_STATE15_GROUND_BEQ = {True: (10, 1), False: (12, 1)}   # 006D72 beq.w -- taken: ground found (word branch)
 _S4_BMI = {True: (10, 1), False: (8, 1)}      # 007540 bmi.b -- taken(<0): transition-3 (byte branch)
 _S4_TO2_TAIL = (16 + 4 + 10, 3)               # 007542 move.w #2,f192.w; 007548 moveq #2,d7; 00754A bra.w
 _S4_TO3_TAIL = (16 + 4 + 10, 3)               # 00754E move.w #3,f192.w; 007554 moveq #0,d7; 007556 bra.w
+
+
+def _state15_ground_probe(read, sp32, sr, registers):
+    """006D68-006D72: state 15's own body as reached by a shared fallthrough -- state 4's own
+    `FFFFEA20 == 0` arm (below) and the real STATE_TABLE index 26's own `FFFFEA1E >= 0` arm
+    (`game.player.state_26_step`'s own `'state15-body'` arm) both land here directly, no call
+    pushed on top of their own.  Re-runs the already-recovered grid cell lookup and tests its own
+    ground byte; 'not-found' past `006D72` is real ROM, unwitnessed by any recording from either
+    caller, and stays declined here for both.  Returns (cycles, instructions, stack write, exit
+    register overlay, exit sr, last_pc) for the caller to fold onto its own head cost."""
+    from .game.grid import grid_cell
+    c, i = _STATE15_BSR_GRID
+    cycles, instructions = c, i
+    cycles += GRID_CELL_COST[0]
+    instructions += GRID_CELL_COST[1]
+    order = dict(_bytes((sp32 - 4) & 0xFFFFFF, 0x006D6C, 4))
+    cell = grid_cell(read)
+    overlay = {'a0': cell['address'] & 0xFFFFFFFF,
+               'd0': (registers['d0'] & 0xFFFF0000) | cell['d0'],
+               'd1': (registers['d1'] & 0xFFFF0000) | cell['d1']}
+    sr = _asl_sr(sr, cell['row_source'], 3, 2)
+
+    c, i = _STATE15_GROUND_TEST
+    cycles += c
+    instructions += i
+    ground_byte = read((cell['address'] + 0x180) & 0xFFFFFF, 1)
+    sr = _cmp_sr(sr, ground_byte, 1, 1)
+    if ground_byte != 1:
+        raise UnsupportedCandidate('state 15 composition: ground not found at 006D72 not witnessed by a recording')
+    c, i = _STATE15_GROUND_BEQ[True]
+    cycles += c
+    instructions += i
+    return cycles, instructions, order, overlay, sr, 0x006D72
 
 
 def state4_plan(machine, registers):
     """007538 (state 4): the player state machine's own dispatch table entry 4.  See
     game.player's own module note above state4_step."""
     from .game import player
-    from .game.grid import grid_cell
     if registers['pc'] != STATE4_ENTRY:
         raise UnsupportedCandidate('state 4 planner needs the machine parked at 007538')
     sr = registers['sr']
@@ -11716,33 +12569,15 @@ def state4_plan(machine, registers):
     instructions += i
 
     if zero:
-        c, i = _S4_BSR_GRID
+        c, i, probe_writes, overlay, sr, last_pc = _state15_ground_probe(read, sp32, sr, registers)
         cycles += c
         instructions += i
-        cycles += GRID_CELL_COST[0]
-        instructions += GRID_CELL_COST[1]
-        order.update(_bytes((sp32 - 4) & 0xFFFFFF, 0x006D6C, 4))
-        cell = grid_cell(read)
-        exit_registers['a0'] = cell['address'] & 0xFFFFFFFF
-        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cell['d0']
-        exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cell['d1']
-        sr = _asl_sr(sr, cell['row_source'], 3, 2)
-
-        c, i = _S4_GROUND_TEST
-        cycles += c
-        instructions += i
-        ground_byte = read((cell['address'] + 0x180) & 0xFFFFFF, 1)
-        sr = _cmp_sr(sr, ground_byte, 1, 1)
-        ground = ground_byte == 1
-        if not ground:
-            raise UnsupportedCandidate('state 4/state 15 composition: ground not found at 006D72 not witnessed by a recording')
-        c, i = _S4_GROUND_BEQ[True]
-        cycles += c
-        instructions += i
+        order.update(probe_writes)
+        exit_registers.update(overlay)
         exit_registers['pc'] = 0x0075D6
         exit_registers['sr'] = sr
         return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
-                          registers=exit_registers, last_pc=0x006D72)
+                          registers=exit_registers, last_pc=last_pc)
 
     negative = ea20 < 0
     c, i = _S4_BMI[negative]
@@ -13623,15 +14458,13 @@ _PS_JMP = (8, 1)                                     # 005722 jmp (a0)
 
 # Real STATE_TABLE indices with a recovered handler of their own: every witnessed state (17 September's
 # own full-history tally) except 7 and 15 (game.player.UNWITNESSED_STATES: a bare rts and a body only
-# ever reached via state 4's own shared-fallthrough jump, never as FFFFF192's own value) -- plus one
-# more the 18 September stint's own naming left unresolved: real index 26 (player.STATE_HANDLERS[26],
-# ROM 005724).  The candidate named 'state-26' targets STATE26_ENTRY (0069AC), which the STATE_TABLE
-# reconstruction later showed is player.STATE_HANDLERS[20], not [26] (STATUS.md's own "misnomer left
-# as a fact for a future session"); real index 26's own handler at 005724 has never been recovered as
-# its own leaf, despite the coordinator's own tally showing it the seventh most frequent state (634 of
-# 13,488 activations on fb408bc75597).  Declined here by the same rule as 7/15: real ROM, no
-# candidate, not guessed -- this composition is keyed by the PC the STATE_TABLE actually holds at
-# each index, not by any candidate's own name, so the misnomer costs nothing beyond this decline.
+# ever reached via state 4's own shared-fallthrough jump, never as FFFFF192's own value).  Real index
+# 26 (player.STATE_HANDLERS[26], ROM 005724 -- the tree's largest single decline before this session,
+# 1,975 of 8,857 fallbacks) is recovered as `state_26_plan` (18 Sep, real-index-26 session); the
+# candidate PREVIOUSLY named 'state-26' targeted STATE26_ENTRY (0069AC), which the STATE_TABLE
+# reconstruction showed is player.STATE_HANDLERS[20], not [26] -- that candidate is renamed
+# 'state-20' in recovery.py (the gate PC and this dict entry are unchanged: this composition is
+# keyed by the PC the STATE_TABLE actually holds at each index, not by any candidate's own name).
 _PLAYER_STATE_PLANNERS = {
     STATE0_ENTRY: state0_plan, STATE1_ENTRY: state1_plan, STATE2_ENTRY: state2_plan,
     STATE3_ENTRY: state3_plan, STATE4_ENTRY: state4_plan, STATE5_ENTRY: state5_plan,
@@ -13642,6 +14475,7 @@ _PLAYER_STATE_PLANNERS = {
     STATE21_ENTRY: state21_plan, STATE22_ENTRY: state22_plan, STATE23_ENTRY: state23_plan,
     STATE24_ENTRY: movement_hit_primary_plan, STATE25_ENTRY: movement_hit_secondary_plan,
     STATE26_ENTRY: state26_plan, STATE27_ENTRY: state27_plan, STATE28_ENTRY: state28_plan,
+    STATE_26_ENTRY: state_26_plan,   # real STATE_TABLE index 26 (005724) -- STATE26_ENTRY above is index 20
 }
 
 

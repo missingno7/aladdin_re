@@ -19,7 +19,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
-                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
+                       SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
                        animation_step_plan, attack_update_plan, camera_follow_plan,
@@ -28,7 +28,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, kind_frame_offset_plan, launch_plan, message_gate_plan,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
                        next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_state_plan, player_tail_plan, proximity_plan,
-                       record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state2_plan, state10_plan, state3_plan, state4_plan, state5_plan, state6_plan, state8_plan, state9_plan, state11_plan, state12_plan, state13_plan, state14_plan, state16_plan, state17_plan, state18_plan, state19_plan, state21_plan, state22_plan, state23_plan, state26_plan, state27_plan, state28_plan, static_emit_plan, string_copy_plan, table_reset_plan,
+                       record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state2_plan, state10_plan, state3_plan, state4_plan, state5_plan, state6_plan, state8_plan, state9_plan, state11_plan, state12_plan, state13_plan, state14_plan, state16_plan, state17_plan, state18_plan, state19_plan, state21_plan, state22_plan, state23_plan, state26_plan, state_26_plan, state27_plan, state28_plan, static_emit_plan, string_copy_plan, table_reset_plan,
                        trail_check_plan, walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
 
@@ -266,7 +266,12 @@ PLANNERS = {
     'state-2': {STATE2_ENTRY: state2_plan},
     'state-3': {STATE3_ENTRY: state3_plan},
     'state-4': {STATE4_ENTRY: state4_plan},
-    'state-26': {STATE26_ENTRY: state26_plan},
+    # 'state-26' below targets 0069AC, real STATE_TABLE index 20, not 26 -- a misnomer left as a
+    # fact for a future session (docs/gods/STATUS.md's own 18 September entries), renamed here to
+    # 'state-20' (18 Sep, real-index-26 recovery session): the gate PC is unchanged, so this is
+    # purely a candidate-name fix, not a re-verification.
+    'state-20': {STATE26_ENTRY: state26_plan},
+    'state-26': {STATE_26_ENTRY: state_26_plan},
     'state-14': {STATE14_ENTRY: state14_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
@@ -415,7 +420,15 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # every arm at once.
              'state-9-mutant-result': ('state-9', _mutate_outcome),
              # the same reasoning: STATE_INDEX/F19C/D7 all feed the shared tail's own re-index or a
-             # future activation's own dispatch the same unbounded way.
+             # future activation's own dispatch the same unbounded way.  Renamed from 'state-26' (18
+             # Sep, real-index-26 recovery session): this candidate's own gate (0069AC) is real
+             # STATE_TABLE index 20, not 26 -- see PLANNERS' own comment above.
+             'state-20-mutant-result': ('state-20', _mutate_outcome),
+             # the real STATE_TABLE index 26 (005724): every witnessed arm writes STATE_INDEX,
+             # PROXIMITY_ACTIVE (F24A) or the box-scan's own found fields, all read back either by
+             # the shared tail's own re-index or by a LATER activation of this same gate (F24A's own
+             # debounce, the box-scan's own EF54/56/58) -- dropping every write is the one shape
+             # safe on every arm at once, the same reasoning every other player-state mutant uses.
              'state-26-mutant-result': ('state-26', _mutate_outcome),
              # the same reasoning as state 9's own mutant (its sibling, sharing the same shared-tail
              # hazard): STATE_INDEX/F19C/D7 all feed the shared tail's own re-index or a future
