@@ -24,6 +24,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY, aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY, aim_target_resolve_plan,
                        AIM_SEARCH_SCAN_ENTRY, aim_search_scan_plan,
+                       AIM_SEARCH_DISPATCH_ENTRY, aim_search_dispatch_plan,
                        SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
@@ -366,6 +367,7 @@ PLANNERS = {
     'aim-target-scan-backward': {AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan},
     'aim-target-resolve': {AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
     'aim-search-scan': {AIM_SEARCH_SCAN_ENTRY: aim_search_scan_plan},
+    'aim-search-dispatch': {AIM_SEARCH_DISPATCH_ENTRY: aim_search_dispatch_plan},
     'spawn-table-find-free': {SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
     'spawn-table-add': {SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
@@ -455,8 +457,14 @@ PLANNERS = {
                        GROUND_CONTACT_UPDATE_MIRROR_ENTRY: ground_contact_update_mirror_plan,
                        FALL_KIND_UPDATE_ENTRY: fall_kind_update_plan, FALL_KIND_UPDATE_MIRROR_ENTRY: fall_kind_update_mirror_plan,
                        AF3C_ENTRY: creature_grid_cell_d0d1_plan,
-                       AIM_CUE_ENTRY: aim_cue_update_plan,
-                       AIM_POOL_RESET_ENTRY: aim_pool_reset_plan, AIM_POOL_ADD_ENTRY: aim_pool_add_plan,
+                       # AIM_CUE_ENTRY (00B082) and AIM_POOL_RESET_ENTRY (00B02A) are RETIRED here too,
+                       # 19 September: both exit exclusively into 00AF52's own body (00AF90/00AF98,
+                       # confirmed against their own census fixtures), and AIM_SEARCH_DISPATCH_ENTRY's
+                       # own atomic plan (aim_search_dispatch_plan, below) composes both -- their own
+                       # PLANNERS entries and standalone tests are unchanged, the same retirement shape
+                       # as 00B588's and 00B002's own above.  AIM_POOL_ADD_ENTRY stays: it has a SECOND,
+                       # independent caller (00B62A's own 'store' arm, already composed elsewhere).
+                       AIM_POOL_ADD_ENTRY: aim_pool_add_plan,
                        AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan,
                        AIM_PROBE_MARK_ENTRY: aim_probe_mark_plan,
                        # AIM_PROBE_MARK_STORE_ENTRY (00B62A) and the two ray marches (00B354/00B440) are
@@ -481,6 +489,7 @@ PLANNERS = {
                        # as a gate hit.  62 -> 59 gates; their own PLANNERS entries and standalone tests
                        # are unchanged, the same retirement shape as above.
                        AIM_SEARCH_SCAN_ENTRY: aim_search_scan_plan,
+                       AIM_SEARCH_DISPATCH_ENTRY: aim_search_dispatch_plan,
                        SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
@@ -716,6 +725,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-ray-march-backward-mutant-result': ('aim-ray-march-backward', _mutate_aim_ray_march),
              'aim-pool-scan-mutant-result': ('aim-pool-scan', _mutate_aim_ray_march),
              'aim-search-scan-mutant-result': ('aim-search-scan', _mutate_aim_ray_march),
+             'aim-search-dispatch-mutant-result': ('aim-search-dispatch', _mutate_aim_ray_march),
              'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result),
              'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),

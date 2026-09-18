@@ -18766,6 +18766,495 @@ def aim_search_scan_plan(machine, registers):
                       last_pc=pool_plan.last_pc)
 
 
+# --- 00AF52: the camera-relative box test gating a full search dispatch -- AA76's own second call,
+# after 00AF3C.  Disassembled fresh (census-0XAF52-*, five recordings): AIM_SEARCH_BEST_FLAG:
+# AIM_SEARCH_BEST_INDEX (F2CE:F2D1, one long) is unconditionally reset to -1, then a camera-relative
+# four-way box test on (a5)'s own position (the SAME AIM_PROBE_LOW_BIAS/AIM_SEARCH_X_LIMIT/
+# AIM_PROBE_Y_HIGH bounds the probe box test already uses) -- out of bounds, real ROM stops here.  In
+# bounds: 00B02A (pool reset) and 00B082 (aim-cue update) run once each (A3-A5 saved around both,
+# reloaded -- not popped -- between them so 00B082 sees the SAME entry A3/A4/A5 00B02A did, THEN
+# popped once for real), AIM_SEARCH_START_INDEX (F2CA) is cleared, and 00B002 (the whole target-scan/
+# pool-scan composition) runs on (a5)'s own RAW position.  If AIM_SEARCH_BEST_INDEX afterward is
+# (unsigned) <= 0x10, done.  Otherwise a SECOND, entirely undisassembled-by-the-blocker-doc loop scans
+# the 32-slot AIM_POOL (FFFF40B2, distinct from AIM_SEARCH_POOL_LOW) circularly: every occupied slot
+# (D0/D1/D2/D3, its own found target's position and AIM_SEARCH_START_INDEX/AIM_SEARCH_FLAG_SOURCE seed)
+# is cleared, AIM_POOL_COUNT decremented, and 00B002 re-run on the TARGET's own position with F2CA/F2CC
+# freshly seeded from the popped slot -- stopping the same way (BEST_INDEX <= 0x10) or when
+# AIM_POOL_COUNT reaches 0; a full pass with the count still nonzero wraps back to the pool's own start
+# (real, witnessed: `bra.b $afb2`).  A slot-scan reaching all 32 slots while STILL holding a nonzero
+# BEST_INDEX search (not the wrap, the OTHER exhaustion arm past the found-slot body) is real ROM,
+# never witnessed by any of the five recordings -- declined, the same way every other exhaustion arm
+# this whole family already declines.  census_all's own `iters` distribution (351 fixtures, 19
+# September): 279 never re-loop, 33/19/4/11/4/1 loop 1/2/3/4/7/8 times -- the loop is real but usually
+# short; each iteration re-runs the ENTIRE 00B002 composition, so this routine's own cost-cap decline
+# (the same native/machine.cpp al_atomic check every composition in this family already carries)
+# triggers far more often here than in 00B002 alone.
+AIM_SEARCH_DISPATCH_ENTRY, AIM_SEARCH_DISPATCH_LAST_PC = 0x00AF52, 0x00B000
+
+_ASD_COST = {
+    (0x00AF52, None): 24, (0x00AF5A, None): 8, (0x00AF5C, None): 12, (0x00AF60, None): 12,
+    (0x00AF64, None): 12, (0x00AF68, None): 8, (0x00AF6C, False): 12, (0x00AF6C, True): 10,
+    (0x00AF70, None): 8, (0x00AF74, False): 12, (0x00AF74, True): 10, (0x00AF78, None): 8,
+    (0x00AF7C, False): 12, (0x00AF7C, True): 10, (0x00AF80, None): 8,
+    (0x00AF84, False): 12, (0x00AF84, True): 10,
+    (0x00AF88, None): 32, (0x00AF8C, True): 18, (0x00AF90, None): 36, (0x00AF94, True): 18,
+    (0x00AF98, None): 36, (0x00AF9C, None): 16, (0x00AFA0, None): 8, (0x00AFA2, None): 12,
+    (0x00AFA6, True): 18, (0x00AFAA, None): 16, (0x00AFB0, False): 8, (0x00AFB0, True): 10,
+    (0x00AFB2, None): 12, (0x00AFB8, None): 4,
+    (0x00AFBA, None): 12, (0x00AFBE, False): 8, (0x00AFBE, True): 10,
+    (0x00AFC0, None): 12, (0x00AFC2, False): 8, (0x00AFC2, True): 10,
+    (0x00AFC4, None): 4, (0x00AFC6, None): 4, (0x00AFC8, None): 8,
+    (0x00AFCC, False): 8, (0x00AFCC, True): 10, (0x00AFCE, True): 10,
+    (0x00AFD0, None): 28, (0x00AFD4, None): 20, (0x00AFD6, None): 20, (0x00AFD8, None): 16,
+    (0x00AFDC, None): 4, (0x00AFDE, None): 12, (0x00AFE2, None): 12, (0x00AFE6, None): 56,
+    (0x00AFEA, True): 18, (0x00AFEC, None): 60, (0x00AFF0, None): 16,
+    (0x00AFF6, False): 8, (0x00AFF6, True): 10, (0x00AFF8, None): 8, (0x00AFFC, True): 10,
+    (0x00B000, None): 16,   # rts -- every exit path converges here, charged once at each return point
+}
+
+
+def _asd_invoke_search_scan(machine, overlay, sp_slot, d0, d1, sr, current, return_pc):
+    """One bsr $b002 -- the return-address residue always lands at sp_slot (this routine's own frame
+    never grows around any of these calls), with the SAME cap check every composition in this family
+    carries (aim_pool_scan_plan's own internal check only sees ITS OWN local total, never this
+    routine's own prefix, and aim_search_scan_plan's own only sees ITS OWN three-call prefix, never
+    a SECOND or later invocation's own accumulated cost from a previous loop iteration).  `return_pc`
+    is 0x00AFAA for the first (outside the loop) call and 0x00AFEC for every loop re-invocation --
+    the SAME slot, a different return address, real and witnessed both ways."""
+    for offset in range(4):
+        overlay[(sp_slot + offset) & 0xFFFF] = (return_pc >> (8 * (3 - offset))) & 0xFF
+    search_regs = dict(current, pc=AIM_SEARCH_SCAN_ENTRY, a7=sp_slot, sr=sr, d0=d0, d1=d1)
+    plan = aim_search_scan_plan(_ConstMachine(machine, overlay), search_regs)
+    for addr, value in plan.writes:
+        overlay[addr & 0xFFFF] = value
+    return plan
+
+
+def aim_search_dispatch_plan(machine, registers):
+    """00AF52: see the module note above."""
+    if registers['pc'] != AIM_SEARCH_DISPATCH_ENTRY:
+        raise UnsupportedCandidate('aim search dispatch planner needs the machine parked at 00AF52')
+    from .game import creatures
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a5 = registers['a5'] & 0xFFFFFFFF
+    overlay = {}
+    cycles, instructions = 0, 0
+
+    def charge(fragment):
+        nonlocal cycles, instructions
+        cycles += fragment[0]
+        instructions += fragment[1]
+
+    def cost(addr, taken=None):
+        return _ASD_COST[(addr, taken)], 1
+
+    def cur_read(address, size):
+        return _reader(_ConstMachine(machine, overlay))(address, size)
+
+    def cap_check(label):
+        if cycles > 100000 or instructions > 10000:
+            raise UnsupportedCandidate(
+                'aim search dispatch: projected cost exceeds the native adapter\'s own atomic-plan cap '
+                f'({cycles} cycles, {instructions} instructions {label})')
+
+    c, i = cost(0x00AF52)
+    cycles += c
+    instructions += i
+    for addr, value in _bytes(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFF, 0xFFFFFFFF, 4):
+        overlay[addr] = value
+
+    d0 = (registers['d0'] & 0xFFFF0000) | (cur_read(a5 & 0xFFFFFF, 2) & 0xFFFF)
+    c, i = cost(0x00AF5A)
+    cycles += c
+    instructions += i
+    d1 = (registers['d1'] & 0xFFFF0000) | (cur_read((a5 + 2) & 0xFFFFFF, 2) & 0xFFFF)
+    c, i = cost(0x00AF5C)
+    cycles += c
+    instructions += i
+    follow_x = cur_read(creatures.FOLLOW_X & 0xFFFFFF, 2) & 0xFFFF
+    follow_y = cur_read(creatures.FOLLOW_Y & 0xFFFFFF, 2) & 0xFFFF
+    d0_low = (d0 - follow_x) & 0xFFFF
+    sr = _sub_sr(sr, d0 & 0xFFFF, follow_x, 2)
+    d0 = (d0 & 0xFFFF0000) | d0_low
+    c, i = cost(0x00AF60)
+    cycles += c
+    instructions += i
+    d1_low = (d1 - follow_y) & 0xFFFF
+    sr = _sub_sr(sr, d1 & 0xFFFF, follow_y, 2)
+    d1 = (d1 & 0xFFFF0000) | d1_low
+    c, i = cost(0x00AF64)
+    cycles += c
+    instructions += i
+
+    def bound_exit(register_exits):
+        nonlocal cycles, instructions
+        c, i = cost(0x00B000)
+        cycles += c
+        instructions += i
+        writes = tuple((addr | 0xFF0000, value) for addr, value in overlay.items())
+        registers_out = dict(register_exits)
+        registers_out['a7'] = (sp32 + 4) & 0xFFFFFFFF
+        registers_out['pc'] = _return(machine, sp)
+        registers_out['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=registers_out,
+                          last_pc=AIM_SEARCH_DISPATCH_LAST_PC)
+
+    x = creatures._signed_word(d0_low)
+    c, i = cost(0x00AF68)
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, d0_low, creatures.AIM_PROBE_LOW_BIAS & 0xFFFF, 2)
+    x_low_fail = x <= creatures.AIM_PROBE_LOW_BIAS
+    c, i = cost(0x00AF6C, x_low_fail)
+    cycles += c
+    instructions += i
+    if x_low_fail:
+        return bound_exit({'d0': d0, 'd1': d1})
+
+    c, i = cost(0x00AF70)
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, d0_low, creatures.AIM_SEARCH_X_LIMIT & 0xFFFF, 2)
+    x_high_fail = x >= creatures.AIM_SEARCH_X_LIMIT
+    c, i = cost(0x00AF74, x_high_fail)
+    cycles += c
+    instructions += i
+    if x_high_fail:
+        return bound_exit({'d0': d0, 'd1': d1})
+
+    y = creatures._signed_word(d1_low)
+    c, i = cost(0x00AF78)
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, d1_low, creatures.AIM_PROBE_LOW_BIAS & 0xFFFF, 2)
+    y_low_fail = y <= creatures.AIM_PROBE_LOW_BIAS
+    c, i = cost(0x00AF7C, y_low_fail)
+    cycles += c
+    instructions += i
+    if y_low_fail:
+        raise UnsupportedCandidate('aim search dispatch: Y-low bound exit, not witnessed by a recording')
+
+    c, i = cost(0x00AF80)
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, d1_low, creatures.AIM_PROBE_Y_HIGH & 0xFFFF, 2)
+    y_high_fail = y >= creatures.AIM_PROBE_Y_HIGH
+    c, i = cost(0x00AF84, y_high_fail)
+    cycles += c
+    instructions += i
+    if y_high_fail:
+        return bound_exit({'d0': d0, 'd1': d1})
+
+    # In bounds: 00B02A (pool reset), then 00B082 (aim-cue update) with the SAME entry A3/A4/A5 --
+    # movem.l a3-a5,-(a7) then movem.l (a7),a3-a5 (no pop) between the two calls, real 12-byte residue.
+    a3, a4 = registers['a3'] & 0xFFFFFFFF, registers['a4'] & 0xFFFFFFFF
+    current = dict(registers, d0=d0, d1=d1)
+    c, i = cost(0x00AF88)
+    cycles += c
+    instructions += i
+    frame_sp = (sp - 12) & 0xFFFFFF
+    for offset, value in ((0, a3), (4, a4), (8, a5)):
+        for byte_offset in range(4):
+            overlay[(frame_sp + offset + byte_offset) & 0xFFFF] = (value >> (8 * (3 - byte_offset))) & 0xFF
+
+    c, i = cost(0x00AF8C, True)
+    cycles += c
+    instructions += i
+    reset_push = (frame_sp - 4) & 0xFFFFFF
+    for offset in range(4):
+        overlay[(reset_push + offset) & 0xFFFF] = (0x00AF90 >> (8 * (3 - offset))) & 0xFF
+    reset_plan = aim_pool_reset_plan(_ConstMachine(machine, overlay), dict(current, pc=AIM_POOL_RESET_ENTRY,
+                                                                           a7=reset_push, sr=sr))
+    cycles += reset_plan.cycles
+    instructions += reset_plan.instructions
+    for addr, value in reset_plan.writes:
+        overlay[addr & 0xFFFF] = value
+    sr = reset_plan.registers['sr']
+    cap_check('after 00B02A')
+
+    c, i = cost(0x00AF90)
+    cycles += c
+    instructions += i
+    c, i = cost(0x00AF94, True)
+    cycles += c
+    instructions += i
+    cue_push = (frame_sp - 4) & 0xFFFFFF
+    for offset in range(4):
+        overlay[(cue_push + offset) & 0xFFFF] = (0x00AF98 >> (8 * (3 - offset))) & 0xFF
+    cue_regs = dict(current, pc=AIM_CUE_ENTRY, a7=cue_push, sr=sr, a3=a3, a4=a4)
+    cue_plan = aim_cue_update_plan(_ConstMachine(machine, overlay), cue_regs)
+    cycles += cue_plan.cycles
+    instructions += cue_plan.instructions
+    for addr, value in cue_plan.writes:
+        overlay[addr & 0xFFFF] = value
+    sr = cue_plan.registers['sr']
+    current.update({k: v for k, v in cue_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    cap_check('after 00B082')
+
+    c, i = cost(0x00AF98)
+    cycles += c
+    instructions += i
+    # a3/a4/a5 are exactly what this routine's own caller supplied -- real, unconditional on every
+    # witnessed occurrence (00B02A never touches them, and 00B082's own body is popped away again here).
+    current['a3'], current['a4'], current['a5'] = a3, a4, a5
+
+    c, i = cost(0x00AF9C)
+    cycles += c
+    instructions += i
+    overlay[creatures.AIM_SEARCH_START_INDEX & 0xFFFF] = 0
+    overlay[(creatures.AIM_SEARCH_START_INDEX + 1) & 0xFFFF] = 0
+
+    d0 = (current['d0'] & 0xFFFF0000) | (cur_read(a5 & 0xFFFFFF, 2) & 0xFFFF)
+    c, i = cost(0x00AFA0)
+    cycles += c
+    instructions += i
+    d1 = (current['d1'] & 0xFFFF0000) | (cur_read((a5 + 2) & 0xFFFFFF, 2) & 0xFFFF)
+    c, i = cost(0x00AFA2)
+    cycles += c
+    instructions += i
+    current['d0'], current['d1'] = d0, d1
+
+    c, i = cost(0x00AFA6, True)
+    cycles += c
+    instructions += i
+    search_push = (sp - 4) & 0xFFFFFF
+    search_plan = _asd_invoke_search_scan(machine, overlay, search_push, d0, d1, sr, current, 0x00AFAA)
+    cycles += search_plan.cycles
+    instructions += search_plan.instructions
+    sr = search_plan.registers['sr']
+    current.update({k: v for k, v in search_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+    cap_check('after the first 00B002')
+
+    def tail_compare():
+        nonlocal cycles, instructions, sr
+        c, i = cost(0x00AFAA)
+        cycles += c
+        instructions += i
+        best_index = cur_read(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFFFF, 2) & 0xFFFF
+        sr = _cmp_sr(sr, best_index, 0x10, 2)
+        return best_index <= 0x10
+
+    if tail_compare():
+        c, i = cost(0x00AFB0, True)
+        cycles += c
+        instructions += i
+        c, i = cost(0x00B000)
+        cycles += c
+        instructions += i
+        writes = tuple((addr | 0xFF0000, value) for addr, value in overlay.items())
+        exit_registers = dict(current)
+        exit_registers['a7'] = (sp32 + 4) & 0xFFFFFFFF
+        exit_registers['pc'] = _return(machine, sp)
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_SEARCH_DISPATCH_LAST_PC)
+    c, i = cost(0x00AFB0, False)
+    cycles += c
+    instructions += i
+
+    # The pool-drain loop: every occupied AIM_POOL slot re-runs 00B002 on the TARGET's own position,
+    # seeding AIM_SEARCH_START_INDEX/AIM_SEARCH_FLAG_SOURCE from the slot's own D2/D3 first.  A0/D6 are
+    # this routine's own scan cursor and slot-visit counter (real, python-tracked, since the outer
+    # movem save/restore around each 00B002 call means whatever that call does to them internally never
+    # survives back out here); D7/A3-A5 are pure stack residue around the same call, restored the SAME
+    # way.  Bounded defensively at 96 total slot-visits (three full circular passes) -- AIM_POOL_COUNT
+    # only ever decreases on an occupied slot, so a real activation always terminates well before that;
+    # the bound exists only to guarantee this loop itself can never hang on an unforeseen input.
+    c, i = cost(0x00AFB2)
+    cycles += c
+    instructions += i
+    a0 = creatures.AIM_POOL_LOW & 0xFFFFFFFF
+    c, i = cost(0x00AFB8)
+    cycles += c
+    instructions += i
+    d6 = 0
+    for _ in range(96):
+        c, i = cost(0x00AFBA)
+        cycles += c
+        instructions += i
+        pool_count = cur_read(creatures.AIM_POOL_COUNT & 0xFFFFFF, 2) & 0xFFFF
+        sr = _logic_sr(sr, pool_count, 2)
+        pool_empty = pool_count == 0
+        c, i = cost(0x00AFBE, pool_empty)
+        cycles += c
+        instructions += i
+        if pool_empty:
+            break
+
+        c, i = cost(0x00AFC0)
+        cycles += c
+        instructions += i
+        leading = cur_read(a0 & 0xFFFFFF, 4)
+        sr = _logic_sr(sr, leading, 4)
+        occupied = leading != 0
+        c, i = cost(0x00AFC2, occupied)
+        cycles += c
+        instructions += i
+
+        if not occupied:
+            c, i = cost(0x00AFC4)
+            cycles += c
+            instructions += i
+            a0 = (a0 + 8) & 0xFFFFFFFF
+            c, i = cost(0x00AFC6)
+            cycles += c
+            instructions += i
+            d6 += 1
+            c, i = cost(0x00AFC8)
+            cycles += c
+            instructions += i
+            sr = _cmp_sr(sr, d6, 0x20, 2)
+            more_slots = d6 < 0x20
+            c, i = cost(0x00AFCC, more_slots)
+            cycles += c
+            instructions += i
+            if more_slots:
+                continue
+            c, i = cost(0x00AFCE, True)
+            cycles += c
+            instructions += i
+            # bra.b $afb2 lands on the SAME lea.l/moveq reset the routine's own head uses -- real,
+            # charged instructions, not just this loop's own bookkeeping effect.
+            c, i = cost(0x00AFB2)
+            cycles += c
+            instructions += i
+            a0 = creatures.AIM_POOL_LOW & 0xFFFFFFFF
+            c, i = cost(0x00AFB8)
+            cycles += c
+            instructions += i
+            d6 = 0
+            continue
+
+        # movem.w (a0),d0-d3: word-size loads SIGN-EXTEND each register fully -- the target's own X/Y
+        # (D0/D1) and this slot's own AIM_SEARCH_START_INDEX/AIM_SEARCH_FLAG_SOURCE seed (D2/D3).
+        slot_d0 = cur_read(a0 & 0xFFFFFF, 2) & 0xFFFF
+        slot_d1 = cur_read((a0 + 2) & 0xFFFFFF, 2) & 0xFFFF
+        slot_d2 = cur_read((a0 + 4) & 0xFFFFFF, 2) & 0xFFFF
+        slot_d3 = cur_read((a0 + 6) & 0xFFFFFF, 2) & 0xFFFF
+        d0 = 0xFFFF0000 | slot_d0 if slot_d0 & 0x8000 else slot_d0
+        d1 = 0xFFFF0000 | slot_d1 if slot_d1 & 0x8000 else slot_d1
+        c, i = cost(0x00AFD0)
+        cycles += c
+        instructions += i
+        for offset in range(4):
+            overlay[(a0 + offset) & 0xFFFF] = 0
+        c, i = cost(0x00AFD4)
+        cycles += c
+        instructions += i
+        for offset in range(4):
+            overlay[(a0 + 4 + offset) & 0xFFFF] = 0
+        c, i = cost(0x00AFD6)
+        cycles += c
+        instructions += i
+        a0 = (a0 + 8) & 0xFFFFFFFF
+        pool_count = (pool_count - 1) & 0xFFFF
+        overlay[creatures.AIM_POOL_COUNT & 0xFFFF] = (pool_count >> 8) & 0xFF
+        overlay[(creatures.AIM_POOL_COUNT + 1) & 0xFFFF] = pool_count & 0xFF
+        sr = _sub_sr(sr, (pool_count + 1) & 0xFFFF, 1, 2)
+        c, i = cost(0x00AFD8)
+        cycles += c
+        instructions += i
+        d6 += 1
+        c, i = cost(0x00AFDC)
+        cycles += c
+        instructions += i
+        overlay[creatures.AIM_SEARCH_START_INDEX & 0xFFFF] = (slot_d2 >> 8) & 0xFF
+        overlay[(creatures.AIM_SEARCH_START_INDEX + 1) & 0xFFFF] = slot_d2 & 0xFF
+        c, i = cost(0x00AFDE)
+        cycles += c
+        instructions += i
+        overlay[creatures.AIM_SEARCH_FLAG_SOURCE & 0xFFFF] = (slot_d3 >> 8) & 0xFF
+        overlay[(creatures.AIM_SEARCH_FLAG_SOURCE + 1) & 0xFFFF] = slot_d3 & 0xFF
+        c, i = cost(0x00AFE2)
+        cycles += c
+        instructions += i
+
+        current['d0'], current['d1'] = d0, d1
+        c, i = cost(0x00AFE6)
+        cycles += c
+        instructions += i
+        loop_push = (sp - 24) & 0xFFFFFF
+        saved_d7 = current.get('d7', registers.get('d7', 0)) & 0xFFFFFFFF
+        # A3 (unlike A4/A5) is real, live state by this point: 00B002's own composition changes it as
+        # part of its own real semantics (aim_target_scan's/aim_pool_scan's own exit A3 among them), so
+        # the FIRST search-scan call (or an earlier loop iteration) already updated `current['a3']` --
+        # that is what gets pushed and, symmetrically, what the pop below must restore, not this
+        # routine's own original entry A3.
+        saved_a3 = current.get('a3', a3) & 0xFFFFFFFF
+        for offset, value in ((0, d6), (4, saved_d7), (8, a0), (12, saved_a3), (16, a4), (20, a5)):
+            for byte_offset in range(4):
+                overlay[(loop_push + offset + byte_offset) & 0xFFFF] = (value >> (8 * (3 - byte_offset))) & 0xFF
+        c, i = cost(0x00AFEA, True)
+        cycles += c
+        instructions += i
+        loop_search_push = (loop_push - 4) & 0xFFFFFF
+        search_plan = _asd_invoke_search_scan(machine, overlay, loop_search_push, d0, d1, sr, current, 0x00AFEC)
+        cycles += search_plan.cycles
+        instructions += search_plan.instructions
+        sr = search_plan.registers['sr']
+        current.update({k: v for k, v in search_plan.registers.items() if k not in ('a7', 'pc', 'sr')})
+        cap_check('inside the pool-drain loop')
+
+        c, i = cost(0x00AFEC)
+        cycles += c
+        instructions += i
+        # movem.l (a7)+,d6-d7/a0/a3-a5: real hardware restore, not this call's own exit -- whatever
+        # 00B002 did to these five registers internally never survives back out past this pop (d6/a0
+        # are already tracked in their own python locals, unaffected by `current`).
+        current['d7'] = saved_d7
+        current['a3'], current['a4'], current['a5'] = saved_a3, a4, a5
+
+        if tail_compare():
+            c, i = cost(0x00AFF6, True)
+            cycles += c
+            instructions += i
+            c, i = cost(0x00B000)
+            cycles += c
+            instructions += i
+            writes = tuple((addr | 0xFF0000, value) for addr, value in overlay.items())
+            exit_registers = dict(current)
+            exit_registers['d6'] = d6 & 0xFFFF
+            exit_registers['a0'] = a0
+            exit_registers['a7'] = (sp32 + 4) & 0xFFFFFFFF
+            exit_registers['pc'] = _return(machine, sp)
+            exit_registers['sr'] = sr
+            return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                              last_pc=AIM_SEARCH_DISPATCH_LAST_PC)
+        c, i = cost(0x00AFF6, False)
+        cycles += c
+        instructions += i
+
+        c, i = cost(0x00AFF8)
+        cycles += c
+        instructions += i
+        sr = _cmp_sr(sr, d6 & 0xFFFF, 0x20, 2)
+        more_slots = d6 < 0x20
+        c, i = cost(0x00AFFC, more_slots)
+        cycles += c
+        instructions += i
+        if more_slots:
+            continue
+        raise UnsupportedCandidate(
+            'aim search dispatch: pool-drain slot-scan exhausted at 32 with a nonzero AIM_POOL_COUNT, '
+            'not witnessed by a recording')
+    else:
+        raise UnsupportedCandidate('aim search dispatch: pool-drain loop exceeded its own defensive bound')
+
+    c, i = cost(0x00B000)
+    cycles += c
+    instructions += i
+    writes = tuple((addr | 0xFF0000, value) for addr, value in overlay.items())
+    exit_registers = dict(current)
+    exit_registers['d6'] = d6 & 0xFFFF
+    exit_registers['a0'] = a0
+    exit_registers['a7'] = (sp32 + 4) & 0xFFFFFFFF
+    exit_registers['pc'] = _return(machine, sp)
+    exit_registers['sr'] = sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=AIM_SEARCH_DISPATCH_LAST_PC)
+
+
 # --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (game/creatures.py: spawn_table_find_
 # free, spawn_table_add) -----------------------------------------------------------------------------
 #

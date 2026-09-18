@@ -1037,7 +1037,9 @@ def test_aim_cue_update_plan_reproduces_every_witnessed_occurrence(fixture):
 
 def test_aim_cue_update_candidate_names_are_explicit():
     assert recovery.Candidate('aim-cue-update').gate_pcs == (boundary.AIM_CUE_ENTRY,)
-    assert boundary.AIM_CUE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 19 September -- see test_aim_probe_mark_store_candidate_names_are_explicit
+    # (00AF52's own aim_search_dispatch_plan now covers this span too).
+    assert boundary.AIM_CUE_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-cue-update-mutant-result').mutation is recovery._mutate_result
 
 
@@ -1129,7 +1131,11 @@ def test_aim_pool_add_plan_reproduces_every_witnessed_occurrence(fixture):
 def test_aim_pool_candidate_names_are_explicit():
     assert recovery.Candidate('aim-pool-reset').gate_pcs == (boundary.AIM_POOL_RESET_ENTRY,)
     assert recovery.Candidate('aim-pool-add').gate_pcs == (boundary.AIM_POOL_ADD_ENTRY,)
-    assert boundary.AIM_POOL_RESET_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # aim-pool-reset retired from camera-sprites 19 September -- see
+    # test_aim_probe_mark_store_candidate_names_are_explicit (00AF52's own aim_search_dispatch_plan
+    # now covers this span too).  aim-pool-add stays: it has a second, independent caller (00B62A's
+    # own 'store' arm), already composed elsewhere.
+    assert boundary.AIM_POOL_RESET_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert boundary.AIM_POOL_ADD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('aim-pool-reset-mutant-result').mutation is recovery._mutate_result
     assert recovery.Candidate('aim-pool-add-mutant-result').mutation is recovery._mutate_result
@@ -1669,6 +1675,64 @@ def test_aim_search_scan_candidate_matches_the_reference_and_its_mutant_diverges
             break
     else:
         pytest.skip('no retained fixture/window makes aim-search-scan produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00AF52: the camera-relative box test gating a full search dispatch -- AA76's own second call,
+# after 00AF3C.  See boundary.py's own module note above aim_search_dispatch_plan.
+
+AIM_SEARCH_DISPATCH_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0XAF52-*/00AF52-entry-p*.state'))
+needs_aim_search_dispatch_census = pytest.mark.skipif(not AIM_SEARCH_DISPATCH_FIXTURES or not GODS.rom_path.is_file(),
+                                                       reason='no local census of 00AF52')
+
+
+def test_aim_search_dispatch_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-search-dispatch').gate_pcs == (boundary.AIM_SEARCH_DISPATCH_ENTRY,)
+    assert boundary.AIM_SEARCH_DISPATCH_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-search-dispatch-mutant-result').mutation is recovery._mutate_aim_ray_march
+
+
+@needs_aim_search_dispatch_census
+@pytest.mark.parametrize('fixture', AIM_SEARCH_DISPATCH_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_search_dispatch_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_search_dispatch_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            # A busy pool can genuinely exceed native/machine.cpp's own al_atomic cost cap (the same
+            # decline aim_pool_scan_plan/aim_search_scan_plan already carry), an unwitnessed arm inside
+            # the composed scan family, an unwitnessed Y-low bound exit, an unwitnessed event-scan
+            # table-window miss, or the pool-drain slot-scan exhausting at 32 with count still nonzero.
+            assert any(needle in str(error) for needle in
+                      ('aim target scan', 'aim search scan', 'aim pool scan', 'aim search dispatch',
+                       'aim cue')), error
+            return
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'], max_instructions=100000))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_search_dispatch_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_SEARCH_DISPATCH_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-search-dispatch',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        if report['status'] != 'PASS':
+            continue
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-search-dispatch-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-search-dispatch produce an observable effect')
     assert mutant['status'] == 'DIVERGENCE'
 
 

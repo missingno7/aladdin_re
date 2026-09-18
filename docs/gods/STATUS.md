@@ -720,6 +720,61 @@ below, has the count and the milestone tree numbers).
   `00A772` as the family (frees the creature gates further), then
   `00A578` as the walk with its own semantic-operation card.
 
+- **19 September, later the same session**: `00AF52` recovered -- the
+  reconnaissance's own scoping (`00AA76`'s own second call, box test then
+  `00B02A`/`00B082`/`00B002`) confirmed, PLUS a second loop past where the
+  original reconnaissance stopped disassembling (at the `cmpi #$10` tail):
+  `move.l #$ffffffff,f2ce.w` resets `AIM_SEARCH_BEST_FLAG:AIM_SEARCH_BEST_INDEX`,
+  a camera-relative four-way box test on `(a5)`'s own position (the SAME
+  `AIM_PROBE_LOW_BIAS`/`AIM_SEARCH_X_LIMIT`/`AIM_PROBE_Y_HIGH` bounds the
+  probe box test already uses -- X-low/X-high/Y-high all witnessed, Y-low
+  real ROM never witnessed, declined by name) gates everything else.  In
+  bounds: `00B02A`/`00B082` run once each (A3-A5 saved around both,
+  reloaded -- not popped -- between them), `AIM_SEARCH_START_INDEX`
+  cleared, then `00B002` on `(a5)`'s own raw position; if
+  `AIM_SEARCH_BEST_INDEX` is (unsigned) `<= 0x10`, done.  Otherwise a
+  circular scan of the 32-slot `AIM_POOL` (`FFFF40B2`, distinct from
+  `AIM_SEARCH_POOL_LOW`): every occupied slot's own D0/D1 (a found
+  target's own position) and D2/D3 (the next search's own
+  `AIM_SEARCH_START_INDEX`/`AIM_SEARCH_FLAG_SOURCE` seed) drive ANOTHER
+  `00B002` call on the target's own position, repeating until the same
+  `<= 0x10` stop or `AIM_POOL_COUNT` reaches 0, wrapping back to the
+  pool's own start on a full pass with the count still nonzero (real,
+  witnessed) -- the found-slot arm's own 32-slot exhaustion (not the
+  wrap) is real ROM, never witnessed, declined.
+  `gods_sega.boundary.aim_search_dispatch_plan` composes
+  `aim_pool_reset_plan`/`aim_cue_update_plan`/`aim_search_scan_plan` (the
+  last one possibly several times) as real internal calls, the same
+  `_ConstMachine` overlay technique the rest of the family already
+  established -- six levels deep at its busiest arm.  `candidate
+  'aim-search-dispatch'` replaces `'aim-cue-update'`/`'aim-pool-reset'`
+  in `camera-sprites` (both exit exclusively into this routine's own
+  body): **fifty-nine gates to fifty-eight** (`AIM_POOL_ADD_ENTRY` stays
+  armed on its own -- a second, independent caller via `00B62A`'s own
+  'store' arm).  `aim_search_dispatch_plan` also carries its own
+  combined-cost decline, the same `al_atomic` cap every composition in
+  this family prices.  Two real defects this session's own `factcheck
+  check` found: the pool-drain loop's own A3 register is real, live
+  state by the second call onward (`00B002`'s own composition changes it
+  as part of its own real semantics, not a fixed pass-through the way
+  A4/A5 are) -- the first draft saved/restored this routine's own ENTRY
+  A3 instead of whatever the LATEST call actually left it as; and the
+  loop's own wrap-around (`bra.b $afb2`) lands on the SAME `lea.l`/
+  `moveq` reset the routine's own head uses, two real charged
+  instructions the first draft's own bookkeeping applied the EFFECT of
+  without charging the COST of (found by parking the original machine at
+  the exact loop iteration a fixture's own cycle count came up short,
+  confirming `aim_search_scan_plan` itself was already exact for that
+  same input).  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-af52`,
+  107,519 frames, current receipts).  Reproduces the original on
+  `f0ac19738f19…`: PASS, 12 hits, 27 fallbacks (all atomic-plan-cap
+  declines); mutant (`_mutate_aim_ray_march`, shared) DIVERGENCE at frame
+  13,905.  Next, per the Decision's own order: `00AC36`, `00AA76`/
+  `00AB50`, then `00A772` as the family (frees the creature gates
+  further), then `00A578` as the walk with its own semantic-operation
+  card.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from
