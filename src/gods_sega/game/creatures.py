@@ -1079,3 +1079,130 @@ def aim_target_scan(read, type_ptr, x0, y0):
         checks.append({'arm': 'continue', 'd7_before': d7_before_incr, 'd2_before': d2_before,
                         'layer0': layer0, 'layer1': layer1, 'tile': tile, 'header': header})
         index += 1
+
+
+# --- 00B7DA: the aim target scan, backward (docs/gods/blockers/2026-09-18-00A578.md's own "Decision
+# on 00AF52", 19 Sep -- the second of the three further callees 00B002's own reconnaissance found
+# bounded over {00AF3C, 00B32E}).  The disassembly reads as 00B724's own mirror (the SAME two initial
+# guards, the SAME per-column footing/blocking/marking tests, stepping left instead of right) but two
+# real differences the tracer found, not assumed by symmetry: it never stores the starting column at
+# all (00B724's own first store is unconditional; here the very first probe is a bare advance, and a
+# column is only stored once a LATER probe's own header test re-validates it -- so a call can produce
+# zero stores where 00B724 always produces at least one), and it has no step-count limit whatsoever
+# (00B724's own `cmp.b $d(a4),d7` has no counterpart here: only the X bound ever stops the walk).  The
+# 'found' tail is also a real superset of 00B724's own: AIM_SEARCH_BEST_FLAG's own word is read first
+# and, only when it is already negative (never yet set), the new best is stored unconditionally --
+# otherwise AIM_SEARCH_BEST_INDEX is compared SIGNED (00B724's own comparison is unsigned) and only
+# the 'skip' sub-arm (this step is not an improvement) is witnessed.  A3 (the pool cursor) is NOT
+# reloaded from a fixed address the way 00B724's own `lea.l $ffff41b2.l,a3` is -- it is the caller's
+# own register, continuing wherever an earlier call (00B724's, on every witnessed occurrence) left it.
+AIM_SEARCH_BACKWARD_SNAPSHOT = 0xFFFFF2BA      # three words (D0, D1, D7): the 'exhausted' arm's own
+                                                # snapshot -- its own work-RAM span, not 00B724's
+AIM_SEARCH_BACKWARD_SNAPSHOT_FLAG = 0xFFFFF2C0  # word: AIM_SEARCH_FLAG_SOURCE's own value, forced to
+                                                 # 0 (not 00B724's own 1) when the start index is 0
+AIM_SEARCH_BACKWARD_X_LIMIT = -0x40             # camera-relative X must stay above this (signed)
+
+
+def aim_target_scan_backward(read, type_ptr, x0, y0, a3):
+    """00B7DA: see the module note above.  'blocked-start' and 'pruned-start' are real ROM, never
+    witnessed, exactly as 00B724's own.  Past those two guards the FIRST probe is a bare advance (no
+    store): at each column, 'x-bound' (the camera-relative X leaves (AIM_SEARCH_BACKWARD_X_LIMIT, 0]),
+    'blocked' / 'blocked-below' (layer 0 / layer 1 occupied), 'found' (the column's own window-mark
+    cell already holds a negative signed byte), 'pruned' (it already holds a step index at or past this
+    one) or 'exhausted' (its own two-rows-down footing is not 1) end the walk; otherwise the column is
+    stored (at ``a3``, the caller's own cursor) and the walk continues from it."""
+    from .grid import grid_cell_at, GRID_ROW_BYTES, _signed_byte, _signed_word
+    type_ptr &= 0xFFFFFF
+    x0 &= 0xFFFF
+    y0 &= 0xFFFF
+    a3 &= 0xFFFFFFFF
+    cell = grid_cell_at(x0, y0)
+    a2 = cell['address'] & 0xFFFFFFFF
+    a0 = (aim_window_address(read, x0, y0) + AIM_SEARCH_MARK_OFFSET) & 0xFFFFFFFF
+
+    if (read((a2 + 2 * GRID_ROW_BYTES) & 0xFFFFFF, 1) & 0xFF) != 1:
+        return {'arm': 'blocked-start', 'a2': a2, 'a0': a0}
+
+    d7_start_word = read(AIM_SEARCH_START_INDEX, 2) & 0xFFFF
+    tile0 = read(a0, 1) & 0xFF
+    if _signed_byte(d7_start_word & 0xFF) > _signed_byte(tile0):
+        return {'arm': 'pruned-start', 'a2': a2, 'a0': a0, 'd7_start': d7_start_word, 'tile0': tile0}
+
+    start_index_zero = d7_start_word == 0
+    flag_source = read(AIM_SEARCH_FLAG_SOURCE, 2) & 0xFFFF
+    d5 = 0 if start_index_zero else flag_source
+    count = read(AIM_SEARCH_COUNT, 2) & 0xFFFF
+
+    d7 = d7_start_word
+    d0 = x0
+    d2 = (x0 - read(FOLLOW_X, 2)) & 0xFFFF
+    stores = []
+    checks = []
+    index = 0
+    while True:
+        d7_before_incr = d7
+        d7 = (d7 + 1) & 0xFFFF
+        a0 = (a0 - 1) & 0xFFFFFFFF
+        d0 = (d0 - AIM_SEARCH_STEP) & 0xFFFF
+        d2_before = d2
+        d2 = (d2 - AIM_SEARCH_STEP) & 0xFFFF
+        if _signed_word(d2) <= AIM_SEARCH_BACKWARD_X_LIMIT:
+            checks.append({'arm': 'x-bound', 'd7_before': d7_before_incr, 'd2_before': d2_before})
+            return {'arm': 'x-bound', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'count_before': count, 'a3': a3, 'd7_start_word': d7_start_word}
+        a2 = (a2 - 1) & 0xFFFFFFFF
+        layer0 = read(a2, 1) & 0xFF
+        if layer0 == 1:
+            checks.append({'arm': 'blocked', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0})
+            return {'arm': 'blocked', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'count_before': count, 'a3': a3, 'd7_start_word': d7_start_word}
+        layer1 = read((a2 + GRID_ROW_BYTES) & 0xFFFFFF, 1) & 0xFF
+        if layer1 == 1:
+            checks.append({'arm': 'blocked-below', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0, 'layer1': layer1})
+            return {'arm': 'blocked-below', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0,
+                    'd0': d0, 'd2': d2, 'd7': d7, 'count_before': count, 'a3': a3, 'd7_start_word': d7_start_word}
+        tile = read(a0, 1) & 0xFF
+        stile = _signed_byte(tile)
+        if stile < 0:
+            best_flag_before = read(AIM_SEARCH_BEST_FLAG, 2) & 0xFFFF
+            no_prior_best = _signed_word(best_flag_before) < 0
+            if no_prior_best:
+                # 00B878's own bmi taken: no comparison at all, always a new best.
+                update_best = True
+                best_index_before = None
+            else:
+                # 00B87A-880: SIGNED cmp.w d1,d7 (d1 = AIM_SEARCH_BEST_INDEX); bge skips the store.
+                # Only the skip (d7 >= best_index_before) sub-arm is witnessed by any recording.
+                best_index_before = read(AIM_SEARCH_BEST_INDEX, 2) & 0xFFFF
+                skip = _signed_word(d7) >= _signed_word(best_index_before)
+                update_best = not skip
+            best_flag = 0 if start_index_zero else flag_source
+            checks.append({'arm': 'found', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0, 'layer1': layer1, 'tile': tile})
+            return {'arm': 'found', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'tile': tile, 'count_before': count, 'a3': a3,
+                    'best_flag_before': best_flag_before, 'no_prior_best': no_prior_best,
+                    'best_index_before': best_index_before, 'update_best': update_best,
+                    'best_flag': best_flag & 0xFFFF, 'flag_source': flag_source,
+                    'd7_start_word': d7_start_word}
+        pruned = stile > 0 and _signed_byte(d7 & 0xFF) >= _signed_byte(tile)
+        if pruned:
+            checks.append({'arm': 'pruned', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0, 'layer1': layer1, 'tile': tile})
+            return {'arm': 'pruned', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'tile': tile, 'count_before': count, 'a3': a3, 'd7_start_word': d7_start_word}
+        header = read((a2 + 2 * GRID_ROW_BYTES) & 0xFFFFFF, 1) & 0xFF
+        if header != 1:
+            checks.append({'arm': 'exhausted', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0, 'layer1': layer1, 'tile': tile, 'header': header})
+            return {'arm': 'exhausted', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0,
+                    'd0': d0, 'd2': d2, 'd7': d7, 'count_before': count, 'flag_source': flag_source,
+                    'force_flag': start_index_zero, 'd7_start_word': d7_start_word, 'a3': a3}
+        stores.append({'index': index, 'address': (a3 + AIM_SEARCH_POOL_STRIDE * index) & 0xFFFFFFFF,
+                        'd0': d0 & 0xFFFF, 'd1': y0 & 0xFFFF, 'd7': d7 & 0xFFFF, 'd5': d5 & 0xFFFF,
+                        'mark_address': a0, 'mark_value': d7 & 0xFF})
+        checks.append({'arm': 'continue', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                        'layer0': layer0, 'layer1': layer1, 'tile': tile, 'header': header})
+        index += 1

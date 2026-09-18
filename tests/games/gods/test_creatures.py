@@ -81,6 +81,10 @@ AIM_TARGET_SCAN_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0
 needs_aim_target_scan_census = pytest.mark.skipif(not AIM_TARGET_SCAN_FIXTURES or not GODS.rom_path.is_file(),
                                                   reason='no local census of 00B724')
 
+AIM_TARGET_SCAN_BACKWARD_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B7DA-*/00B7DA-entry-p*.state'))
+needs_aim_target_scan_backward_census = pytest.mark.skipif(not AIM_TARGET_SCAN_BACKWARD_FIXTURES or not GODS.rom_path.is_file(),
+                                                            reason='no local census of 00B7DA')
+
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
 
@@ -1237,5 +1241,53 @@ def test_aim_target_scan_candidate_matches_the_reference_and_its_mutant_diverges
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-target-scan-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B7DA: the aim target scan, backward (docs/gods/blockers/2026-09-18-00A578.md's own "Decision
+# on 00AF52", 19 Sep -- the second of the three further callees 00B002's own reconnaissance found
+# bounded over {00AF3C, 00B32E}).  Reads as 00B724's own mirror but with two real differences the
+# tracer found: no store on the first probe (a call can produce zero stores), and no step-count limit
+# at all.  See game/creatures.py's own module note above aim_target_scan_backward.
+
+def test_aim_target_scan_backward_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-target-scan-backward').gate_pcs == (boundary.AIM_TARGET_SCAN_BACKWARD_ENTRY,)
+    assert boundary.AIM_TARGET_SCAN_BACKWARD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-target-scan-backward-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_aim_target_scan_backward_census
+@pytest.mark.parametrize('fixture', AIM_TARGET_SCAN_BACKWARD_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_target_scan_backward_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_target_scan_backward_plan(machine, registers)
+        except UnsupportedCandidate:
+            pytest.skip('declined arm (blocked-start / pruned-start / found-without-a-new-best) -- '
+                       'covered by factcheck check, not this MATCH-only test')
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_target_scan_backward_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in AIM_TARGET_SCAN_BACKWARD_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-target-scan-backward',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00B7DA within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS | {
+        'unsupported domain: aim target scan backward: found without a new best, not witnessed by a recording'}
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-target-scan-backward-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

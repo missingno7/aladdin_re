@@ -16617,3 +16617,338 @@ def aim_target_scan_plan(machine, registers):
                           last_pc=AIM_TARGET_SCAN_FOUND_PC)
 
     raise UnsupportedCandidate(f'aim target scan: {arm}, not witnessed by a recording')
+
+
+# --- 00B7DA: the aim target scan, backward (game/creatures.py: aim_target_scan_backward) -----------
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-00B7DA-*, 149 retained fixtures over
+# four recordings).  See game/creatures.py's own module note above aim_target_scan_backward for the
+# two real differences from 00B724: no store on the first probe, no step-count limit at all.
+AIM_TARGET_SCAN_BACKWARD_ENTRY = 0x00B7DA
+AIM_TARGET_SCAN_BACKWARD_STEP_PC = 0x00B862    # every bail arm's own rts
+AIM_TARGET_SCAN_BACKWARD_FOUND_PC = 0x00B88A   # 'found' only
+AIM_TARGET_SCAN_BACKWARD_HEAD_RETURN = 0x00B7E2   # the second internal call's own return address
+
+_BW_LEA_MARK = (8, 1)                   # 00B7E2 lea.l $14(a0),a0
+_BW_CMP_HEADER0 = (16, 1)               # 00B7E6 cmpi.b #1,$100(a2)
+_BW_BNE_HEADER0 = (12, 1)               # 00B7EC bne.w -- only 'not taken' ever witnessed
+_BW_MOVE_D7 = (12, 1)                   # 00B7F0 move.w f2ca,d7
+_BW_CMP_TILE0 = (8, 1)                  # 00B7F4 cmp.b (a0),d7
+_BW_BGT_TILE0 = {True: (10, 1), False: (12, 1)}     # 00B7F6 (word branch)
+_BW_MOVEQ_D6 = (4, 1)                   # 00B7FA moveq #$20,d6
+_BW_MOVE_D2 = (4, 1)                    # 00B7FC move.w d0,d2
+_BW_SUB_D2_SETUP = (12, 1)              # 00B7FE sub.w f3ee,d2 (the ONE-TIME setup fragment --
+                                         # distinct from the loop's OWN sub.w d6,d2 below, which
+                                         # shares the same mnemonic but a different cost)
+_BW_MOVE_D5 = (12, 1)                   # 00B802 move.w f2cc,d5
+_BW_TST_D7 = (4, 1)                     # 00B806 tst.w d7
+_BW_BNE_D7 = {True: (10, 1), False: (8, 1)}         # 00B808
+_BW_MOVEQ_D5 = (4, 1)                   # 00B80A moveq #0,d5
+_BW_BRA_TAIL = (10, 1)                  # 00B80C bra.b $b81c (only taken -- unconditional branch)
+
+_BW_STORE = _add((8, 1), (8, 1), (8, 1), (8, 1), (8, 1))   # 00B80E-00B816: the four words + the byte
+_BW_COUNT_INCR = (16, 1)                # 00B818 addq.w #1,f2b0
+_BW_D7_INCR = (4, 1)                    # 00B81C addq.w #1,d7
+_BW_SUBQ_MARK = (8, 1)                  # 00B81E subq.w #1,a0 (address register: no flags)
+_BW_SUB_D0 = (4, 1)                     # 00B820 sub.w d6,d0
+_BW_SUB_D2 = (4, 1)                     # 00B822 sub.w d6,d2
+_BW_CMP_XBOUND = (8, 1)                 # 00B824 cmpi.w #$ffc0,d2
+_BW_BLE_XBOUND = {True: (10, 1), False: (8, 1)}     # 00B828
+_BW_SUBQ_CELL = (8, 1)                  # 00B82A subq.w #1,a2 (address register: no flags)
+_BW_CMP_LAYER0 = (12, 1)                # 00B82C cmpi.b #1,(a2)
+_BW_BEQ_LAYER0 = {True: (10, 1), False: (8, 1)}     # 00B830
+_BW_CMP_LAYER1 = (16, 1)                # 00B832 cmpi.b #1,$80(a2)
+_BW_BEQ_LAYER1 = {True: (10, 1), False: (8, 1)}     # 00B838
+_BW_TST_TILE = (8, 1)                   # 00B83A tst.b (a0)
+_BW_BEQ_TILE = {True: (10, 1), False: (8, 1)}       # 00B83C -- taken: tile==0, straight to the header
+_BW_BMI_FOUND = {True: (10, 1), False: (8, 1)}      # 00B83E -- taken: 'found'
+_BW_CMP_PRUNE = (8, 1)                  # 00B840 cmp.b (a0),d7 -- only reached when tile > 0
+_BW_BGE_PRUNE = {True: (10, 1), False: (8, 1)}      # 00B842 -- taken: 'pruned'
+_BW_CMP_HEADER = (16, 1)                # 00B844 cmpi.b #1,$100(a2)
+_BW_BEQ_HEADER = {True: (10, 1), False: (8, 1)}     # 00B84A -- taken: store, loop back; not: 'exhausted'
+
+_BW_SNAPSHOT = (24, 1)                  # 00B84C movem.w d0-d1/d7,f2ba (MOVEM: no flags)
+_BW_MOVE_SNAPSHOT_FLAG = (20, 1)        # 00B852 move.w f2cc,f2c0
+_BW_TST_START_EXHAUSTED = (12, 1)       # 00B858 tst.w f2ca
+_BW_BNE_SNAPSHOT = {True: (10, 1), False: (8, 1)}   # 00B85C -- taken: f2ca != 0, skip the next store
+_BW_STORE_SNAPSHOT_FLAG = (16, 1)       # 00B85E clr.w f2c0
+_BW_RTS = (16, 1)                       # 00B862 / 00B88A
+
+_BW_CLR_COUNT = (16, 1)                 # 00B864 clr.w f2b0
+_BW_MOVE_BEST_FLAG_SOURCE = (12, 1)     # 00B868 move.w f2cc,d6
+_BW_TST_START_FOUND = (12, 1)           # 00B86C tst.w f2ca
+_BW_BNE_BEST_FLAG = {True: (10, 1), False: (8, 1)}  # 00B870 -- taken: f2ca != 0, keep d6
+_BW_MOVEQ_BEST_FLAG = (4, 1)            # 00B872 moveq #0,d6
+_BW_MOVE_D0_FLAG = (12, 1)              # 00B874 move.w f2ce,d0
+_BW_BMI_NO_PRIOR = {True: (10, 1), False: (8, 1)}   # 00B878 -- taken: no prior best, unconditional store
+_BW_MOVE_D1_INDEX = (12, 1)             # 00B87A move.w f2d0,d1 -- only reached when NOT no_prior_best
+_BW_CMP_BEST = (4, 1)                   # 00B87E cmp.w d1,d7
+_BW_BGE_BEST = {True: (10, 1)}          # 00B880 -- only 'taken' (skip) ever witnessed
+_BW_STORE_BEST_FLAG = (12, 1)           # 00B882 move.w d6,f2ce
+_BW_STORE_BEST_INDEX = (12, 1)          # 00B886 move.w d7,f2d0
+
+_BW_HEAD = _add(_ATS_BSR_AF3C, _AF3C_COST, _ATS_BSR_WINDOW, _AIM_WINDOW_ADDRESS_COST, _BW_LEA_MARK,
+                _BW_CMP_HEADER0, _BW_BNE_HEADER0, _BW_MOVE_D7, _BW_CMP_TILE0)
+_BW_SETUP_TAIL_ZERO = _add(_BW_MOVEQ_D6, _BW_MOVE_D2, _BW_SUB_D2_SETUP, _BW_MOVE_D5, _BW_TST_D7, _BW_BNE_D7[False],
+                           _BW_MOVEQ_D5, _BW_BRA_TAIL)
+_BW_SETUP_TAIL_NONZERO = _add(_BW_MOVEQ_D6, _BW_MOVE_D2, _BW_SUB_D2_SETUP, _BW_MOVE_D5, _BW_TST_D7, _BW_BNE_D7[True])
+
+
+def _bw_stack_residue(sp):
+    return _bytes((sp - 4) & 0xFFFFFF, AIM_TARGET_SCAN_BACKWARD_HEAD_RETURN, 4)
+
+
+def _bw_window_d3(read, y0):
+    from .game import creatures
+    dy = (y0 - read(creatures.FOLLOW_Y, 2)) & 0xFFFF
+    b = creatures._signed_word(dy) >> 4
+    return (16 * b) & 0xFFFF
+
+
+def _bw_store_writes(stores):
+    writes = ()
+    for store in stores:
+        addr = store['address'] & 0xFFFFFF
+        writes += _bytes(addr, store['d0'], 2) + _bytes((addr + 2) & 0xFFFFFF, store['d1'], 2)
+        writes += _bytes((addr + 4) & 0xFFFFFF, store['d7'], 2) + _bytes((addr + 6) & 0xFFFFFF, store['d5'], 2)
+        writes += ((store['mark_address'] & 0xFFFFFF, store['mark_value']),)
+    return writes
+
+
+def _bw_walk(sr, checks):
+    """Replays the per-column continue/terminate test, charging each fragment in ROM order.  Unlike
+    00B724's own walk, every exit here is reached only AFTER both SUB.w d6,d0 and SUB.w d6,d2 (00B820/
+    00B822) have already run unconditionally -- there is no early bail before the advance the way
+    00B724's own step-limit is -- so only the LAST of the two (d2's own) ever matters for X, and only
+    for the LAST check: earlier checks' own 'continue' arm re-enters the SAME two SUBs next iteration,
+    which is what threading sr through every check still gets right."""
+    from .game import creatures
+    cycles = instructions = 0
+    last_check = None
+    for check in checks:
+        c, i = _BW_D7_INCR
+        cycles += c
+        instructions += i
+        c, i = _add(_BW_SUBQ_MARK, _BW_SUB_D0, _BW_SUB_D2, _BW_CMP_XBOUND)
+        cycles += c
+        instructions += i
+        sr = _sub_sr(sr, check['d2_before'], creatures.AIM_SEARCH_STEP, 2)   # SUB.w d6,d2 (00B822)
+        xbound_taken = check['arm'] == 'x-bound'
+        c, i = _BW_BLE_XBOUND[xbound_taken]
+        cycles += c
+        instructions += i
+        last_check = check
+        if xbound_taken:
+            return cycles, instructions, sr, last_check
+        c, i = _add(_BW_SUBQ_CELL, _BW_CMP_LAYER0)
+        cycles += c
+        instructions += i
+        layer0_taken = check['arm'] == 'blocked'
+        c, i = _BW_BEQ_LAYER0[layer0_taken]
+        cycles += c
+        instructions += i
+        if layer0_taken:
+            return cycles, instructions, sr, last_check
+        c, i = _BW_CMP_LAYER1
+        cycles += c
+        instructions += i
+        layer1_taken = check['arm'] == 'blocked-below'
+        c, i = _BW_BEQ_LAYER1[layer1_taken]
+        cycles += c
+        instructions += i
+        if layer1_taken:
+            return cycles, instructions, sr, last_check
+        c, i = _BW_TST_TILE
+        cycles += c
+        instructions += i
+        tile_zero = check['tile'] == 0
+        c, i = _BW_BEQ_TILE[tile_zero]
+        cycles += c
+        instructions += i
+        if not tile_zero:
+            found_taken = check['arm'] == 'found'
+            c, i = _BW_BMI_FOUND[found_taken]
+            cycles += c
+            instructions += i
+            if found_taken:
+                return cycles, instructions, sr, last_check
+            c, i = _BW_CMP_PRUNE
+            cycles += c
+            instructions += i
+            pruned_taken = check['arm'] == 'pruned'
+            c, i = _BW_BGE_PRUNE[pruned_taken]
+            cycles += c
+            instructions += i
+            if pruned_taken:
+                return cycles, instructions, sr, last_check
+        c, i = _BW_CMP_HEADER
+        cycles += c
+        instructions += i
+        continues = check['arm'] == 'continue'
+        c, i = _BW_BEQ_HEADER[continues]
+        cycles += c
+        instructions += i
+        if not continues:
+            return cycles, instructions, sr, last_check
+        c, i = _BW_STORE
+        cycles += c
+        instructions += i
+        c, i = _BW_COUNT_INCR
+        cycles += c
+        instructions += i
+    raise UnsupportedCandidate('aim target scan backward: no terminal check in the semantics result')
+
+
+def aim_target_scan_backward_plan(machine, registers):
+    """00B7DA: see game/creatures.py's own module note above aim_target_scan_backward.  'blocked-start'
+    and 'pruned-start' decline, unwitnessed, exactly as 00B724's own; a 'found' with an existing prior
+    best that is NOT an improvement (00B880's own skip arm) is the only witnessed 'found' sub-arm with
+    a prior best -- an improvement over an existing best is real ROM, never witnessed, and declines."""
+    from .game import creatures
+    if registers['pc'] != AIM_TARGET_SCAN_BACKWARD_ENTRY:
+        raise UnsupportedCandidate('aim target scan backward planner needs the machine parked at 00B7DA')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    type_ptr = registers['a4'] & 0xFFFFFF
+    x0, y0 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
+    a3_in = registers['a3'] & 0xFFFFFFFF
+    result = creatures.aim_target_scan_backward(read, type_ptr, x0, y0, a3_in)
+    if result['arm'] in ('blocked-start', 'pruned-start'):
+        raise UnsupportedCandidate(f"aim target scan backward: {result['arm']}, not witnessed by a recording")
+
+    cycles, instructions = _BW_HEAD
+    c, i = _BW_BGT_TILE0[False]
+    cycles += c
+    instructions += i
+    d7_start = result['d7_start_word']
+    setup_zero = (d7_start == 0)
+    if setup_zero:
+        c, i = _BW_SETUP_TAIL_ZERO
+    else:
+        c, i = _BW_SETUP_TAIL_NONZERO
+    cycles += c
+    instructions += i
+
+    loop_cycles, loop_instructions, sr, last_check = _bw_walk(sr, result['checks'])
+    cycles += loop_cycles
+    instructions += loop_instructions
+
+    writes = _bw_stack_residue(sp) + _bw_store_writes(result['stores'])
+    d3_residue = _bw_window_d3(read, y0)
+    count_after = (result['count_before'] + len(result['stores'])) & 0xFFFF
+    # D5 is set exactly once, in the setup (moveq #0,d5 or move.w f2cc,d5) -- never touched again,
+    # regardless of how many stores followed: read it straight from the FIRST store if there was one,
+    # else recompute it the same way the semantics did (flag_source is only needed in that case).
+    d5_via_moveq = (d7_start == 0)
+    if result['stores']:
+        d5_low = result['stores'][0]['d5']
+    elif d5_via_moveq:
+        d5_low = 0
+    else:
+        d5_low = read(creatures.AIM_SEARCH_FLAG_SOURCE, 2) & 0xFFFF
+    d5_exit = d5_low if d5_via_moveq else (registers['d5'] & 0xFFFF0000) | d5_low
+    exit_registers = {
+        'a2': result['a2'], 'a0': result['a0'],
+        'a3': (a3_in + creatures.AIM_SEARCH_POOL_STRIDE * len(result['stores'])) & 0xFFFFFFFF,
+        'd3': (registers['d3'] & 0xFFFF0000) | d3_residue,
+        'd5': d5_exit,
+        'd6': 0x20,
+        'd7': (registers['d7'] & 0xFFFF0000) | (result['d7'] & 0xFFFF),
+        'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+    }
+
+    arm = result['arm']
+    if arm in ('x-bound', 'blocked', 'blocked-below', 'pruned'):
+        cycles += _BW_RTS[0]
+        instructions += _BW_RTS[1]
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | result['d2']
+        if arm == 'x-bound':
+            exit_registers['sr'] = _cmp_sr(sr, result['d2'], creatures.AIM_SEARCH_BACKWARD_X_LIMIT & 0xFFFF, 2)
+        elif arm == 'blocked':
+            exit_registers['sr'] = _cmp_sr(sr, last_check['layer0'], 1, 1)
+        elif arm == 'blocked-below':
+            exit_registers['sr'] = _cmp_sr(sr, last_check['layer1'], 1, 1)
+        else:
+            exit_registers['sr'] = _cmp_sr(sr, result['d7'] & 0xFF, result['tile'], 1)
+        writes += _bytes(creatures.AIM_SEARCH_COUNT & 0xFFFFFF, count_after, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_BACKWARD_STEP_PC)
+
+    if arm == 'exhausted':
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | result['d2']
+        c, i = _add(_BW_SNAPSHOT, _BW_MOVE_SNAPSHOT_FLAG, _BW_TST_START_EXHAUSTED)
+        cycles += c
+        instructions += i
+        skip_store = not result['force_flag']
+        c, i = _BW_BNE_SNAPSHOT[skip_store]
+        cycles += c
+        instructions += i
+        snapshot_flag = result['flag_source']
+        if not skip_store:
+            c, i = _BW_STORE_SNAPSHOT_FLAG
+            cycles += c
+            instructions += i
+            sr = _logic_sr(sr, 0, 2)                     # clr.w f2c0 (00B85E) is the last flag-setter
+            snapshot_flag = 0
+        else:
+            sr = _logic_sr(sr, result['d7_start_word'], 2)   # tst.w f2ca (00B858) is the last setter
+        cycles += _BW_RTS[0]
+        instructions += _BW_RTS[1]
+        exit_registers['sr'] = sr
+        writes += _bytes(creatures.AIM_SEARCH_COUNT & 0xFFFFFF, count_after, 2)
+        writes += _bytes(creatures.AIM_SEARCH_BACKWARD_SNAPSHOT & 0xFFFFFF, result['d0'], 2)
+        writes += _bytes((creatures.AIM_SEARCH_BACKWARD_SNAPSHOT + 2) & 0xFFFFFF, y0, 2)
+        writes += _bytes((creatures.AIM_SEARCH_BACKWARD_SNAPSHOT + 4) & 0xFFFFFF, result['d7'] & 0xFFFF, 2)
+        writes += _bytes(creatures.AIM_SEARCH_BACKWARD_SNAPSHOT_FLAG & 0xFFFFFF, snapshot_flag & 0xFFFF, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_BACKWARD_STEP_PC)
+
+    if arm == 'found':
+        if not result['update_best']:
+            raise UnsupportedCandidate('aim target scan backward: found without a new best, not witnessed by a recording')
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | result['d2']
+        exit_registers['d6'] = result['best_flag'] & 0xFFFF
+        c, i = _add(_BW_CLR_COUNT, _BW_MOVE_BEST_FLAG_SOURCE, _BW_TST_START_FOUND)
+        cycles += c
+        instructions += i
+        keep_flag_source = result['d7_start_word'] != 0
+        c, i = _BW_BNE_BEST_FLAG[keep_flag_source]
+        cycles += c
+        instructions += i
+        if not keep_flag_source:
+            c, i = _BW_MOVEQ_BEST_FLAG
+            cycles += c
+            instructions += i
+        c, i = _BW_MOVE_D0_FLAG
+        cycles += c
+        instructions += i
+        no_prior_best = result['no_prior_best']
+        c, i = _BW_BMI_NO_PRIOR[no_prior_best]
+        cycles += c
+        instructions += i
+        if not no_prior_best:
+            c, i = _add(_BW_MOVE_D1_INDEX, _BW_CMP_BEST, _BW_BGE_BEST[True])
+            cycles += c
+            instructions += i
+            # d1 is overwritten with AIM_SEARCH_BEST_INDEX's own current (word) value here.
+            exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | result['best_index_before']
+        else:
+            exit_registers['d1'] = registers['d1']   # 00B87A never ran: D1 stays Y0, untouched
+        c, i = _add(_BW_STORE_BEST_FLAG, _BW_STORE_BEST_INDEX)
+        cycles += c
+        instructions += i
+        cycles += _BW_RTS[0]
+        instructions += _BW_RTS[1]
+        # move.w f2ce,d0 (00B874) is D0's own last write; move.w d7,f2d0 (00B886) is the last flag-setter.
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['best_flag_before']
+        exit_registers['sr'] = _logic_sr(sr, result['d7'], 2)
+        writes += _bytes(creatures.AIM_SEARCH_COUNT & 0xFFFFFF, 0, 2)
+        writes += _bytes(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFFFF, result['best_flag'], 2)
+        writes += _bytes(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFFFF, result['d7'] & 0xFFFF, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_BACKWARD_FOUND_PC)
+
+    raise UnsupportedCandidate(f'aim target scan backward: {arm}, not witnessed by a recording')
