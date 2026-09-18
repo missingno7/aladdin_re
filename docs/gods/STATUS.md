@@ -179,7 +179,8 @@ one planner") is the next bite.
   `contact-search`, `contact-consume-primary`,
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
-  `state-26`, `state-8`, `state-13` and `state-12` arm each alone.
+  `state-26`, `state-8`, `state-13`, `state-12` and `state-16` arm each
+  alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -971,10 +972,10 @@ small leaf):
   (38), 22 (36), 27 (19), 23 (13), 10 (6); states 7 and 15 unwitnessed on
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
-  state-13, state-12 -- 9,711 of 13,488 activations (72%) directly
-  reproduced by their own candidate, every remaining activation still
-  running the original but reaching the ALREADY-recovered `player-tail`
-  gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
+  state-13, state-12, state-16 -- 9,965 of 13,488 activations (74%)
+  directly reproduced by their own candidate, every remaining activation
+  still running the original but reaching the ALREADY-recovered
+  `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
   both ways, "one region, two gates, one planner") and state 6 (its own
   mirror, sharing state 0's own hand-off the same way) are both plain
   leaves composed over the already-recovered contact-consume family;
@@ -1044,11 +1045,21 @@ small leaf):
   (`FFFFF18E`'s own `+6` advance is an unconditional MEMORY write, not
   state 14's own register-based, saved/restored step); and two `D0`
   register updates missing after the tick/cooldown arithmetic overwrites
-  it.
+  it.  State 16 (`006686`, recovered 18 Sep) is a tiny two-step "settle
+  then countdown" leaf -- the target both state 9's own "ground-before"/
+  "ground-after" arms and state 26's own mirror transition into
+  (`_state9_ground_stores`): `FFFFF1B8 == 0` increments it and exits
+  unchanged (a one-tick delay); `FFFFF1B8 != 0` decrements `FFFFF198` by
+  4, exiting unchanged while non-negative or transitioning to state 1
+  (`d7` forced to 2) once it goes negative.  391 real path classes
+  across all five recordings collapse to exactly three real terminal
+  shapes; the only defect the FAST tier caught was a word-branch cost
+  table transcribed backwards (`bpl.w`, the same class of bug states
+  12/16's own sessions kept finding).
 - **Remaining blocker**: none structural -- the 17 September escalation
   was the shared tail itself, since resolved (`player-tail`).  What is
   left is pure volume: the remaining witnessed states in frequency order
-  (16, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10) -- state 20
+  (19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10) -- state 20
   is already gated (a real STATE_TABLE reconstruction from `005700`'s own
   dispatch code, 18 Sep, found `FFFFF192 == 20` reaches `0069AC`, the
   entry the existing `'state-26'` candidate already owns end to end; the

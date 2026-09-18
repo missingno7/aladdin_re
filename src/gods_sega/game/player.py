@@ -1806,3 +1806,29 @@ def state12_step(read):
     if not bit2:
         return {'arm': 'unchanged', **base}
     return {'arm': 'trigger-gate', **base}
+
+
+# --- 006686: state 16's own decision tree -- a tiny two-step "settle then countdown" leaf, the
+# target both state 9's own "ground-before"/"ground-after" arms and state 26's own mirror transition
+# into (`_state9_ground_stores`).  No `d7` is ever READ as an input, only written (moveq #2) on the
+# transition arm.  `factcheck.py facts --path` on real fixtures over `census-006686-*` (all five
+# recordings; 391 real path classes collapsing to exactly three real terminal shapes): `FFFFF1B8 == 0`
+# increments it to 1 and exits unchanged (a one-tick "settle" delay after `_state9_ground_stores`
+# itself already cleared it); `FFFFF1B8 != 0` decrements `FFFFF198` (the SAME tick counter
+# `_state9_ground_stores` clears to 0 too) by 4 -- a non-negative result exits unchanged (the
+# countdown continues next tick), a negative result transitions to state 1 with `d7` forced to 2.
+STATE16_ENTRY = 0x006686
+
+
+def state16_step(read):
+    """006686-0066A4: state 16's own whole decision tree.  Returns `'settle'` (F1B8 incremented,
+    exits unchanged), `'countdown'` (F198 decremented, still non-negative, exits unchanged), or
+    `'transition-1'` (F198 went negative, state 1, d7 forced to 2)."""
+    f1b8 = read(F1B8, 2)
+    if f1b8 == 0:
+        return {'arm': 'settle', 'stores': {F1B8 & 0xFFFFFF: ((f1b8 + 1) & 0xFFFF, 2)}}
+    new_f198 = (read(F198, 2) - 4) & 0xFFFF
+    if _signed_word(new_f198) >= 0:
+        return {'arm': 'countdown', 'stores': {F198 & 0xFFFFFF: (new_f198, 2)}}
+    return {'arm': 'transition-1', 'd7': 2,
+            'stores': {F198 & 0xFFFFFF: (new_f198, 2), STATE_INDEX: (1, 2)}}

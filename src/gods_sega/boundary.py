@@ -9900,3 +9900,76 @@ def state12_plan(machine, registers):
     exit_registers['sr'] = _logic_sr(sr, 1, 2)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x00612A)
+
+
+# --- 006686: state 16 (game.player.state16_step) -- a tiny two-step "settle then countdown" leaf,
+# the target both state 9's own "ground-before"/"ground-after" arms and state 26's own mirror
+# transition into.  Costed one instruction-block at a time from the tracer on real fixtures over
+# census-006686-* (all five recordings; 391 real path classes collapsing to exactly three real
+# terminal shapes).  No d7 is ever read as an input.
+STATE16_ENTRY = 0x006686
+
+_S16_TEST = (12, 1)                          # 006686 tst.w f1b8.w
+_S16_BNE = {True: (10, 1), False: (8, 1)}    # 00668A bne.b -- taken(!=0): countdown/transition
+_S16_SETTLE_TAIL = (16 + 10, 2)              # 00668C addq.w #1,f1b8 (mem); 006690 bra.w
+_S16_COUNTDOWN = (16, 1)                     # 006694 subq.w #4,f198 (mem)
+_S16_BPL = {True: (10, 1), False: (12, 1)}   # 006698 bpl.w -- taken(>=0): countdown continues (word branch)
+_S16_TRANS_TAIL = (4 + 16 + 10, 3)           # 00669C moveq #2,d7; 00669E move.w #1,f192; bra.w
+
+
+def state16_plan(machine, registers):
+    """006686 (state 16): the player state machine's own dispatch table entry 16.  See
+    game.player's own module note above state16_step."""
+    from .game import player
+    if registers['pc'] != STATE16_ENTRY:
+        raise UnsupportedCandidate('state 16 planner needs the machine parked at 006686')
+    sr = registers['sr']
+    read = _reader(machine)
+    order = {}
+    exit_registers = {}
+
+    result = player.state16_step(read)
+    c, i = _add(_S16_TEST, _S16_BNE[result['arm'] != 'settle'])
+    cycles, instructions = c, i
+
+    if result['arm'] == 'settle':
+        c, i = _S16_SETTLE_TAIL
+        cycles += c
+        instructions += i
+        for a, b in result['stores'].items():
+            for aa, bb in _bytes(a, b[0], b[1]):
+                order[aa] = bb
+        f1b8 = read(player.F1B8, 2)
+        sr = _add_sr(sr, f1b8, 1, 2)
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006690)
+
+    c, i = _S16_COUNTDOWN
+    cycles += c
+    instructions += i
+    old_f198 = read(player.F198, 2)
+    sr = _sub_sr(sr, old_f198, 4, 2)
+    negative = result['arm'] == 'transition-1'
+    c, i = _S16_BPL[not negative]
+    cycles += c
+    instructions += i
+    for a, b in result['stores'].items():
+        for aa, bb in _bytes(a, b[0], b[1]):
+            order[aa] = bb
+
+    if not negative:
+        exit_registers['pc'] = 0x0075D6
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                          registers=exit_registers, last_pc=0x006698)
+
+    c, i = _S16_TRANS_TAIL
+    cycles += c
+    instructions += i
+    exit_registers['d7'] = result['d7']
+    exit_registers['pc'] = 0x0075D6
+    exit_registers['sr'] = _logic_sr(sr, 1, 2)   # 00669E move.w #1,f192.w is the last flag-setter
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x0066A4)
