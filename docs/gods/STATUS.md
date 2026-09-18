@@ -135,7 +135,7 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with fifty-eight gates armed, the camera follow step `002806`, the
+  original with fifty-nine gates armed, the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -180,8 +180,8 @@ one planner") is the next bite.
   `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
-  `state-2`, `state-3`, `state-4`, `state-17` and `state-21` arm each
-  alone.
+  `state-2`, `state-3`, `state-4`, `state-17`, `state-21` and `state-28`
+  arm each alone.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -974,7 +974,7 @@ small leaf):
   any of the eight recordings. Gated so far: state-1, state-0, state-14,
   state-24, state-25, state-5, state-6, state-9, state-26, state-8,
   state-13, state-12, state-16, state-11, state-2, state-3, state-4,
-  state-17, state-21 -- 10,900 of 13,488 activations (81%)
+  state-17, state-21, state-28 -- 10,938 of 13,488 activations (81%)
   directly reproduced by their own candidate, every remaining activation
   still running the original but reaching the ALREADY-recovered
   `player-tail` gate one level in.  State 5 (`00746A`, a real sibling of state 1 sharing code
@@ -1137,7 +1137,10 @@ small leaf):
   declines by name.  No defects: every composition (`_row_gate_cost`,
   `_cc_resolve`, `GRID_CELL_COST`) was already fully tested by states
   9/26's and the movement-cluster's own earlier sessions, and reusing
-  them directly caught every fact on the first attempt.
+  them directly caught every fact on the first attempt.  State 28
+  (`005828`, recovered 18 Sep) is the smallest leaf yet: an
+  UNCONDITIONAL transition to state 1, `d7` forced to 2, no input ever
+  read.  All 71 real path classes across all five recordings agree.
 - **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least

@@ -11123,3 +11123,29 @@ def state21_plan(machine, registers):
     exit_registers['sr'] = _logic_sr(sr, 0, 2)   # 006972 clr.w f194.w is the last flag-setter
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x006976)
+
+
+# --- 005828: state 28 -- the smallest leaf yet: an unconditional transition to state 1.  Costed
+# from the tracer on real fixtures over census-005828-* (all five recordings; 71 real path classes,
+# all one shape).
+STATE28_ENTRY = 0x005828
+
+_S28_TAIL = (4 + 16 + 10, 3)   # 005828 moveq #2,d7; 00582A move.w #1,f192.w; 005830 bra.w
+
+
+def state28_plan(machine, registers):
+    """005828 (state 28): the player state machine's own dispatch table entry 28.  See
+    game.player's own module note above state28_step."""
+    from .game import player
+    if registers['pc'] != STATE28_ENTRY:
+        raise UnsupportedCandidate('state 28 planner needs the machine parked at 005828')
+    sr = registers['sr']
+    order = {}
+    c, i = _S28_TAIL
+    cycles, instructions = c, i
+    for a, b in _bytes(player.STATE_INDEX, player.STATE28_TO_STATE1, 2):
+        order[a] = b
+    exit_registers = {'d7': player.STATE28_D7, 'pc': 0x0075D6,
+                       'sr': _logic_sr(sr, player.STATE28_TO_STATE1, 2)}   # 00582A move.w #1,f192.w is the last flag-setter
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=0x005830)

@@ -2133,3 +2133,15 @@ def state21_tail(d7, f19c):
     new_f19c = (f19c + 2) & 0xFFFF
     capped = new_f19c >= STATE21_CAP
     return {'arm': base_arm, 'f19c': new_f19c, 'capped': capped}
+
+
+# --- 005828: state 28 -- the smallest leaf yet: an UNCONDITIONAL transition to state 1, d7 forced
+# to 2, no input ever read.  All 71 real path classes across all five recordings agree.
+STATE28_ENTRY = 0x005828
+STATE28_TO_STATE1 = 0x1
+STATE28_D7 = 2
+
+
+def state28_step(read):
+    """005828-005830: unconditional -- always transitions to state 1 with d7 forced to 2."""
+    return {'arm': 'transition-1', 'd7': STATE28_D7}
