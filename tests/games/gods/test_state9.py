@@ -102,7 +102,10 @@ def test_plan_reproduces_every_witnessed_arm(fixture):
 
 def test_candidate_name_is_explicit():
     assert recovery.Candidate('state-9').gate_pcs == (boundary.STATE9_ENTRY,)
-    assert boundary.STATE9_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired 18 September: player_state_plan (005700) now owns the jump into state 9's
+    # own handler; this candidate's own hits replace the direct gate's.
+    assert boundary.STATE9_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.PLAYER_STATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('state-9-mutant-result').mutation is recovery._mutate_outcome
 
 

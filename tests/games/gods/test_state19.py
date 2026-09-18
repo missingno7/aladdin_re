@@ -207,12 +207,17 @@ def test_state18_plan_reproduces_every_witnessed_arm(fixture):
 def test_candidate_names_are_explicit():
     assert recovery.Candidate('state-19').gate_pcs == (boundary.STATE19_ENTRY,)
     assert recovery.Candidate('state-18').gate_pcs == (boundary.STATE18_ENTRY,)
-    assert boundary.STATE19_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
-    # STATE18_ENTRY is deliberately NOT armed in the combined candidate: native/machine.cpp caps the
-    # gate set at 64 and camera-sprites was already at 63 (state 19 takes the last slot); state 18
-    # stays a fully recovered, individually verified candidate of its own, per Aladdin's own
-    # precedent for exhausted native gate capacity (docs/archive/aladdin/recovery-cost-log.md).
-    assert len(recovery.Candidate('camera-sprites').gate_pcs) == 64
+    # Retired 18 September: player_state_plan (005700) now owns the jump into state 19's
+    # own handler; this candidate's own hits replace the direct gate's.
+    assert boundary.STATE19_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.PLAYER_STATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # STATE18_ENTRY is still NOT armed in the combined candidate: it was left out under the old
+    # native/machine.cpp 64-gate cap (camera-sprites was already at 63) and stays a fully recovered,
+    # individually verified candidate of its own ('state-18').  18 September: player_state_plan
+    # (005700) retired the 25 individual player-state gates from this candidate (their own hits
+    # replaced by the dispatcher's), so there is ample headroom to arm 005834 too now -- a separate
+    # decision from this composition, not made here.
+    assert len(recovery.Candidate('camera-sprites').gate_pcs) == 40
     assert boundary.STATE18_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     # A register mutant, not the generic _mutate_outcome every other state uses: states 19/18 are
     # seam-heavy, and dropping every write corrupts a seam's own structural return-address writes,

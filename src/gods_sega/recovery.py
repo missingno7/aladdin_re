@@ -18,7 +18,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, HAZARD_TICK_ENTRY,
                        LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
-                       PICKUP_PROBE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
+                       PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
                        TRAIL_CHECK_ENTRY, WALKER_RESUME_ENTRY, ZONE_CHECK_ENTRY, achievement_slot_dispatch_plan, achievement_slot_reset_plan,
                        action_clear_group_plan, action_reset_elapsed_plan,
@@ -27,7 +27,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        countdown_check_plan, draw_solid_plan, effect_pool_add_plan, evaluator_plan,
                        footprint_stamp_plan, condition_plan, grid_cell_plan, hazard_tick_plan, launch_plan, message_gate_plan,
                        movement_hit_primary_plan, movement_hit_secondary_plan,
-                       next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_tail_plan, proximity_plan,
+                       next_random_plan, particle_emit_plan, pickup_award_plan, pickup_check_plan, pickup_probe_plan, player_state_plan, player_tail_plan, proximity_plan,
                        record_id_scan_plan, score_convert_plan, slot_scan_plan, spawn_queue_plan, sprite_emit_plan, state0_plan, state1_plan, state2_plan, state10_plan, state3_plan, state4_plan, state5_plan, state6_plan, state8_plan, state9_plan, state11_plan, state12_plan, state13_plan, state14_plan, state16_plan, state17_plan, state18_plan, state19_plan, state21_plan, state22_plan, state23_plan, state26_plan, state27_plan, state28_plan, static_emit_plan, string_copy_plan, table_reset_plan,
                        trail_check_plan, walker_resume_plan, walker_resume_projectile_plan, zone_check_plan)
 
@@ -155,6 +155,30 @@ def _mutate_state14_counter(plan: AtomicPlan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_player_state_counter(plan) -> AtomicPlan:
+    """Negative control for the composed player state family (005700): STATE_COUNTER (D7) off by
+    one, the same shape states 0/1/14's own mutants already draw -- every witnessed activation (100%
+    of the coordinator's own tally, `fb408bc75597`'s 13,488 of 13,488) takes the active dispatch arm,
+    handing D7 through this plan's own register file to the separately-armed player-tail gate one
+    step later, whose own first instruction stores it into FFFFF190 unconditionally.  Blind only on
+    the FROZEN_FLAG/ACTIVE_GATE inactive arm, where this planner calls player_tail_plan itself and
+    its own prefix already bakes STATE_COUNTER into a RAM write rather than leaving it live in a
+    register -- real ROM, but unwitnessed by any of the eight recordings (docs/gods/ledger.md), so
+    this blindness never reaches a `history-verify --expect divergence` run."""
+    if isinstance(plan, Seam):
+        registers = dict(plan.prefix.registers)
+        if 'd7' not in registers:
+            return plan
+        registers['d7'] = registers['d7'] ^ 1
+        prefix = AtomicPlan(plan.prefix.cycles, plan.prefix.instructions, plan.prefix.writes, registers,
+                            plan.prefix.last_pc, plan.prefix.direct_calls)
+        return Seam(prefix=prefix, resume_pc=plan.resume_pc, stack_basis=plan.stack_basis,
+                   guards=plan.guards, suffix=plan.suffix, expect=plan.expect)
+    registers = dict(plan.registers)
+    registers['d7'] = registers.get('d7', 0) ^ 1
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
 # The fallback reasons that are the adapter's refusal of an exact span (the original runs it; nothing
 # is declined): the caller's observation instant precedes the span's end, the sound driver's Z80
 # bank register points at work RAM, a vertical interrupt falls inside the span, or another condition
@@ -197,6 +221,7 @@ PLANNERS = {
     'action-reset-elapsed': {ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan},
     'action-clear-group': {ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
     'player-tail': {PLAYER_TAIL_ENTRY: player_tail_plan},
+    'player-state': {PLAYER_STATE_ENTRY: player_state_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
     'contact-consume-secondary': {CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan},
@@ -248,24 +273,21 @@ PLANNERS = {
                        PLAYER_TAIL_ENTRY: player_tail_plan, CONTACT_SEARCH_ENTRY: contact_search_plan,
                        CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan,
                        CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan,
-                       STATE24_ENTRY: movement_hit_primary_plan, STATE25_ENTRY: movement_hit_secondary_plan,
-                       TRAIL_CHECK_ENTRY: trail_check_plan, STATE1_ENTRY: state1_plan, STATE0_ENTRY: state0_plan,
-                       STATE5_ENTRY: state5_plan, STATE6_ENTRY: state6_plan, STATE9_ENTRY: state9_plan,
-                       STATE26_ENTRY: state26_plan, STATE14_ENTRY: state14_plan, STATE8_ENTRY: state8_plan,
-                       STATE13_ENTRY: state13_plan, STATE12_ENTRY: state12_plan, STATE16_ENTRY: state16_plan,
-                       STATE11_ENTRY: state11_plan, STATE2_ENTRY: state2_plan, STATE3_ENTRY: state3_plan,
-                       STATE4_ENTRY: state4_plan, STATE17_ENTRY: state17_plan, STATE21_ENTRY: state21_plan,
-                       STATE28_ENTRY: state28_plan, STATE22_ENTRY: state22_plan, STATE27_ENTRY: state27_plan,
-                       STATE23_ENTRY: state23_plan, STATE10_ENTRY: state10_plan,
-                       # STATE18_ENTRY is NOT armed here: native/machine.cpp caps the gate set at 64
-                       # (PortForge, pinned) and camera-sprites was already at 63 -- state 19 (190
-                       # activations) takes the last slot; state 18 (63 activations) stays a fully
-                       # recovered, individually verified candidate ('state-18', its own single gate)
-                       # per Aladdin's own precedent (docs/archive/aladdin/recovery-cost-log.md: "an
-                       # attempted nine-gate expansion exceeded native capacity... independent wrapper
-                       # plans are oracle-only entry points. No new gate manager or native change.").
-                       # See docs/gods/ledger.md's 18 September entry.
-                       STATE19_ENTRY: state19_plan},
+                       TRAIL_CHECK_ENTRY: trail_check_plan,
+                       # The 25 individual player-state gates (states 0-6, 8-14, 16-28's own dispatch
+                       # table entries, plus the movement-cluster pair 24/25) are RETIRED from this
+                       # combined candidate's own gate set, 18 September: player_state_plan (005700)
+                       # now owns the jump into every one of them, so their own PCs are never reached
+                       # as a live gate during real dispatch -- the dispatcher's own hits replace
+                       # theirs (docs/gods/STATUS.md's own `005700` semantic-operation card).  Their
+                       # own PLANNERS entries ('state-0' etc., above) and gate PCs stay, unchanged,
+                       # for their own isolated tests (factcheck check, segment_verify) -- this
+                       # candidate simply no longer arms them itself.  STATE18_ENTRY was never armed
+                       # here in the first place (native/machine.cpp's own 64-gate cap, pinned;
+                       # docs/gods/ledger.md's 18 September entry) and stays its own standalone
+                       # candidate ('state-18'); with the 25 gates retired there is ample headroom to
+                       # arm it too, but that is a separate decision from this composition.
+                       PLAYER_STATE_ENTRY: player_state_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -452,7 +474,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # gameplay effect (the countdown reload, the projectile pool fill, LAUNCHED_FLAG, or the
              # random cursor advance) rather than the tail-jump's own dead stack residue, so
              # _mutate_result's one-byte flip is genuinely observable.
-             'creature-attack-mutant-result': ('creature-attack', _mutate_result)}
+             'creature-attack-mutant-result': ('creature-attack', _mutate_result),
+             'player-state-mutant-result': ('player-state', _mutate_player_state_counter)}
 
 
 @dataclass

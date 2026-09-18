@@ -89,8 +89,11 @@ def test_state_25_plan_reproduces_every_fact_of_the_original(fixture):
 def test_candidate_names_are_explicit():
     assert recovery.Candidate('state-24').gate_pcs == (boundary.STATE24_ENTRY,)
     assert recovery.Candidate('state-25').gate_pcs == (boundary.STATE25_ENTRY,)
+    # Retired 18 September: player_state_plan (005700) now owns the jump into states 24/25's own
+    # handlers; this candidate's own hits replace the direct gates'.
     for entry in (boundary.STATE24_ENTRY, boundary.STATE25_ENTRY):
-        assert entry in recovery.Candidate('camera-sprites').gate_pcs
+        assert entry not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.PLAYER_STATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('state-24-mutant-result').mutation is recovery._mutate_result
     assert recovery.Candidate('state-25-mutant-result').mutation is recovery._mutate_result
 

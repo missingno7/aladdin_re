@@ -131,6 +131,18 @@ nibble-tested exit.  State 5's own table-dispatch entry (`00746A`, which
 falls back into state 1's own body on one arm -- "one region, two gates,
 one planner") is the next bite.
 
+**Superseded later the same day**: every witnessed state (including 5)
+now has its own gated candidate (the coordinator's own frequency-order
+list closed in full, `ledger.md`'s 18 September entries), and the family
+itself is composed over them: `player_state_plan` (candidate
+`'player-state'`) owns `005700`'s own dispatch head directly, replacing
+the 25 individual player-state gates inside `camera-sprites` with one.
+Building it surfaced a genuine gap the misnomer above had hidden: real
+STATE_TABLE index 26 (ROM `005724`, not `0069AC`, which is index 20) has
+never been recovered as its own leaf -- the seventh most frequent state
+and now the clear next bite (`005700`'s own semantic-operation card,
+below, has the count and the milestone tree numbers).
+
 ## What runs today
 
 - **The original**, cold from power-on, on every recorded history.
@@ -181,12 +193,20 @@ one planner") is the next bite.
   `achievement-slot-dispatch`, `slot-scan`, `record-id-scan`,
   `action-reset-elapsed`, `action-clear-group`, `player-tail`,
   `contact-search`, `contact-consume-primary`,
-  `contact-consume-secondary`, `state-24`, `state-25`, `trail-check`,
+  `contact-consume-secondary`, `trail-check` and `player-state` arm each
+  alone.  **18 September, later the same day**: the 25 individual
+  player-state gates this candidate used to arm (`state-24`, `state-25`,
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
   `state-2`, `state-3`, `state-4`, `state-17`, `state-21`, `state-28`,
-  `state-22`, `state-27`, `state-23`, `state-10` and `state-19` arm each
-  alone.  The player state machine's own shared box-overlap-scan copy
+  `state-22`, `state-27`, `state-23`, `state-10`, `state-19`) are
+  retired from `camera-sprites`' own gate set: `player_state_plan`
+  (`player-state`, above) now owns the jump into each of their own
+  planners directly, so their own hits are replaced by this one
+  dispatcher's.  Their own standalone candidates (same names), gates and
+  tests are untouched -- only `camera-sprites`' own composite no longer
+  arms them itself.  `camera-sprites` is now forty gates, down from
+  sixty-four.  The player state machine's own shared box-overlap-scan copy
   (`0058D2`, consuming what states 0/1's own `00722C` twin discards), the
   achievement highlight cycle (`005CEE`, a seam over a seam like
   `achievement-slot-dispatch`'s own shape over `0047DA`) and the floating
@@ -1303,9 +1323,37 @@ small leaf):
   `ledger.md`'s own 18 September entry.  Every witnessed state now has
   its own gated candidate: `005700` is complete as a plain per-state
   composite, the same shape `achievement-slot-dispatch` already is over
-  `0047DA`/`004800` -- no further card revision needed unless a later
-  state surfaces persistent state or platform interaction this card does
-  not already cover.
+  `0047DA`/`004800`.
+
+  **Composed, 18 September (later the same day):** the family itself,
+  `player_state_plan` (candidate `'player-state'`, armed inside
+  `camera-sprites`) -- the dispatcher's own prefix now owns the jump into
+  each recovered state's own planner directly (the same "call the
+  callee's own planner, prepend this region's own cost" shape
+  `achievement_slot_dispatch_plan` already draws over
+  `achievement_slot_reset_plan`), and the 25 individual player-state
+  gates this candidate used to arm are retired from its own gate set
+  (their own hits replaced by this one dispatcher's; their own standalone
+  candidates, gates and tests are untouched).  `camera-sprites` drops
+  from sixty-four to forty gates net.  Building the dispatch table
+  surfaced the misnomer above as a genuine gap, not merely a naming
+  fact: real `STATE_TABLE` index 26 (ROM `005724`) has never been
+  recovered as its own leaf -- the `'state-26'` candidate targets index
+  20 (`0069AC`), not 26.  Declined here by the same rule as 7/15 (real
+  ROM, no candidate, not guessed), and confirmed still real and
+  frequently witnessed: 6 of the retained `census-005700-fb408bc75597`
+  fixtures reach it, and a full cold run of `ca2b703b6fd5` shows 314 of
+  366 fallbacks are this decline (the coordinator's own tally already
+  named it the seventh most frequent state, 634 of 13,488 activations).
+  **This is the clear next bite** for the player state machine: recover
+  `005724` as its own leaf (census it directly; it is real STATE_TABLE
+  index 26, not the address the `'state-26'` name suggests) and fold it
+  into `_PLAYER_STATE_PLANNERS`.  Milestone tree PASS (18 Sep,
+  `artifacts/gods/verify-camera-sprites-leaves-2026-09-18t`): 107,519
+  frames bit-exact; fallbacks 8,857, of which 1,975 are the state-26
+  decline (second only to 4,468 z80 bank guard).  No further card
+  revision needed unless a later state surfaces persistent state or
+  platform interaction this card does not already cover.
 
 ## Open questions
 

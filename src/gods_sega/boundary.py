@@ -13539,3 +13539,155 @@ def state10_plan(machine, registers):
     exit_registers['sr'] = sr
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=tuple(order.items()),
                       registers=exit_registers, last_pc=0x005FF0)
+
+
+# --- 005700: the player state machine's own dispatch head, composed as the family over FFFFF192 --
+#
+# The dispatcher's own prefix (d7 <- STATE_COUNTER FFFFF190, d0 <- STATE_INDEX FFFFF192, the
+# FROZEN_FLAG/ACTIVE_GATE inactive arm falling straight into the already-armed player-tail gate,
+# the STATE_TABLE lookup at 005618 otherwise) owning the jump into each recovered state's own
+# planner: the same "call the callee's own planner from a machine parked at its own entry, prepend
+# this region's own cost" composition `achievement_slot_dispatch_plan` already draws over
+# `achievement_slot_reset_plan` -- but, unlike that seam-of-seam (0047DA's own inline VDP work makes
+# it a platform block the original must run opaquely), no device access sits between 005700's own
+# entry and the target handler's own first instruction, so the callee's own AtomicPlan/Seam is reused
+# directly (`_prefix_atomic_or_seam`, already proven by state19_plan/state18_plan's own outer heads),
+# never ceded to the machine.  Costs from the tracer (artifacts/gods/evidence/census-005700-*, and
+# the FROZEN_FLAG/ACTIVE_GATE branches poked directly, since no recording sets either).
+PLAYER_STATE_ENTRY = 0x005700
+PLAYER_STATE_TABLE = 0x005618
+
+_PS_LOAD_D7 = (12, 1)                                # 005700 move.w f190.w,d7
+_PS_LEA_TABLE = (8, 1)                               # 005704 lea.l 5618(pc),a0
+_PS_LOAD_D0 = (12, 1)                                # 005708 move.w f192.w,d0
+_PS_TST_FROZEN = (12, 1)                             # 00570C tst.b eecd.w
+_PS_BNE_FROZEN = {True: (10, 1), False: (12, 1)}     # 005710 bne.w 75d6 (word branch)
+_PS_TST_GATE = (12, 1)                               # 005714 tst.w f210.w
+_PS_BPL_INACTIVE = {True: (10, 1), False: (12, 1)}   # 005718 bpl.w 75d6 (word branch)
+_PS_ASL = (12, 1)                                    # 00571C asl.w #3,d0
+_PS_MOVEA = (18, 1)                                  # 00571E movea.l 4(a0,d0.w),a0
+_PS_JMP = (8, 1)                                     # 005722 jmp (a0)
+
+# Real STATE_TABLE indices with a recovered handler of their own: every witnessed state (17 September's
+# own full-history tally) except 7 and 15 (game.player.UNWITNESSED_STATES: a bare rts and a body only
+# ever reached via state 4's own shared-fallthrough jump, never as FFFFF192's own value) -- plus one
+# more the 18 September stint's own naming left unresolved: real index 26 (player.STATE_HANDLERS[26],
+# ROM 005724).  The candidate named 'state-26' targets STATE26_ENTRY (0069AC), which the STATE_TABLE
+# reconstruction later showed is player.STATE_HANDLERS[20], not [26] (STATUS.md's own "misnomer left
+# as a fact for a future session"); real index 26's own handler at 005724 has never been recovered as
+# its own leaf, despite the coordinator's own tally showing it the seventh most frequent state (634 of
+# 13,488 activations on fb408bc75597).  Declined here by the same rule as 7/15: real ROM, no
+# candidate, not guessed -- this composition is keyed by the PC the STATE_TABLE actually holds at
+# each index, not by any candidate's own name, so the misnomer costs nothing beyond this decline.
+_PLAYER_STATE_PLANNERS = {
+    STATE0_ENTRY: state0_plan, STATE1_ENTRY: state1_plan, STATE2_ENTRY: state2_plan,
+    STATE3_ENTRY: state3_plan, STATE4_ENTRY: state4_plan, STATE5_ENTRY: state5_plan,
+    STATE6_ENTRY: state6_plan, STATE8_ENTRY: state8_plan, STATE9_ENTRY: state9_plan,
+    STATE10_ENTRY: state10_plan, STATE11_ENTRY: state11_plan, STATE12_ENTRY: state12_plan,
+    STATE13_ENTRY: state13_plan, STATE14_ENTRY: state14_plan, STATE16_ENTRY: state16_plan,
+    STATE17_ENTRY: state17_plan, STATE18_ENTRY: state18_plan, STATE19_ENTRY: state19_plan,
+    STATE21_ENTRY: state21_plan, STATE22_ENTRY: state22_plan, STATE23_ENTRY: state23_plan,
+    STATE24_ENTRY: movement_hit_primary_plan, STATE25_ENTRY: movement_hit_secondary_plan,
+    STATE26_ENTRY: state26_plan, STATE27_ENTRY: state27_plan, STATE28_ENTRY: state28_plan,
+}
+
+
+def _merge_head(result, head_overlay, extra_cycles, extra_instructions):
+    """Fold this region's own head cost AND its own register overlay into the callee's own plan/seam.
+
+    `_prefix_atomic_or_seam` alone (state19_plan/state18_plan's own shape) is right when the outer
+    head never itself changes a register: it just bumps the cost and passes the callee's own
+    ``registers`` dict through unchanged.  Here the head DOES set d0/a0 (the STATE_TABLE scratch) --
+    a value dead on every witnessed arm, but still the real ROM's own residue -- and a callee that
+    never revisits them (most of the plain state-transition arms) would silently lose them if only
+    its own delta reached the adapter: ``AtomicPlan.registers`` is a delta against the CALLEE's own
+    entry, not against the real machine's entry at 005700, so an unset register reverts to whatever
+    it was BEFORE this whole activation began.  ``head_overlay`` restates the head's own effect first;
+    the callee's own returned registers are applied on top, so anything it DOES set (a taken grid-cell
+    branch's own a0/d0) still wins.
+    """
+    if isinstance(result, Seam):
+        p = result.prefix
+        merged = dict(head_overlay)
+        merged.update(p.registers)
+        new_prefix = AtomicPlan(cycles=p.cycles + extra_cycles, instructions=p.instructions + extra_instructions,
+                                writes=p.writes, registers=merged, last_pc=p.last_pc)
+        return Seam(prefix=new_prefix, resume_pc=result.resume_pc, stack_basis=result.stack_basis,
+                   guards=result.guards, suffix=result.suffix, expect=result.expect)
+    merged = dict(head_overlay)
+    merged.update(result.registers)
+    return AtomicPlan(cycles=result.cycles + extra_cycles, instructions=result.instructions + extra_instructions,
+                      writes=result.writes, registers=merged, last_pc=result.last_pc)
+
+
+def player_state_plan(machine, registers):
+    """005700: the player state machine's own dispatch, composed as the family over FFFFF192 -- the
+    dispatcher's own prefix owning the jump into each recovered state's own planner (or into the
+    already-armed player-tail gate directly, on the FROZEN_FLAG/ACTIVE_GATE inactive arm)."""
+    from .game import player
+    if registers['pc'] != PLAYER_STATE_ENTRY:
+        raise UnsupportedCandidate('player state planner needs the machine parked at 005700')
+    sp = registers['a7'] & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+
+    d7_word = read(player.STATE_COUNTER, 2)
+    state_index = read(player.STATE_INDEX, 2)
+    frozen_byte = read(player.FROZEN_FLAG, 1)
+
+    cycles, instructions = _add(_PS_LOAD_D7, _PS_LEA_TABLE, _PS_LOAD_D0, _PS_TST_FROZEN)
+    sr = _logic_sr(registers['sr'], frozen_byte, 1)
+    frozen = bool(frozen_byte)
+    c, i = _PS_BNE_FROZEN[frozen]
+    cycles, instructions = cycles + c, instructions + i
+
+    handoff_registers = dict(registers)
+    handoff_registers['d7'] = (registers['d7'] & 0xFFFF0000) | d7_word
+    handoff_registers['d0'] = (registers['d0'] & 0xFFFF0000) | state_index
+    handoff_registers['a0'] = PLAYER_STATE_TABLE
+    head_overlay = {'d7': handoff_registers['d7'], 'd0': handoff_registers['d0'], 'a0': handoff_registers['a0']}
+
+    if frozen:
+        handoff_registers['pc'] = PLAYER_TAIL_ENTRY
+        handoff_registers['sr'] = sr
+        result = player_tail_plan(machine, handoff_registers)
+        return _merge_head(result, head_overlay, cycles, instructions)
+
+    gate = player._signed_word(read(player.ACTIVE_GATE, 2))
+    c, i = _PS_TST_GATE
+    cycles, instructions = cycles + c, instructions + i
+    sr = _logic_sr(sr, gate, 2)
+    inactive = gate >= 0
+    c, i = _PS_BPL_INACTIVE[inactive]
+    cycles, instructions = cycles + c, instructions + i
+
+    if inactive:
+        handoff_registers['pc'] = PLAYER_TAIL_ENTRY
+        handoff_registers['sr'] = sr
+        result = player_tail_plan(machine, handoff_registers)
+        return _merge_head(result, head_overlay, cycles, instructions)
+
+    if not (0 <= state_index < len(player.STATE_HANDLERS)):
+        raise UnsupportedCandidate(f'player state {state_index} outside the 29-entry STATE_TABLE')
+    handler_entry = player.STATE_HANDLERS[state_index]
+    planner = _PLAYER_STATE_PLANNERS.get(handler_entry)
+    if planner is None:
+        raise UnsupportedCandidate(
+            f'player state {state_index} (ROM {handler_entry:06X}) not witnessed by a recording')
+
+    c, i = _PS_ASL
+    cycles, instructions = cycles + c, instructions + i
+    sr = _asl_sr(sr, state_index, 3, 2)
+    c, i = _PS_MOVEA
+    cycles, instructions = cycles + c, instructions + i
+    c, i = _PS_JMP
+    cycles, instructions = cycles + c, instructions + i
+
+    handoff_registers['d0'] = (registers['d0'] & 0xFFFF0000) | ((state_index << 3) & 0xFFFF)
+    handoff_registers['a0'] = handler_entry & 0xFFFFFFFF
+    handoff_registers['pc'] = handler_entry
+    handoff_registers['sr'] = sr
+    head_overlay = {'d7': handoff_registers['d7'], 'd0': handoff_registers['d0'], 'a0': handoff_registers['a0']}
+    result = planner(machine, handoff_registers)
+    return _merge_head(result, head_overlay, cycles, instructions)
