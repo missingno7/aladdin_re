@@ -16206,3 +16206,48 @@ def aim_pool_add_plan(machine, registers):
                       registers={'a0': exit_a0, 'd5': d5_final, 'a7': (sp32 + 4) & 0xFFFFFFFF,
                                  'pc': _return(machine, sp), 'sr': exit_sr},
                       last_pc=AIM_POOL_ADD_LAST_PC)
+
+
+# --- 00B32E: the aim window address (game/creatures.py: aim_window_address) -----------------------
+#
+# The SAME camera-relative scaling 00B082's own window-mark arm uses (_cue_scale_with_carry, bias 0),
+# called (with 00AF3C) from every one of 00AF52's own further creature-targeting callees.  One path,
+# no branch, no store -- cost from the tracer (artifacts/gods/evidence/census-00B32E-*).
+AIM_WINDOW_ADDRESS_ENTRY, AIM_WINDOW_ADDRESS_LAST_PC = 0x00B32E, 0x00B352
+_AIM_WINDOW_ADDRESS_COST = (122, 16)
+
+
+def aim_window_address_plan(machine, registers):
+    """00B32E: address = AIM_CUE_WINDOW_BASE + scale(D0 - FOLLOW_X, D1 - FOLLOW_Y, bias 0)."""
+    from .game import creatures
+    if registers['pc'] != AIM_WINDOW_ADDRESS_ENTRY:
+        raise UnsupportedCandidate('aim window address planner needs the machine parked at 00B32E')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    d0, d1 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
+    dx = (d0 - read(creatures.FOLLOW_X, 2)) & 0xFFFF
+    dy = (d1 - read(creatures.FOLLOW_Y, 2)) & 0xFFFF
+    # the SAME "(asr#5) + 5 + 20*(asr#4)" scaling _cue_scale_with_carry uses, kept unrolled here so
+    # both the pre- and post-final-add D2 values are on hand for the exit SR.
+    d2 = (creatures._signed_word(dx) >> 5) & 0xFFFF
+    d3 = (creatures._signed_word(dy) >> 4) & 0xFFFF
+    d2 = (d2 + 5) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d2 = (d2 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d2_before_final = d2
+    d2_final = (d2 + d3) & 0xFFFF
+    window_base_reg = 0xFFFF0000 | (creatures.AIM_CUE_WINDOW_BASE & 0xFFFF)
+    a0 = (window_base_reg + creatures._signed_word(d2_final)) & 0xFFFFFFFF
+    cycles, instructions = _AIM_WINDOW_ADDRESS_COST
+    # add.w d3,d2 (00B34A) is the last flag-setter: N/Z/V from the sum, X=C set with it (ADD).
+    exit_sr = _add_sr(sr, d2_before_final, d3, 2)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
+                      registers={'d2': (registers['d2'] & 0xFFFF0000) | d2_final,
+                                 'd3': (registers['d3'] & 0xFFFF0000) | d3,
+                                 'a0': a0, 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+                                 'sr': exit_sr},
+                      last_pc=AIM_WINDOW_ADDRESS_LAST_PC)

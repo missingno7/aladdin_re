@@ -891,6 +891,18 @@ def aim_pool_reset(read):
     return {'stores': stores}
 
 
+def aim_window_address(read, d0, d1):
+    """00B32E: the SAME camera-relative scaling ``aim_cue_update``'s own window-mark arm uses (bias
+    0), but the caller supplies the raw position directly (D0/D1) instead of this routine reading
+    GRID_X/GRID_Y itself -- a pure address computation into the AIM_CUE_WINDOW_BASE sub-table, no
+    store, called (with 00AF3C, the shared grid-cell lookup) from every one of 00AF52's own further
+    creature-targeting callees (00B724, 00B7DA, 00B6AE, ...)."""
+    dx = (d0 - read(FOLLOW_X, 2)) & 0xFFFF
+    dy = (d1 - read(FOLLOW_Y, 2)) & 0xFFFF
+    offset = _signed_word(_cue_offset(dx, dy, 0))
+    return (AIM_CUE_WINDOW_BASE + offset) & 0xFFFFFFFF
+
+
 def aim_pool_add(read, d0, d1, d7, d2):
     """00B05A: scan AIM_POOL_LOW.. for the first slot whose own leading long (its own first two words)
     is zero, and write ``d0, d1, d7, d2`` there (in that order), incrementing AIM_POOL_COUNT.  Returns

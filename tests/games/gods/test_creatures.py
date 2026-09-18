@@ -73,6 +73,10 @@ AIM_POOL_ADD_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B0
 needs_aim_pool_add_census = pytest.mark.skipif(not AIM_POOL_ADD_FIXTURES or not GODS.rom_path.is_file(),
                                                reason='no local census of 00B05A')
 
+AIM_WINDOW_ADDRESS_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B32E-*/00B32E-entry-p*.state'))
+needs_aim_window_address_census = pytest.mark.skipif(not AIM_WINDOW_ADDRESS_FIXTURES or not GODS.rom_path.is_file(),
+                                                      reason='no local census of 00B32E')
+
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
 
@@ -1119,5 +1123,55 @@ def test_aim_pool_add_candidate_matches_the_reference_and_its_mutant_diverges():
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-pool-add-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B32E: the aim window address (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
+# 00AF52") -- the SAME camera-relative scaling 00B082's own window-mark arm uses, called (with
+# 00AF3C) from every one of 00AF52's own further creature-targeting callees (00B724, 00B7DA,
+# 00B6AE, ...).  See game/creatures.py's own module note above aim_window_address.
+
+def test_aim_window_address_matches_the_window_mark_arithmetic():
+    from gods_sega.game import camera
+    values = {(creatures.FOLLOW_X & 0xFFFFFF, 2): 0, (creatures.FOLLOW_Y & 0xFFFFFF, 2): 0}
+    address = creatures.aim_window_address(_reader(values), 0x100, 0x40)
+    window = creatures._cue_window_mark(_reader({**values, (creatures.GRID_X & 0xFFFFFF, 2): 0x100,
+                                                 (creatures.GRID_Y & 0xFFFFFF, 2): 0x40}))
+    assert address == (creatures.AIM_CUE_WINDOW_BASE + window['offset']) & 0xFFFFFFFF
+
+
+@needs_aim_window_address_census
+@pytest.mark.parametrize('fixture', AIM_WINDOW_ADDRESS_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_window_address_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.aim_window_address_plan(machine, registers)
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_aim_window_address_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-window-address').gate_pcs == (boundary.AIM_WINDOW_ADDRESS_ENTRY,)
+    assert boundary.AIM_WINDOW_ADDRESS_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-window-address-mutant-result').mutation is recovery._mutate_aim_window_address
+
+
+@needs_reference
+def test_aim_window_address_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in AIM_WINDOW_ADDRESS_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-window-address', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00B32E within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-window-address-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

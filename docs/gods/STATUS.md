@@ -427,9 +427,26 @@ below, has the count and the milestone tree numbers).
   leaves (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19e`,
   107,519 frames); both candidates reproduce the original on
   `f0ac19738f19…`: PASS, 39 hits each, 0 fallbacks, bit-exact; both
-  mutants DIVERGENCE.  Next, per the Decision's own order: `00B724`,
-  `00B7DA`, `00B6AE`, then `00B002` (which calls all three), then
-  `00AF52` itself over everything recovered so far.
+  mutants DIVERGENCE.  `00B32E` (`'aim-window-address'`) is recovered
+  next, the same session: the SAME camera-relative scaling `00B082`'s own
+  window-mark arm uses, called (with `00AF3C`) from every one of
+  `00AF52`'s own further creature-targeting callees -- a pure address
+  computation, no store, one path, 12,737 occurrences across the tree.
+  `camera-sprites` (fifty-five gates) milestone tree PASS; the candidate
+  reproduces the original on `f0ac19738f19…`: PASS, bit-exact; mutant (a
+  register control, A0 off by one -- the leaf stores nothing of its own)
+  DIVERGENCE.  Full-tree census of the three remaining Decision items
+  (`00B724`, `00B7DA`, `00B6AE`, 871 occurrences each) found all three
+  bounded, calling ONLY `{00AF3C, 00B32E}` (`00B724`/`00B7DA`) or
+  `{00AF3C, 00B32E, 00B05A}` (`00B6AE`) on every witnessed occurrence
+  (max 223-300 instructions, one exit PC each) -- tractable.  `00B002`
+  ITSELF is not: past its own three calls it tail-jumps (`bra.w`) to
+  `00B588`, unexamined by the Decision's own reconnaissance, which calls
+  `00B354` (a second function sharing `00B32E`'s own ROM range, past
+  its own `rts`) and `00B62A` (wholly new) -- a real scope gap, not yet
+  censused.  Next: `00B724`, `00B7DA`, `00B6AE` (each its own leaf over
+  `{00AF3C, 00B32E}`/`{..., 00B05A}`), then `00B588`'s own reconnaissance
+  before `00B002` can be composed.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
