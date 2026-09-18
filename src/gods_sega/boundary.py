@@ -4078,6 +4078,417 @@ def creature_pickup_check_plan(machine, registers):
                       registers=exit_registers, last_pc=CREATURE_PICKUP_CHECK_LAST_PC)
 
 
+# --- 00A922: the creature's own world-event consume, the third of 00A772's own unconditional
+# callees.  No calls of its own; a bounded loop over the world update's own per-tick event list, then
+# (on a match) a second bounded loop backwards over the already-recovered game.movement.BOX_SCAN_TABLE.
+# Cost from the tracer (artifacts/gods/evidence/census-00A922-*, all five recordings).
+EVENT_CONSUME_ENTRY, EVENT_CONSUME_DECLINE_PC = 0x00A922, 0x00A9AA
+EVENT_CONSUME_FOUND_PC = 0x00A9F0
+
+_EC_CMP_MODE = (16, 1)                      # 00A922 cmpi.w #2,f1e6.w
+_EC_BNE_MODE = {True: (10, 1), False: (12, 1)}      # 00A928 bne.w (word)
+_EC_TST_COUNT = (12, 1)                     # 00A92C tst.w f260.w
+_EC_BEQ_COUNT = {True: (10, 1), False: (12, 1)}     # 00A930 beq.w (word)
+_EC_TST_KIND = (12, 1)                      # 00A934 tst.w $10(a5)
+_EC_BPL_KIND = {True: (10, 1), False: (12, 1)}      # 00A938 bpl.w (word) -- taken: already has an event
+_EC_LOAD_D7 = (12, 1)                       # 00A93C move.w f260.w,d7
+_EC_CMP_CLAMP = (8, 1)                      # 00A940 cmpi.w #$14,d7
+_EC_BLE_CLAMP = {True: (10, 1), False: (8, 1)}      # 00A944 ble.b (byte) -- taken: no clamp needed
+_EC_SUBQ_D7 = (4, 1)                        # 00A948 subq.w #1,d7
+_EC_LOAD_D0 = (8, 1)                        # 00A94A move.w (a5),d0
+_EC_LOAD_D1 = (12, 1)                       # 00A94C move.w $2(a5),d1
+_EC_SUBQ_D0 = (4, 1)                        # 00A950 subq.w #8,d0
+_EC_SUBQ_D1 = (4, 1)                        # 00A952 subq.w #8,d1
+_EC_LEA_LIST = (12, 1)                      # 00A954 lea.l $ffff0bf8.l,a0
+
+_EC_LOAD_QUAD = (12, 1)                     # 00A95A move.w $4(a4),d2
+_EC_MOVEQ_D3 = (4, 1)                       # 00A95E moveq #0,d3
+_EC_CMP_OTHER = (16, 1)                     # 00A960 cmpi.w #$c0,$4(a0)
+_EC_BLT_OTHER = {True: (10, 1), False: (8, 1)}      # 00A966 blt.b (byte)
+_EC_MOVEQ_D3_2 = (4, 1)                     # 00A968 moveq #2,d3 (only kind >= 0xc0)
+_EC_LSR = {0: (6, 1), 2: (10, 1)}           # 00A96A lsr.w d3,d2 (shift is d3: 0 or 2)
+_EC_ANDI_MASK = (8, 1)                      # 00A96C andi.w #3,d2
+_EC_BEQ_MASK = {True: (10, 1), False: (8, 1)}       # 00A970 beq.b (byte)
+_EC_CMP_EXCLUDED = (16, 1)                  # 00A972 cmpi.w #$45,$4(a0)
+_EC_BEQ_EXCLUDED = {True: (10, 1), False: (8, 1)}   # 00A978 beq.b (byte)
+_EC_LOAD_SLOT_X = (8, 1)                    # 00A97A move.w (a0),d2
+_EC_LOAD_SLOT_Y = (12, 1)                   # 00A97C move.w $2(a0),d3
+_EC_ADDQ_D2 = (4, 1)                        # 00A980 addq.w #8,d2
+_EC_ADDQ_D3 = (4, 1)                        # 00A982 addq.w #8,d3
+_EC_CMP1 = (4, 1)                           # 00A984 cmp.w d2,d0
+_EC_BGT1 = {True: (10, 1), False: (8, 1)}           # 00A986 bgt.b (byte)
+_EC_CMP2 = (4, 1)                           # 00A988 cmp.w d3,d1
+_EC_BGT2 = {True: (10, 1), False: (8, 1)}           # 00A98A bgt.b (byte)
+_EC_SUBI_D2 = (8, 1)                        # 00A98C subi.w #$30,d2
+_EC_SUBI_D3 = (8, 1)                        # 00A990 subi.w #$30,d3
+_EC_CMP3 = (4, 1)                           # 00A994 cmp.w d2,d0
+_EC_BLT1 = {True: (10, 1), False: (8, 1)}           # 00A996 blt.b (byte)
+_EC_CMP4 = (4, 1)                           # 00A998 cmp.w d3,d1
+_EC_BLT2 = {True: (10, 1), False: (8, 1)}           # 00A99A blt.b (byte)
+_EC_MOVEM_FOUND = (24, 1)                   # 00A99C movem.w (a0),d2-d4
+_EC_BRA_LOOP2 = (10, 1)                     # 00A9A0 bra.b $a9ac
+_EC_LEA_NEXT = (8, 1)                       # 00A9A2 lea.l $6(a0),a0
+_EC_DBRA_TAKEN, _EC_DBRA_LAST = (10, 1), (14, 1)     # 00A9A6 dbra
+_EC_RTS = (16, 1)                           # 00A9AA / 00A9F0 rts
+
+_EC_LEA_OBJ_END = (12, 1)                   # 00A9AC lea.l $ffff4982.l,a0
+_EC_LOAD_D6 = (8, 1)                        # 00A9B2 move.w #$c7,d6
+_EC_SUBQ_A0 = (8, 1)                        # 00A9B6 subq.w #8,a0 (address register: no flags)
+_EC_TST_STATUS_B = (12, 1)                  # 00A9B8 tst.w $6(a0)
+_EC_BEQ_STATUS_B = {True: (10, 1), False: (8, 1)}   # 00A9BC beq.b (byte)
+_EC_TST_STATUS_A = (12, 1)                  # 00A9BE tst.w $4(a0)
+_EC_BPL_STATUS_A = {True: (10, 1), False: (8, 1)}   # 00A9C2 bpl.b (byte) -- taken: non-negative, proceed
+_EC_CMP_KIND2 = (12, 1)                     # 00A9CA cmp.w $4(a0),d4
+_EC_BNE_KIND2 = {True: (10, 1), False: (8, 1)}      # 00A9CE bne.b (byte)
+_EC_CMP_X2 = (8, 1)                         # 00A9D0 cmp.w (a0),d2
+_EC_BNE_X2 = {True: (10, 1), False: (8, 1)}         # 00A9D2 bne.b (byte)
+_EC_CMP_Y2 = (12, 1)                        # 00A9D4 cmp.w $2(a0),d3
+_EC_BNE_Y2 = {True: (10, 1), False: (8, 1)}         # 00A9D8 bne.b (byte)
+_EC_STORE_EVENT_X = (12, 1)                 # 00A9DA move.w d2,$14(a5)
+_EC_STORE_EVENT_Y = (12, 1)                 # 00A9DE move.w d3,$16(a5)
+_EC_STORE_EVENT_KIND = (12, 1)              # 00A9E2 move.w d4,$10(a5)
+_EC_STORE_NEG = (16, 1)                     # 00A9E6 move.w #$ffff,$4(a0)
+_EC_CLR_ACTIVE = (16, 1)                    # 00A9EC clr.w $6(a0)
+
+def _ec_walk_loop1(read, sr, entries, cx, cy, is_last_index):
+    """Simulates the WHOLE event-list scan, entry by entry in real execution order (needed to track
+    X correctly: ADDQ/SUBI on d2/d3 set it, CMP/ANDI/TST never do, so X can survive from an EARLIER
+    entry's own box test into a LATER entry that never reaches one).  Returns (cycles, instructions,
+    d2, d3, sr) as of the LAST entry processed; d2/d3 are low words only, the caller merges d2's own
+    upper half (never touched here -- only word ops ever reach it) back in.  cx/cy are the creature's
+    own tracked box origin (d0/d1, POSITION_X/Y - 8)."""
+    from .game import creatures
+    cycles = instructions = 0
+    d2 = d3 = 0
+    for index, step in enumerate(entries):
+        is_last = is_last_index(index)
+        c, i = _add(_EC_LOAD_QUAD, _EC_MOVEQ_D3)
+        cycles += c
+        instructions += i
+        kind = step['slot_kind']
+        is_other = kind >= creatures.EVENT_KIND_OTHER_GATE
+        d3 = 2 if is_other else 0
+        c, i = _EC_CMP_OTHER
+        cycles += c
+        instructions += i
+        c, i = _EC_BLT_OTHER[not is_other]
+        cycles += c
+        instructions += i
+        if is_other:
+            c, i = _EC_MOVEQ_D3_2
+            cycles += c
+            instructions += i
+        c, i = _EC_LSR[d3]
+        cycles += c
+        instructions += i
+        c, i = _EC_ANDI_MASK
+        cycles += c
+        instructions += i
+        d2 = step['mask']
+        sr = _logic_sr(sr, d2, 2)
+        if step['arm'] == 'skip-mask':
+            c, i = _EC_BEQ_MASK[True]
+            cycles += c
+            instructions += i
+            c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+            cycles, instructions = cycles + _EC_LEA_NEXT[0] + c, instructions + _EC_LEA_NEXT[1] + i
+            continue
+        c, i = _EC_BEQ_MASK[False]
+        cycles += c
+        instructions += i
+        c, i = _EC_CMP_EXCLUDED
+        cycles += c
+        instructions += i
+        # cmpi.w does not write its own destination: d2 stays the earlier andi.w result (the mask).
+        sr = _cmp_sr(sr, kind, creatures.EVENT_KIND_EXCLUDED, 2)
+        if step['arm'] == 'skip-excluded':
+            c, i = _EC_BEQ_EXCLUDED[True]
+            cycles += c
+            instructions += i
+            c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+            cycles, instructions = cycles + _EC_LEA_NEXT[0] + c, instructions + _EC_LEA_NEXT[1] + i
+            continue
+        c, i = _add(_EC_BEQ_EXCLUDED[False], _EC_LOAD_SLOT_X, _EC_LOAD_SLOT_Y, _EC_ADDQ_D2, _EC_ADDQ_D3, _EC_CMP1)
+        cycles += c
+        instructions += i
+        slot_x = read(step['entry'] & 0xFFFFFF, 2)
+        slot_y = read((step['entry'] + 2) & 0xFFFFFF, 2)
+        d2, d3 = (slot_x + 8) & 0xFFFF, (slot_y + 8) & 0xFFFF   # ADDQ.w: sets X too
+        sr = _add_sr(sr, slot_x, 8, 2)
+        sr = _cmp_sr(sr, cx, d2, 2)
+        if not step['pass_far_x']:
+            c, i = _EC_BGT1[True]
+            cycles += c
+            instructions += i
+            c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+            cycles, instructions = cycles + _EC_LEA_NEXT[0] + c, instructions + _EC_LEA_NEXT[1] + i
+            continue
+        c, i = _add(_EC_BGT1[False], _EC_CMP2)
+        cycles += c
+        instructions += i
+        sr = _cmp_sr(sr, cy, d3, 2)
+        if not step['pass_far_y']:
+            c, i = _EC_BGT2[True]
+            cycles += c
+            instructions += i
+            c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+            cycles, instructions = cycles + _EC_LEA_NEXT[0] + c, instructions + _EC_LEA_NEXT[1] + i
+            continue
+        c, i = _add(_EC_BGT2[False], _EC_SUBI_D2, _EC_SUBI_D3, _EC_CMP3)
+        cycles += c
+        instructions += i
+        far_x = d2
+        d2, d3 = (d2 - 0x30) & 0xFFFF, (d3 - 0x30) & 0xFFFF     # SUBI.w: sets X too
+        sr = _sub_sr(sr, far_x, 0x30, 2)   # d2's own subi (d3's own runs right after, unconditionally)
+        sr_after_d3_subi = _sub_sr(sr, (d3 + 0x30) & 0xFFFF, 0x30, 2)
+        sr = _cmp_sr(sr_after_d3_subi, cx, d2, 2)
+        if not step['pass_near_x']:
+            c, i = _EC_BLT1[True]
+            cycles += c
+            instructions += i
+            c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+            cycles, instructions = cycles + _EC_LEA_NEXT[0] + c, instructions + _EC_LEA_NEXT[1] + i
+            continue
+        c, i = _add(_EC_BLT1[False], _EC_CMP4)
+        cycles += c
+        instructions += i
+        sr = _cmp_sr(sr, cy, d3, 2)
+        if step['arm'] != 'found':
+            c, i = _EC_BLT2[True]
+            cycles += c
+            instructions += i
+            c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+            cycles, instructions = cycles + _EC_LEA_NEXT[0] + c, instructions + _EC_LEA_NEXT[1] + i
+            continue
+        c, i = _add(_EC_BLT2[False], _EC_MOVEM_FOUND, _EC_BRA_LOOP2)
+        cycles += c
+        instructions += i
+    return cycles, instructions, d2, d3, sr
+
+
+def _ec_loop2_entry_cost(step, is_last):
+    """One game.movement.BOX_SCAN_TABLE entry's own cost through the object search, from its own
+    subq.w #8,a0 through whichever tail it reaches.  Every 'continue' arm (skip-inactive, skip-kind,
+    skip-x) jumps to the shared 00A9C4 dbra, which this folds in (DBRA_LAST only for the table's own
+    last slot, i.e. full exhaustion -- 'no-object-match', which the caller already declines, so
+    DBRA_TAKEN is the only cost ever actually charged here in practice).  'skip-negative'/'skip-y'
+    break the loop without ever reaching the dbra.  Returns (cycles, instructions, continues)."""
+    cycles, instructions = _add(_EC_SUBQ_A0, _EC_TST_STATUS_B)
+    if step['arm'] == 'skip-inactive':
+        c, i = _EC_BEQ_STATUS_B[True]
+        cycles += c
+        instructions += i
+        c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+        return cycles + c, instructions + i, True
+    c, i = _add(_EC_BEQ_STATUS_B[False], _EC_TST_STATUS_A)
+    cycles += c
+    instructions += i
+    if step['arm'] == 'skip-negative':
+        c, i = _EC_BPL_STATUS_A[False]
+        return cycles + c, instructions + i, False
+    c, i = _add(_EC_BPL_STATUS_A[True], _EC_CMP_KIND2)
+    cycles += c
+    instructions += i
+    if step['arm'] == 'skip-kind':
+        c, i = _EC_BNE_KIND2[True]
+        cycles += c
+        instructions += i
+        c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+        return cycles + c, instructions + i, True
+    c, i = _add(_EC_BNE_KIND2[False], _EC_CMP_X2)
+    cycles += c
+    instructions += i
+    if step['arm'] == 'skip-x':
+        c, i = _EC_BNE_X2[True]
+        cycles += c
+        instructions += i
+        c, i = _EC_DBRA_LAST if is_last else _EC_DBRA_TAKEN
+        return cycles + c, instructions + i, True
+    c, i = _add(_EC_BNE_X2[False], _EC_CMP_Y2)
+    cycles += c
+    instructions += i
+    if step['arm'] == 'skip-y':
+        c, i = _EC_BNE_Y2[True]
+        return cycles + c, instructions + i, False
+    c, i = _add(_EC_BNE_Y2[False], _EC_STORE_EVENT_X, _EC_STORE_EVENT_Y, _EC_STORE_EVENT_KIND,
+               _EC_STORE_NEG, _EC_CLR_ACTIVE)
+    return cycles + c, instructions + i, False
+
+
+def event_consume_plan(machine, registers):
+    """00A922: the creature's own world-event consume.  See game/creatures.py's own module note
+    above event_consume for the full arm breakdown."""
+    from .game import creatures
+    if registers['pc'] != EVENT_CONSUME_ENTRY:
+        raise UnsupportedCandidate('event consume planner needs the machine parked at 00A922')
+    sr = registers['sr']
+    read = _reader(machine)
+    a4, a5 = registers['a4'] & 0xFFFFFFFF, registers['a5'] & 0xFFFFFFFF
+    order = {}
+    exit_registers = {}
+    # no push of its own anywhere in this routine (stack_delta is +4 on every exit): the caller's own
+    # return address sits at the entry a7 throughout, popped by whichever rts actually runs.
+    return_pc = _return(machine, registers['a7'] & 0xFFFFFF)
+    exit_registers['a7'] = (registers['a7'] + 4) & 0xFFFFFFFF
+
+    mode = read(creatures.EVENT_MODE, 2)
+    cycles, instructions = _EC_CMP_MODE
+    sr = _cmp_sr(sr, mode, 2, 2)
+    inactive = mode != 2
+    c, i = _EC_BNE_MODE[inactive]
+    cycles += c
+    instructions += i
+    if inactive:
+        exit_registers['pc'] = return_pc
+        exit_registers['sr'] = sr
+        c, i = _EC_RTS
+        return AtomicPlan(cycles=cycles + c, instructions=instructions + i, writes=(),
+                          registers=exit_registers, last_pc=EVENT_CONSUME_DECLINE_PC)
+
+    count = read(creatures.EVENT_COUNT, 2)
+    c, i = _EC_TST_COUNT
+    cycles += c
+    instructions += i
+    sr = _logic_sr(sr, count, 2)
+    no_events = count == 0
+    c, i = _EC_BEQ_COUNT[no_events]
+    cycles += c
+    instructions += i
+    if no_events:
+        exit_registers['pc'] = return_pc
+        exit_registers['sr'] = sr
+        c, i = _EC_RTS
+        return AtomicPlan(cycles=cycles + c, instructions=instructions + i, writes=(),
+                          registers=exit_registers, last_pc=EVENT_CONSUME_DECLINE_PC)
+
+    event_kind_field = read((a5 + creatures.EVENT_KIND) & 0xFFFFFF, 2)
+    c, i = _EC_TST_KIND
+    cycles += c
+    instructions += i
+    sr = _logic_sr(sr, event_kind_field, 2)
+    has_event = creatures._signed_word(event_kind_field) >= 0
+    c, i = _EC_BPL_KIND[has_event]
+    cycles += c
+    instructions += i
+    if has_event:
+        exit_registers['pc'] = return_pc
+        exit_registers['sr'] = sr
+        c, i = _EC_RTS
+        return AtomicPlan(cycles=cycles + c, instructions=instructions + i, writes=(),
+                          registers=exit_registers, last_pc=EVENT_CONSUME_DECLINE_PC)
+
+    result = creatures.event_consume(read, a4, a5)
+    if result['arm'] == 'count-clamped':
+        raise UnsupportedCandidate('event consume: EVENT_COUNT clamp arm not witnessed by a recording')
+
+    c, i = _EC_LOAD_D7
+    cycles += c
+    instructions += i
+    sr = _logic_sr(sr, count, 2)
+    c, i = _EC_CMP_CLAMP
+    cycles += c
+    instructions += i
+    sr = _cmp_sr(sr, count, 0x14, 2)
+    c, i = _EC_BLE_CLAMP[True]
+    cycles += c
+    instructions += i
+    c, i = _EC_SUBQ_D7
+    cycles += c
+    instructions += i
+    d7 = (count - 1) & 0xFFFF
+    sr = _sub_sr(sr, count, 1, 2)
+    position_x = read(a5 & 0xFFFFFF, 2)
+    position_y = read((a5 + 2) & 0xFFFFFF, 2)
+    c, i = _EC_LOAD_D0
+    cycles += c
+    instructions += i
+    c, i = _EC_LOAD_D1
+    cycles += c
+    instructions += i
+    cx = (position_x - 8) & 0xFFFF
+    cy = (position_y - 8) & 0xFFFF
+    c, i = _EC_SUBQ_D0
+    cycles += c
+    instructions += i
+    sr = _sub_sr(sr, position_x, 8, 2)
+    c, i = _EC_SUBQ_D1
+    cycles += c
+    instructions += i
+    sr = _sub_sr(sr, position_y, 8, 2)
+    c, i = _EC_LEA_LIST
+    cycles += c
+    instructions += i
+    exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | cx
+    exit_registers['d1'] = (registers['d1'] & 0xFFFF0000) | cy
+    exit_registers['a0'] = creatures.EVENT_LIST & 0xFFFFFFFF
+
+    entries = result['entries']
+    is_last_index = lambda index: index == len(entries) - 1
+    c, i, d2_low, d3_low, sr = _ec_walk_loop1(read, sr, entries, cx, cy, is_last_index)
+    cycles += c
+    instructions += i
+    last_entry_addr = (creatures.EVENT_LIST + creatures.EVENT_LIST_STRIDE * len(entries)) & 0xFFFFFFFF
+    exit_registers['a0'] = last_entry_addr if result['arm'] != 'found' else entries[-1]['entry'] & 0xFFFFFFFF
+    # d7 starts at (count-1); a 'no-match' scan always runs it down to exhaustion (-1) by construction
+    # (exactly `count` entries, one dbra each); a 'found' entry never reaches its own dbra, so d7 stays
+    # at (count-1) minus however many PRIOR entries already decremented it.
+    # move.w $f260.w,d7 (00A93C) is the only writer of d7 before the loop; subq.w/dbra are also word
+    # ops, so d7's own upper half survives from ENTRY throughout.
+    if result['arm'] == 'found':
+        exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | ((count - 1 - entries[-1]['index']) & 0xFFFF)
+    else:
+        exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | 0xFFFF
+    # d2: only ever touched by word ops here (move.w/andi.w/addq.w/subi.w), so its own upper half
+    # survives from ENTRY throughout; d3 is fully re-cleared by its own moveq #0/2 every iteration.
+    exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | d2_low
+    exit_registers['d3'] = d3_low
+
+    if result['arm'] == 'no-match':
+        exit_registers['pc'] = return_pc
+        exit_registers['sr'] = sr
+        c, i = _EC_RTS
+        return AtomicPlan(cycles=cycles + c, instructions=instructions + i, writes=(),
+                          registers=exit_registers, last_pc=EVENT_CONSUME_DECLINE_PC)
+    exit_registers['d2'] = result['d2']
+    exit_registers['d3'] = result['d3']
+
+    # 'found' at loop 1: d2/d3/d4 sign-extended by movem.w; loop 2 walks game.movement.BOX_SCAN_TABLE.
+    from .game import movement
+    exit_registers['d4'] = result['d4'] & 0xFFFF
+    c, i = _EC_LEA_OBJ_END
+    cycles += c
+    instructions += i
+    c, i = _EC_LOAD_D6
+    cycles += c
+    instructions += i
+    obj_entries = result['obj_entries']
+    for oindex, step in enumerate(obj_entries):
+        is_last_obj = oindex == len(obj_entries) - 1
+        c, i, _continues = _ec_loop2_entry_cost(step, is_last_obj)
+        cycles += c
+        instructions += i
+    last_obj = obj_entries[-1]
+    if last_obj['arm'] in ('skip-negative', 'skip-y'):
+        raise UnsupportedCandidate(f"event consume: object search arm not witnessed by a recording: {last_obj['arm']}")
+    obj_dbra_count = len(obj_entries) - (1 if last_obj['arm'] == 'found' else 0)
+    # move.w #$c7,d6 (00A9B2) is a word op: d6's own upper half survives from ENTRY.
+    exit_registers['d6'] = (registers['d6'] & 0xFFFF0000) | ((0xC7 - obj_dbra_count) & 0xFFFF)
+    exit_registers['a0'] = last_obj['entry'] & 0xFFFFFFFF
+    if result['arm'] == 'no-object-match':
+        raise UnsupportedCandidate('event consume: object search exhausted, not witnessed by a recording')
+
+    for address, (value, size) in result['stores'].items():
+        for a, b in _bytes(address, value, size):
+            order[a] = b
+    # clr.w 6(a0) is the last flag-setter for N/Z/V/C (Z=1, rest 0) but does not touch X; nothing in
+    # loop 2 (all cmp/tst/move/clr) ever sets X either, so it survives from loop 1's own walk.
+    exit_registers['sr'] = _logic_sr(sr, 0, 2)
+    exit_registers['pc'] = return_pc
+    c, i = _EC_RTS
+    return AtomicPlan(cycles=cycles + c, instructions=instructions + i, writes=tuple(order.items()),
+                      registers=exit_registers, last_pc=EVENT_CONSUME_FOUND_PC)
+
+
 # --- 00FFF0: the line walker's resume, object copy (game/walker.py) ----------
 #
 # The animation step resumes a solid's walk: the record at A3 is loaded, the

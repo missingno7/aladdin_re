@@ -206,3 +206,136 @@ def creature_pickup_check(read, x, y, lifecycle):
     from . import pickups
     check = pickups.pickup_check(read, x, y, lifecycle)
     return {'check': check, 'negative': pickups._signed_word(check['d2']) < 0}
+
+
+# --- 00A922: the creature's own world-event consume, the third of 00A772's own unconditional
+# callees (18 Sep, real-index-26 session).  No calls; a bounded loop over the world update's own
+# per-tick event list (EVENT_LIST, new -- unreferenced anywhere else in src/gods_sega), then, on a
+# match, a SECOND bounded loop backwards over the already-recovered game.movement.BOX_SCAN_TABLE
+# looking for the object the event refers to.
+EVENT_MODE = 0xFFFFF1E6              # word: only mode 2 permits a scan; 0/1 are the world update's
+                                      # own earlier phases (order 11, docs/gods/tick-map.md)
+EVENT_COUNT = 0xFFFFF260              # word: this tick's own appended-event count (0030CC's own tail);
+                                       # clamped to EVENT_LIST_MAX before the search loop even starts
+EVENT_LIST = 0xFFFF0BF8               # 6-byte (X, Y, kind) triples, appended by the world update
+EVENT_LIST_STRIDE = 6
+EVENT_LIST_MAX = 0x14                 # never witnessed exceeded by any recording; declined, not guessed
+EVENT_KIND = 0x10                     # instance_ptr word: gate ('already has an event' when >= 0);
+                                       # the found event's own kind, once one is consumed
+EVENT_X, EVENT_Y = 0x14, 0x16         # instance_ptr words: the found event's own position
+EVENT_KIND_OTHER_GATE = 0xC0          # a slot kind >= this shifts QUADRANT_WORD by 2 instead of 0
+EVENT_KIND_EXCLUDED = 0x45            # a slot of exactly this kind is always skipped
+EVENT_BOX_NEAR, EVENT_BOX_FAR = -0x28, 0x8    # instanceX - slotX (and instanceY - slotY) must fall
+                                               # in this range for the slot to match (00A980/00A982
+                                               # addq.w #8 sets the far bound; 00A98C/00A990 subi.w
+                                               # #$30 from that same +8 value nets -0x28 for the near
+                                               # bound -- not the state-26 box margins, which are a
+                                               # different region's own constants)
+
+
+def event_consume(read, type_ptr, instance_ptr):
+    """00A922: real, witnessed, fully modelled arms -- 'mode-inactive' (EVENT_MODE != 2, the world
+    update's own earlier phases), 'no-events' (EVENT_COUNT == 0), 'already-has-event' (EVENT_KIND >=
+    0), 'no-match' (the event-list scan exhausts).  'found' composes both loops: the first slot inside
+    the creature's own box around (POSITION_X-8, POSITION_Y-8) whose own kind passes the
+    QUADRANT_WORD mask (and isn't EVENT_KIND_EXCLUDED) selects an (x, y, kind) triple; the SAME triple
+    is then searched for, walking game.movement.BOX_SCAN_TABLE BACKWARDS from its own last slot, in
+    the object table -- the entries dicts (both 'entries' and 'obj_entries') carry every step's own
+    per-slot facts for the boundary's own costing.  'count-clamped' (EVENT_COUNT > EVENT_LIST_MAX) and
+    the object search's own 'skip-negative'/'skip-y'/exhausted ('no-object-match') arms are real ROM,
+    never witnessed by any recording -- the caller declines them."""
+    type_ptr &= 0xFFFFFF
+    instance_ptr &= 0xFFFFFF
+    mode = read(EVENT_MODE, 2) & 0xFFFF
+    if mode != 2:
+        return {'arm': 'mode-inactive'}
+    count = read(EVENT_COUNT, 2) & 0xFFFF
+    if count == 0:
+        return {'arm': 'no-events'}
+    if _signed_word(read(instance_ptr + EVENT_KIND, 2)) >= 0:
+        return {'arm': 'already-has-event'}
+    if count > EVENT_LIST_MAX:
+        return {'arm': 'count-clamped'}
+    d7 = count - 1
+    cx = _signed_word((read(instance_ptr + POSITION_X, 2) - 8) & 0xFFFF)
+    cy = _signed_word((read(instance_ptr + POSITION_Y, 2) - 8) & 0xFFFF)
+    quadrant_word = read(type_ptr + QUADRANT_WORD, 2) & 0xFFFF
+    entries = []
+    found = None
+    entry_addr = EVENT_LIST
+    for index in range(d7 + 1):
+        slot_kind = read((entry_addr + 4) & 0xFFFFFF, 2) & 0xFFFF
+        shift = 2 if _signed_word(slot_kind) >= EVENT_KIND_OTHER_GATE else 0
+        mask = (quadrant_word >> shift) & 3
+        if mask == 0:
+            entries.append({'index': index, 'arm': 'skip-mask', 'entry': entry_addr, 'slot_kind': slot_kind,
+                           'mask': mask})
+        elif slot_kind == EVENT_KIND_EXCLUDED:
+            entries.append({'index': index, 'arm': 'skip-excluded', 'entry': entry_addr, 'slot_kind': slot_kind,
+                           'mask': mask})
+        else:
+            slot_x = read(entry_addr & 0xFFFFFF, 2) & 0xFFFF
+            slot_y = read((entry_addr + 2) & 0xFFFFFF, 2) & 0xFFFF
+            dx = cx - _signed_word(slot_x)
+            dy = cy - _signed_word(slot_y)
+            pass_far_x = dx <= EVENT_BOX_FAR
+            pass_far_y = pass_far_x and dy <= EVENT_BOX_FAR
+            pass_near_x = pass_far_y and dx >= EVENT_BOX_NEAR
+            pass_near_y = pass_near_x and dy >= EVENT_BOX_NEAR
+            step = {'index': index, 'entry': entry_addr, 'slot_kind': slot_kind, 'mask': mask,
+                    'pass_far_x': pass_far_x, 'pass_far_y': pass_far_y, 'pass_near_x': pass_near_x}
+            if pass_near_y:
+                step['arm'] = 'found'
+                entries.append(step)
+                found = step
+                break
+            step['arm'] = 'tested'
+            entries.append(step)
+        entry_addr = (entry_addr + EVENT_LIST_STRIDE) & 0xFFFFFFFF
+    if found is None:
+        return {'arm': 'no-match', 'entries': entries, 'd0': cx & 0xFFFF, 'd1': cy & 0xFFFF}
+
+    from .movement import BOX_SCAN_TABLE, BOX_SCAN_COUNT, BOX_SCAN_STRIDE, BOX_SCAN_STATUS_A, BOX_SCAN_STATUS_B
+    ex = read(found['entry'] & 0xFFFFFF, 2) & 0xFFFF
+    ey = read((found['entry'] + 2) & 0xFFFFFF, 2) & 0xFFFF
+    ekind = found['slot_kind']
+    obj_entries = []
+    obj_found = None
+    obj_addr = (BOX_SCAN_TABLE + BOX_SCAN_STRIDE * BOX_SCAN_COUNT) & 0xFFFFFFFF
+    declined_arm = None
+    for oindex in range(BOX_SCAN_COUNT):
+        obj_addr = (obj_addr - BOX_SCAN_STRIDE) & 0xFFFFFFFF
+        status_b = read((obj_addr + BOX_SCAN_STATUS_B) & 0xFFFFFF, 2)
+        if status_b == 0:
+            obj_entries.append({'index': oindex, 'arm': 'skip-inactive', 'entry': obj_addr})
+            continue
+        status_a = read((obj_addr + BOX_SCAN_STATUS_A) & 0xFFFFFF, 2)
+        if _signed_word(status_a) < 0:
+            obj_entries.append({'index': oindex, 'arm': 'skip-negative', 'entry': obj_addr})
+            declined_arm = 'skip-negative'
+            break
+        if (status_a & 0xFFFF) != ekind:
+            obj_entries.append({'index': oindex, 'arm': 'skip-kind', 'entry': obj_addr})
+            continue
+        ox = read(obj_addr & 0xFFFFFF, 2) & 0xFFFF
+        if ox != ex:
+            obj_entries.append({'index': oindex, 'arm': 'skip-x', 'entry': obj_addr})
+            continue
+        oy = read((obj_addr + 2) & 0xFFFFFF, 2) & 0xFFFF
+        if oy != ey:
+            obj_entries.append({'index': oindex, 'arm': 'skip-y', 'entry': obj_addr})
+            declined_arm = 'skip-y'
+            break
+        obj_entries.append({'index': oindex, 'arm': 'found', 'entry': obj_addr})
+        obj_found = obj_addr
+        break
+    base = {'entries': entries, 'obj_entries': obj_entries, 'd0': cx & 0xFFFF, 'd1': cy & 0xFFFF,
+            'd2': ex, 'd3': ey, 'd4': ekind}
+    if declined_arm is not None:
+        return {**base, 'arm': declined_arm}
+    if obj_found is None:
+        return {**base, 'arm': 'no-object-match'}
+    stores = {(instance_ptr + EVENT_X) & 0xFFFFFF: (ex, 2), (instance_ptr + EVENT_Y) & 0xFFFFFF: (ey, 2),
+              (instance_ptr + EVENT_KIND) & 0xFFFFFF: (ekind, 2), (obj_found + 4) & 0xFFFFFF: (0xFFFF, 2),
+              (obj_found + 6) & 0xFFFFFF: (0, 2)}
+    return {**base, 'arm': 'found', 'stores': stores, 'obj_found': obj_found}

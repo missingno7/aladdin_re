@@ -288,9 +288,29 @@ below, has the count and the milestone tree numbers).
   this region's own head write feeds a callee's own read two levels down.
   Milestone tree PASS (`artifacts/gods/verify-creature-pickup-check-leaves-2026-09-18`,
   standalone gate): 107,519 frames, 20,811 hits, 78 fallbacks (all
-  `ADAPTER_REFUSALS` but one already-known pickup_check decline).  `00A922`
-  (the last of `00A772`'s own three unconditional callees; full recon
-  already done this session) is the next bite.
+  `ADAPTER_REFUSALS` but one already-known pickup_check decline).
+- **The candidate `event-consume`** (`src/gods_sega/recovery.py`): a single
+  gate at `00A922`, the last of `00A772`'s own three unconditional callees
+  (18 Sep, `docs/gods/blockers/2026-09-18-00A578.md`'s own ordering) -- the
+  creature's own world-event consume.  Two bounded loops: the first walks
+  the event list (`EVENT_LIST`, stride 6, up to 20 entries) for a slot
+  whose own kind passes the type's own `QUADRANT_WORD` mask, isn't
+  `EVENT_KIND_EXCLUDED`, and whose own (x, y) falls in the creature's own
+  box; the second, on a match, walks `game.movement.BOX_SCAN_TABLE`
+  backwards for an active object of the SAME (x, y, kind), and on a match
+  stores the event into the instance and marks both slots consumed.  See
+  `ledger.md`'s own 18 September entry for the arm breakdown and the four
+  real defects this session's own FAST tier and `--perturb-upper-halves`
+  caught in turn (two wrong box-margin constants copied from state-26's
+  own box scan, a missing shared-`dbra` cost on loop 2's own continuing
+  arms, a missing `lsr.w d3,d2` cost, a missing final `rts` cost, and two
+  registers' own upper halves not carried from entry).  Milestone tree
+  PASS on four of the five leaves (`artifacts/gods/verify-event-consume-leaves-2026-09-18`,
+  standalone gate): 107,519 frames total, 19,779 hits, 19 fallbacks (all
+  `ADAPTER_REFUSALS`); the fifth recording (`ca2b703b6fd5`) never reaches
+  `00A922` at all, honestly `NOT_EXERCISED` (0 retained fixtures in its
+  own census, matching).  The witnessed kind handlers and their callees
+  are the next bite, then `00A772` as the family and `00A578` as the walk.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
