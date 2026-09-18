@@ -336,7 +336,13 @@ power-on, all leaves at once (five for Gods: ten worker processes; about
 4 min, the longest leaf's time, against 13 min for the single-process
 `--tree` walk with restores).  It makes the same claim — every recorded
 branch, every frame — without a restore anywhere.  Then: one line in
-`ledger.md`, the region and the next bites in `STATUS.md`, commit, push.
+`ledger.md`, the region and the next bites in `STATUS.md`, commit — and
+**immediately before `git push`, run `verify_status.py` on the tree
+directory again**: it must print `PASS … current receipts` against the
+commit being pushed.  `STALE_EVIDENCE` means a source file changed after
+the tree ran (a docstring, a renamed test, a helper); run the tree again
+on the final commit.  Three pushes on 18 September carried a stale tree
+and had to be re-sealed by the supervisor.
 
 ## The three tiers, and when each runs
 
