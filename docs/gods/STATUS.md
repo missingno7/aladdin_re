@@ -448,6 +448,41 @@ below, has the count and the milestone tree numbers).
   `{00AF3C, 00B32E}`/`{..., 00B05A}`), then `00B588`'s own reconnaissance
   before `00B002` can be composed.
 
+- **19 September, grinder session following the three-region reconnaissance
+  above**: all three are recovered.  `00B724` (`'aim-target-scan'`): a
+  horizontal raycast up to the type's own step limit, marking each visited
+  column in the SAME window table `aim_cue_update`'s own window-mark arm
+  writes into and appending into a second, per-call-restarted 32-slot pool
+  (`AIM_SEARCH_POOL_LOW`, immediately below `AIM_POOL`); 127 retained
+  fixtures, 120 MATCH, 7 correctly declined (`'blocked-start'`/
+  `'pruned-start'`, real ROM never witnessed).  `00B7DA` (`'aim-target-
+  scan-backward'`): 00B724's own mirror, stepping left -- but NOT a
+  byte-identical copy, two real differences the tracer found: the first
+  probe is a bare advance with no store (a call alone can produce zero
+  stores), and there is no step-count limit at all; 149 retained fixtures,
+  140 MATCH, 9 declined.  `00B6AE` (`'aim-target-resolve'`): a two-slot
+  outer loop consuming the 'exhausted' snapshots `00B724`/`00B7DA` leave
+  (`AIM_SEARCH_SNAPSHOT`/`AIM_SEARCH_BACKWARD_SNAPSHOT`), each slot an
+  independent VERTICAL scan (opposite header polarity from the other two:
+  here header==1 STOPS the scan to evaluate, there it continues), reusing
+  the already-recovered `aim_pool_add` (00B05A) verbatim for its own store
+  arm; the second slot's own reads had to see the first slot's own writes
+  (a real cross-slot RAM dependency), composed via the same `_ConstMachine`
+  overlay `creature_pickup_check_plan` already established -- 93 retained
+  fixtures, all 93 MATCH.  `camera-sprites` extended to fifty-eight gates.
+  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19h`, 107,519
+  frames, bit-exact).  See `ledger.md`'s own three 19 September entries for
+  the full arm breakdowns, cost tables and the real defects each session's
+  own FAST tier and `--perturb-upper-halves` caught (a duplicate-named cost
+  constant, missing D2/X-flag threading, MOVEM's own sign-extension on
+  load, the cross-slot RAM dependency).  Next: `00B588`'s own
+  reconnaissance (a second function sharing `00B32E`'s own ROM range past
+  its own `rts`, and `00B62A`, wholly new) before `00B002` can be composed;
+  `00AF52` over `00B082`/`00B02A`/`00B724`/`00B7DA`/`00B6AE`/`00B002`;
+  `00AC36`; `00AA76`/`00AB50`; `00B8C2` then `00B920`; `00A772` as the
+  family; `00A578` as the walk.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from
