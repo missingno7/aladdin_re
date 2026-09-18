@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
+                       AIM_CUE_ENTRY, aim_cue_update_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
@@ -270,6 +271,7 @@ PLANNERS = {
     'creature-frame-offset': {KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan},
     'creature-grid-cell': {CREATURE_GRID_CELL_ENTRY: creature_grid_cell_plan},
     'creature-grid-cell-d0d1': {AF3C_ENTRY: creature_grid_cell_d0d1_plan},
+    'aim-cue-update': {AIM_CUE_ENTRY: aim_cue_update_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
@@ -356,7 +358,8 @@ PLANNERS = {
                        GROUND_CONTACT_UPDATE_ENTRY: ground_contact_update_plan,
                        GROUND_CONTACT_UPDATE_MIRROR_ENTRY: ground_contact_update_mirror_plan,
                        FALL_KIND_UPDATE_ENTRY: fall_kind_update_plan, FALL_KIND_UPDATE_MIRROR_ENTRY: fall_kind_update_mirror_plan,
-                       AF3C_ENTRY: creature_grid_cell_d0d1_plan},
+                       AF3C_ENTRY: creature_grid_cell_d0d1_plan,
+                       AIM_CUE_ENTRY: aim_cue_update_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -580,7 +583,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'creature-ground-contact-mirror-mutant-result': ('creature-ground-contact-mirror', _mutate_result),
              'creature-fall-kind-mutant-result': ('creature-fall-kind', _mutate_result),
              'creature-fall-kind-mirror-mutant-result': ('creature-fall-kind-mirror', _mutate_result),
-             'creature-grid-cell-d0d1-mutant-result': ('creature-grid-cell-d0d1', _mutate_creature_grid_cell_d0d1)}
+             'creature-grid-cell-d0d1-mutant-result': ('creature-grid-cell-d0d1', _mutate_creature_grid_cell_d0d1),
+             'aim-cue-update-mutant-result': ('aim-cue-update', _mutate_result)}
 
 
 @dataclass

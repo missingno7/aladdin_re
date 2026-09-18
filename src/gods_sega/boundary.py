@@ -15670,3 +15670,457 @@ def player_state_plan(machine, registers):
     head_overlay = {'d7': handoff_registers['d7'], 'd0': handoff_registers['d0'], 'a0': handoff_registers['a0']}
     result = planner(machine, handoff_registers)
     return _merge_head(result, head_overlay, cycles, instructions)
+
+
+# --- 00B082: the aim-cue update (game/creatures.py: aim_cue_update) ---------
+#
+# Costs from the tracer (artifacts/gods/evidence/census-0X00B082-*), verified fragment by fragment
+# against seven independent retained fixtures until every total matched to the cycle: the fill+dispatch
+# head (two variants: low or high nibble selected), the window-mark arm (00B2EC, straight-line), the
+# quadrant-mark arm (00B0FE, fully deterministic -- always exactly 32 calls into the shared mark leaf,
+# two mirrored passes each run twice), the event-scan arm's own per-entry cost (00B15C) and the
+# empty-count retry overhead (00B0E0).  The shared mark leaf's own miss arm (00B1AC, out of the
+# table's own window) and dispatch index 3 (00B1E8) are real ROM, never witnessed by any of the five
+# recordings: declined, as is a retry landing on index 2 (self) or 3.
+AIM_CUE_ENTRY = 0x00B082
+AIM_CUE_WINDOW_LAST_PC = 0x00B32C     # index 0 (window-mark)'s own rts
+AIM_CUE_QUADRANT_LAST_PC = 0x00B15A   # index 1 (quadrant-mark)'s own rts
+AIM_CUE_EVENT_LAST_PC = 0x00B1AA      # index 2 (event-scan)'s own rts, the non-retry tail
+AIM_CUE_FRAME_REGISTERS = ('a3', 'a4', 'a5')   # movem.l a3-a5,-(a7) / (a7)+ -- pushed then popped
+                                                 # unchanged, but the 12 bytes of residue are real
+AIM_CUE_TABLE_TARGETS = {0: 0x00B2EC, 1: 0x00B0FE, 2: 0x00B15C, 3: 0x00B1E8}   # the dispatch table's
+                                                 # own four entries -- a0's own exit value whenever the
+                                                 # arm itself never touches a0 again (window, quadrant)
+AIM_CUE_DRAW_RETURN_PC = 0x00B0D8               # 014A3C's own return site: jsr's own stack push
+AIM_CUE_QUAD_MARK_RETURN_PC = 0x00B146          # 00B1AC's own return site from the quadrant loop's
+                                                 # SECOND bsr (00B142): loop 2 always runs last, so
+                                                 # this is the final residue at [sp32-4, sp32-1]
+                                                 # regardless of which pass or iteration actually wrote
+                                                 # the table -- every call uses the SAME two sites
+AIM_CUE_SCAN_MARK_RETURN_PC = 0x00B190          # 00B1AC's own return site from the event scan's own
+                                                 # (single) bsr.b -- at [sp32-12, sp32-9], INSIDE the
+                                                 # scan's own d7/a0 frame, overwriting the outer a3
+                                                 # push's own slot a second time
+
+_CUE_HEAD = (32 + 72 + 8 + 112 * 7 + 80 + 36, 12)   # push; fill (movem.w load, lea, 7 full stores, one
+                                                     # partial store); pop -- always this exact cost
+_CUE_SKIP = (12 + 12, 2)              # tst.w AIM_CUE_SKIP_FLAG; bne.w not taken (the only admitted arm)
+_CUE_READ_INDEX = (12 + 4 + 8 + 8 + 14 + 12, 6)   # move.b; move.w; andi; andi; lsr; move.b
+_CUE_DRAW = (20, 1)                   # jsr 014A3C.l itself (the callee's own cost is _NR_COST, added
+                                       # separately -- the SAME shared constant next_random_plan uses)
+_CUE_COMPARE = (8 + 4, 2)             # andi.w #$7f,d0; cmp.b d0,d4
+_CUE_SWAP_BRANCH = {False: (10, 1), True: (8, 1)}   # bge.b -- False (no swap, low nibble): taken
+_CUE_EXG = (6, 1)                     # exg.l d2,d3 (when swapped, or always on a retry)
+_CUE_TABLE_JUMP = (4 + 4 + 4 + 18 + 8, 5)   # add.b x2; ext.w; movea.l; jmp
+_CUE_EXG_JUMP = (6 + 4 + 4 + 4 + 18 + 8, 1 + 5)   # a retry's own exg + table jump (index 3/-1 cases decline)
+
+
+_CUE_SCAN_TEST = (12, 1)              # tst.w EVENT_COUNT
+_CUE_SCAN_BRANCH = {True: (10, 1), False: (12, 1)}   # beq.w -- True: EVENT_COUNT == 0 (retry)
+_CUE_SCAN_HEAD_TAIL = (24 + 12 + 8 + 10 + 4 + 20 + 12, 7)   # movem save; load count; clamp compare +
+                                                              # branch (never taken -- EVENT_COUNT > 20
+                                                              # is declined outright); subq; bclr; lea
+
+# window-mark (00B2EC..00B32C): straight-line, no branch of its own.
+_CUE_WINDOW_BODY = (12 + 12 + 12 + 12 + 16 + 16 + 14 + 4 + 4 + 4 + 4 + 4 + 4 + 4
+                    + 12 + 8 + 8 + 12 + 16 + 16 + 12 + 16, 22)
+
+# quadrant-mark (00B0FE..00B15A): two loops, two passes each, 8 iterations a pass -- all immediate
+# values, no data dependence in the trip count (game/creatures.py: _cue_quadrant_marks).
+_CUE_QUAD_SETUP = (4 + 4 + 12 + 12 + 12 + 12 + 4, 7)      # moveq x2; the camera window; moveq #7,d3
+_CUE_QUAD_WRAP = (4 + 4 + 4 + 4, 4)                        # move.w x2; add.w x2 (register only)
+_CUE_QUAD_BSR = (18, 1)               # bsr.w $b1ac
+_CUE_QUAD_STEP = (8, 1)               # addi.w #$10,d0 (or d1)
+_CUE_QUAD_DBRA = {True: (10, 1), False: (14, 1)}   # dbra -- True: continue, False: pass exhausted
+_CUE_QUAD_CHECK = (4, 1)              # tst.w d1 (or d0) -- register operand
+_CUE_QUAD_RESUME_BRANCH = {True: (10, 1), False: (8, 1)}   # bpl.b -- True: proceed, False: repeat
+_CUE_QUAD_NEG = (4, 1)                # neg.w d1 (or d0)
+_CUE_QUAD_RESET = (4 + 4, 2)          # moveq #$c0,d0 (or d1); moveq #7,d3
+_CUE_QUAD_BRA = (10, 1)               # bra.b (the pass repeat)
+_CUE_QUAD_LOOP2_SETUP = (4 + 4 + 4, 3)   # moveq #$c0,d0; moveq #$c0,d1; moveq #7,d3
+_CUE_QUAD_RTS = (16, 1)               # rts at 00B15A
+
+# the shared mark leaf 00B1AC, called from both the quadrant loop and the event scan -- the hit arm
+# only (the miss arm, real ROM, is never witnessed: the caller declines).
+_CUE_MARK_BODY = (4 + 4 + 16 + 14 + 4 + 4 + 4 + 4 + 4 + 4 + 4        # subq x2; asr x2; addq; add x6
+                  + 8 + 12 + 6 + 8, 15)                              # lea; lea; cmpa; blt not taken
+_CUE_MARK_HIT_TAIL = (14 + 6 + 8 + 12 + 16 + 20 + 16, 7)             # adda; cmpa; bge not taken; the
+                                                                       # two 0xFF stores; bset; rts
+
+# event-scan (00B15C..00B1AA): the shared list scan, camera-relative, marking every entry.
+_CUE_SCAN_LOADXY = (8 + 8 + 12 + 12, 4)   # move.w (a0)+ x2; sub.w x2
+_CUE_SCAN_BSR = (18, 1)                   # bsr.b $b1ac
+_CUE_SCAN_ADVANCE = (4, 1)                # addq.w #2,a0
+_CUE_SCAN_TAIL = (16 + 28 + 16 + 12 + 16, 5)   # move.w #2,EVENT_MODE; movem restore; btst; beq not
+                                                 # taken (the sticky flag is always set: every admitted
+                                                 # occurrence has at least one in-bounds mark); rts
+
+
+def _cue_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(AIM_CUE_FRAME_REGISTERS)
+                 for pair in _bytes(sp - 12 + 4 * index, registers[name], 4))
+
+
+def _cue_dispatch_cost(swap):
+    c, i = _add(_CUE_HEAD, _CUE_SKIP, _CUE_READ_INDEX, _CUE_DRAW, _NR_COST, _CUE_COMPARE,
+               _CUE_SWAP_BRANCH[swap])
+    if swap:
+        ec, ei = _CUE_EXG
+        c, i = c + ec, i + ei
+    tc, ti = _CUE_TABLE_JUMP
+    return c + tc, i + ti
+
+
+def _cue_index_registers(selected_index, other_value):
+    """The dispatch's own exit d2/d3: d2 = selected_index*4, sign-extended byte->word (ext.w only
+    reaches the low word -- the upper 16 bits stay 0, zeroed by the fill and never touched again); d3
+    is whichever nibble was NOT selected, untouched after the (possible) exg."""
+    d2_byte = (selected_index * 4) & 0xFF
+    d2 = d2_byte | (0xFF00 if d2_byte & 0x80 else 0)
+    return d2, other_value & 0xFFFF
+
+
+def _cue_scale_with_carry(dx, dy, bias):
+    """The shared ``(asr#5) + 5 + 20*(asr#4)`` scaling both the window-mark arm and the shared mark
+    leaf use -- returns (first_final, second_final, carry), ``carry`` the X/C bit the LAST ``add``
+    (the second ``add second,first``) leaves, which survives (unlike N/Z/V) through every instruction
+    either arm runs afterward, all the way to the routine's own exit."""
+    from .game import creatures
+    first = (creatures._signed_word((dx - bias) & 0xFFFF) >> 5) & 0xFFFF
+    second = (creatures._signed_word((dy - bias) & 0xFFFF) >> 4) & 0xFFFF
+    first = (first + 5) & 0xFFFF
+    second = (second + second) & 0xFFFF
+    second = (second + second) & 0xFFFF
+    first = (first + second) & 0xFFFF
+    second = (second + second) & 0xFFFF
+    second = (second + second) & 0xFFFF
+    carry = (first + second) > 0xFFFF
+    first = (first + second) & 0xFFFF
+    return first, second, carry
+
+
+def _cue_mark_step(dx, dy):
+    """Register-exact transcription of 00B1AC (bias AIM_CUE_MARK_BIAS): returns (d4, d5, a3, hit,
+    carry) -- d4/d5 as 16-bit patterns (their own upper halves stay 0 throughout: the fill zeroed them
+    and only word ops touch them after), a3 the full 32-bit address the mark would land at."""
+    from .game import creatures
+    d4, d5, carry = _cue_scale_with_carry(dx, dy, creatures.AIM_CUE_MARK_BIAS)
+    # a2's own base is "lea.l $c1ba.w,a2" -- a .w (sign-extending) load of the ROM-coded constant, so
+    # the register itself is 0xFFFFC1BA, not 0x00FFC1BA; the further arithmetic (a small signed
+    # displacement) never carries out of the upper word.
+    base_reg = 0xFFFF0000 | (creatures.AIM_CUE_MARK_BASE & 0xFFFF)
+    a3 = (base_reg + creatures.AIM_CUE_MARK_OFFSET + creatures._signed_word(d4)) & 0xFFFFFFFF
+    a3_ram = a3 & 0xFFFFFF
+    hit = creatures.AIM_CUE_MARK_BASE <= a3_ram < creatures.AIM_CUE_MARK_BASE + creatures.AIM_CUE_MARK_SPAN
+    return d4, d5, a3, hit, carry
+
+
+def _cue_mark_writes(a3):
+    from .game import creatures
+    return ((a3 & 0xFFFFFF, 0xFF), ((a3 + creatures.AIM_CUE_MARK_STRIDE) & 0xFFFFFF, 0xFF))
+
+
+def _cue_window_registers(read):
+    """00B2EC: register-exact transcription of the window-mark arm -- returns (d0, d1, writes,
+    carry).  ``clr.w EVENT_MODE`` (00B2FC) runs unconditionally before the scaling, clearing the SAME
+    word the event-scan's own tail sets to 2 -- a real cross-arm interaction, not modelled further
+    this session."""
+    from .game import creatures
+    dx = (read(creatures.GRID_X, 2) - read(creatures.FOLLOW_X, 2)) & 0xFFFF
+    dy = (read(creatures.GRID_Y, 2) - read(creatures.FOLLOW_Y, 2)) & 0xFFFF
+    d0, d1, carry = _cue_scale_with_carry(dx, dy, 0)
+    base = (creatures.AIM_CUE_WINDOW_BASE + creatures._signed_word(d0)) & 0xFFFFFFFF
+    writes = ((creatures.EVENT_MODE & 0xFFFFFF, 0x00), ((creatures.EVENT_MODE + 1) & 0xFFFFFF, 0x00),
+             (base & 0xFFFFFF, 0xFF), ((base + creatures.AIM_CUE_WINDOW_STRIDE_1) & 0xFFFFFF, 0xFF),
+             ((base + creatures.AIM_CUE_WINDOW_STRIDE_2) & 0xFFFFFF, 0xFF))
+    return d0, d1, writes, carry
+
+
+def _cue_pass(dx0, dy0, fixed, axis):
+    """One 8-step pass of the quadrant loop (axis 'x': d0 steps from -64, d1 fixed; axis 'y': d1
+    steps, d0 fixed) -- returns (cycles, instructions, last_d4, last_d5, last_a3, last_carry,
+    writes)."""
+    cycles, instructions = 0, 0
+    writes = {}
+    last_d4 = last_d5 = last_a3 = last_carry = 0
+    step_value = -64
+    for step in range(8):
+        dx, dy = ((step_value + dx0) & 0xFFFF, (fixed + dy0) & 0xFFFF) if axis == 'x' else \
+                 ((fixed + dx0) & 0xFFFF, (step_value + dy0) & 0xFFFF)
+        c, i = _add(_CUE_QUAD_WRAP, _CUE_QUAD_BSR)
+        cycles += c
+        instructions += i
+        d4, d5, a3, hit, carry = _cue_mark_step(dx, dy)
+        if not hit:
+            raise UnsupportedCandidate('aim cue: quadrant mark out of the table window, not witnessed')
+        c, i = _add(_CUE_MARK_BODY, _CUE_MARK_HIT_TAIL)
+        cycles += c
+        instructions += i
+        writes.update(dict(_cue_mark_writes(a3)))
+        last_d4, last_d5, last_a3, last_carry = d4, d5, a3, carry
+        step_value += 0x10
+        c, i = _add(_CUE_QUAD_STEP, _CUE_QUAD_DBRA[step != 7])
+        cycles += c
+        instructions += i
+    return cycles, instructions, last_d4, last_d5, last_a3, last_carry, writes
+
+
+def _cue_quadrant_plan(read, sr):
+    """00B0FE..00B15A: the fully deterministic 32-call quadrant sweep -- returns a dict of cycles,
+    instructions, the exit d0/d1/d4/d5/d6/d7/a2/a3, sr and writes, or raises ``UnsupportedCandidate``
+    if any of the 32 marks misses (real ROM, never witnessed)."""
+    from .game import creatures
+    dx0 = (read(creatures.GRID_X, 2) - read(creatures.FOLLOW_X, 2)) & 0xFFFF
+    dy0 = (read(creatures.GRID_Y, 2) - read(creatures.FOLLOW_Y, 2)) & 0xFFFF
+    cycles, instructions = _CUE_QUAD_SETUP
+    writes = {}
+    last_d4 = last_d5 = last_a3 = 0
+    for pass_index, d1_fixed in enumerate((-64, 64)):
+        c, i, last_d4, last_d5, last_a3, _carry, pass_writes = _cue_pass(dx0, dy0, d1_fixed, 'x')
+        cycles += c
+        instructions += i
+        writes.update(pass_writes)
+        proceed = pass_index == 1
+        c, i = _add(_CUE_QUAD_CHECK, _CUE_QUAD_RESUME_BRANCH[proceed])
+        cycles += c
+        instructions += i
+        if not proceed:
+            c, i = _add(_CUE_QUAD_NEG, _CUE_QUAD_RESET, _CUE_QUAD_BRA)
+            cycles += c
+            instructions += i
+    c, i = _CUE_QUAD_LOOP2_SETUP
+    cycles += c
+    instructions += i
+    for pass_index, d0_fixed in enumerate((-64, 64)):
+        c, i, last_d4, last_d5, last_a3, _carry, pass_writes = _cue_pass(dx0, dy0, d0_fixed, 'y')
+        cycles += c
+        instructions += i
+        writes.update(pass_writes)
+        proceed = pass_index == 1
+        c, i = _add(_CUE_QUAD_CHECK, _CUE_QUAD_RESUME_BRANCH[proceed])
+        cycles += c
+        instructions += i
+        if not proceed:
+            c, i = _add(_CUE_QUAD_NEG, _CUE_QUAD_RESET, _CUE_QUAD_BRA)
+            cycles += c
+            instructions += i
+    c, i = _CUE_QUAD_RTS
+    cycles += c
+    instructions += i
+    sticky = (read(creatures.AIM_CUE_STICKY_FLAG, 1) | 0x08) & 0xFF
+    writes[creatures.AIM_CUE_STICKY_FLAG & 0xFFFFFF] = sticky
+    # tst.w d0 (final d0 == 0x0040, always -- the whole 32-step progression is immediate values only,
+    # so this needs no live-state dependence) is the last N/Z/V/C setter; X survives from the LAST
+    # addi.w #$10,d1 (0x0030+0x10=0x0040: no carry, always, for the SAME reason).  Both registers'
+    # own upper halves are 0xFFFF, not 0: the last write to each is its own "moveq #$c0,dX" (a
+    # LONGWORD op, sign-extending -64 to the full register), and every instruction after that
+    # (neg.w/addi.w) is word-sized, leaving the upper half at 0xFFFF for good.
+    exit_sr = _logic_sr(sr & ~0x10, 0x40, 2)
+    a2_final = (0xFFFF0000 | (creatures.AIM_CUE_MARK_BASE & 0xFFFF)) + creatures.AIM_CUE_MARK_SPAN & 0xFFFFFFFF
+    return {'cycles': cycles, 'instructions': instructions, 'd0': 0xFFFF0040, 'd1': 0xFFFF0040, 'd4': last_d4,
+            'd5': last_d5, 'd6': dx0, 'd7': dy0, 'a2': a2_final, 'a3': last_a3, 'sr': exit_sr,
+            'writes': writes}
+
+
+def _cue_event_plan(read, sr):
+    """00B15C: returns a dict like ``_cue_quadrant_plan``'s own (event-scan success) or
+    ``{'retry': True, 'cycles': ..., 'instructions': ...}`` when EVENT_COUNT == 0 (the caller
+    redispatches with the OTHER nibble)."""
+    from .game import creatures
+    count = read(creatures.EVENT_COUNT, 2) & 0xFFFF
+    c, i = _CUE_SCAN_TEST
+    cycles, instructions = c, i
+    empty = count == 0
+    c, i = _CUE_SCAN_BRANCH[empty]
+    cycles += c
+    instructions += i
+    if empty:
+        return {'retry': True, 'cycles': cycles, 'instructions': instructions}
+    if count > creatures.EVENT_LIST_MAX:
+        raise UnsupportedCandidate('aim cue: event-scan EVENT_COUNT clamp arm not witnessed by a recording')
+    c, i = _CUE_SCAN_HEAD_TAIL
+    cycles += c
+    instructions += i
+    sticky_entry = read(creatures.AIM_CUE_STICKY_FLAG, 1) & 0xFF
+    writes = {}
+    address = creatures.EVENT_LIST
+    last_d4 = last_d5 = last_a3 = last_carry = 0
+    for index in range(count):
+        dx = (read(address & 0xFFFFFF, 2) - read(creatures.FOLLOW_X, 2)) & 0xFFFF
+        dy = (read((address + 2) & 0xFFFFFF, 2) - read(creatures.FOLLOW_Y, 2)) & 0xFFFF
+        c, i = _add(_CUE_SCAN_LOADXY, _CUE_SCAN_BSR)
+        cycles += c
+        instructions += i
+        d4, d5, a3, hit, carry = _cue_mark_step(dx, dy)
+        if not hit:
+            raise UnsupportedCandidate('aim cue: event-scan mark out of the table window, not witnessed')
+        c, i = _add(_CUE_MARK_BODY, _CUE_MARK_HIT_TAIL)
+        cycles += c
+        instructions += i
+        writes.update(dict(_cue_mark_writes(a3)))
+        last_d4, last_d5, last_a3, last_carry = d4, d5, a3, carry
+        address = (address + creatures.EVENT_LIST_STRIDE) & 0xFFFFFFFF
+        c, i = _add(_CUE_SCAN_ADVANCE, _CUE_QUAD_DBRA[index != count - 1])
+        cycles += c
+        instructions += i
+    c, i = _CUE_SCAN_TAIL
+    cycles += c
+    instructions += i
+    # bclr.b #3,F17C (00B176, before the loop even starts) clears the sticky bit; every mark this
+    # loop ran was a hit (a miss raises above), so with count >= 1 the bit is ALWAYS set again by the
+    # time the loop exits -- net effect on the ENTRY byte: bit 3 forced on, every other bit untouched.
+    sticky = (sticky_entry | 0x08) & 0xFF
+    writes[creatures.AIM_CUE_STICKY_FLAG & 0xFFFFFF] = sticky
+    writes[creatures.EVENT_MODE & 0xFFFFFF] = 0
+    writes[(creatures.EVENT_MODE + 1) & 0xFFFFFF] = 2
+    # move.w #2,EVENT_MODE (00B196) is a MOVE-class write: N/Z/V/C from the stored value (2: N=0 Z=0
+    # V=0 C=0), X untouched -- addq.w #2,a0 (the loop's own per-entry advance) is an address-register
+    # ADDA, which never touches CCR at all, so X survives from the LAST mark call's own final add.
+    exit_sr = _logic_sr((sr & ~0x10) | (0x10 if last_carry else 0), 2, 2)
+    a2_final = (0xFFFF0000 | (creatures.AIM_CUE_MARK_BASE & 0xFFFF)) + creatures.AIM_CUE_MARK_SPAN & 0xFFFFFFFF
+    # 00B19C: "movem.l (a7)+,d7/a0" restores BOTH registers from the frame this arm's own head pushed
+    # -- the loop's own d7 (the countdown) and a0 (the EVENT_LIST cursor) are both scratch, discarded;
+    # the exit values are the SAVED ones (d7 == 0, the fill's own; a0 == the dispatch's own jump target).
+    return {'cycles': cycles, 'instructions': instructions, 'd4': last_d4, 'd5': last_d5,
+            'd7': 0, 'a0': AIM_CUE_TABLE_TARGETS[2], 'a2': a2_final, 'a3': last_a3, 'sr': exit_sr,
+            'writes': writes}
+
+
+def aim_cue_update_plan(machine, registers):
+    """00B082: the aim-cue update.  See game/creatures.py's own module note above ``aim_cue_update``
+    for the full arm breakdown (window-mark, quadrant-mark, event-scan, the empty-count retry)."""
+    from .game import creatures, effects
+    if registers['pc'] != AIM_CUE_ENTRY:
+        raise UnsupportedCandidate('aim cue planner needs the machine parked at 00B082')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    return_pc = _return(machine, sp)
+
+    fill_regs = creatures._cue_fill_registers(read)
+    writes = dict(creatures._cue_fill_stores(read))
+    if read(creatures.AIM_CUE_SKIP_FLAG, 2) & 0xFFFF:
+        raise UnsupportedCandidate('aim cue: AIM_CUE_SKIP_FLAG set, not witnessed by a recording')
+
+    a4 = registers['a4'] & 0xFFFFFFFF
+    index_byte = read((a4 + creatures.AIM_CUE_INDEX_BYTE) & 0xFFFFFF, 1) & 0xFF
+    threshold = read((a4 + creatures.AIM_CUE_THRESHOLD_BYTE) & 0xFFFFFF, 1) & 0xFF
+    low, high = index_byte & 0xF, (index_byte >> 4) & 0xF
+    draw = effects.next_random(read)
+    masked = draw['value'] & 0x7F
+    cursor_address = effects.RANDOM_CURSOR & 0xFFFFFF
+    new_cursor = draw['stores'][cursor_address][0]
+    writes[cursor_address] = (new_cursor >> 8) & 0xFF
+    writes[(cursor_address + 1) & 0xFFFFFF] = new_cursor & 0xFF
+    # 014A3C's own internal frame: jsr pushes the return address at [sp32-4, sp32-1], then
+    # move.l a0,-(a7) pushes a0's OWN entry value (always AIM_CUE_TABLE_LOW: the fill's own final
+    # a0) at [sp32-8, sp32-5] -- both popped again before the rts, but the bytes are real residue,
+    # and both spans fall INSIDE the outer a3-a5 frame's own [sp-12, sp-1] (a4's and a5's own pushed
+    # bytes are overwritten here, not a3's, which sits below at [sp-12, sp-9)).
+    for address, value in _bytes((sp - 4) & 0xFFFFFF, AIM_CUE_DRAW_RETURN_PC, 4):
+        writes[address & 0xFFFFFF] = value
+    for address, value in _bytes((sp - 8) & 0xFFFFFF, 0xFFFF0000 | creatures.AIM_CUE_TABLE_LOW, 4):
+        writes[address & 0xFFFFFF] = value
+    swap = masked > threshold
+    other_value = low if swap else high
+    index = high if swap else low
+
+    cycles, instructions = _cue_dispatch_cost(swap)
+    exit_registers = {name: fill_regs[name] for name in
+                      ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'a1', 'a2')}
+    exit_registers['d4'] = (fill_regs['d4'] & 0xFFFFFF00) | threshold
+    exit_registers['d0'] = (fill_regs['d0'] & 0xFFFF0000) | masked
+
+    def _emit_window(selected_index, other, exg_extra):
+        nonlocal cycles, instructions
+        c, i = _CUE_WINDOW_BODY
+        cycles += c + exg_extra[0]
+        instructions += i + exg_extra[1]
+        d0, d1, window_writes, carry = _cue_window_registers(read)
+        writes.update(dict(window_writes))
+        d2, d3 = _cue_index_registers(selected_index, other)
+        a3_entry = registers['a3'] & 0xFFFFFFFF
+        exit_sr = _logic_sr((sr & ~0x10) | (0x10 if carry else 0), a3_entry, 4)
+        # 00B312: the arm's own internal frame ("move.l a3,-(a7)" / "movea.l (a7)+,a3", scratch for
+        # the two lea's -- a3's own value never changes, but the pushed bytes are real residue, at
+        # [sp32-4, sp32-1] again: the SAME span the draw's own jsr return address left, now overwritten
+        # a second time).
+        for address, value in _bytes((sp - 4) & 0xFFFFFF, a3_entry, 4):
+            writes[address & 0xFFFFFF] = value
+        exit_registers.update(d0=d0, d1=d1, d2=d2, d3=d3, a0=AIM_CUE_TABLE_TARGETS[selected_index],
+                              pc=return_pc, sr=exit_sr, a7=(sp32 + 4) & 0xFFFFFFFF)
+        return AIM_CUE_WINDOW_LAST_PC
+
+    def _emit_quadrant(selected_index, other, exg_extra):
+        nonlocal cycles, instructions
+        cycles += exg_extra[0]
+        instructions += exg_extra[1]
+        quad = _cue_quadrant_plan(read, sr)
+        cycles += quad['cycles']
+        instructions += quad['instructions']
+        writes.update(quad['writes'])
+        # every one of the 32 bsr.w $b1ac calls pushes its own return address at [sp32-4, sp32-1]
+        # (no movem frame in this arm); the last call is always loop 2's own second pass, so the
+        # final residue is fixed regardless of which cell actually got marked last.
+        for address, value in _bytes((sp - 4) & 0xFFFFFF, AIM_CUE_QUAD_MARK_RETURN_PC, 4):
+            writes[address & 0xFFFFFF] = value
+        d2, _dispatch_d3 = _cue_index_registers(selected_index, other)
+        # d3 is this arm's OWN dbra counter ("moveq #7,d3"), not the dispatch's untouched nibble: both
+        # loops always run to full exhaustion (deterministic, no data dependence), so d3 always ends
+        # at the SAME dbra-exhausted -1.
+        d3 = 0xFFFF
+        exit_registers.update(d0=quad['d0'], d1=quad['d1'], d2=d2, d3=d3, d4=quad['d4'], d5=quad['d5'],
+                              d6=quad['d6'], d7=quad['d7'], a0=AIM_CUE_TABLE_TARGETS[selected_index],
+                              a2=quad['a2'], a3=quad['a3'], pc=return_pc, sr=quad['sr'],
+                              a7=(sp32 + 4) & 0xFFFFFFFF)
+        return AIM_CUE_QUADRANT_LAST_PC
+
+    zero_cost = (0, 0)
+    if index == 0:
+        last_pc = _emit_window(index, other_value, zero_cost)
+    elif index == 1:
+        last_pc = _emit_quadrant(index, other_value, zero_cost)
+    elif index == 2:
+        event = _cue_event_plan(read, sr)
+        cycles += event['cycles']
+        instructions += event['instructions']
+        if event.get('retry'):
+            retry_index = other_value
+            # d3 after the retry's own exg holds whatever d2 held just before it -- the FIRST
+            # dispatch's own already-doubled-and-sign-extended index (index*4), not the raw nibble.
+            retry_other, _d3_unused = _cue_index_registers(index, other_value)
+            if retry_index == 0:
+                last_pc = _emit_window(retry_index, retry_other, _CUE_EXG_JUMP)
+            elif retry_index == 1:
+                last_pc = _emit_quadrant(retry_index, retry_other, _CUE_EXG_JUMP)
+            else:
+                raise UnsupportedCandidate(
+                    f'aim cue: retry into index {retry_index}, not witnessed by a recording')
+        else:
+            writes.update(event['writes'])
+            # 00B164/00B19C: the scan's own internal frame ("movem.l d7/a0,-(a7)" / "(a7)+,d7/a0"),
+            # at [sp32-8, sp32-1] -- d7 is still 0 (the fill's own value, untouched before this),
+            # a0 the dispatch's own jump target (00B15C); overwrites the draw's own jsr/next_random
+            # residue a second time, and nothing touches this span again before the routine's own rts.
+            for address, value in _bytes((sp - 8) & 0xFFFFFF, 0, 4):
+                writes[address & 0xFFFFFF] = value
+            for address, value in _bytes((sp - 4) & 0xFFFFFF, AIM_CUE_TABLE_TARGETS[2], 4):
+                writes[address & 0xFFFFFF] = value
+            # every bsr.b $b1ac call (from inside the d7/a0 frame above) pushes its own return address
+            # at [sp32-12, sp32-9] -- the SAME single site every time, overwriting the outer a3 push's
+            # own slot a second time (the SAME shape the window arm's own internal a3-repush is, one
+            # frame further out).
+            for address, value in _bytes((sp - 12) & 0xFFFFFF, AIM_CUE_SCAN_MARK_RETURN_PC, 4):
+                writes[address & 0xFFFFFF] = value
+            d2, d3 = _cue_index_registers(index, other_value)
+            exit_registers.update(d2=d2, d3=d3, d4=event['d4'], d5=event['d5'], d7=event['d7'],
+                                  a0=event['a0'], a2=event['a2'], a3=event['a3'], pc=return_pc,
+                                  sr=event['sr'], a7=(sp32 + 4) & 0xFFFFFFFF)
+            last_pc = AIM_CUE_EVENT_LAST_PC
+    else:
+        raise UnsupportedCandidate(f'aim cue: dispatch index {index}, not witnessed by a recording')
+
+    return AtomicPlan(cycles=cycles, instructions=instructions,
+                      writes=_cue_frame_writes(sp, registers) + tuple(writes.items()),
+                      registers=exit_registers, last_pc=last_pc)
+

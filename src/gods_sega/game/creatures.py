@@ -31,6 +31,7 @@ Pure functions of ``read(address, size)``; calls into ``game/timers.py``, ``game
 from __future__ import annotations
 
 from . import effects, projectiles, timers
+from .camera import FOLLOW_X, FOLLOW_Y
 from .grid import GRID_X, GRID_Y
 
 ATTACK_BYTE = 0x6                  # type_ptr byte: 0 disables the creature's attack entirely
@@ -646,3 +647,198 @@ def fall_kind_update_mirror(read, type_ptr, instance_ptr):
     third-test trigger sets KIND to 0 (00AA76) -- the OPPOSITE assignment from 00AE6C's own."""
     return _fall_kind_step(read, type_ptr, instance_ptr, third_low_offset=MIRROR_SKIP_TEST_LOW_OFFSET,
                            third_high_offset=MIRROR_SKIP_TEST_HIGH_OFFSET, near_kind=1, third_kind=0)
+
+
+# --- 00B082: the aim-cue update, the second of 00AF52's own three unconditional callees
+# (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on 00AF52", 19 Sep).  Every single call
+# first refills a fixed 400-byte work table from thirteen ROM constants (real, unconditional -- the
+# table's own purpose past this routine is not established this session), then -- unless
+# AIM_CUE_SKIP_FLAG is set (real ROM, never witnessed by any of the five recordings: declined) --
+# draws one word from the shared random table (``effects.next_random``) and compares it against the
+# type's own threshold byte to pick between the LOW and HIGH nibble of the type's own index byte as a
+# 0-3 dispatch selector into one of (up to) four bodies.  Only three of the four are ever witnessed:
+#
+# - index 0 (``window-mark``, ROM 00B2EC): unconditional, branch-free -- one camera-relative cell
+#   offset, three bytes set to 0xFF in a second sub-table (no bounds check at all, so always applied).
+# - index 1 (``quadrant-mark``, ROM 00B0FE): a fixed, DATA-INDEPENDENT sweep of exactly 32 camera-
+#   relative cells (two mirrored 8-step passes, twice each -- immediate values, no data-dependent trip
+#   count), each tested against the shared ``_cue_mark`` window and, in bounds, marked.
+# - index 2 (``event-scan``, ROM 00B15C): walks the SAME world-event list ``event_consume`` reads
+#   (``EVENT_LIST``, clamped to ``EVENT_LIST_MAX``), unconditionally marking every entry (no kind
+#   filter, no early exit) -- and, only when ``EVENT_COUNT`` is exactly 0, RETRIES immediately with the
+#   OTHER nibble (real ROM: swap and redispatch, ``00B0E0``) before the loop ever runs, since the loop
+#   never touches the sticky flag a real (nonzero-count) scan always ends up setting once at least one
+#   mark hits -- every witnessed occurrence has at least one hit, so that second, post-loop retry path
+#   is real code this session never saw taken.
+#
+# index 3 (ROM 00B1E8, a further table dispatch) is never witnessed by any recording; a retry landing
+# on index 3, on index 2 again (self, real code: the pathological case both nibbles equal 2, an
+# infinite retry the ROM's own data plainly never produces) or on index 1 (untested AS a retry target,
+# though the code is byte-identical to a direct index-1 dispatch) are declined by the boundary too --
+# not because the arithmetic would be wrong, but because no recording proves the COMBINATION.
+#
+# The shared "mark" leaf (ROM 00B1AC) itself declines (real ROM, never witnessed: every mark computed
+# from all five recordings' own evidence lands in bounds) when its own camera-relative cell would fall
+# outside the table's own window -- the boundary raises for that arm too.
+AIM_CUE_FILL_SOURCE = 0x004102          # ROM: thirteen sign-extended words (d0-d7,a1-a5 load order)
+AIM_CUE_TABLE_LOW, AIM_CUE_TABLE_HIGH = 0xFFC1BA, 0xFFC34A   # 400 bytes, refilled whole every call
+_AIM_CUE_FILL_REGISTERS = 13            # d0-d7 (8) + a1-a5 (5)
+_AIM_CUE_FILL_LAST_REGISTERS = 9        # the eighth (final) store only covers d0-d7/a1
+AIM_CUE_SKIP_FLAG = 0xFFFFF388          # word: nonzero jumps straight into the event-scan arm's own
+                                         # body, skipping the whole dispatch -- unwitnessed, declined
+AIM_CUE_INDEX_BYTE = 0x8                # type_ptr byte: low/high nibble select the dispatch arm
+AIM_CUE_THRESHOLD_BYTE = 0x9            # type_ptr byte: the draw's own comparison threshold
+AIM_CUE_MARK_BASE = 0xFFC1BA            # a2: the SAME fill table's own low address
+AIM_CUE_MARK_OFFSET = 0x50              # a3 = MARK_BASE + MARK_OFFSET + offset
+AIM_CUE_MARK_SPAN = 0x17C               # valid iff MARK_BASE <= a3 < MARK_BASE + MARK_SPAN
+AIM_CUE_MARK_STRIDE = 0x14              # the mark's own second byte, base+STRIDE
+AIM_CUE_MARK_BIAS = 8                   # 00B1AC's own subq #8 pre-adjustment (window-mark has none)
+AIM_CUE_STICKY_FLAG = 0xFFFFF17C        # byte: bit 3 -- set by a successful mark (event-scan clears
+                                         # it first; the quadrant loop never clears it at all)
+AIM_CUE_WINDOW_BASE = 0xFFC20A          # index 0's own sub-table base (no bounds check)
+AIM_CUE_WINDOW_STRIDE_1, AIM_CUE_WINDOW_STRIDE_2 = 0x14, 0x28
+
+
+_AIM_CUE_FILL_ORDER = ('d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'a1', 'a2', 'a3', 'a4', 'a5')
+
+
+def _cue_fill_registers(read):
+    """00B086: the thirteen ROM words at AIM_CUE_FILL_SOURCE, sign-extended to 32 bits, in
+    ``movem.w`` load order -- every recording's own evidence has all thirteen at zero, but this reads
+    the ROM rather than assume it."""
+    words = [read((AIM_CUE_FILL_SOURCE + 2 * i) & 0xFFFFFF, 2) & 0xFFFF for i in range(_AIM_CUE_FILL_REGISTERS)]
+    longs = [(w - 0x10000 if w & 0x8000 else w) & 0xFFFFFFFF for w in words]
+    return dict(zip(_AIM_CUE_FILL_ORDER, longs))
+
+
+def _cue_fill_stores(read):
+    """00B086-00B0AE: the thirteen ROM words at AIM_CUE_FILL_SOURCE (``_cue_fill_registers``), tiled
+    by seven full 13-register ``movem.l -(a0)`` stores then one 9-register (d0-d7/a1) partial store
+    into AIM_CUE_TABLE_LOW..AIM_CUE_TABLE_HIGH -- the SAME 400 bytes every single call, never read
+    back by this routine itself."""
+    longs = [_cue_fill_registers(read)[name] for name in _AIM_CUE_FILL_ORDER]
+    stores = {}
+    address = AIM_CUE_TABLE_HIGH
+    for block in range(8):
+        count = _AIM_CUE_FILL_REGISTERS if block < 7 else _AIM_CUE_FILL_LAST_REGISTERS
+        address -= 4 * count
+        for slot in range(count):
+            value = longs[slot]
+            for byte_index in range(4):
+                stores[(address + 4 * slot + byte_index) & 0xFFFFFF] = (value >> (8 * (3 - byte_index))) & 0xFF
+    return stores
+
+
+def _cue_offset(dx, dy, bias):
+    """The shared ``(asr#5) + 5 + 20*(asr#4)`` scaling both the window-mark arm and the shared mark
+    leaf use (the mark leaf biases each axis by AIM_CUE_MARK_BIAS first; the window arm does not)."""
+    a = _signed_word((dx - bias) & 0xFFFF) >> 5
+    b = _signed_word((dy - bias) & 0xFFFF) >> 4
+    return (a + 5 + 20 * b) & 0xFFFF
+
+
+def _cue_mark(dx, dy):
+    """00B1AC: the shared 'mark' leaf both the quadrant loop and the event scan call -- a camera-
+    relative cell test against AIM_CUE_MARK_BASE's own [OFFSET, OFFSET+SPAN) window; in bounds, two
+    bytes are set to 0xFF (a read-modify-write bit, not shown here -- the caller ORs it once per
+    successful mark) at ``address``/``address+STRIDE``.  Returns ``None`` on a miss (real ROM, never
+    witnessed by any recording)."""
+    offset = _signed_word(_cue_offset(dx, dy, AIM_CUE_MARK_BIAS))
+    address = (AIM_CUE_MARK_BASE + AIM_CUE_MARK_OFFSET + offset) & 0xFFFFFFFF
+    if address < AIM_CUE_MARK_BASE or address >= AIM_CUE_MARK_BASE + AIM_CUE_MARK_SPAN:
+        return None
+    return (address & 0xFFFFFF, (address + AIM_CUE_MARK_STRIDE) & 0xFFFFFF)
+
+
+def _cue_window_mark(read):
+    """00B2EC: dispatch index 0 -- unconditional, branch-free; the SAME scaling as ``_cue_mark`` but
+    with no bias and no bounds check, so always applied."""
+    dx = (read(GRID_X, 2) - read(FOLLOW_X, 2)) & 0xFFFF
+    dy = (read(GRID_Y, 2) - read(FOLLOW_Y, 2)) & 0xFFFF
+    offset = _signed_word(_cue_offset(dx, dy, 0))
+    base = (AIM_CUE_WINDOW_BASE + offset) & 0xFFFFFFFF
+    addresses = (base & 0xFFFFFF, (base + AIM_CUE_WINDOW_STRIDE_1) & 0xFFFFFF,
+                (base + AIM_CUE_WINDOW_STRIDE_2) & 0xFFFFFF)
+    return {'offset': offset, 'addresses': addresses}
+
+
+def _cue_quadrant_marks(read):
+    """00B0FE: dispatch index 1 -- two mirrored 8-step passes (d0 stepping while d1 stays fixed, then
+    d1 stepping while d0 stays fixed), each pass run twice (the second with its own fixed value
+    negated -- ALWAYS, since the first pass's own fixed value is always negative on entry): exactly 32
+    calls into the shared mark leaf, immediate values only, no data dependence in the trip count."""
+    dx0 = (read(GRID_X, 2) - read(FOLLOW_X, 2)) & 0xFFFF
+    dy0 = (read(GRID_Y, 2) - read(FOLLOW_Y, 2)) & 0xFFFF
+    marks = []
+    for d1_fixed in (-64, 64):
+        d0 = -64
+        for _ in range(8):
+            marks.append(_cue_mark((d0 + dx0) & 0xFFFF, (d1_fixed + dy0) & 0xFFFF))
+            d0 += 0x10
+    for d0_fixed in (-64, 64):
+        d1 = -64
+        for _ in range(8):
+            marks.append(_cue_mark((d0_fixed + dx0) & 0xFFFF, (d1 + dy0) & 0xFFFF))
+            d1 += 0x10
+    return marks
+
+
+def _cue_event_scan(read):
+    """00B15C: dispatch index 2 -- walks EVENT_LIST (clamped to EVENT_LIST_MAX, the SAME shared list
+    and clamp event_consume reads), camera-relative, marking every entry; unlike event_consume this
+    never inspects an entry's own kind and never stops early.  ``'count-clamped'`` (EVENT_COUNT >
+    EVENT_LIST_MAX) declines, unwitnessed.  On EVENT_COUNT == 0 the loop never runs at all -- the
+    caller retries with the OTHER dispatch nibble (see ``aim_cue_update``)."""
+    count = read(EVENT_COUNT, 2) & 0xFFFF
+    if count == 0:
+        return {'arm': 'empty', 'count': 0}
+    if count > EVENT_LIST_MAX:
+        return {'arm': 'count-clamped', 'count': count}
+    marks = []
+    address = EVENT_LIST
+    for _ in range(count):
+        dx = (read(address & 0xFFFFFF, 2) - read(FOLLOW_X, 2)) & 0xFFFF
+        dy = (read((address + 2) & 0xFFFFFF, 2) - read(FOLLOW_Y, 2)) & 0xFFFF
+        marks.append(_cue_mark(dx, dy))
+        address = (address + EVENT_LIST_STRIDE) & 0xFFFFFFFF
+    return {'arm': 'scanned', 'count': count, 'marks': marks}
+
+
+def aim_cue_update(read, type_ptr):
+    """00B082: the whole aim-cue update -- the fill, the skip-flag gate, the draw-gated dispatch, and
+    (index 2 only) the empty-count retry.  Returns the fill's own stores plus an ``'arm'`` tag:
+    ``'skip-flag'`` (declined), ``'window-mark'``, ``'quadrant-mark'``, ``'event-scan'`` (with its own
+    ``scan['arm']`` of ``'scanned'`` or ``'count-clamped'``, declined), or ``'retry'`` (the empty-count
+    redispatch, itself ``'window-mark'``-shaped, ``'quadrant-mark'``-shaped, or declined when the
+    retried index is 2 or 3)."""
+    type_ptr &= 0xFFFFFF
+    fill = _cue_fill_stores(read)
+    if read(AIM_CUE_SKIP_FLAG, 2) & 0xFFFF:
+        return {'arm': 'skip-flag', 'fill': fill}
+    index_byte = read((type_ptr + AIM_CUE_INDEX_BYTE) & 0xFFFFFF, 1) & 0xFF
+    low, high = index_byte & 0xF, (index_byte >> 4) & 0xF
+    threshold = read((type_ptr + AIM_CUE_THRESHOLD_BYTE) & 0xFFFFFF, 1) & 0xFF
+    draw = effects.next_random(read)
+    masked = draw['value'] & 0x7F
+    swap = masked > threshold
+    index = high if swap else low
+    base = {'fill': fill, 'draw': draw, 'masked': masked, 'threshold': threshold, 'low': low,
+            'high': high, 'swap': swap, 'index': index}
+    if index == 0:
+        return {**base, 'arm': 'window-mark', 'window': _cue_window_mark(read)}
+    if index == 1:
+        return {**base, 'arm': 'quadrant-mark', 'marks': _cue_quadrant_marks(read)}
+    if index == 2:
+        scan = _cue_event_scan(read)
+        if scan['arm'] != 'empty':
+            return {**base, 'arm': 'event-scan', 'scan': scan}
+        retry_index = low if swap else high
+        result = {**base, 'arm': 'retry', 'retry_index': retry_index}
+        if retry_index == 0:
+            result['retry'] = {'arm': 'window-mark', 'window': _cue_window_mark(read)}
+        elif retry_index == 1:
+            result['retry'] = {'arm': 'quadrant-mark', 'marks': _cue_quadrant_marks(read)}
+        else:
+            result['retry'] = {'arm': 'undispatched'}   # index 2 (self) or 3: never witnessed
+        return result
+    return {**base, 'arm': 'undispatched'}

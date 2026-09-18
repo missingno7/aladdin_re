@@ -61,6 +61,10 @@ GROUND_EDGE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00AD6
 needs_ground_edge_census = pytest.mark.skipif(not GROUND_EDGE_FIXTURES or not GODS.rom_path.is_file(),
                                               reason='no local census of 00AD68')
 
+AIM_CUE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B082-*/00B082-entry-p*.state'))
+needs_aim_cue_census = pytest.mark.skipif(not AIM_CUE_FIXTURES or not GODS.rom_path.is_file(),
+                                          reason='no local census of 00B082')
+
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
 
@@ -906,5 +910,96 @@ def test_creature_grid_cell_d0d1_candidate_matches_the_reference_and_its_mutant_
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-grid-cell-d0d1-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B082: the aim-cue update (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
+# 00AF52", 19 Sep) -- the second of 00AF52's own three unconditional callees.  Every call refills a
+# fixed 400-byte table from ROM constants, then (unless AIM_CUE_SKIP_FLAG is set, unwitnessed) draws
+# one random word and picks between the LOW/HIGH nibble of the type's own index byte to dispatch one
+# of three witnessed arms (window-mark, quadrant-mark, event-scan) -- or, on event-scan's own
+# EVENT_COUNT == 0, retries once with the OTHER nibble.  See game/creatures.py's own module note
+# above aim_cue_update for the full shape.
+
+def test_aim_cue_update_dispatches_window_mark_on_index_zero():
+    values = {(creatures.AIM_CUE_INDEX_BYTE + TYPE_PTR, 1): 0x00, (creatures.AIM_CUE_THRESHOLD_BYTE + TYPE_PTR, 1): 0x7F,
+             (effects.RANDOM_CURSOR, 2): 0, (effects.RANDOM_TABLE, 2): 0}
+    result = creatures.aim_cue_update(_reader(values), TYPE_PTR)
+    assert result['arm'] == 'window-mark' and result['index'] == 0
+
+
+def test_aim_cue_update_dispatches_quadrant_mark_on_index_one():
+    values = {(creatures.AIM_CUE_INDEX_BYTE + TYPE_PTR, 1): 0x01, (creatures.AIM_CUE_THRESHOLD_BYTE + TYPE_PTR, 1): 0x7F,
+             (effects.RANDOM_CURSOR, 2): 0, (effects.RANDOM_TABLE, 2): 0}
+    result = creatures.aim_cue_update(_reader(values), TYPE_PTR)
+    assert result['arm'] == 'quadrant-mark' and result['index'] == 1 and len(result['marks']) == 32
+
+
+def test_aim_cue_update_dispatches_event_scan_on_index_two():
+    values = {(creatures.AIM_CUE_INDEX_BYTE + TYPE_PTR, 1): 0x02, (creatures.AIM_CUE_THRESHOLD_BYTE + TYPE_PTR, 1): 0x7F,
+             (effects.RANDOM_CURSOR, 2): 0, (effects.RANDOM_TABLE, 2): 0, (creatures.EVENT_COUNT & 0xFFFFFF, 2): 1,
+             (creatures.EVENT_LIST & 0xFFFFFF, 2): 0, ((creatures.EVENT_LIST + 2) & 0xFFFFFF, 2): 0}
+    result = creatures.aim_cue_update(_reader(values), TYPE_PTR)
+    assert result['arm'] == 'event-scan' and result['scan']['arm'] in ('scanned',)
+
+
+def test_aim_cue_update_declines_index_three_by_name():
+    values = {(creatures.AIM_CUE_INDEX_BYTE + TYPE_PTR, 1): 0x03, (creatures.AIM_CUE_THRESHOLD_BYTE + TYPE_PTR, 1): 0x7F,
+             (effects.RANDOM_CURSOR, 2): 0, (effects.RANDOM_TABLE, 2): 0}
+    result = creatures.aim_cue_update(_reader(values), TYPE_PTR)
+    assert result['arm'] == 'undispatched'
+
+
+def test_aim_cue_update_declines_the_skip_flag_arm_by_name():
+    values = {(creatures.AIM_CUE_SKIP_FLAG & 0xFFFFFF, 2): 1}
+    result = creatures.aim_cue_update(_reader(values), TYPE_PTR)
+    assert result['arm'] == 'skip-flag'
+
+
+def test_aim_cue_update_retries_the_other_nibble_on_an_empty_event_count():
+    # low nibble 2 (event-scan), high nibble 1 (quadrant-mark): EVENT_COUNT == 0 retries into index 1.
+    values = {(creatures.AIM_CUE_INDEX_BYTE + TYPE_PTR, 1): 0x12, (creatures.AIM_CUE_THRESHOLD_BYTE + TYPE_PTR, 1): 0x7F,
+             (effects.RANDOM_CURSOR, 2): 0, (effects.RANDOM_TABLE, 2): 0, (creatures.EVENT_COUNT & 0xFFFFFF, 2): 0}
+    result = creatures.aim_cue_update(_reader(values), TYPE_PTR)
+    assert result['arm'] == 'retry' and result['retry_index'] == 1 and result['retry']['arm'] == 'quadrant-mark'
+
+
+@needs_aim_cue_census
+@pytest.mark.parametrize('fixture', AIM_CUE_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_cue_update_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_cue_update_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'aim cue' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_aim_cue_update_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-cue-update').gate_pcs == (boundary.AIM_CUE_ENTRY,)
+    assert boundary.AIM_CUE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-cue-update-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_reference
+def test_aim_cue_update_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in AIM_CUE_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-cue-update', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00B082 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-cue-update-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

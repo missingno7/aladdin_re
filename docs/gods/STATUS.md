@@ -351,9 +351,70 @@ below, has the count and the milestone tree numbers).
   adapter's sixty-four).  Milestone tree PASS on all five leaves
   (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19a`, 107,519
   frames): 1,161,016 hits, 7,109 fallbacks, 40.07M instructions replaced.
-  Next: `00AA76`/`00AB50` (need `00AF3C`/`00AF52` first, per the Decision's
-  own frequency ordering), then `00A772` as the recipe-6a family over the
-  creature's own kind byte, then `00A578` as the walk over the nine slots.
+  `00AF3C` (needed by both `00AA76` and `00AB50`) is recovered too, the
+  same session (`'creature-grid-cell-d0d1'`): a FOURTH call site of the
+  shared grid arithmetic 0063FA/010CBC/00AA38 all run, X/Y from the
+  caller's own D0/D1, pure, no RAM read, extremely hot (22,932
+  occurrences); `camera-sprites` extended to fifty-one gates.  `00AF52`
+  itself (00AA76's own second call, after 00AF3C) does not close the same
+  session: escalated `NEW_GODS_SUBSYSTEM`
+  (`docs/gods/blockers/2026-09-18-00A578.md`'s own 19 September
+  Progress/Decision) after disassembly alone showed three further
+  unexamined calls (`00B02A`, `00B082`, `00B002`) behind what looked like
+  a bounded leaf.  The supervisor's own Decision on `00AF52` (same day,
+  evening) read the ROM directly and found none of the three is a new
+  subsystem: `00B082`'s own "indirect jsr through a computed table" is
+  `jsr $14a3c.l` -- a direct call into the already-recovered next-random
+  draw -- and its "large record write" is a `movem.w $4102.l` fill of a
+  400-byte RAM block from thirteen ROM constants; `00B02A` is a 32-slot
+  pool scan (`0091BC`'s own shape); `00B002` is three further calls to
+  census.  Every piece named a shape; the order to proceed: `00B082`,
+  `00B02A`, `00B724`/`00B7DA`/`00B6AE` then `00B002`, `00AF52` over them,
+  `00AC36`, `00AA76`/`00AB50`, `00B8C2` then `00B920`, `00A772` as the
+  family, `00A578` as the walk.
+
+- **19 September, grinder session following the Decision on `00AF52`**:
+  `00B082` (`'aim-cue-update'`) is recovered first, in the Decision's own
+  order.  A full-tree census (`--entry 0x00B082`, all five recordings, 41
+  retained fixtures) showed the routine is considerably richer than the
+  Decision's own "fill + recovered call" first read: past the fill and an
+  unwitnessed `AIM_CUE_SKIP_FLAG` shortcut (real ROM, declined), a random
+  draw against the type's own threshold byte picks the LOW or HIGH nibble
+  of the type's own index byte to dispatch one of four table entries, of
+  which three are witnessed -- index 0 (`00B2EC`, `'window-mark'`):
+  unconditional, branch-free, three bytes set in a camera-relative
+  sub-table; index 1 (`00B0FE`, `'quadrant-mark'`): a fully deterministic
+  32-call sweep over the shared "mark" leaf `00B1AC` (two mirrored 8-step
+  passes, each run twice -- immediate values only, no data dependence in
+  the trip count); index 2 (`00B15C`, `'event-scan'`): walks the SAME
+  `EVENT_LIST`/`EVENT_COUNT` `event_consume` already reads, marking every
+  entry, and on `EVENT_COUNT == 0` retries once with the OTHER nibble
+  (real ROM: a second `exg`/redispatch, `00B0E0`).  Index 3 (`00B1E8`)
+  and the shared mark leaf's own miss arm (out of its table's own
+  `[BASE, BASE+0x17C)` window) are real ROM, never witnessed by any of
+  the five recordings: declined, as is a retry landing on index 2 (self)
+  or 3.  Every cost fragment (the fill, the dispatch head's two nibble
+  variants, each arm's own body, the shared mark leaf, the retry
+  overhead) was verified against independent fixtures until the
+  assembled totals matched the tracer to the cycle before any register
+  work began; getting the exit register file and RAM residue exact took
+  several real corrections along the way -- the outer `movem.l
+  a3-a5,-(a7)` frame's own stack residue is overwritten a second (and,
+  for the event-scan and quadrant arms, a third) time by the routine's
+  own internal calls (`014A3C`'s own frame, the window arm's own scratch
+  `move.l a3,-(a7)`, the event scan's own `movem.l d7/a0,-(a7)` and every
+  `bsr $b1ac`'s own return-address push, all landing in the SAME 12 bytes
+  in sequence); `MOVEQ`-loaded registers (the quadrant loop's own D0/D1)
+  keep a `0xFFFF` upper half no later word op ever clears; the
+  event-scan's own saved D7/A0 are restored from the stack at the tail,
+  not left at the loop's own scratch values.  `factcheck check` (41
+  fixtures: 37 MATCH, 4 correctly DECLINE the mark leaf's own miss arm)
+  and `--perturb-upper-halves` both clean.  `camera-sprites` (fifty-two
+  gates) milestone tree PASS; `aim-cue-update` reproduces the original on
+  `f0ac19738f19…`: PASS, 15,148 frames, 39 hits, 0 fallbacks, bit-exact;
+  mutant `aim-cue-update-mutant-result` DIVERGENCE at frame 10,658.  Next,
+  per the Decision's own order: `00B02A`, then `00B724`/`00B7DA`/`00B6AE`
+  and `00B002`, then `00AF52` itself over all of them.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
