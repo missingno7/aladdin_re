@@ -476,12 +476,44 @@ below, has the count and the milestone tree numbers).
   the full arm breakdowns, cost tables and the real defects each session's
   own FAST tier and `--perturb-upper-halves` caught (a duplicate-named cost
   constant, missing D2/X-flag threading, MOVEM's own sign-extension on
-  load, the cross-slot RAM dependency).  Next: `00B588`'s own
-  reconnaissance (a second function sharing `00B32E`'s own ROM range past
-  its own `rts`, and `00B62A`, wholly new) before `00B002` can be composed;
-  `00AF52` over `00B082`/`00B02A`/`00B724`/`00B7DA`/`00B6AE`/`00B002`;
-  `00AC36`; `00AA76`/`00AB50`; `00B8C2` then `00B920`; `00A772` as the
-  family; `00A578` as the walk.
+  load, the cross-slot RAM dependency).
+
+- **19 September, later the same session**: `00B588` itself, disassembled
+  fresh (`00B588`-`00B724`, `00B354`-`00B588`), is a real subsystem, not a
+  thin tail: it walks every entry currently in `AIM_POOL` and for each runs
+  FOUR directional ray-march passes (`00B354`/`00B440`, each its own bounded
+  loop over an eleven-entry ROM table at `00AE4C`, calling `00B524` and the
+  SAME bounding-box-plus-window-mark shape `00B62A`/`00B6AE` already prove),
+  each followed by `00B62A` itself (a tractable, loop-free evaluator on its
+  own terms -- 70 retained fixtures scoped it -- but semantically entangled
+  with `00B354`/`00B440`'s own `F2D4`/`F2D2` context, so not recovered
+  ahead of them).  Escalated `NEW_GODS_SUBSYSTEM`
+  (`docs/gods/blockers/2026-09-18-00A578.md`'s own 19 September addendum);
+  `00B002` itself is otherwise fully scoped (two `bsr`s with a register
+  pass-through and three `clr`s resetting both scan slots) and composes
+  cleanly once `00B588` is recovered.  `00AF52`, `00AC36`, `00AA76`/
+  `00AB50`, `00A772` and `00A578` all remain blocked behind `00B588`.
+
+  Independent of that whole chain, `00A578`'s own spawn-init body's own
+  unconditional callees `00B8C2` (`'spawn-table-find-free'`) and `00B920`
+  (`'spawn-table-add'`) are recovered: a bounded 10-slot table scan
+  (`SPAWN_TABLE_LOW`, `FFFF0EF0`) returning its own result via the CCR alone
+  (an `rtr` popping a literal pushed value -- not a new mechanism), composed
+  by the ADD into a real internal call.  `camera-sprites` extended to sixty
+  gates.  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19i`, 107,519
+  frames, bit-exact).  See `ledger.md`'s own entry for the arm breakdown and
+  the three real defects this session's own FAST tier and
+  `--perturb-upper-halves` caught (RTR's own wholesale CCR load, the
+  `clr.w -(a7)` stack write RTR itself pops, MOVEQ's own upper-half clear).
+
+  With every admissible candidate in the Decision's own list now either
+  recovered or blocked behind the `00B588` escalation, this session's own
+  frontier is exhausted: the next work is the `00B588` reconnaissance's own
+  next question (what the eleven `00AE4C` table entries encode) or a fresh
+  bite chosen from elsewhere in the tick (the player state machine and the
+  world update, `0030CC`, remain the two other tick phases whose own mass
+  is still mostly original execution -- `tick-map.md`).
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
