@@ -135,7 +135,11 @@ one planner") is the next bite.
 
 - **The original**, cold from power-on, on every recorded history.
 - **The candidate `camera-sprites`** (`src/gods_sega/recovery.py`): the
-  original with sixty-three gates armed, the camera follow step `002806`, the
+  original with sixty-four gates armed -- the native machine's own capacity
+  limit (`native/machine.cpp`, PortForge, pinned); state 18 (below) is fully
+  recovered but stays a standalone candidate rather than a sixty-fifth gate,
+  per Aladdin's own precedent for exhausted native capacity
+  (`docs/archive/aladdin/recovery-cost-log.md`) -- the camera follow step `002806`, the
   sprite emitter `0018C8`, its RAM-only sibling `001164`, the work-table
   reset `004150`, the spawn queue `0049DA`, the grid cell lookup `0063FA`,
   the footprint stamp `00FDB8`, the solid drawer `00FC8E`, the animation
@@ -181,7 +185,16 @@ one planner") is the next bite.
   `state-1`, `state-0`, `state-14`, `state-5`, `state-6`, `state-9`,
   `state-26`, `state-8`, `state-13`, `state-12`, `state-16`, `state-11`,
   `state-2`, `state-3`, `state-4`, `state-17`, `state-21`, `state-28`,
-  `state-22`, `state-27`, `state-23` and `state-10` arm each alone.
+  `state-22`, `state-27`, `state-23`, `state-10` and `state-19` arm each
+  alone.  The player state machine's own shared box-overlap-scan copy
+  (`0058D2`, consuming what states 0/1's own `00722C` twin discards), the
+  achievement highlight cycle (`005CEE`, a seam over a seam like
+  `achievement-slot-dispatch`'s own shape over `0047DA`) and the floating
+  icon spawn (`010D7C`) are owned by `state-19` and by the standalone
+  `state-18` (below), not separate candidates of their own.
+- **The candidate `state-18`** (`src/gods_sega/recovery.py`): a single gate
+  at `005834`, fully recovered and verified through the whole ladder but
+  kept out of `camera-sprites` (above) for native gate capacity.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
@@ -1204,14 +1217,15 @@ small leaf):
   (FDF6, the actual target `005FEA move.w #$39,fdf6.w` writes).  State 10
   was the LAST state in the coordinator's own frequency-order list
   (8, 13, 12, 16, 20, 19, 11, 2, 3, 4, 17, 21, 18, 28, 22, 27, 23, 10):
-  every witnessed state on that list now has its own gated candidate
-  except 19 and 18 (escalated together, see the blocker below); state 20
-  needed no work of its own (already `state-26`).  States 7 and 15
-  remain unwitnessed by any of the eight recordings and decline by name;
-  nothing in this session found evidence either is ever reached.  82% of
-  all real `005700` activations (11,012 of 13,488, `fb408bc75597`'s own
-  tally) are now directly reproduced by their own candidate.
-- **Remaining blocker**: one new escalation, `docs/gods/blockers/2026-09-18-005886.md`
+  every witnessed state on that list now has its own gated candidate,
+  including 19 and 18 (recovered 18 September, resolving the blocker
+  below); state 20 needed no work of its own (already `state-26`).
+  States 7 and 15 remain unwitnessed by any of the eight recordings and
+  decline by name; nothing in this session found evidence either is ever
+  reached.  Every witnessed `005700` activation (13,488 of 13,488,
+  `fb408bc75597`'s own tally) is now directly reproduced by its own
+  candidate.
+- **Resolved** (18 September, same session): `docs/gods/blockers/2026-09-18-005886.md`
   -- state 19 (`005886`, 190 occurrences) turned out NOT to be a same-recipe
   leaf like 8/13/12/16/11: a ten-terminal-shape state spanning at least
   three subsystems (an inline copy of the already-recovered
@@ -1230,24 +1244,34 @@ small leaf):
   (the same "one region, two gates" shape states 4/15, 5/1, 6/0 already
   established), not a duplicated copy (a raw ROM diff of the two heads
   shows they are NOT byte-identical the way states 11/12 or 8/9 are).
-  Both states 18 and 19 deferred together, rather than forced through in
-  this sweep; the remaining witnessed states continue in frequency order
-  (28, 22, 27, 23, 10) -- state 20 is already gated (a real
-  STATE_TABLE reconstruction from `005700`'s own dispatch code, 18 Sep,
-  found `FFFFF192 == 20` reaches `0069AC`, the entry the existing
-  `'state-26'` candidate already owns end to end; the candidate's own name
-  is a misnomer left as a fact for a future session, not acted on --
-  nothing it proves is wrong, since every gate, fixture and test is keyed
-  by the PC, not the name) -- each remaining state needing the SAME
-  per-arm survey/cost/verify recipe states 0/1/14 already established;
-  states 7 and 15 decline by name (unwitnessed) until a recording
-  exercises them.  The full `STATE_TABLE` (`005618`, 8-byte entries,
-  address at `+4`) is in `ledger.md`'s own 18 September entry.
-  Once every witnessed state has its own gated candidate, `005700` is
-  complete as a plain per-state composite, the same shape
-  `achievement-slot-dispatch` already is over `0047DA`/`004800` -- no
-  further card revision needed unless a later state surfaces persistent
-  state or platform interaction this card does not already cover.
+  Both states recovered together, in the end, rather than deferred
+  further: the box-overlap-scan copy, `005CEE` (`game.achievements.
+  achievement_highlight_cycle`) and `010D7C` (`game.spawns.
+  floating_icon_spawn`) are all recovered, tested (`tests/games/gods/
+  test_state19.py`) and verified (factcheck check MATCH on all 190 + 118
+  retained fixtures, including `--perturb-upper-halves`; segment_verify
+  PASS; history-verify PASS on `ca2b703b6fd5` for both, 14,583 frames,
+  59/57 hits, 1/0 fallbacks; mutant `_mutate_register` DIVERGENCE at
+  frames 5,491/8,039 -- `_mutate_outcome`, every other player state's own
+  mutant, faults the M68000 here by corrupting a seam's own return
+  address, the first player-state candidates for which that shape
+  matters).  State 19 took `camera-sprites`' own last gate slot (the
+  native machine caps the gate set at 64, PortForge, pinned); state 18
+  stays a fully recovered, individually verified standalone candidate.
+  State 20 is already gated (a real STATE_TABLE reconstruction from
+  `005700`'s own dispatch code, 18 Sep, found `FFFFF192 == 20` reaches
+  `0069AC`, the entry the existing `'state-26'` candidate already owns
+  end to end; the candidate's own name is a misnomer left as a fact for a
+  future session, not acted on -- nothing it proves is wrong, since every
+  gate, fixture and test is keyed by the PC, not the name).  States 7 and
+  15 decline by name (unwitnessed) until a recording exercises them.  The
+  full `STATE_TABLE` (`005618`, 8-byte entries, address at `+4`) is in
+  `ledger.md`'s own 18 September entry.  Every witnessed state now has
+  its own gated candidate: `005700` is complete as a plain per-state
+  composite, the same shape `achievement-slot-dispatch` already is over
+  `0047DA`/`004800` -- no further card revision needed unless a later
+  state surfaces persistent state or platform interaction this card does
+  not already cover.
 
 ## Open questions
 
