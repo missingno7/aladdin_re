@@ -2,7 +2,7 @@
 
 Current state only.  The per-region record is `ledger.md`; the iteration
 recipe is `grinder-protocol.md`; the worker prompt is `grinder-goal.md`.
-Last updated 18 September 2026.
+Last updated 19 September 2026.
 
 ## The cartridge
 
@@ -337,12 +337,23 @@ below, has the count and the milestone tree numbers).
   September every recovered creature-update piece (`009D6C`, `00AA50`,
   `00AA38`, `00AD68`, `00A922`, `00B944`) is armed in `camera-sprites` as a
   leaf (forty-six gates of the adapter's sixty-four; the `00A772` family
-  composition will fold them, as `005700`'s did the states): the tree
-  then measures 1,162,024 hits and 40.05M instructions replaced.  Next: `00ACA0`/`00AD88` (the ground-contact kind handlers,
-  now unblocked -- both further callees they need are recovered), then
-  `00AE6C`/`00AED4` (the fall kind handlers, same two callees), then
-  `00AA76`/`00AB50` (need `00AF3C`/`00AF52` first), then `00A772` as the
-  family and `00A578` as the walk.
+  composition will fold them, as `005700`'s did the states).
+- **19 September**: the four remaining kind handlers of the six the
+  Decision named are recovered -- the ground-contact pair `00ACA0`/`00AD88`
+  (kinds 4/5, `candidate`s `'creature-ground-contact'`/`'creature-ground-
+  contact-mirror'`) composed over `creature_grid_cell` and `ground_edge_test`
+  (both entry points -- 00AD46's own (d16,An) variant and 00AD68 itself),
+  ending at a hand-off to `kind_frame_offset`'s own separately-armed gate;
+  and the fall pair `00AE6C`/`00AED4` (kinds 2/3, `candidate`s
+  `'creature-fall-kind'`/`'creature-fall-kind-mirror'`) composed over
+  `kind_frame_offset` (inline, a real bsr/rts) and `creature_grid_cell`.
+  Every recovered piece is armed in `camera-sprites` (fifty gates of the
+  adapter's sixty-four).  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19a`, 107,519
+  frames): 1,161,016 hits, 7,109 fallbacks, 40.07M instructions replaced.
+  Next: `00AA76`/`00AB50` (need `00AF3C`/`00AF52` first, per the Decision's
+  own frequency ordering), then `00A772` as the recipe-6a family over the
+  creature's own kind byte, then `00A578` as the walk over the nine slots.
 
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
