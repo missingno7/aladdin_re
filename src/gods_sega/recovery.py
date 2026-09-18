@@ -15,6 +15,8 @@ from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
                        AIM_CUE_ENTRY, aim_cue_update_plan, AIM_POOL_RESET_ENTRY, aim_pool_reset_plan, AIM_POOL_ADD_ENTRY, aim_pool_add_plan,
                        AIM_WINDOW_ADDRESS_ENTRY, aim_window_address_plan,
+                       AIM_PROBE_MARK_ENTRY, aim_probe_mark_plan,
+                       AIM_PROBE_MARK_STORE_ENTRY, aim_probe_mark_store_plan,
                        AIM_TARGET_SCAN_ENTRY, aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY, aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY, aim_target_resolve_plan,
@@ -187,6 +189,25 @@ def _mutate_creature_grid_cell_d0d1(plan: AtomicPlan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_aim_probe(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00B524 and 00B62A: AIM_SEARCH_BEST_INDEX's own low byte off by one when a
+    'found' occurrence wrote it (read back by every later probe's own found-tail, and by 00B588's own
+    next AIM_POOL entry); else AIM_POOL_COUNT's own low byte when a 'store' occurrence wrote it
+    (00B62A only -- read back by aim_pool_add's own next call and by 00B588's own outer loop bound);
+    else pass through unmutated, the SAME "about half the occurrences write nothing to flip" shape
+    _mutate_follow_point already uses -- every OTHER write here is dead call-return stack residue,
+    popped before any frame boundary (_mutate_aim_target_resolve's own class of blind spot)."""
+    from .game import creatures
+    for target in (creatures.AIM_SEARCH_BEST_INDEX, creatures.AIM_POOL_COUNT):
+        indices = [index for index, (address, _) in enumerate(plan.writes) if address == (target + 1) & 0xFFFFFF]
+        if indices:
+            index = indices[0]
+            address, value = plan.writes[index]
+            writes = plan.writes[:index] + ((address, (value + 1) & 0xFF),) + plan.writes[index + 1:]
+            return AtomicPlan(plan.cycles, plan.instructions, writes, plan.registers, plan.last_pc, plan.direct_calls)
+    return plan
+
+
 def _mutate_aim_window_address(plan: AtomicPlan) -> AtomicPlan:
     """Negative control for 00B32E: A0 (the computed address, this leaf's own real output -- every
     known caller dereferences or stores through it) off by one, the SAME shape
@@ -315,6 +336,8 @@ PLANNERS = {
     'aim-pool-reset': {AIM_POOL_RESET_ENTRY: aim_pool_reset_plan},
     'aim-pool-add': {AIM_POOL_ADD_ENTRY: aim_pool_add_plan},
     'aim-window-address': {AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan},
+    'aim-probe-mark': {AIM_PROBE_MARK_ENTRY: aim_probe_mark_plan},
+    'aim-probe-mark-store': {AIM_PROBE_MARK_STORE_ENTRY: aim_probe_mark_store_plan},
     'aim-target-scan': {AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan},
     'aim-target-scan-backward': {AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan},
     'aim-target-resolve': {AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan},
@@ -410,6 +433,8 @@ PLANNERS = {
                        AIM_CUE_ENTRY: aim_cue_update_plan,
                        AIM_POOL_RESET_ENTRY: aim_pool_reset_plan, AIM_POOL_ADD_ENTRY: aim_pool_add_plan,
                        AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan,
+                       AIM_PROBE_MARK_ENTRY: aim_probe_mark_plan,
+                       AIM_PROBE_MARK_STORE_ENTRY: aim_probe_mark_store_plan,
                        AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan,
                        AIM_TARGET_SCAN_BACKWARD_ENTRY: aim_target_scan_backward_plan,
                        AIM_TARGET_RESOLVE_ENTRY: aim_target_resolve_plan,
@@ -642,6 +667,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-pool-reset-mutant-result': ('aim-pool-reset', _mutate_result),
              'aim-pool-add-mutant-result': ('aim-pool-add', _mutate_result),
              'aim-window-address-mutant-result': ('aim-window-address', _mutate_aim_window_address),
+             'aim-probe-mark-mutant-result': ('aim-probe-mark', _mutate_aim_probe),
+             'aim-probe-mark-store-mutant-result': ('aim-probe-mark-store', _mutate_aim_probe),
              'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result),
              'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),

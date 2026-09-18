@@ -16253,6 +16253,437 @@ def aim_window_address_plan(machine, registers):
                       last_pc=AIM_WINDOW_ADDRESS_LAST_PC)
 
 
+# --- 00B524 / 00B62A: the aim ray probe and mark-store (game/creatures.py: aim_probe_mark,
+# aim_probe_mark_store) -- docs/gods/blockers/2026-09-18-00A578.md's own "Decision on 00B588", 19 Sep.
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-0X00B524-*, 45 retained fixtures;
+# census-0X00B62A-*, 70 retained fixtures -- both over four recordings, the fifth honestly
+# NOT_EXERCISED like every other creature-family leaf).  The box test, the internal call into the
+# already-recovered aim_window_address (00B32E) and the window-mark tile read are BYTE-FOR-BYTE
+# identical instructions in both routines -- one shared set of fragments, prefixed _AIM_PROBE_ (unique
+# to this region: distinct from _RES_, _AIM_POOL_, _AIM_CUE_ and _AIM_WINDOW_ADDRESS_ above).
+AIM_PROBE_MARK_ENTRY, AIM_PROBE_MARK_LAST_PC = 0x00B524, 0x00B586
+AIM_PROBE_MARK_WINDOW_RETURN = 0x00B55E          # bsr $b32e's own return site inside 00B524
+AIM_PROBE_MARK_STORE_ENTRY = 0x00B62A
+AIM_PROBE_MARK_STORE_LAST_PC = 0x00B68E          # every arm but 'found'/'no-improvement'
+AIM_PROBE_MARK_STORE_FOUND_LAST_PC = 0x00B6AC    # 'found' alone -- 00B690's own separate rts
+AIM_PROBE_MARK_STORE_NO_IMPROVEMENT_LAST_PC = 0x00B68E  # 'no-improvement': 00B690's own bhi falls back
+                                                          # to the SAME rts every other arm uses
+AIM_PROBE_MARK_STORE_WINDOW_RETURN = 0x00B662    # bsr $b32e's own return site inside 00B62A -- also
+                                                  # the 'store' arm's own SECOND push slot (sp is back
+                                                  # to the same value after $b32e's own rts), overwritten
+                                                  # there by AIM_PROBE_MARK_STORE_LAST_PC (0x00B68A's own
+                                                  # bsr $b05a) -- the SAME "internal call residue
+                                                  # overwritten a second time" fact 00B082's own session
+                                                  # already found and named.
+
+_AIM_PROBE_BOX_D2 = (4, 1)                       # move.w d0,d2
+_AIM_PROBE_BOX_D3 = (4, 1)                       # move.w d1,d3
+_AIM_PROBE_BOX_SUB_D2 = (12, 1)                  # sub.w f3ee,d2
+_AIM_PROBE_BOX_SUB_D3 = (12, 1)                  # sub.w f3f0,d3
+_AIM_PROBE_BOX_CMPI = (8, 1)                     # each cmpi.w #imm,Dn (up to four)
+_AIM_PROBE_BOX_BCC = {True: (10, 1), False: (8, 1)}     # each ble.b/bge.b in the box test
+_AIM_PROBE_BSR_WINDOW = (18, 1)                  # bsr.w $b32e (00B32E's own body: _AIM_WINDOW_ADDRESS_COST)
+_AIM_PROBE_LEA_MARK = (8, 1)                     # lea.l $14(a0),a0
+_AIM_PROBE_TST_TILE = (8, 1)                     # tst.b (a0)
+_AIM_PROBE_CMP_LIMIT = (12, 1)                   # cmp.b d(a4),d7
+_AIM_PROBE_BGT_LIMIT = {True: (10, 1), False: (8, 1)}   # bgt.b -- step-limit exit
+_AIM_PROBE_MOVEM_PUSH = (24, 1)                  # movem.l d2-d3,-(a7)  (00B524 only)
+_AIM_PROBE_MOVEM_POP = (28, 1)                   # movem.l (a7)+,d2-d3  (00B524 only)
+_AIM_PROBE_RTS = (16, 1)
+_AIM_PROBE_BPL_CLEAR = {True: (10, 1), False: (8, 1)}   # bpl.b -- 00B524 only: tile >= 0 -> miss
+_AIM_PROBE_BEQ_ZERO = {True: (10, 1), False: (8, 1)}    # beq.b -- 00B62A only: tile == 0 -> store
+_AIM_PROBE_BMI_FOUND = {True: (10, 1), False: (8, 1)}   # bmi.b -- 00B62A only: tile < 0 -> found-tail
+_AIM_PROBE_CMP_PRUNE = (8, 1)                    # cmp.b (a0),d7        (00B62A only)
+_AIM_PROBE_BGE_PRUNE = {True: (10, 1), False: (8, 1)}   # bge.b -- 00B62A only: pruned
+_AIM_PROBE_CMP_DEDUP_X = (8, 1)                  # cmp.w (a5),d0        (00B62A only)
+_AIM_PROBE_BNE_DEDUP_X = {True: (10, 1), False: (8, 1)}
+_AIM_PROBE_CMP_DEDUP_Y = (12, 1)                 # cmp.w 2(a5),d1       (00B62A only)
+_AIM_PROBE_BEQ_DEDUP_Y = {True: (10, 1), False: (8, 1)}
+_AIM_PROBE_STORE_MARK = (8, 1)                   # move.b d7,(a0)       (00B62A only)
+_AIM_PROBE_STORE_FLAG_READ = (12, 1)             # move.w 6(a3),d2
+_AIM_PROBE_STORE_TST_ROUTE = (12, 1)             # tst.w 4(a3)
+_AIM_PROBE_STORE_BNE_ROUTE = {True: (10, 1), False: (8, 1)}
+_AIM_PROBE_STORE_FLAG_FALLBACK = (12, 1)         # move.w f2d2,d2 (route == 0 only)
+_AIM_PROBE_BSR_POOLADD = (18, 1)                 # bsr.w $b05a
+_AIM_PROBE_CMP_BEST = (12, 1)                    # cmp.w f2d0,d7          (the found-tail)
+_AIM_PROBE_BHI_BEST = {True: (10, 1), False: (8, 1)}
+_AIM_PROBE_STORE_BEST_FLAG_ROUTE = (12, 1)       # tst.w 4(a3)            (the found-tail's own)
+_AIM_PROBE_STORE_BEST_FLAG_ROUTE_BNE = {True: (10, 1), False: (8, 1)}
+_AIM_PROBE_STORE_BEST_FLAG_A3 = (20, 1)          # move.w 6(a3),f2ce
+_AIM_PROBE_STORE_BEST_FLAG_FALLBACK = (20, 1)    # move.w f2d2,f2ce (route == 0 only)
+_AIM_PROBE_STORE_BEST_INDEX = (12, 1)            # move.w d7,f2d0
+
+_AIM_PROBE_MARK_D7_MOVE = (4, 1)                 # 00B524 move.w d4,d7
+_AIM_PROBE_MARK_D7_ASR = (8, 1)                  # 00B524 asr.w #1,d7
+_AIM_PROBE_MARK_D7_ADD = (12, 1)                 # 00B524 add.w 4(a3),d7
+_AIM_PROBE_STORE_D7_MOVE = (12, 1)               # 00B62A move.w f2d4,d7
+_AIM_PROBE_STORE_D7_ASR = (10, 1)                # 00B62A asr.w #2,d7
+_AIM_PROBE_STORE_D7_ADD = (12, 1)                # 00B62A add.w 4(a3),d7 (same instruction bytes as
+                                                  # 00B524's own, kept a separate name per the region's
+                                                  # own read-order documentation, not a different cost)
+
+
+def _aim_probe_box_cost(bound_arm):
+    """The shared box test's own cost, given which (if any) of the four sequential compares rejected
+    the point -- _aim_probe_bound (game/creatures.py) already decided WHICH; this only prices the ROM's
+    own compare order (x-low, x-high, y-low, y-high)."""
+    cycles, instructions = _add(_AIM_PROBE_BOX_D2, _AIM_PROBE_BOX_D3, _AIM_PROBE_BOX_SUB_D2,
+                                 _AIM_PROBE_BOX_SUB_D3)
+    order = ('bound-x-low', 'bound-x-high', 'bound-y-low', 'bound-y-high')
+    for name in order:
+        c, i = _AIM_PROBE_BOX_CMPI
+        cycles += c
+        instructions += i
+        taken = name == bound_arm
+        c, i = _AIM_PROBE_BOX_BCC[taken]
+        cycles += c
+        instructions += i
+        if taken:
+            return cycles, instructions
+    return cycles, instructions
+
+
+def _aim_probe_found_tail_cost(result):
+    """The found-tail's own cost (game.creatures._aim_found_update): the cmp.w/bhi pair always runs;
+    only 'found' (bhi not taken) charges the flag store and AIM_SEARCH_BEST_INDEX write."""
+    cycles, instructions = _add(_AIM_PROBE_CMP_BEST, _AIM_PROBE_BHI_BEST[result['arm'] != 'found'])
+    if result['arm'] != 'found':
+        return cycles, instructions
+    c, i = _AIM_PROBE_STORE_BEST_FLAG_ROUTE
+    cycles += c
+    instructions += i
+    route = result.get('_route', 0) != 0
+    c, i = _AIM_PROBE_STORE_BEST_FLAG_ROUTE_BNE[route]
+    cycles += c
+    instructions += i
+    c, i = _AIM_PROBE_STORE_BEST_FLAG_A3
+    cycles += c
+    instructions += i
+    if not route:
+        c, i = _AIM_PROBE_STORE_BEST_FLAG_FALLBACK
+        cycles += c
+        instructions += i
+    c, i = _AIM_PROBE_STORE_BEST_INDEX
+    cycles += c
+    instructions += i
+    return cycles, instructions
+
+
+def _aim_probe_window_residue(read, d0, d1):
+    """The (D2, D3) 00B32E's own internal scratch computation LEAVES when it returns: 00B62A never
+    saves D2/D3 around its own bsr $b32e (unlike 00B524's movem frame), so the callee's own residue
+    replaces the caller's own dx/dy the instant the call returns -- D2 the SAME final offset
+    ``_res_window_d2`` (aim_target_resolve_plan) already names, D3 whatever the doubling chain left it
+    at (16 * (dy >> 4)), never touched again on any arm but D2's own further overwrite in 'store'."""
+    from .game import creatures
+    dx = creatures._signed_word((d0 - read(creatures.FOLLOW_X, 2)) & 0xFFFF)
+    dy = creatures._signed_word((d1 - read(creatures.FOLLOW_Y, 2)) & 0xFFFF)
+    d2 = (dx >> 5) & 0xFFFF
+    d3 = (dy >> 4) & 0xFFFF
+    d2 = (d2 + 5) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d2 = (d2 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d2 = (d2 + d3) & 0xFFFF
+    return d2, d3
+
+
+def _aim_probe_window_add_sr(sr, read, d0, d1):
+    """The SR left by 00B32E's own tail (add.w d3,d2, its last flag-setter -- aim_window_address_plan's
+    own exit_sr, replicated here since the routine is a real internal call, not a plan composition)
+    as seen by a CALLER that reaches the bsr: X/C/N/Z/V do not depend at all on the caller's own entry
+    sr (ADD always sets them fresh), so this is exactly what 00B524's and 00B62A's own tile test,
+    found-tail and 'clear'/'store' exits build on."""
+    from .game import creatures
+    dx = creatures._signed_word((d0 - read(creatures.FOLLOW_X, 2)) & 0xFFFF)
+    dy = creatures._signed_word((d1 - read(creatures.FOLLOW_Y, 2)) & 0xFFFF)
+    d2 = (dx >> 5) & 0xFFFF
+    d3 = (dy >> 4) & 0xFFFF
+    d2 = (d2 + 5) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    d2 = (d2 + d3) & 0xFFFF        # d2_before_final
+    d3 = (d3 + d3) & 0xFFFF
+    d3 = (d3 + d3) & 0xFFFF
+    return _add_sr(sr, d2, d3, 2)  # add.w d3,d2 (00B34A) -- 00B32E's own last flag-setter
+
+
+def _aim_probe_found_writes(result):
+    from .game import creatures
+    return (_bytes(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFFFF, result['flag'], 2) +
+            _bytes(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFFFF, result['d7'] & 0xFFFF, 2))
+
+
+def aim_probe_mark_plan(machine, registers):
+    """00B524: a found-only probe over one ray-march step.  See game/creatures.py's own module note
+    above aim_probe_mark.  Every arm is real and witnessed (45 retained fixtures over four
+    recordings)."""
+    from .game import creatures
+    if registers['pc'] != AIM_PROBE_MARK_ENTRY:
+        raise UnsupportedCandidate('aim probe mark planner needs the machine parked at 00B524')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    d0, d1 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
+    d4, a3, a4 = registers['d4'], registers['a3'], registers['a4']
+    result = creatures.aim_probe_mark(read, d0, d1, d4, a3, a4)
+    result['_route'] = read(((a3 & 0xFFFFFF) + 4) & 0xFFFFFF, 2) & 0xFFFF if result['arm'] == 'found' else 0
+
+    cycles, instructions = _add(_AIM_PROBE_MOVEM_PUSH, _AIM_PROBE_MARK_D7_MOVE, _AIM_PROBE_MARK_D7_ASR,
+                                 _AIM_PROBE_MARK_D7_ADD, _AIM_PROBE_CMP_LIMIT)
+    arm = result['arm']
+    c, i = _AIM_PROBE_BGT_LIMIT[arm == 'step-limit']
+    cycles += c
+    instructions += i
+    # movem.l d2-d3,-(a7): predecrement order stores the HIGHER-numbered register first (nearer the old
+    # sp), so d2 lands at sp-8 and d3 at sp-4 -- both entry values, real writes even though the tail's
+    # own movem.l (a7)+,d2-d3 restores them to the SAME registers (the memory itself is never erased).
+    writes = _bytes((sp - 8) & 0xFFFFFF, registers['d2'] & 0xFFFFFFFF, 4) + \
+        _bytes((sp - 4) & 0xFFFFFF, registers['d3'] & 0xFFFFFFFF, 4)
+    exit_a0 = None
+    if arm != 'step-limit':
+        c, i = _aim_probe_box_cost(arm if arm.startswith('bound') else None)
+        cycles += c
+        instructions += i
+        if not arm.startswith('bound'):
+            c, i = _add(_AIM_PROBE_BSR_WINDOW, _AIM_WINDOW_ADDRESS_COST, _AIM_PROBE_LEA_MARK,
+                       _AIM_PROBE_TST_TILE)
+            cycles += c
+            instructions += i
+            # bsr $b32e's own return-address push: the movem frame sits below it, so the slot is
+            # sp - 8 (the pushed d2-d3) - 4 -- real for every arm that reaches this call, never popped
+            # back to a visible value since $b32e's own rts pops it before this routine's own tail runs.
+            writes += _bytes((sp - 12) & 0xFFFFFF, AIM_PROBE_MARK_WINDOW_RETURN, 4)
+            exit_a0 = result['a0']
+            c, i = _AIM_PROBE_BPL_CLEAR[arm == 'clear']
+            cycles += c
+            instructions += i
+            if arm != 'clear':
+                c, i = _aim_probe_found_tail_cost(result)
+                cycles += c
+                instructions += i
+                if arm == 'found':
+                    writes += _aim_probe_found_writes(result)
+
+    c, i = _add(_AIM_PROBE_MOVEM_POP, _AIM_PROBE_RTS)
+    cycles += c
+    instructions += i
+
+    # X is set fresh by the FIRST add.w 4(a3),d7 (00B52C) regardless of the asr before it (asr's own X
+    # is always overwritten before any exit can read it), then again by the box test's own second
+    # sub.w f3f0,d3 (00B542) for every arm that reaches it, then again by 00B32E's own internal add.w
+    # d3,d2 tail for every arm that calls it -- CMP/TST/MOVE never touch X, so each of those becomes
+    # the SAME baseline every later flag-setter in that arm builds on.
+    if arm == 'step-limit':
+        asr_result = (creatures._signed_word(d4 & 0xFFFF) >> 1) & 0xFFFF
+        route_word = read(((a3 & 0xFFFFFF) + 4) & 0xFFFFFF, 2) & 0xFFFF
+        base = _add_sr(sr, asr_result, route_word, 2)
+        limit = read(((a4 & 0xFFFFFF) + creatures.AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1) & 0xFF
+        exit_sr = _cmp_sr(base, result['d7'] & 0xFF, limit, 1)
+    elif arm.startswith('bound'):
+        # both sub.w instructions (00B53A/00B53E) always run before any of the four cmpi/Bcc pairs, so
+        # X is always the second sub's own X regardless of which bound fails; N/Z/V/C come fresh from
+        # the SPECIFIC cmpi that exits (cmp retains X, never touches it).
+        sr_after_subs = _sub_sr(sr, d1, read(creatures.FOLLOW_Y, 2) & 0xFFFF, 2)
+        bound_value = result['dy'] if arm.endswith('y-low') or arm.endswith('y-high') else result['dx']
+        bound_limit = (creatures.AIM_PROBE_LOW_BIAS if arm.endswith('low')
+                        else (creatures.AIM_SEARCH_X_LIMIT if 'x' in arm else creatures.AIM_PROBE_Y_HIGH))
+        exit_sr = _cmp_sr(sr_after_subs, bound_value & 0xFFFF, bound_limit & 0xFFFF, 2)
+    else:
+        base = _aim_probe_window_add_sr(sr, read, d0, d1)
+        if arm == 'clear':
+            exit_sr = _logic_sr(base, result['tile'], 1)
+        elif arm == 'found':
+            exit_sr = _logic_sr(base, result['d7'] & 0xFFFF, 2)
+        else:  # no-improvement
+            exit_sr = _cmp_sr(base, result['d7'] & 0xFFFF,
+                              read(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFFFF, 2) & 0xFFFF, 2)
+
+    exit_registers = {'d7': (registers['d7'] & 0xFFFF0000) | (result['d7'] & 0xFFFF),
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+    if exit_a0 is not None:
+        exit_registers['a0'] = exit_a0 & 0xFFFFFFFF
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=AIM_PROBE_MARK_LAST_PC)
+
+
+def aim_probe_mark_store_plan(machine, registers):
+    """00B62A: the STORE-capable evaluator 00B588 calls directly after each ray pass.  See
+    game/creatures.py's own module note above aim_probe_mark_store.  ``'pool-full-by-count'`` and
+    ``'pool-full-scanned'`` (aim_pool_add's own unwitnessed arms) decline the same way every other
+    composition over aim_pool_add does -- not witnessed by any of the 70 retained fixtures here
+    either."""
+    from .game import creatures
+    if registers['pc'] != AIM_PROBE_MARK_STORE_ENTRY:
+        raise UnsupportedCandidate('aim probe mark store planner needs the machine parked at 00B62A')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    d0, d1 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
+    a3, a4, a5 = registers['a3'], registers['a4'], registers['a5']
+    result = creatures.aim_probe_mark_store(read, d0, d1, a3, a4, a5)
+    a3ram = a3 & 0xFFFFFF
+    result['_route'] = read((a3ram + 4) & 0xFFFFFF, 2) & 0xFFFF if result['arm'] == 'found' else 0
+
+    cycles, instructions = _add(_AIM_PROBE_STORE_D7_MOVE, _AIM_PROBE_STORE_D7_ASR, _AIM_PROBE_STORE_D7_ADD,
+                                 _AIM_PROBE_CMP_LIMIT)
+    arm = result['arm']
+    c, i = _AIM_PROBE_BGT_LIMIT[arm == 'step-limit']
+    cycles += c
+    instructions += i
+    output_writes = ()
+    exit_registers = {}
+    last_pc = AIM_PROBE_MARK_STORE_LAST_PC
+    call_return = None
+    if arm != 'step-limit':
+        c, i = _aim_probe_box_cost(arm if arm.startswith('bound') else None)
+        cycles += c
+        instructions += i
+        if arm.startswith('bound'):
+            # move.w d0,d2 / move.w d1,d3, then sub.w f3ee,d2 / sub.w f3f0,d3: no call reaches this
+            # arm's own exit, so d2/d3 stay exactly the caller's own dx/dy (word-only ops: each keeps
+            # its own entry upper half).
+            exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | (result['dx'] & 0xFFFF)
+            exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | (result['dy'] & 0xFFFF)
+        if not arm.startswith('bound'):
+            c, i = _add(_AIM_PROBE_BSR_WINDOW, _AIM_WINDOW_ADDRESS_COST, _AIM_PROBE_LEA_MARK,
+                       _AIM_PROBE_TST_TILE)
+            cycles += c
+            instructions += i
+            # bsr $b32e's own return-address push: 00B62A has no movem frame of its own, so the slot is
+            # simply sp - 4 -- real for every arm that reaches this call.  A later internal call (the
+            # 'store' arm's own bsr $b05a, below) returns sp to the SAME value and overwrites it -- the
+            # single write below is always the LAST call's own return address, never both (a duplicate
+            # address in the same plan is exactly what _spans_disjoint elsewhere guards against).
+            call_return = AIM_PROBE_MARK_STORE_WINDOW_RETURN
+            exit_registers['a0'] = result['a0'] & 0xFFFFFFFF
+            # 00B32E's own internal D2/D3 scratch use overwrites the caller's own dx/dy the instant the
+            # call returns (00B62A saves neither around its own bsr): word-only ops throughout, so each
+            # keeps its own entry upper half; nothing past this point touches D3 again on any arm, and
+            # D2 is only overwritten again by the 'store' arm's own flag read, below.
+            window_d2, window_d3 = _aim_probe_window_residue(read, d0, d1)
+            exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | window_d2
+            exit_registers['d3'] = (registers['d3'] & 0xFFFF0000) | window_d3
+            c, i = _AIM_PROBE_BEQ_ZERO[result['tile'] == 0]
+            cycles += c
+            instructions += i
+            if result['tile'] != 0:
+                c, i = _AIM_PROBE_BMI_FOUND[arm in ('found', 'no-improvement')]
+                cycles += c
+                instructions += i
+            if arm in ('found', 'no-improvement'):
+                c, i = _aim_probe_found_tail_cost(result)
+                cycles += c
+                instructions += i
+                if arm == 'found':
+                    output_writes = _aim_probe_found_writes(result)
+                    last_pc = AIM_PROBE_MARK_STORE_FOUND_LAST_PC
+            else:
+                if result['tile'] != 0:
+                    c, i = _AIM_PROBE_CMP_PRUNE
+                    cycles += c
+                    instructions += i
+                    c, i = _AIM_PROBE_BGE_PRUNE[arm == 'pruned']
+                    cycles += c
+                    instructions += i
+                if arm != 'pruned':
+                    x_matches = (d0 & 0xFFFF) == (read(a5 & 0xFFFFFF, 2) & 0xFFFF)
+                    c, i = _add(_AIM_PROBE_CMP_DEDUP_X, _AIM_PROBE_BNE_DEDUP_X[not x_matches])
+                    cycles += c
+                    instructions += i
+                    if x_matches:
+                        c, i = _add(_AIM_PROBE_CMP_DEDUP_Y, _AIM_PROBE_BEQ_DEDUP_Y[arm == 'dedup'])
+                        cycles += c
+                        instructions += i
+                    if arm == 'store':
+                        c, i = _add(_AIM_PROBE_STORE_MARK, _AIM_PROBE_STORE_FLAG_READ,
+                                   _AIM_PROBE_STORE_TST_ROUTE)
+                        cycles += c
+                        instructions += i
+                        route = read((a3ram + 4) & 0xFFFFFF, 2) & 0xFFFF
+                        c, i = _AIM_PROBE_STORE_BNE_ROUTE[route != 0]
+                        cycles += c
+                        instructions += i
+                        if route == 0:
+                            c, i = _AIM_PROBE_STORE_FLAG_FALLBACK
+                            cycles += c
+                            instructions += i
+                        c, i = _AIM_PROBE_BSR_POOLADD
+                        cycles += c
+                        instructions += i
+                        add_result = result['add_result']
+                        if add_result['arm'] != 'found':
+                            raise UnsupportedCandidate(
+                                f"aim probe mark store: aim pool add {add_result['arm']}, not witnessed")
+                        c, i = _AIM_POOL_ADD_HEAD
+                        cycles += c
+                        instructions += i
+                        c, i = _add(*([_AIM_POOL_ADD_SKIP] * add_result['skipped']))
+                        cycles += c
+                        instructions += i
+                        c, i = _AIM_POOL_ADD_FOUND_TEST
+                        cycles += c
+                        instructions += i
+                        c, i = _AIM_POOL_ADD_WRITE
+                        cycles += c
+                        instructions += i
+                        c, i = _AIM_POOL_ADD_RTS
+                        cycles += c
+                        instructions += i
+                        call_return = AIM_PROBE_MARK_STORE_LAST_PC   # bsr $b05a's own return overwrites
+                                                                      # bsr $b32e's own slot (same sp)
+                        output_writes = (((result['a0'] & 0xFFFFFF, result['d7'] & 0xFF),) +
+                                         tuple(add_result['stores'].items()))
+                        exit_registers['a0'] = (add_result['address'] + creatures.AIM_POOL_STRIDE) & 0xFFFFFFFF
+                        exit_registers['d5'] = (0x1F - add_result['skipped']) & 0xFFFF
+                        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | (result['flag'] & 0xFFFF)
+
+    c, i = _AIM_PROBE_RTS
+    cycles += c
+    instructions += i
+    writes = (_bytes((sp - 4) & 0xFFFFFF, call_return, 4) if call_return is not None else ()) + output_writes
+
+    # X threading (see aim_probe_mark_plan's own comment): the initial add.w 4(a3),d7 sets it fresh for
+    # 'step-limit'; the box test's own second sub.w f3f0,d3 sets it fresh for a 'bound-*' miss; past the
+    # box test, 00B32E's own internal add.w d3,d2 tail sets it fresh for every other arm (CMP/TST/MOVE
+    # never touch X) -- 'store' alone runs one more ADD of its own (aim_pool_add's own addq.w #1,f2ae),
+    # overwriting it again.
+    if arm == 'step-limit':
+        asr_result = (creatures._signed_word(read(creatures.AIM_RAY_STEP_INDEX & 0xFFFFFF, 2) & 0xFFFF) >> 2) & 0xFFFF
+        route_word = read(((a3ram) + 4) & 0xFFFFFF, 2) & 0xFFFF
+        base = _add_sr(sr, asr_result, route_word, 2)
+        limit = read(((a4 & 0xFFFFFF) + creatures.AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1) & 0xFF
+        exit_sr = _cmp_sr(base, result['d7'] & 0xFF, limit, 1)
+    elif arm.startswith('bound'):
+        sr_after_subs = _sub_sr(sr, d1, read(creatures.FOLLOW_Y, 2) & 0xFFFF, 2)
+        bound_value = result['dy'] if arm.endswith('y-low') or arm.endswith('y-high') else result['dx']
+        bound_limit = (creatures.AIM_PROBE_LOW_BIAS if arm.endswith('low')
+                        else (creatures.AIM_SEARCH_X_LIMIT if 'x' in arm else creatures.AIM_PROBE_Y_HIGH))
+        exit_sr = _cmp_sr(sr_after_subs, bound_value & 0xFFFF, bound_limit & 0xFFFF, 2)
+    else:
+        base = _aim_probe_window_add_sr(sr, read, d0, d1)
+        if arm == 'found':
+            exit_sr = _logic_sr(base, result['d7'] & 0xFFFF, 2)
+        elif arm == 'no-improvement':
+            exit_sr = _cmp_sr(base, result['d7'] & 0xFFFF, read(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFFFF, 2) & 0xFFFF, 2)
+        elif arm == 'pruned':
+            exit_sr = _cmp_sr(base, result['d7'] & 0xFF, result['tile'], 1)
+        elif arm == 'dedup':
+            exit_sr = _cmp_sr(base, d1 & 0xFFFF, read(((a5 & 0xFFFFFF) + 2) & 0xFFFFFF, 2) & 0xFFFF, 2)
+        else:  # store
+            add_result = result['add_result']
+            exit_sr = _add_sr(base, add_result['count'], 1, 2)
+
+    exit_registers['d7'] = (registers['d7'] & 0xFFFF0000) | (result['d7'] & 0xFFFF)
+    exit_registers['a7'] = (sp32 + 4) & 0xFFFFFFFF
+    exit_registers['pc'] = _return(machine, sp)
+    exit_registers['sr'] = exit_sr
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=last_pc)
+
 
 # --- 00B724: the aim target scan (game/creatures.py: aim_target_scan) -------------------------------
 #

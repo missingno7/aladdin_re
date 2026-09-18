@@ -940,6 +940,137 @@ def aim_pool_add(read, d0, d1, d7, d2):
     return {'arm': 'pool-full-scanned', 'count': count, 'skipped': skipped}
 
 
+# --- 00B524 / 00B62A: the aim ray probe and mark-store (docs/gods/blockers/2026-09-18-00A578.md's own
+# "Decision on 00B588", 19 Sep) -- the found-only probe and the store-capable evaluator 00B354/00B440's
+# own ray-march (each its own bounded walk along the eight-entry 00AE4C table) calls at specific steps,
+# and 00B588's own outer loop calls directly after each ray pass.  Both run the SAME step-limit test,
+# the SAME camera-relative box test, and the SAME window-mark tile read as 00B6AE's own inner loop
+# (_resolve_slot, above) -- the shape the Decision named "byte-for-byte the same bounding-box +
+# window-mark tile logic" -- but each derives its own step index (D7) from a different source: 00B524's
+# own D4 (a local step accumulator the ray march itself threads) versus 00B62A's own AIM_RAY_STEP_INDEX
+# (F2D4, written by the ray march's own tail).  A3 is the current AIM_POOL entry (00B588's own outer
+# loop variable: +4 a per-entry base index folded into D7, +6 a per-entry flag word); A4 is the
+# creature TYPE pointer (+0xD the walk's own per-type step limit, the SAME AIM_SEARCH_STEP_LIMIT_OFFSET
+# byte aim_target_scan's own walk reads).  00B62A alone stores (through the already-recovered
+# aim_pool_add) and alone runs a dedup guard against A5 (bounds-tested against (a5)/2(a5) -- this
+# session's own recovery does not confirm which caller sets A5, the same fact the escalation itself
+# left open); 00B524 only ever reports a found-tail update.
+AIM_RAY_STEP_INDEX = 0xFFFFF2D4      # word: written by 00B354/00B440's own tail (D4, the ray's own
+                                      # local step count) -- 00B62A's own D7 base
+AIM_RAY_CONTEXT_FLAG = 0xFFFFF2D2    # word: the pass's own fallback flag (00B588's own move.w #n,f2d2
+                                      # before each of its four ray-march + 00B62A passes) -- the
+                                      # found/store tail's own flag source when A3+4 is zero
+AIM_PROBE_LOW_BIAS = -0x40           # camera-relative low bound, both axes (signed; ble, strict)
+AIM_PROBE_Y_HIGH = 0xE0              # camera-relative Y high bound (signed; bge, strict) -- X reuses
+                                      # AIM_SEARCH_X_LIMIT (the SAME 0x160 aim_target_scan's own walk
+                                      # bounds against)
+
+
+def _aim_probe_bound(read, d0, d1):
+    """The camera-relative box test 00B524 and 00B62A both run right after their own step-limit test:
+    returns (dx, dy, arm) where arm names WHICH of the four sequential ROM compares rejects the point
+    (``'bound-x-low'``, ``'bound-x-high'``, ``'bound-y-low'``, ``'bound-y-high'``) or is ``None`` when
+    all four pass.  Both D2 (dx) and D3 (dy) are computed by the ROM UNCONDITIONALLY before any of the
+    four compares (two move.w/sub.w pairs back to back) -- dy is real and returned even when an x
+    bound already rejects the point, since it is still the exact register value the routine exits
+    with on every 'bound-x-*' arm."""
+    dx = _signed_word((d0 - read(FOLLOW_X, 2)) & 0xFFFF)
+    dy = _signed_word((d1 - read(FOLLOW_Y, 2)) & 0xFFFF)
+    if dx <= AIM_PROBE_LOW_BIAS:
+        return dx, dy, 'bound-x-low'
+    if dx >= AIM_SEARCH_X_LIMIT:
+        return dx, dy, 'bound-x-high'
+    if dy <= AIM_PROBE_LOW_BIAS:
+        return dx, dy, 'bound-y-low'
+    if dy >= AIM_PROBE_Y_HIGH:
+        return dx, dy, 'bound-y-high'
+    return dx, dy, None
+
+
+def _aim_found_update(read, d7, entry_ptr):
+    """The found-tail shared, byte-for-byte, by 00B524's own probe (B566-B57E) and 00B62A's own
+    evaluator (B690-B6AC): D7 admitted only when it is <= the running AIM_SEARCH_BEST_INDEX (unsigned
+    cmp.w/bhi); on admission AIM_SEARCH_BEST_FLAG is set from ``entry_ptr + 6`` when the word at
+    ``entry_ptr + 4`` is nonzero, else from AIM_RAY_CONTEXT_FLAG, and AIM_SEARCH_BEST_INDEX from D7.
+    A worse D7 (real ROM, never witnessed by any recording) is declined by the boundary."""
+    entry_ptr &= 0xFFFFFF
+    best_index_before = read(AIM_SEARCH_BEST_INDEX & 0xFFFFFF, 2) & 0xFFFF
+    if (d7 & 0xFFFF) > best_index_before:
+        return {'arm': 'no-improvement', 'best_index_before': best_index_before}
+    if read((entry_ptr + 4) & 0xFFFFFF, 2) & 0xFFFF:
+        flag = read((entry_ptr + 6) & 0xFFFFFF, 2) & 0xFFFF
+    else:
+        flag = read(AIM_RAY_CONTEXT_FLAG & 0xFFFFFF, 2) & 0xFFFF
+    return {'arm': 'found', 'flag': flag}
+
+
+def aim_probe_mark(read, d0, d1, d4, a3, a4):
+    """00B524: a found-only probe over one ray-march step.  D7 = (signed D4 >> 1) + word(A3 + 4), word
+    arithmetic (D4 the ray's own local step accumulator).  ``'step-limit'`` when D7's own low byte
+    exceeds the type's own limit byte (A4 + AIM_SEARCH_STEP_LIMIT_OFFSET, signed cmp.b); a
+    ``'bound-*'`` arm when the camera-relative box around (d0, d1) rejects the point
+    (_aim_probe_bound); ``'clear'`` when the window-mark tile at
+    ``aim_window_address(d0, d1) + AIM_CUE_WINDOW_STRIDE_1`` is not negative (tile >= 0, no update);
+    otherwise the found-tail (_aim_found_update) against A3 -- ``'found'`` or ``'no-improvement'``."""
+    from .grid import _signed_byte
+    a3 &= 0xFFFFFF
+    a4 &= 0xFFFFFF
+    d7 = ((_signed_word(d4) >> 1) + read((a3 + 4) & 0xFFFFFF, 2)) & 0xFFFF
+    limit = read((a4 + AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1) & 0xFF
+    if _signed_byte(d7 & 0xFF) > _signed_byte(limit):
+        return {'arm': 'step-limit', 'd7': d7}
+    dx, dy, bound_arm = _aim_probe_bound(read, d0, d1)
+    if bound_arm is not None:
+        return {'arm': bound_arm, 'd7': d7, 'dx': dx, 'dy': dy}
+    a0 = (aim_window_address(read, d0, d1) + AIM_CUE_WINDOW_STRIDE_1) & 0xFFFFFFFF
+    tile = read(a0 & 0xFFFFFF, 1) & 0xFF
+    if _signed_byte(tile) >= 0:
+        return {'arm': 'clear', 'd7': d7, 'dx': dx, 'dy': dy, 'a0': a0, 'tile': tile}
+    result = _aim_found_update(read, d7, a3)
+    result.update(d7=d7, dx=dx, dy=dy, a0=a0, tile=tile)
+    return result
+
+
+def aim_probe_mark_store(read, d0, d1, a3, a4, a5):
+    """00B62A: the STORE-capable evaluator 00B588 calls directly after each ray pass.  D7 = (signed
+    AIM_RAY_STEP_INDEX >> 2) + word(A3 + 4) -- the SAME step-limit and camera-relative box tests as
+    aim_probe_mark, and the SAME found-tail on a negative tile (no store).  On a non-negative tile that
+    is not pruned (tile == 0, or tile > 0 and D7 < tile, both signed byte) a dedup guard against A5
+    skips the store when (d0, d1) already equals (a5)/2(a5); otherwise the tile byte is set to D7 and
+    aim_pool_add(d0, d1, d7, flag) runs, flag the SAME tst.w-A3+4 selection aim_probe_mark's own
+    found-tail uses.  ``'pruned'`` (tile > 0 and D7 >= tile, signed) declines nothing -- it is a real,
+    witnessed miss with no update at all."""
+    from .grid import _signed_byte
+    a3 &= 0xFFFFFF
+    a4 &= 0xFFFFFF
+    a5 &= 0xFFFFFF
+    d7 = ((_signed_word(read(AIM_RAY_STEP_INDEX & 0xFFFFFF, 2)) >> 2) + read((a3 + 4) & 0xFFFFFF, 2)) & 0xFFFF
+    limit = read((a4 + AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1) & 0xFF
+    if _signed_byte(d7 & 0xFF) > _signed_byte(limit):
+        return {'arm': 'step-limit', 'd7': d7}
+    dx, dy, bound_arm = _aim_probe_bound(read, d0, d1)
+    if bound_arm is not None:
+        return {'arm': bound_arm, 'd7': d7, 'dx': dx, 'dy': dy}
+    a0 = (aim_window_address(read, d0, d1) + AIM_CUE_WINDOW_STRIDE_1) & 0xFFFFFFFF
+    tile = read(a0 & 0xFFFFFF, 1) & 0xFF
+    stile = _signed_byte(tile)
+    if stile < 0:
+        result = _aim_found_update(read, d7, a3)
+        result.update(d7=d7, dx=dx, dy=dy, a0=a0, tile=tile)
+        return result
+    if stile > 0 and _signed_byte(d7 & 0xFF) >= stile:
+        return {'arm': 'pruned', 'd7': d7, 'dx': dx, 'dy': dy, 'a0': a0, 'tile': tile}
+    if (d0 & 0xFFFF) == (read(a5, 2) & 0xFFFF) and (d1 & 0xFFFF) == (read((a5 + 2) & 0xFFFFFF, 2) & 0xFFFF):
+        return {'arm': 'dedup', 'd7': d7, 'dx': dx, 'dy': dy, 'a0': a0, 'tile': tile}
+    if read((a3 + 4) & 0xFFFFFF, 2) & 0xFFFF:
+        flag = read((a3 + 6) & 0xFFFFFF, 2) & 0xFFFF
+    else:
+        flag = read(AIM_RAY_CONTEXT_FLAG & 0xFFFFFF, 2) & 0xFFFF
+    add_result = aim_pool_add(read, d0 & 0xFFFF, d1 & 0xFFFF, d7, flag)
+    return {'arm': 'store', 'd7': d7, 'dx': dx, 'dy': dy, 'a0': a0, 'tile': tile, 'flag': flag,
+            'add_result': add_result}
+
+
 # --- 00B724: the aim target scan (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
 # 00AF52", 19 Sep -- the first of the three further callees, 00B002's own reconnaissance found bounded
 # over {00AF3C, 00B32E} on every one of 1,772 witnessed occurrences across four recordings).  A

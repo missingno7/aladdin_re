@@ -89,6 +89,14 @@ AIM_TARGET_RESOLVE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('censu
 needs_aim_target_resolve_census = pytest.mark.skipif(not AIM_TARGET_RESOLVE_FIXTURES or not GODS.rom_path.is_file(),
                                                       reason='no local census of 00B6AE')
 
+AIM_PROBE_MARK_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B524-*/00B524-entry-p*.state'))
+needs_aim_probe_mark_census = pytest.mark.skipif(not AIM_PROBE_MARK_FIXTURES or not GODS.rom_path.is_file(),
+                                                 reason='no local census of 00B524')
+
+AIM_PROBE_MARK_STORE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B62A-*/00B62A-entry-p*.state'))
+needs_aim_probe_mark_store_census = pytest.mark.skipif(not AIM_PROBE_MARK_STORE_FIXTURES or not GODS.rom_path.is_file(),
+                                                        reason='no local census of 00B62A')
+
 SPAWN_FIND_FREE_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00B8C2-*/00B8C2-entry-p*.state'))
 needs_spawn_find_free_census = pytest.mark.skipif(not SPAWN_FIND_FREE_FIXTURES or not GODS.rom_path.is_file(),
                                                    reason='no local census of 00B8C2')
@@ -1355,6 +1363,93 @@ def test_aim_target_resolve_candidate_matches_the_reference_and_its_mutant_diver
             break
     else:
         pytest.skip('no retained fixture/window makes aim-target-resolve produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B524 / 00B62A: the aim ray probe and mark-store (docs/gods/blockers/2026-09-18-00A578.md's own
+# "Decision on 00B588", 19 Sep) -- the found-only probe and the store-capable evaluator 00B354/00B440's
+# own ray-march calls.  See game/creatures.py's own module note above aim_probe_mark.
+
+def test_aim_probe_mark_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-probe-mark').gate_pcs == (boundary.AIM_PROBE_MARK_ENTRY,)
+    assert boundary.AIM_PROBE_MARK_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-probe-mark-mutant-result').mutation is recovery._mutate_aim_probe
+
+
+def test_aim_probe_mark_store_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-probe-mark-store').gate_pcs == (boundary.AIM_PROBE_MARK_STORE_ENTRY,)
+    assert boundary.AIM_PROBE_MARK_STORE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-probe-mark-store-mutant-result').mutation is recovery._mutate_aim_probe
+
+
+@needs_aim_probe_mark_census
+@pytest.mark.parametrize('fixture', AIM_PROBE_MARK_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_probe_mark_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.aim_probe_mark_plan(machine, registers)
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc']))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_aim_probe_mark_store_census
+@pytest.mark.parametrize('fixture', AIM_PROBE_MARK_STORE_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_probe_mark_store_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        plan = boundary.aim_probe_mark_store_plan(machine, registers)
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc']))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_probe_mark_candidate_matches_the_reference_and_its_mutant_diverges():
+    # Most occurrences decline to a plain miss (step-limit / bound / 'clear' / 'no-improvement'): only
+    # a 'found' occurrence writes AIM_SEARCH_BEST_FLAG/BEST_INDEX, the one real effect the mutant can
+    # see (see _mutate_aim_probe's own note) -- a fixture/window has to be found where one actually
+    # fires before the mutant means anything.
+    report = mutant = None
+    for fixture in AIM_PROBE_MARK_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-probe-mark', reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        assert report['status'] == 'PASS', report
+        assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-probe-mark-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-probe-mark produce an observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+@needs_reference
+def test_aim_probe_mark_store_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_PROBE_MARK_STORE_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-probe-mark-store',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1:
+            continue
+        assert report['status'] == 'PASS', report
+        assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-probe-mark-store-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-probe-mark-store produce an observable effect')
     assert mutant['status'] == 'DIVERGENCE'
 
 

@@ -515,6 +515,57 @@ below, has the count and the milestone tree numbers).
   world update, `0030CC`, remain the two other tick phases whose own mass
   is still mostly original execution -- `tick-map.md`).
 
+- **19 September, grinder session following the Decision on `00B588`**: the
+  first two of the Decision's own piecewise order are recovered.  `00B524`
+  (`'aim-probe-mark'`): a found-only probe over one ray-march step
+  (`00B354`/`00B440` call it at specific steps, not yet recovered
+  themselves) -- the SAME step-limit test, camera-relative box test and
+  window-mark tile read as `00B6AE`'s own inner loop (`_resolve_slot`), D7
+  derived from a caller-supplied local step accumulator (D4) instead of an
+  incrementing counter; every arm real and witnessed (45 fixtures over
+  four recordings, the fifth honestly `NOT_EXERCISED`), no declines.
+  `00B62A` (`'aim-probe-mark-store'`): the STORE-capable evaluator `00B588`
+  calls directly after each ray pass, D7 derived from `AIM_RAY_STEP_INDEX`
+  (F2D4, written by the ray march's own tail) instead of D4, a real dedup
+  guard against A5 (the creature's own tracked position, per the
+  escalation -- this session's own recovery does not confirm which caller
+  sets it either) before the store arm, composing the already-recovered
+  `aim_pool_add` (00B05A) verbatim; only `'pruned'` (tile > 0, D7 >= tile)
+  and the box/step-limit misses decline nothing (real, witnessed misses
+  with no update at all) -- 70 fixtures over four recordings, no declines.
+  Both share one found-tail (`_aim_found_update`) and one box test
+  (`_aim_probe_bound`), factored fresh in `game/creatures.py` without
+  touching `_resolve_slot`'s own already-sealed code.  `factcheck check`
+  and `--perturb-upper-halves` both clean on all 115 fixtures combined
+  after fixing real defects this session found in turn: 00B524's own
+  initial `movem.l d2-d3,-(a7)` frame's own stack write (real even though
+  the net register change is zero) was missing from the plan entirely; X
+  is never retained from the entry SR on either routine -- it is set fresh
+  by the initial `add.w 4(a3),d7` (the step-limit exit), by the box test's
+  own second `sub.w f3f0,d3` (every bound-\* exit, regardless of which of
+  the four sequential compares actually fails, since both subs always run
+  first), or by `00B32E`'s own internal `add.w d3,d2` tail (every arm past
+  the box test) -- never by the asr before it, always overwritten before
+  any exit can read it; and `00B62A`'s own D2/D3 exit values are `00B32E`'s
+  own internal scratch RESIDUE (the SAME final offset
+  `_res_window_d2`/`aim_target_resolve_plan` already name), not the
+  caller's own dx/dy, on every arm that reaches the call -- `00B62A` saves
+  neither register around its own `bsr $b32e`, unlike `00B524`'s movem
+  frame.  `camera-sprites` extended to sixty-two gates.  Milestone tree
+  PASS on all five leaves (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19j`,
+  107,519 frames): 1,211,876 hits, 8,192 fallbacks, no decline at either
+  new gate.  Both reproduce the original on `f0ac19738f19…`: `aim-probe-mark`
+  PASS, 939 hits, 9 fallbacks (all `ADAPTER_REFUSALS`); `aim-probe-mark-store`
+  PASS, 489 hits, 3 fallbacks (all `ADAPTER_REFUSALS`); both mutants
+  (`_mutate_aim_probe`, shared: `AIM_SEARCH_BEST_INDEX`'s own low byte on a
+  `'found'` occurrence, else `AIM_POOL_COUNT`'s own low byte on a `'store'`
+  occurrence, else unmutated) DIVERGENCE (frame 13,973 and 12,314).  Next,
+  per the Decision's own order: `00B354`/`00B440` as one parameterised
+  ray-march implementation if they mirror (a real census first -- neither
+  has been censused yet, only disassembled), then `00B588` composing them
+  over every `AIM_POOL` entry, then `00B002`, `00AF52`, `00AC36`,
+  `00AA76`/`00AB50`, `00A772` as the family, `00A578` as the walk.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from
