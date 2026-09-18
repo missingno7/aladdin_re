@@ -327,9 +327,15 @@ field the next invocation reads) and record the fault in the ledger.
 
 ```powershell
 & $py scriptsun_tests.py gods
-& $py scripts\tree_verify.py --game gods --candidate <candidate> --output artifacts\gods\verify-<candidate>-leaves-<date>
-& $py scripts\verify_status.py artifacts\gods\verify-<candidate>-leaves-<date>
+& $py scripts\tree_verify.py --game gods --candidate camera-sprites --output artifacts\gods\verify-camera-sprites-leaves-<date>
+& $py scripts\verify_status.py artifacts\gods\verify-camera-sprites-leaves-<date>
 ```
+
+The milestone seal is always the **combined** candidate (`camera-sprites`,
+every recovered region armed at once): that is the claim a push makes.  A
+single region's own candidate on the tree is a region-seal artefact, not
+a milestone (and a leaf that never reaches the region is NOT_EXERCISED
+for it, which says nothing about the milestone).
 
 `tree_verify.py` verifies every leaf of the tree as its own cold run from
 power-on, all leaves at once (five for Gods: ten worker processes; about
