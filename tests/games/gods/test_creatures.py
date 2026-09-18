@@ -77,6 +77,10 @@ AIM_WINDOW_ADDRESS_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('censu
 needs_aim_window_address_census = pytest.mark.skipif(not AIM_WINDOW_ADDRESS_FIXTURES or not GODS.rom_path.is_file(),
                                                       reason='no local census of 00B32E')
 
+AIM_TARGET_SCAN_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-00B724-*/00B724-entry-p*.state'))
+needs_aim_target_scan_census = pytest.mark.skipif(not AIM_TARGET_SCAN_FIXTURES or not GODS.rom_path.is_file(),
+                                                  reason='no local census of 00B724')
+
 TYPE_PTR, INSTANCE_PTR = 0xFF2000, 0xFF2100
 
 
@@ -1173,5 +1177,65 @@ def test_aim_window_address_candidate_matches_the_reference_and_its_mutant_diver
     assert report['status'] == 'PASS', report
     assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-window-address-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00B724: the aim target scan (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
+# 00AF52", 19 Sep -- the first of the three further callees 00B002's own reconnaissance found bounded
+# over {00AF3C, 00B32E} on every witnessed occurrence).  A horizontal raycast one grid column at a
+# time, gated on a two-rows-down footing, marking each visited column in the SAME window table
+# aim_cue_update's own window-mark arm writes into.  See game/creatures.py's own module note above
+# aim_target_scan.
+
+def test_aim_target_scan_semantics_walk_matches_a_fresh_scan():
+    values = {(creatures.FOLLOW_X & 0xFFFFFF, 2): 0, (creatures.FOLLOW_Y & 0xFFFFFF, 2): 0,
+             (creatures.AIM_SEARCH_START_INDEX & 0xFFFFFF, 2): 0,
+             (creatures.AIM_SEARCH_FLAG_SOURCE & 0xFFFFFF, 2): 3,
+             (creatures.AIM_SEARCH_COUNT & 0xFFFFFF, 2): 0}
+    type_ptr = 0xFF2000
+    values[(type_ptr + creatures.AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1] = 2
+    result = creatures.aim_target_scan(_reader(values), type_ptr, 0x100, 0x40)
+    # every table byte defaults to 0 in this synthetic reader: the two-rows-down footing is never 1,
+    # so the routine declines at the very first guard -- 'blocked-start' is real ROM, never witnessed.
+    assert result['arm'] == 'blocked-start'
+
+
+def test_aim_target_scan_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-target-scan').gate_pcs == (boundary.AIM_TARGET_SCAN_ENTRY,)
+    assert boundary.AIM_TARGET_SCAN_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-target-scan-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_aim_target_scan_census
+@pytest.mark.parametrize('fixture', AIM_TARGET_SCAN_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_target_scan_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_target_scan_plan(machine, registers)
+        except UnsupportedCandidate:
+            pytest.skip('declined arm (blocked-start / pruned-start / found-without-a-new-best) -- '
+                       'covered by factcheck check, not this MATCH-only test')
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_target_scan_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in AIM_TARGET_SCAN_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-target-scan', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00B724 within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-target-scan-mutant-result',
                                   reference=EVIDENCE)
     assert mutant['status'] == 'DIVERGENCE'

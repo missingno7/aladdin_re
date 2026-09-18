@@ -16251,3 +16251,369 @@ def aim_window_address_plan(machine, registers):
                                  'a0': a0, 'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
                                  'sr': exit_sr},
                       last_pc=AIM_WINDOW_ADDRESS_LAST_PC)
+
+
+
+# --- 00B724: the aim target scan (game/creatures.py: aim_target_scan) -------------------------------
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-00B724-*, 127 retained fixtures over
+# four recordings; verified fragment by fragment, in execution order, until the assembled totals
+# matched to the cycle for every witnessed depth from 0 to 10 stores).
+AIM_TARGET_SCAN_ENTRY = 0x00B724
+AIM_TARGET_SCAN_STEP_PC = 0x00B7B8      # every bail arm's own rts, and 'exhausted'
+AIM_TARGET_SCAN_FOUND_PC = 0x00B7D8     # 'found' only
+AIM_TARGET_SCAN_HEAD_RETURN = 0x00B72C  # the second internal call's own return address (00AF3C's own
+                                         # push, from the SAME four bytes, is fully overwritten by it)
+
+_ATS_BSR_AF3C = (18, 1)                 # 00B724 bsr.w $af3c
+_ATS_BSR_WINDOW = (18, 1)               # 00B728 bsr.w $b32e
+_ATS_LEA_MARK = (8, 1)                  # 00B72C lea.l $14(a0),a0
+_ATS_CMP_HEADER0 = (16, 1)              # 00B730 cmpi.b #1,$100(a2)
+_ATS_BNE_HEADER0 = (12, 1)              # 00B736 bne.w -- only 'not taken' ever witnessed
+_ATS_LEA_POOL = (12, 1)                 # 00B73A lea.l $ffff41b2.l,a3
+_ATS_MOVE_D7 = (12, 1)                  # 00B740 move.w f2ca,d7
+_ATS_CMP_TILE0 = (8, 1)                 # 00B744 cmp.b (a0),d7
+_ATS_BGT_TILE0 = {True: (10, 1), False: (12, 1)}    # 00B746 (word branch: 'not taken' is 12, not 8)
+_ATS_MOVEQ_D6 = (4, 1)                  # 00B74A moveq #$20,d6
+_ATS_MOVE_D2 = (4, 1)                   # 00B74C move.w d0,d2
+_ATS_SUB_D2 = (12, 1)                   # 00B74E sub.w f3ee,d2
+_ATS_MOVE_D5 = (12, 1)                  # 00B752 move.w f2cc,d5
+_ATS_TST_D7 = (4, 1)                    # 00B756 tst.w d7
+_ATS_BNE_D7 = {True: (10, 1), False: (8, 1)}        # 00B758
+_ATS_MOVEQ_D5 = (4, 1)                  # 00B75A moveq #1,d5
+
+_ATS_STORE = _add((8, 1), (8, 1), (8, 1), (8, 1), (8, 1))   # 00B75C-00B764: the four words + the byte
+_ATS_COUNT_INCR = (16, 1)               # 00B766 addq.w #1,f2b0 (memory; X overwritten by the very
+                                         # next instruction, never modelled for its own sake)
+_ATS_D7_INCR = (4, 1)                   # 00B76A addq.w #1,d7 -- the LAST X-setting instruction any
+                                         # admitted path's own final RTS can see (every later ADDQ in
+                                         # this routine targets an address register, which never
+                                         # touches CCR)
+_ATS_CMP_LIMIT = (12, 1)                # 00B76C cmp.b $d(a4),d7
+_ATS_BGE_LIMIT = {True: (10, 1), False: (8, 1)}     # 00B770
+_ATS_ADDQ_MARK = (4, 1)                 # 00B772 addq.w #1,a0 (address register: no flags)
+_ATS_ADD_D0 = (4, 1)                    # 00B774 add.w d6,d0
+_ATS_ADD_D2 = (4, 1)                    # 00B776 add.w d6,d2
+_ATS_CMP_XBOUND = (8, 1)                # 00B778 cmpi.w #$160,d2
+_ATS_BGE_XBOUND = {True: (10, 1), False: (8, 1)}    # 00B77C
+_ATS_ADDQ_CELL = (4, 1)                 # 00B77E addq.w #1,a2 (address register: no flags)
+_ATS_CMP_LAYER0 = (12, 1)               # 00B780 cmpi.b #1,(a2)
+_ATS_BEQ_LAYER0 = {True: (10, 1), False: (8, 1)}    # 00B784
+_ATS_CMP_LAYER1 = (16, 1)               # 00B786 cmpi.b #1,$80(a2)
+_ATS_BEQ_LAYER1 = {True: (10, 1), False: (8, 1)}    # 00B78C
+_ATS_TST_TILE = (8, 1)                  # 00B78E tst.b (a0)
+_ATS_BEQ_TILE = {True: (10, 1), False: (8, 1)}      # 00B790 -- taken: tile==0, straight to the header
+_ATS_BMI_FOUND = {True: (10, 1), False: (8, 1)}     # 00B792 -- taken: 'found'
+_ATS_CMP_PRUNE = (8, 1)                 # 00B794 cmp.b (a0),d7 -- only reached when tile > 0
+_ATS_BGE_PRUNE = {True: (10, 1), False: (8, 1)}     # 00B796 -- taken: 'pruned'
+_ATS_CMP_HEADER = (16, 1)               # 00B798 cmpi.b #1,$100(a2)
+_ATS_BEQ_HEADER = {True: (10, 1), False: (8, 1)}    # 00B79E -- taken: loop back; not taken: 'exhausted'
+
+_ATS_SNAPSHOT = (24, 1)                 # 00B7A0 movem.w d0-d1/d7,f2b2 (MOVEM: no flags)
+_ATS_MOVE_SNAPSHOT_FLAG = (20, 1)       # 00B7A6 move.w f2cc,f2b8
+_ATS_TST_START_EXHAUSTED = (12, 1)      # 00B7AC tst.w f2ca
+_ATS_BNE_SNAPSHOT = {True: (10, 1), False: (8, 1)}  # 00B7B0 -- taken: f2ca != 0, skip the next store
+_ATS_STORE_SNAPSHOT_FLAG = (16, 1)      # 00B7B2 move.w #1,f2b8
+_ATS_RTS = (16, 1)                      # 00B7B8 / 00B7D8
+
+_ATS_CLR_COUNT = (16, 1)                # 00B7BA clr.w f2b0
+_ATS_MOVE_BEST_FLAG_SOURCE = (12, 1)    # 00B7BE move.w f2cc,d6
+_ATS_TST_START_FOUND = (12, 1)          # 00B7C2 tst.w f2ca
+_ATS_BNE_BEST_FLAG = {True: (10, 1), False: (8, 1)}  # 00B7C6 -- taken: f2ca != 0, keep d6
+_ATS_MOVEQ_BEST_FLAG = (4, 1)           # 00B7C8 moveq #1,d6
+_ATS_CMP_BEST = (12, 1)                 # 00B7CA cmp.w f2d0,d7
+_ATS_BCC_BEST = (8, 1)                  # 00B7CE -- only 'not taken' (update) ever witnessed
+_ATS_STORE_BEST_FLAG = (12, 1)          # 00B7D0 move.w d6,f2ce
+_ATS_STORE_BEST_INDEX = (12, 1)         # 00B7D4 move.w d7,f2d0
+
+_ATS_HEAD = _add(_ATS_BSR_AF3C, _AF3C_COST, _ATS_BSR_WINDOW, _AIM_WINDOW_ADDRESS_COST, _ATS_LEA_MARK,
+                 _ATS_CMP_HEADER0, _ATS_BNE_HEADER0, _ATS_LEA_POOL, _ATS_MOVE_D7, _ATS_CMP_TILE0)
+_ATS_SETUP = _add(_ATS_MOVEQ_D6, _ATS_MOVE_D2, _ATS_SUB_D2, _ATS_MOVE_D5, _ATS_TST_D7)
+
+
+def _ats_stack_residue(sp):
+    """The internal bsr $af3c / bsr $b32e frame: both push and pop the SAME four bytes right below the
+    entry a7 (00AF3C returns before 00B32E is even called); only the SECOND push's own return address
+    (00B72C, AIM_TARGET_SCAN_HEAD_RETURN) survives in RAM."""
+    return _bytes((sp - 4) & 0xFFFFFF, AIM_TARGET_SCAN_HEAD_RETURN, 4)
+
+
+def _ats_window_d3(read, y0):
+    """00B32E's own D3 residue (game/creatures.py's aim_window_address does not expose it -- D2 is
+    already overwritten by 00B724's own head before that routine even returns, at 00B74C): the SAME
+    (asr#4) doubled four times the window computation's own scaling chain leaves."""
+    from .game import creatures
+    dy = (y0 - read(creatures.FOLLOW_Y, 2)) & 0xFFFF
+    b = creatures._signed_word(dy) >> 4
+    return (16 * b) & 0xFFFF
+
+
+def _ats_store_writes(stores):
+    writes = ()
+    for store in stores:
+        addr = store['address'] & 0xFFFFFF
+        writes += _bytes(addr, store['d0'], 2) + _bytes((addr + 2) & 0xFFFFFF, store['d1'], 2)
+        writes += _bytes((addr + 4) & 0xFFFFFF, store['d7'], 2) + _bytes((addr + 6) & 0xFFFFFF, store['d5'], 2)
+        writes += ((store['mark_address'] & 0xFFFFFF, store['mark_value']),)
+    return writes
+
+
+def _ats_walk(sr, checks):
+    """Replays the per-column continue/terminate test game.creatures.aim_target_scan already decided,
+    charging each fragment in ROM order.  Two spots need X threaded through every iteration (N/Z/V are
+    always overwritten fresh by whichever CMP/TST/MOVE is the exit's own last instruction, but X
+    survives any of those unchanged): ADDQ.w #1,d7 (00B76A) is the LAST X-setter a 'step-limit' exit's
+    own RTS can see (every earlier ADDQ in the store block targets memory but is immediately
+    overwritten by this one; every LATER ADDQ in this routine targets an address register, which the
+    68000 never lets touch CCR); past that, ADD.w d6,d2 (00B776, right after the also-X-setting but
+    immediately overwritten ADD.w d6,d0) is the last X-setter every OTHER exit's own RTS can see.  The
+    SAME reason event_consume_plan's own _ec_walk_loop1 threads SR through its loop."""
+    from .game import creatures
+    cycles = instructions = 0
+    last_check = None
+    for check in checks:
+        c, i = _ATS_STORE
+        cycles += c
+        instructions += i
+        c, i = _ATS_COUNT_INCR
+        cycles += c
+        instructions += i
+        c, i = _ATS_D7_INCR
+        cycles += c
+        instructions += i
+        sr = _add_sr(sr, check['d7_before'], 1, 2)   # ADDQ.w #1,d7
+        c, i = _ATS_CMP_LIMIT
+        cycles += c
+        instructions += i
+        limit_taken = check['arm'] == 'step-limit'
+        c, i = _ATS_BGE_LIMIT[limit_taken]
+        cycles += c
+        instructions += i
+        last_check = check
+        if limit_taken:
+            return cycles, instructions, sr, last_check
+        c, i = _add(_ATS_ADDQ_MARK, _ATS_ADD_D0, _ATS_ADD_D2, _ATS_CMP_XBOUND)
+        cycles += c
+        instructions += i
+        sr = _add_sr(sr, check['d2_before'], creatures.AIM_SEARCH_STEP, 2)   # ADD.w d6,d2 (00B776)
+        xbound_taken = check['arm'] == 'x-bound'
+        c, i = _ATS_BGE_XBOUND[xbound_taken]
+        cycles += c
+        instructions += i
+        if xbound_taken:
+            return cycles, instructions, sr, last_check
+        c, i = _add(_ATS_ADDQ_CELL, _ATS_CMP_LAYER0)
+        cycles += c
+        instructions += i
+        layer0_taken = check['arm'] == 'blocked'
+        c, i = _ATS_BEQ_LAYER0[layer0_taken]
+        cycles += c
+        instructions += i
+        if layer0_taken:
+            return cycles, instructions, sr, last_check
+        c, i = _ATS_CMP_LAYER1
+        cycles += c
+        instructions += i
+        layer1_taken = check['arm'] == 'blocked-below'
+        c, i = _ATS_BEQ_LAYER1[layer1_taken]
+        cycles += c
+        instructions += i
+        if layer1_taken:
+            return cycles, instructions, sr, last_check
+        c, i = _ATS_TST_TILE
+        cycles += c
+        instructions += i
+        tile_zero = check['tile'] == 0
+        c, i = _ATS_BEQ_TILE[tile_zero]
+        cycles += c
+        instructions += i
+        if not tile_zero:
+            found_taken = check['arm'] == 'found'
+            c, i = _ATS_BMI_FOUND[found_taken]
+            cycles += c
+            instructions += i
+            if found_taken:
+                return cycles, instructions, sr, last_check
+            c, i = _ATS_CMP_PRUNE
+            cycles += c
+            instructions += i
+            pruned_taken = check['arm'] == 'pruned'
+            c, i = _ATS_BGE_PRUNE[pruned_taken]
+            cycles += c
+            instructions += i
+            if pruned_taken:
+                return cycles, instructions, sr, last_check
+        c, i = _ATS_CMP_HEADER
+        cycles += c
+        instructions += i
+        continues = check['arm'] == 'continue'
+        c, i = _ATS_BEQ_HEADER[continues]
+        cycles += c
+        instructions += i
+        if not continues:
+            return cycles, instructions, sr, last_check
+    raise UnsupportedCandidate('aim target scan: no terminal check in the semantics result')
+
+
+def aim_target_scan_plan(machine, registers):
+    """00B724: see game/creatures.py's own module note above aim_target_scan.  'blocked-start' and
+    'pruned-start' (the two initial guards) decline, unwitnessed; a 'found' whose own step index is not
+    (unsigned) less than AIM_SEARCH_BEST_INDEX declines too (00B7CE's own taken arm, never witnessed)."""
+    from .game import creatures
+    if registers['pc'] != AIM_TARGET_SCAN_ENTRY:
+        raise UnsupportedCandidate('aim target scan planner needs the machine parked at 00B724')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    type_ptr = registers['a4'] & 0xFFFFFF
+    x0, y0 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF
+    result = creatures.aim_target_scan(read, type_ptr, x0, y0)
+    if result['arm'] in ('blocked-start', 'pruned-start'):
+        raise UnsupportedCandidate(f"aim target scan: {result['arm']}, not witnessed by a recording")
+
+    cycles, instructions = _ATS_HEAD
+    c, i = _ATS_BGT_TILE0[False]         # the initial prune guard, always 'not taken' to reach here
+    cycles += c
+    instructions += i
+    c, i = _ATS_SETUP
+    cycles += c
+    instructions += i
+    d7_start = result['stores'][0]['d7']   # every admitted arm stores at least once, unconditionally
+    setup_taken = d7_start == 0
+    c, i = _ATS_BNE_D7[not setup_taken]
+    cycles += c
+    instructions += i
+    if setup_taken:
+        c, i = _ATS_MOVEQ_D5
+        cycles += c
+        instructions += i
+
+    loop_cycles, loop_instructions, sr, last_check = _ats_walk(sr, result['checks'])
+    cycles += loop_cycles
+    instructions += loop_instructions
+
+    writes = _ats_stack_residue(sp) + _ats_store_writes(result['stores'])
+    d3_residue = _ats_window_d3(read, y0)
+    count_after = (result['count_before'] + len(result['stores'])) & 0xFFFF
+    # D5 (00B75A moveq #1,d5, clearing the whole register) or D6 (00B74A moveq #$20,d6, the SAME):
+    # MOVEQ always clears the upper word -- it is not preserved from entry.  The alternative D5 body
+    # (00B752 move.w f2cc,d5, a WORD op) DOES preserve entry's own upper half; d7_start == 0 (the
+    # store's own first D7, before any increment) is exactly the ROM's own moveq/move.w fork for D5.
+    d5_via_moveq = result['stores'][0]['d7'] == 0
+    d5_exit = result['stores'][0]['d5'] if d5_via_moveq else (registers['d5'] & 0xFFFF0000) | result['stores'][0]['d5']
+    exit_registers = {
+        'a2': result['a2'], 'a0': result['a0'],
+        'a3': (creatures.AIM_SEARCH_POOL_LOW + creatures.AIM_SEARCH_POOL_STRIDE * len(result['stores'])) & 0xFFFFFFFF,
+        'd3': (registers['d3'] & 0xFFFF0000) | d3_residue,
+        'd5': d5_exit,
+        'd6': 0x20,   # every non-'found' exit's own last D6 write; 'found' overwrites this below
+        'd7': (registers['d7'] & 0xFFFF0000) | (result['d7'] & 0xFFFF),
+        'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp),
+    }
+
+    arm = result['arm']
+    if arm == 'step-limit':
+        cycles += _ATS_RTS[0]
+        instructions += _ATS_RTS[1]
+        # the advance block never runs for the store that hit the limit, but DOES run after every
+        # earlier store this same call already committed (each is a 'continue'): the last store's own
+        # D0 (set before ITS OWN advance) is exactly this exit's own D0; D2 tracks it the same way
+        # (x0 - FOLLOW_X) does, the whole call through.
+        d0_exit = result['stores'][-1]['d0']
+        d2_exit = (d0_exit - read(creatures.FOLLOW_X, 2)) & 0xFFFF
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | d0_exit
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | d2_exit
+        # cmp.b $d(a4),d7 (00B76C) is the last flag-setter.
+        exit_registers['sr'] = _cmp_sr(sr, result['d7'] & 0xFF, result['limit'], 1)
+        writes += _bytes(creatures.AIM_SEARCH_COUNT & 0xFFFFFF, count_after, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_STEP_PC)
+
+    if arm in ('x-bound', 'blocked', 'blocked-below', 'pruned'):
+        cycles += _ATS_RTS[0]
+        instructions += _ATS_RTS[1]
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | result['d2']
+        if arm == 'x-bound':
+            exit_registers['sr'] = _cmp_sr(sr, result['d2'], creatures.AIM_SEARCH_X_LIMIT, 2)
+        elif arm == 'blocked':
+            exit_registers['sr'] = _cmp_sr(sr, last_check['layer0'], 1, 1)
+        elif arm == 'blocked-below':
+            exit_registers['sr'] = _cmp_sr(sr, last_check['layer1'], 1, 1)
+        else:
+            exit_registers['sr'] = _cmp_sr(sr, result['d7'] & 0xFF, result['tile'], 1)
+        writes += _bytes(creatures.AIM_SEARCH_COUNT & 0xFFFFFF, count_after, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_STEP_PC)
+
+    if arm == 'exhausted':
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | result['d2']
+        c, i = _add(_ATS_SNAPSHOT, _ATS_MOVE_SNAPSHOT_FLAG, _ATS_TST_START_EXHAUSTED)
+        cycles += c
+        instructions += i
+        skip_store = not result['force_flag']
+        c, i = _ATS_BNE_SNAPSHOT[skip_store]
+        cycles += c
+        instructions += i
+        snapshot_flag = result['flag_source']
+        if not skip_store:
+            c, i = _ATS_STORE_SNAPSHOT_FLAG
+            cycles += c
+            instructions += i
+            sr = _logic_sr(sr, 1, 2)                     # move.w #1,f2b8 (00B7B2) is the last setter
+            snapshot_flag = 1
+        else:
+            sr = _logic_sr(sr, result['d7_start_word'], 2)   # tst.w f2ca (00B7AC) is the last setter
+        cycles += _ATS_RTS[0]
+        instructions += _ATS_RTS[1]
+        exit_registers['sr'] = sr
+        writes += _bytes(creatures.AIM_SEARCH_COUNT & 0xFFFFFF, count_after, 2)
+        writes += _bytes(creatures.AIM_SEARCH_SNAPSHOT & 0xFFFFFF, result['d0'], 2)
+        writes += _bytes((creatures.AIM_SEARCH_SNAPSHOT + 2) & 0xFFFFFF, y0, 2)
+        writes += _bytes((creatures.AIM_SEARCH_SNAPSHOT + 4) & 0xFFFFFF, result['d7'] & 0xFFFF, 2)
+        writes += _bytes(creatures.AIM_SEARCH_SNAPSHOT_FLAG & 0xFFFFFF, snapshot_flag & 0xFFFF, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_STEP_PC)
+
+    if arm == 'found':
+        if not result['update_best']:
+            raise UnsupportedCandidate('aim target scan: found without a new best, not witnessed by a recording')
+        exit_registers['d0'] = (registers['d0'] & 0xFFFF0000) | result['d0']
+        exit_registers['d2'] = (registers['d2'] & 0xFFFF0000) | result['d2']
+        # move.w f2cc,d6 (00B7BE) is a word op, but D6's own upper half is ALREADY 0x0000 by this point
+        # in the SAME activation (the unconditional moveq #$20,d6 in the setup, 00B74A, clears it long
+        # before the found tail runs) -- not preserved from entry, whichever of the two 00B7BE/00B7C8
+        # writes is the last one.
+        exit_registers['d6'] = result['best_flag'] & 0xFFFF
+        c, i = _add(_ATS_CLR_COUNT, _ATS_MOVE_BEST_FLAG_SOURCE, _ATS_TST_START_FOUND)
+        cycles += c
+        instructions += i
+        keep_flag_source = result['d7_start_word'] != 0   # tst.w f2ca (00B7C2), NOT f2cc
+        c, i = _ATS_BNE_BEST_FLAG[keep_flag_source]
+        cycles += c
+        instructions += i
+        if not keep_flag_source:
+            c, i = _ATS_MOVEQ_BEST_FLAG
+            cycles += c
+            instructions += i
+        c, i = _ATS_CMP_BEST
+        cycles += c
+        instructions += i
+        c, i = _ATS_BCC_BEST
+        cycles += c
+        instructions += i
+        c, i = _add(_ATS_STORE_BEST_FLAG, _ATS_STORE_BEST_INDEX)
+        cycles += c
+        instructions += i
+        cycles += _ATS_RTS[0]
+        instructions += _ATS_RTS[1]
+        # move.w d7,f2d0 (00B7D4) is the last flag-setter.
+        exit_registers['sr'] = _logic_sr(sr, result['d7'], 2)
+        writes += _bytes(creatures.AIM_SEARCH_COUNT & 0xFFFFFF, 0, 2)
+        writes += _bytes(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFFFF, result['best_flag'], 2)
+        writes += _bytes(creatures.AIM_SEARCH_BEST_INDEX & 0xFFFFFF, result['d7'] & 0xFFFF, 2)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                          last_pc=AIM_TARGET_SCAN_FOUND_PC)
+
+    raise UnsupportedCandidate(f'aim target scan: {arm}, not witnessed by a recording')

@@ -695,7 +695,17 @@ AIM_CUE_MARK_STRIDE = 0x14              # the mark's own second byte, base+STRID
 AIM_CUE_MARK_BIAS = 8                   # 00B1AC's own subq #8 pre-adjustment (window-mark has none)
 AIM_CUE_STICKY_FLAG = 0xFFFFF17C        # byte: bit 3 -- set by a successful mark (event-scan clears
                                          # it first; the quadrant loop never clears it at all)
-AIM_CUE_WINDOW_BASE = 0xFFC20A          # index 0's own sub-table base (no bounds check)
+AIM_CUE_WINDOW_BASE = 0xFFFFC20A        # index 0's own sub-table base (no bounds check); the full
+                                         # 32-bit register value (`lea.l $c20a.w,a0`'s own sign
+                                         # extension, GRID_TABLE's own convention) -- every existing
+                                         # reader of this constant only ever uses it `& 0xFFFF` or
+                                         # `& 0xFFFFFF` (RAM addressing, unaffected by the top byte);
+                                         # aim_target_scan (00B724) is the first caller of
+                                         # aim_window_address that needs the real register value, and
+                                         # the previous `0xFFC20A` literal was silently wrong in that
+                                         # top byte -- never caught because 00B32E's own boundary plan
+                                         # (aim_window_address_plan) reconstructs a0 independently
+                                         # (`0xFFFF0000 | ...`) rather than calling this function.
 AIM_CUE_WINDOW_STRIDE_1, AIM_CUE_WINDOW_STRIDE_2 = 0x14, 0x28
 
 
@@ -928,3 +938,144 @@ def aim_pool_add(read, d0, d1, d7, d2):
         skipped += 1
         address = (address + AIM_POOL_STRIDE) & 0xFFFFFFFF
     return {'arm': 'pool-full-scanned', 'count': count, 'skipped': skipped}
+
+
+# --- 00B724: the aim target scan (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
+# 00AF52", 19 Sep -- the first of the three further callees, 00B002's own reconnaissance found bounded
+# over {00AF3C, 00B32E} on every one of 1,772 witnessed occurrences across four recordings).  A
+# horizontal raycast, rightward one grid column at a time from ``(x0, y0)``'s own cell (Y never
+# changes), gated at each column on a two-rows-down footing -- the SAME FOOTPRINT_GRID layer
+# 0063FA/00FDB8 read (a cell holds 1 while a solid stands there; ``GRID_ROW_BYTES`` separates rows) --
+# and not itself, nor the row beneath it, blocked by a solid.  Each visited column is marked with a
+# running step index in the SAME work-RAM cell ``aim_cue_update``'s own window-mark arm (``00B2EC``)
+# writes 0xFF into (``AIM_CUE_WINDOW_STRIDE_1`` past ``aim_window_address``'s own base) -- so an
+# EARLIER scan's own 0xFF mark short-circuits a later one as 'found', and an earlier scan's own
+# (smaller-or-equal) step index at a column prunes a later, worse pass through it.  Each visited
+# column's own position is also appended to a second, per-call work-RAM table
+# (``AIM_SEARCH_POOL_LOW``, restarting from slot 0 on every single call -- NOT an occupancy pool like
+# AIM_POOL, whose own 256 bytes sit immediately below it).
+AIM_SEARCH_STEP_LIMIT_OFFSET = 0xD      # type_ptr byte: the walk's own max step count
+AIM_SEARCH_START_INDEX = 0xFFFFF2CA     # word: the walk's own starting step index (a byte-wise prune
+                                         # gate at the very first column, then the first stored index)
+AIM_SEARCH_FLAG_SOURCE = 0xFFFFF2CC     # word: the search's own flag value, substituted by 1 for every
+                                         # store when AIM_SEARCH_START_INDEX's own value is 0
+AIM_SEARCH_COUNT = 0xFFFFF2B0           # word: this call's own store counter -- READ, not reset, at
+                                         # entry (carries over calls that do not end in 'found'); the
+                                         # 'found' arm alone clears it back to 0
+AIM_SEARCH_SNAPSHOT = 0xFFFFF2B2        # three words (D0, D1, D7): the 'exhausted' arm's own snapshot
+AIM_SEARCH_SNAPSHOT_FLAG = 0xFFFFF2B8   # word: AIM_SEARCH_FLAG_SOURCE's own value, forced to 1 when
+                                         # AIM_SEARCH_START_INDEX is 0 -- 'exhausted' only
+AIM_SEARCH_BEST_FLAG = 0xFFFFF2CE       # word: the running best flag -- 'found' only, and then only
+AIM_SEARCH_BEST_INDEX = 0xFFFFF2D0      #   when the step index is (unsigned) less than this word's
+                                         #   own current value; a 'found' where it is not is real ROM,
+                                         #   never witnessed by any recording (declined)
+AIM_SEARCH_STEP = 0x20                  # pixels per walk step (world X; the grid column stride)
+AIM_SEARCH_X_LIMIT = 0x160              # camera-relative X must stay below this (signed)
+AIM_SEARCH_POOL_LOW = 0xFFFF41B2        # 32 slots, 8 bytes each: D0, D1, D7, D5 per visited column
+AIM_SEARCH_POOL_STRIDE = 8
+AIM_SEARCH_MARK_OFFSET = AIM_CUE_WINDOW_STRIDE_1   # a0 = aim_window_address(...) + this
+
+
+def aim_target_scan(read, type_ptr, x0, y0):
+    """00B724: see the module note above.  'blocked-start' (the starting cell's own two-rows-down
+    footing is not 1) and 'pruned-start' (the starting window-mark cell already holds a step index
+    greater than the walk's own starting index) are real ROM, never witnessed: declined.  Past those
+    two guards the routine ALWAYS stores at least once (unconditionally, before the first per-step
+    continuation test), then at each subsequent column: 'step-limit' (the step index reaches
+    AIM_SEARCH_STEP_LIMIT_OFFSET's own value), 'x-bound' (the camera-relative X leaves
+    [0, AIM_SEARCH_X_LIMIT)), 'blocked' / 'blocked-below' (the next column's own layer 0 / layer 1 is
+    occupied), 'found' (the next column's own window-mark cell already holds a negative signed byte,
+    i.e. 0xFF -- an earlier pass fully marked it), 'pruned' (the next column's own window-mark cell
+    already holds a step index at or past this one) or 'exhausted' (the next column's own two-rows-
+    down footing is not 1) -- the walk continues instead when it is."""
+    from .grid import grid_cell_at, GRID_ROW_BYTES, _signed_byte, _signed_word
+    type_ptr &= 0xFFFFFF
+    x0 &= 0xFFFF
+    y0 &= 0xFFFF
+    cell = grid_cell_at(x0, y0)
+    a2 = cell['address'] & 0xFFFFFFFF
+    a0 = (aim_window_address(read, x0, y0) + AIM_SEARCH_MARK_OFFSET) & 0xFFFFFFFF
+
+    if (read((a2 + 2 * GRID_ROW_BYTES) & 0xFFFFFF, 1) & 0xFF) != 1:
+        return {'arm': 'blocked-start', 'a2': a2, 'a0': a0}
+
+    d7 = read(AIM_SEARCH_START_INDEX, 2) & 0xFFFF
+    tile0 = read(a0, 1) & 0xFF
+    if _signed_byte(d7 & 0xFF) > _signed_byte(tile0):
+        return {'arm': 'pruned-start', 'a2': a2, 'a0': a0, 'd7_start': d7, 'tile0': tile0}
+
+    d7_start_word = d7                # AIM_SEARCH_START_INDEX itself (F2CA) is never written by this
+                                       # routine, so this stays its own (fresh) value for both the
+                                       # 'found' and 'exhausted' tails' own re-reads of it, below
+    start_index_zero = d7_start_word == 0
+    flag_source = read(AIM_SEARCH_FLAG_SOURCE, 2) & 0xFFFF
+    d5 = 1 if d7 == 0 else flag_source
+    limit = read((type_ptr + AIM_SEARCH_STEP_LIMIT_OFFSET) & 0xFFFFFF, 1) & 0xFF
+    count = read(AIM_SEARCH_COUNT, 2) & 0xFFFF
+
+    d0 = x0
+    d2 = (x0 - read(FOLLOW_X, 2)) & 0xFFFF
+    stores = []
+    checks = []          # one entry per store, above: the transition test that followed it
+    index = 0
+    while True:
+        stores.append({'index': index,
+                        'address': (AIM_SEARCH_POOL_LOW + AIM_SEARCH_POOL_STRIDE * index) & 0xFFFFFFFF,
+                        'd0': d0 & 0xFFFF, 'd1': y0 & 0xFFFF, 'd7': d7 & 0xFFFF, 'd5': d5 & 0xFFFF,
+                        'mark_address': a0, 'mark_value': d7 & 0xFF})
+        d7_before_incr = d7
+        d7 = (d7 + 1) & 0xFFFF
+        if _signed_byte(d7 & 0xFF) >= _signed_byte(limit):
+            checks.append({'arm': 'step-limit', 'd7_before': d7_before_incr})
+            return {'arm': 'step-limit', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0,
+                    'd7': d7, 'limit': limit, 'count_before': count}
+        a0 = (a0 + 1) & 0xFFFFFFFF
+        d0 = (d0 + AIM_SEARCH_STEP) & 0xFFFF
+        d2_before = d2
+        d2 = (d2 + AIM_SEARCH_STEP) & 0xFFFF
+        if _signed_word(d2) >= AIM_SEARCH_X_LIMIT:
+            checks.append({'arm': 'x-bound', 'd7_before': d7_before_incr, 'd2_before': d2_before})
+            return {'arm': 'x-bound', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'count_before': count}
+        a2 = (a2 + 1) & 0xFFFFFFFF
+        layer0 = read(a2, 1) & 0xFF
+        if layer0 == 1:
+            checks.append({'arm': 'blocked', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0})
+            return {'arm': 'blocked', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'count_before': count}
+        layer1 = read((a2 + GRID_ROW_BYTES) & 0xFFFFFF, 1) & 0xFF
+        if layer1 == 1:
+            checks.append({'arm': 'blocked-below', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0, 'layer1': layer1})
+            return {'arm': 'blocked-below', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0,
+                    'd0': d0, 'd2': d2, 'd7': d7, 'count_before': count}
+        tile = read(a0, 1) & 0xFF
+        stile = _signed_byte(tile)
+        if stile < 0:
+            best_index_before = read(AIM_SEARCH_BEST_INDEX, 2) & 0xFFFF
+            update_best = d7 < best_index_before
+            best_flag = 1 if start_index_zero else flag_source
+            checks.append({'arm': 'found', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0, 'layer1': layer1, 'tile': tile})
+            return {'arm': 'found', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'tile': tile, 'count_before': count,
+                    'best_index_before': best_index_before, 'update_best': update_best,
+                    'best_flag': best_flag & 0xFFFF, 'flag_source': flag_source,
+                    'd7_start_word': d7_start_word}
+        pruned = stile > 0 and _signed_byte(d7 & 0xFF) >= _signed_byte(tile)
+        if pruned:
+            checks.append({'arm': 'pruned', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0, 'layer1': layer1, 'tile': tile})
+            return {'arm': 'pruned', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'tile': tile, 'count_before': count}
+        header = read((a2 + 2 * GRID_ROW_BYTES) & 0xFFFFFF, 1) & 0xFF
+        if header != 1:
+            checks.append({'arm': 'exhausted', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                            'layer0': layer0, 'layer1': layer1, 'tile': tile, 'header': header})
+            return {'arm': 'exhausted', 'stores': stores, 'checks': checks, 'a2': a2, 'a0': a0, 'd0': d0,
+                    'd2': d2, 'd7': d7, 'count_before': count, 'flag_source': flag_source,
+                    'force_flag': start_index_zero, 'd7_start_word': d7_start_word}
+        checks.append({'arm': 'continue', 'd7_before': d7_before_incr, 'd2_before': d2_before,
+                        'layer0': layer0, 'layer1': layer1, 'tile': tile, 'header': header})
+        index += 1

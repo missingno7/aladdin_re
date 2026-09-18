@@ -15,6 +15,7 @@ from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
                        AIM_CUE_ENTRY, aim_cue_update_plan, AIM_POOL_RESET_ENTRY, aim_pool_reset_plan, AIM_POOL_ADD_ENTRY, aim_pool_add_plan,
                        AIM_WINDOW_ADDRESS_ENTRY, aim_window_address_plan,
+                       AIM_TARGET_SCAN_ENTRY, aim_target_scan_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
@@ -285,6 +286,7 @@ PLANNERS = {
     'aim-pool-reset': {AIM_POOL_RESET_ENTRY: aim_pool_reset_plan},
     'aim-pool-add': {AIM_POOL_ADD_ENTRY: aim_pool_add_plan},
     'aim-window-address': {AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan},
+    'aim-target-scan': {AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
     'contact-search': {CONTACT_SEARCH_ENTRY: contact_search_plan},
     'contact-consume-primary': {CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan},
@@ -374,7 +376,8 @@ PLANNERS = {
                        AF3C_ENTRY: creature_grid_cell_d0d1_plan,
                        AIM_CUE_ENTRY: aim_cue_update_plan,
                        AIM_POOL_RESET_ENTRY: aim_pool_reset_plan, AIM_POOL_ADD_ENTRY: aim_pool_add_plan,
-                       AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan},
+                       AIM_WINDOW_ADDRESS_ENTRY: aim_window_address_plan,
+                       AIM_TARGET_SCAN_ENTRY: aim_target_scan_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -602,7 +605,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-cue-update-mutant-result': ('aim-cue-update', _mutate_result),
              'aim-pool-reset-mutant-result': ('aim-pool-reset', _mutate_result),
              'aim-pool-add-mutant-result': ('aim-pool-add', _mutate_result),
-             'aim-window-address-mutant-result': ('aim-window-address', _mutate_aim_window_address)}
+             'aim-window-address-mutant-result': ('aim-window-address', _mutate_aim_window_address),
+             'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result)}
 
 
 @dataclass
