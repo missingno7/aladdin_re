@@ -56,6 +56,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        HALF_FRAME_COUNTER_ENTRY, half_frame_counter_plan,
                        OBJECT_ACTIVITY_GATE_ENTRY, object_activity_gate_plan,
                        RECORD_ONE_ENTRY, record_status_one_plan,
+                       STATUS_HIGH_ENTRY, status_high_dispatch_plan,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
@@ -422,6 +423,7 @@ PLANNERS = {
     # 00354C: the record-status-1 sub-dispatch, composed inside object-activity-gate as a real
     # internal call; standalone-only for the SAME native gate capacity reason the 005958 handlers are.
     'record-status-one': {RECORD_ONE_ENTRY: record_status_one_plan},
+    'status-high-dispatch': {STATUS_HIGH_ENTRY: status_high_dispatch_plan},
     'kind-sound-cue-pair': {SOUND_CUE_PAIR_ENTRY: sound_cue_pair_plan},
     'kind-copy-table-14': {COPY_TABLE_14_ENTRY: copy_table_14_plan},
     'kind-copy-table-15': {COPY_TABLE_15_ENTRY: copy_table_15_plan},
@@ -672,8 +674,15 @@ PLANNERS = {
                        # pickup-award (012C80) and sound-request (0x5958 table + 002F2E) arms -- the
                        # 0x354C record-status-1 sub-dispatch (a genuine second real sub-mechanism) and
                        # 005958 indices 4/6/17/18 (each its own real, unrecovered complexity) decline
-                       # by name -- 61 -> 60 gates net (012C80/002F2E retired, 003480 admitted).
-                       OBJECT_ACTIVITY_GATE_ENTRY: object_activity_gate_plan},
+                       # by name -- 61 -> 60 gates net (012C80/002F2E retired, 003480 admitted).  Its
+                       # own 0x354C sub-dispatch is recovered too (RECORD_ONE_ENTRY, 20 September), but
+                       # stays standalone-only: this composition already reaches it internally.
+                       OBJECT_ACTIVITY_GATE_ENTRY: object_activity_gate_plan,
+                       # STATUS_HIGH_ENTRY (003BBA): 003284's own high-status dispatch, 20 September --
+                       # a genuinely NEW, independent gate (nothing already armed here reaches it), a
+                       # Seam composing OBJECT_ACTIVITY_GATE_ENTRY as a real internal call and ceding
+                       # SPRITE_EMIT_ENTRY opaque -- 60 -> 61 gates.
+                       STATUS_HIGH_ENTRY: status_high_dispatch_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -736,6 +745,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # tail_zero_write (the shared 0034B6 clr.w -(a7) scratch the SAME rtr immediately consumes),
              # the SAME dead-last-write blind spot object-activity-gate's own mutant note already names.
              'record-status-one-mutant-register': ('record-status-one', _mutate_register),
+             'status-high-dispatch-mutant-register': ('status-high-dispatch', _mutate_register),
              'hazard-tick-mutant-result': ('hazard-tick', _mutate_result),
              'score-convert-mutant-result': ('score-convert', _mutate_result),
              'evaluator-mutant-outcome': ('evaluator', _mutate_outcome),

@@ -2812,9 +2812,40 @@ small leaf):
   original assignment's own order: `003BBA` (composes only
   `003480`/`0018C8`), the `0032F6` kind dispatch's default/`0x53`/`0x36`
   arms, the five still-unread routines (`01191A`, `011D32`, `012010`,
-  `00173C`, `003BEC`), the status chains (`0039EA`/`003AE6`/`003BBA`) as
-  families, `003186`'s head, `003284` composing the chains, and `0030CC`
-  as the scan.
+  `00173C`, `003BEC`), the status chains (`0039EA`/`003AE6`) as families,
+  `003186`'s head, `003284` composing the chains, and `0030CC` as the
+  scan.
+
+- **20 September, grinder session on `003BBA`**: recovered in full.  A
+  fourth `FFFFF262`-gated triple-buffer append (mirroring `0032C2`'s own
+  shape, unconditional in every one of 67 retained occurrences -- the
+  buffer-full 'skip' arm is real ROM, unwitnessed, declined by name), then
+  two real calls: `bsr.w $3480` into the already-recovered
+  `object_activity_gate` (composed as a genuine internal call, entered
+  exactly as its own real callers enter it -- `003284`'s own head already
+  loads A0/D0/D1 from the SAME object record) and `bsr.w $18c8` into the
+  already-recovered `sprite_emit`, ceded opaque as the seam's own block --
+  the same "`0047DA` is opaque"/object-kind-dispatch-fallback shape, since
+  `0018C8` restores its own `d0`-`d5`/`a0`-`a2` frame before returning, so
+  nothing downstream needs modelling.  The suffix is the identical
+  "restore `d7`/`a0`/`a2`, `bra` the scan loop" tail `0036E2`'s own suffix
+  already proves.  A genuinely new, independent gate (nothing already
+  armed in `camera-sprites` reaches it); armed there directly (60 -> 61
+  gates).  The milestone tree's own first attempt caught a real defect as
+  a genuine `DIVERGENCE` on two of the five leaves (frame 24,091 of
+  `fb408bc75597`): `object_activity_gate`'s own 'bypass' arm (`EF3C`
+  negative) never touches D0/D1/D2 at all, and no FAST-tier fixture
+  happened to exercise it, so this composition's own D2 baseline had
+  silently stayed the caller's raw entry value instead of the *adjusted*
+  value actually fed to the internal call -- fixed, a `'bypass'` fixture
+  retained (`census-0X003BBA-d2-fb408bc75597-bypass`), and the tree re-run
+  clean.  Milestone tree PASS
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-20f`, 107,519
+  frames, 246.7 s, 8,556 fallbacks).  Next, per the original assignment's
+  own order: the `0032F6` kind dispatch's default/`0x53`/`0x36` arms, the
+  five still-unread routines (`01191A`, `011D32`, `012010`, `00173C`,
+  `003BEC`), the status chains (`0039EA`/`003AE6`) as families, `003186`'s
+  head, `003284` composing the chains, and `0030CC` as the scan.
 
 ## Open questions
 

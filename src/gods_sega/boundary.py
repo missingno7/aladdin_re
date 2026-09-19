@@ -23631,3 +23631,108 @@ _GATE_5958_PLANS.update({
     21: (ACCUMULATOR_21_ENTRY, accumulator_21_plan),
     22: (HALF_FRAME_COUNTER_ENTRY, half_frame_counter_plan),
 })
+
+
+# --- 003BBA: the object post-process high-status dispatch (game.world.status_high_buffer_append) --
+#
+# Reached from 003284's own head (docs/gods/blockers/2026-09-19-003186.md's own Progress note) when
+# the entry's own object status word (D2, loaded from (a0) at 003284's own first instruction) is
+# already >= 0xC0 -- the SAME threshold object_activity_gate's own pickup-award arm tests
+# independently by re-reading the SAME (a0)'s own status field, so whenever this gate's own status
+# dispatch is reached at all (the box test passes) it can only take that one arm -- confirmed by the
+# full census: 1 of 67 retained occurrences passes the box test, and that one reaches pickup-award.
+# Composed as a Seam: the prefix ends at the SECOND bsr (0018C8's own entry), folding in a REAL
+# internal call into object_activity_gate_plan (003480, always a plain AtomicPlan, RAM-only, entered
+# exactly as its own real callers enter it since A0/D0/D1 are unchanged from 003284's own head); the
+# ceded block is the WHOLE 0018C8 call, opaque -- the SAME "0047DA is opaque"/object-kind-dispatch
+# fallback shape (0018C8 restores its own d0-d5/a0-a2 frame before returning, so nothing downstream
+# needs modelling); the suffix is the SAME "restore d7/a0/a2, bra the scan loop" tail 0036E2's own
+# suffix already proves -- 003186's own shared frame, the identical two instructions at a different
+# address.
+STATUS_HIGH_ENTRY = 0x003BBA
+STATUS_HIGH_BSR_18C8 = 0x003BE0
+STATUS_HIGH_RESUME = 0x003BE4          # movem.l (a7)+,d7/a0/a2 -- the suffix's own first instruction
+STATUS_HIGH_LAST_PC = 0x003BE8         # bra.w $3158 -- the last instruction actually executed
+_SH_COUNTER_ADDQ = (16, 1)             # 003BBA addq.w #1,f260.w
+_SH_COUNTER_CMPI = (16, 1)             # 003BBE cmpi.w #$14,f260.w
+_SH_COUNTER_BGT_NOT = (8, 1)           # 003BC4 bgt.b $3bd4 (not taken: the append runs)
+_SH_APPEND_MOVEA = (16, 1)             # 003BC6 movea.l f262.w,a3
+_SH_APPEND_STORE = (8, 1)              # move.w dN,(a3)+, once per word (d0, d1, d2)
+_SH_APPEND_WRITEBACK = (16, 1)         # 003BD0 move.l a3,f262.w
+_SH_ADJUST_SUBI = (8, 1)               # 003BD4 subi.w #$c0,d2
+_SH_ADJUST_ADDI = (8, 1)               # 003BD8 addi.w #$84,d2
+_SH_BSR = (18, 1)                      # bsr.w, either call
+
+
+def status_high_dispatch_plan(machine, registers):
+    """003BBA: the high-status dispatch, composing object_activity_gate_plan (003480) as a real
+    internal call and ceding 0018C8 opaque as the seam's own block."""
+    from .game import world
+    if registers['pc'] != STATUS_HIGH_ENTRY:
+        raise UnsupportedCandidate('status high dispatch planner needs the machine parked at 003BBA')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    d0, d1, d2 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF, registers['d2'] & 0xFFFF
+    read = _reader(machine)
+    result = world.status_high_buffer_append(read, d0, d1, d2)
+    if result['arm'] != 'append':
+        raise UnsupportedCandidate(f"status high dispatch: buffer {result['arm']} is not witnessed by a recording")
+    cost = _add(_SH_COUNTER_ADDQ, _SH_COUNTER_CMPI, _SH_COUNTER_BGT_NOT, _SH_APPEND_MOVEA,
+               _SH_APPEND_STORE, _SH_APPEND_STORE, _SH_APPEND_STORE, _SH_APPEND_WRITEBACK,
+               _SH_ADJUST_SUBI, _SH_ADJUST_ADDI, _SH_BSR)
+    pointer = result['pointer'] & 0xFFFFFF
+    _ram_span('status high buffer entry', pointer, 6)
+    append_writes = (_bytes(pointer, d0, 2) + _bytes((pointer + 2) & 0xFFFFFF, d1, 2)
+                     + _bytes((pointer + 4) & 0xFFFFFF, d2, 2))
+    counter_write = _bytes(world.STATUS_HIGH_COUNTER & 0xFFFFFF, result['counter'], 2)
+    pointer_write = _bytes(world.STATUS_HIGH_BUFFER_POINTER & 0xFFFFFF, result['next_pointer'], 4)
+
+    # bsr.w $3480 pushes its own 4-byte return address; object_activity_gate_plan is entered exactly
+    # as its own real callers enter it (A0/D0/D1 unchanged since 003284's own head loaded them from
+    # the SAME object record), a genuine internal call, never opaque.  The d2 arithmetic just above
+    # (subi/addi) is real but dead: object_activity_gate_plan never reads its own entry D2 at all.
+    gate_sp = (sp32 - 4) & 0xFFFFFFFF
+    gate_write = _bytes(gate_sp & 0xFFFFFF, STATUS_HIGH_BSR_18C8, 4)
+    virtual = dict(registers)
+    virtual.update(pc=OBJECT_ACTIVITY_GATE_ENTRY, a7=gate_sp,
+                   d2=(registers['d2'] & 0xFFFF0000) | ((d2 - 0xC0 + 0x84) & 0xFFFF))
+    inner = object_activity_gate_plan(machine, virtual)
+    cost = _add(cost, (inner.cycles, inner.instructions))
+    # object_activity_gate's own 'bypass' arm (EF3C negative) never touches D0/D1/D2 at all, so
+    # inner.registers carries no 'd2' key for it -- the baseline must be the ADJUSTED d2 this call
+    # actually fed it (virtual), not the ORIGINAL entry d2, or D2 wrongly survives unadjusted (a real
+    # defect the milestone tree caught: 'bypass' is common but every FAST-tier sample happened to take
+    # a different arm).
+    live = dict(virtual); live.update(inner.registers)
+    # 003BD0's own "move.l a3,f262.w" leaves A3 at the advanced pointer -- object_activity_gate_plan
+    # never touches A3 itself, so it survives unless explicitly restated here.
+    live['a3'] = result['next_pointer']
+
+    # object_activity_gate's own bsr/rtr pair is self-balancing (A7 is back at sp32 once it returns:
+    # every admitted arm's own final "rtr" pops exactly what its own initial push added), so
+    # bsr.w $18c8 pushes its own return address at the SAME relative slot.
+    cost = _add(cost, _SH_BSR)
+    sprite_sp = (sp32 - 4) & 0xFFFFFFFF
+    sprite_write = _bytes(sprite_sp & 0xFFFFFF, STATUS_HIGH_RESUME, 4)
+    live.update(a7=sprite_sp, pc=SPRITE_EMIT_ENTRY)
+    writes = append_writes + counter_write + pointer_write + gate_write + inner.writes + sprite_write
+    prefix = AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=live,
+                        last_pc=STATUS_HIGH_BSR_18C8)
+    return Seam(prefix=prefix, resume_pc=STATUS_HIGH_RESUME, stack_basis=sp32 & 0xFFFFFFFF,
+               guards=((sprite_sp & 0xFFFFFF, 4),), suffix=status_high_dispatch_suffix)
+
+
+def status_high_dispatch_suffix(machine, registers):
+    """003BE4 after 0018C8's own return: the d7/a0/a2 frame back (pushed by 003186's own head, not by
+    this gate); bra.w $3158, into 0030CC's own scan loop -- the SAME tail 0036E2's own suffix uses."""
+    if registers['pc'] != STATUS_HIGH_RESUME:
+        raise UnsupportedCandidate('status high dispatch suffix needs the machine parked at 003BE4')
+    base = registers['a7']
+    frame = int.from_bytes(machine.peek_ram(base & 0xFFFF, 12), 'big')
+    exit_registers = {'d7': (frame >> 64) & 0xFFFFFFFF, 'a0': (frame >> 32) & 0xFFFFFFFF,
+                      'a2': frame & 0xFFFFFFFF, 'a7': (base + 12) & 0xFFFFFFFF, 'pc': OBJECT_KIND_SCAN_LOOP}
+    cycles, instructions = _add(_OKD_RESTORE, _OKD_BRA_LOOP)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
+                      last_pc=STATUS_HIGH_LAST_PC)

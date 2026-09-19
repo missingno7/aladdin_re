@@ -381,3 +381,28 @@ def record_status_one_dispatch(read, status, record):
         if entry == index:
             return {'arm': 'found', 'slot': slot, 'index': index}
     return {'arm': 'not-found', 'index': index}
+
+
+# --- 003BBA: the object post-process high-status dispatch ------------------------------------------
+#
+# Reached from 003284's own head (`docs/gods/blockers/2026-09-19-003186.md`'s own Progress note) when
+# the entry's own object status word (D2, loaded from (a0) at 003284's own first instruction) is
+# already >= 0xC0 -- the fourth FFFFF262-gated triple-buffer append this project has found (mirroring
+# `0032C2`'s own shape), followed by real internal calls into the already-recovered
+# `object_activity_gate` (003480) and `sprite_emit` (0018C8).
+STATUS_HIGH_COUNTER = 0xFFFFF260
+STATUS_HIGH_BUFFER_POINTER = 0xFFFFF262
+STATUS_HIGH_BUFFER_CAP = 0x14
+
+
+def status_high_buffer_append(read, d0, d1, d2):
+    """003BBA-0x3BD0: FFFFF260 is incremented unconditionally; the append itself (three words at the
+    FFFFF262 pointer, then the pointer advanced by six) only runs while the NEW count is <=
+    STATUS_HIGH_BUFFER_CAP -- every witnessed occurrence does; a full buffer is real ROM code no
+    recording enters.  Returns the arm ('append' or 'skip') and, for 'append', the pointer's own
+    value (where the triple lands) and its own advanced value."""
+    counter = (read(STATUS_HIGH_COUNTER, 2) + 1) & 0xFFFF
+    if counter > STATUS_HIGH_BUFFER_CAP:
+        return {'arm': 'skip', 'counter': counter}
+    pointer = read(STATUS_HIGH_BUFFER_POINTER, 4) & 0xFFFFFFFF
+    return {'arm': 'append', 'counter': counter, 'pointer': pointer, 'next_pointer': (pointer + 6) & 0xFFFFFFFF}
