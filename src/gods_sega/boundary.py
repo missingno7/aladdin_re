@@ -1668,6 +1668,129 @@ def object_tile_suffix(machine, registers):
                       last_pc=OBJECT_TILE_LAST_PC)
 
 
+# --- 0036E2: the object-kind dispatch (game/world.py: classify_object_kind) --------------------------
+#
+# Reached via a plain branch from inside 003284's own body (docs/gods/blockers/2026-09-19-003480.md's
+# own reconnaissance), not a bsr: its own d7/a0/a2 frame was pushed earlier, before this candidate's
+# own gate, by 003186's own head -- this planner never writes that frame, only reads it back at the
+# resume (the same "read a frame I did not push" shape object_tile_suffix already uses).  Its own EXIT
+# is `bra.w $3158`, back into 0030CC's own 200-entry scan loop: verified directly (`factcheck facts
+# --park 0x36E2 --stop 0x3158 --path`, 257 real instructions for the one witnessed arm) since the
+# standard census tooling cannot classify this gate at all (every real occurrence census_all.py tried
+# ran to the frame deadline and past a 48,000-instruction offline retry: 0x36E2 is not itself a call
+# boundary, and pathfacts' own "returns to its caller" heuristic waits for a return through the WHOLE
+# rest of the 200-entry scan, tens of thousands of instructions away -- a tooling mismatch for a
+# mid-function jump target, not a game defect).  Of the thirteen table entries, only kind 0x51 (->
+# 0037A0) is witnessed reaching this gate (45 of 45 sampled real occurrences, two recordings); every
+# other entry (censused individually at its own entry: 00377A and 00375C never fire on any of the five
+# recordings, 0037C6/003884/003896 never fire either), the 0x71 no-op short-circuit and the table's own
+# exhaustion (falling back to a bsr into 001810) all decline by name.  The matched handler's own
+# internals are never modelled here -- opaque to this composition, the SAME "0047DA is opaque"
+# seam-over-a-seam shape achievement_slot_dispatch_plan already proved for 0018C8/001810's own kind.
+OBJECT_KIND_DISPATCH_ENTRY = 0x0036E2
+OBJECT_KIND_JSR_ENTRY = 0x00370A           # the jsr (a0) instruction itself
+OBJECT_KIND_JSR_RESUME = 0x00370C          # the jsr's own return slot
+OBJECT_KIND_SCAN_LOOP = 0x003158           # 0030CC's own loop-continue point: this candidate's own exit
+OBJECT_KIND_EXIT_TAIL_PC = 0x0036FE        # movem.l (a7)+,d7/a0/a2 -- the suffix's own first instruction
+OBJECT_KIND_LAST_PC = 0x003702             # bra.w $3158 -- the last instruction actually executed
+_OKD_LOAD_D2 = (8, 1)                      # 0036E2 move.w (a1),d2
+_OKD_CMP_NOOP = (8, 1)                     # 0036E4 cmpi.w #$71,d2
+_OKD_BEQ_NOOP = {True: (10, 1), False: (8, 1)}      # 0036E8 beq.b $36fe
+_OKD_LEA = (8, 1)                          # 0036EA lea.l $370e(pc),a0
+_OKD_MOVEQ_D3 = (4, 1)                     # 0036EE moveq #$c,d3
+_OKD_SCAN_CMP = (8, 1)                     # 0036F0 cmp.w (a0),d2
+_OKD_SCAN_BEQ = {True: (10, 1), False: (8, 1)}      # 0036F2 beq.b $3706
+_OKD_SCAN_ADDQ = (4, 1)                    # 0036F4 addq.w #6,a0
+_OKD_SCAN_DBRA = {True: (10, 1), False: (14, 1)}    # 0036F6 dbra d3,$36f0
+_OKD_MOVEA = (16, 1)                       # 003706 movea.l 2(a0),a0
+_OKD_JSR = (16, 1)                         # 00370A jsr (a0)
+_OKD_BRA_TAIL = (10, 1)                    # 00370C bra.b $36fe
+_OKD_RESTORE = (36, 1)                     # 0036FE movem.l (a7)+,d7/a0/a2
+_OKD_BRA_LOOP = (10, 1)                    # 003702 bra.w $3158
+OBJECT_KIND_WITNESSED = {0x0051}           # the only kind a recording is confirmed to reach this gate with
+
+
+def _object_kind_scan_cost(mismatches, matched):
+    cycles, instructions = _add(_OKD_LEA, _OKD_MOVEQ_D3)
+    for _ in range(mismatches):
+        c, i = _add(_OKD_SCAN_CMP, _OKD_SCAN_BEQ[False], _OKD_SCAN_ADDQ, _OKD_SCAN_DBRA[True])
+        cycles += c
+        instructions += i
+    if matched:
+        c, i = _add(_OKD_SCAN_CMP, _OKD_SCAN_BEQ[True])
+    else:
+        c, i = _add(_OKD_SCAN_CMP, _OKD_SCAN_BEQ[False], _OKD_SCAN_ADDQ, _OKD_SCAN_DBRA[False])
+    cycles += c
+    instructions += i
+    return cycles, instructions
+
+
+def object_kind_dispatch_plan(machine, registers):
+    """0036E2: the kind==0x71 no-op is a plain leaf; a witnessed table match is a Seam opaque over its
+    own handler, resuming at the jsr's own return slot."""
+    from .game import world
+    if registers['pc'] != OBJECT_KIND_DISPATCH_ENTRY:
+        raise UnsupportedCandidate('object kind dispatch planner needs the machine parked at 0036E2')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    a1 = registers['a1'] & 0xFFFFFFFF
+    read = _reader(machine)
+    kind = read(a1 & 0xFFFFFF, 2)
+    result = world.classify_object_kind(read, kind)
+    arm = result['arm']
+    if kind not in OBJECT_KIND_WITNESSED:
+        raise UnsupportedCandidate(f'object kind dispatch: kind {kind:#06x} ({arm}) not witnessed by a recording')
+    if arm == 'noop':
+        cycles, instructions = _add(_OKD_LOAD_D2, _OKD_CMP_NOOP, _OKD_BEQ_NOOP[True], _OKD_RESTORE, _OKD_BRA_LOOP)
+        frame = int.from_bytes(machine.peek_ram(sp & 0xFFFF, 12), 'big')
+        exit_registers = {'d2': (registers['d2'] & 0xFFFF0000) | kind,
+                          'd7': (frame >> 64) & 0xFFFFFFFF, 'a0': (frame >> 32) & 0xFFFFFFFF,
+                          'a2': frame & 0xFFFFFFFF, 'a7': (sp32 + 12) & 0xFFFFFFFF, 'pc': OBJECT_KIND_SCAN_LOOP,
+                          'sr': _cmp_sr(sr, kind, world.NOOP_KIND, 2)}
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
+                          last_pc=OBJECT_KIND_LAST_PC)
+    if arm != 'dispatch':
+        raise UnsupportedCandidate(f'object kind dispatch: kind {kind:#06x} ({arm}) not witnessed by a recording')
+    mismatches, handler = result['mismatches'], result['handler']
+    cycles, instructions = _add((_OKD_LOAD_D2), _OKD_CMP_NOOP, _OKD_BEQ_NOOP[False])
+    c, i = _object_kind_scan_cost(mismatches, True)
+    cycles += c
+    instructions += i
+    c, i = _add(_OKD_MOVEA, _OKD_JSR)
+    cycles += c
+    instructions += i
+    return_slot = (sp - 4) & 0xFFFFFF
+    _ram_span('object kind dispatch return slot', return_slot, 4)
+    writes = _bytes(return_slot, OBJECT_KIND_JSR_RESUME, 4)
+    # d3 is scratch (the scan's own countdown, dead to the caller); a0 lands on the handler's own
+    # address (movea.l loaded it there before the jsr); d0/d1/a1 pass through unchanged -- nothing
+    # between this gate's own entry and the jsr touches them.
+    exit_sr = _cmp_sr(sr, kind, read(world.KIND_TABLE + 6 * mismatches, 2), 2)
+    prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                        registers={'d2': (registers['d2'] & 0xFFFF0000) | kind,
+                                   'd3': (0x0C - mismatches) & 0xFFFFFFFF, 'a0': handler & 0xFFFFFFFF,
+                                   'a7': (sp32 - 4) & 0xFFFFFFFF, 'pc': handler & 0xFFFFFFFF, 'sr': exit_sr},
+                        last_pc=OBJECT_KIND_JSR_ENTRY)
+    return Seam(prefix=prefix, resume_pc=OBJECT_KIND_JSR_RESUME, stack_basis=sp32 & 0xFFFFFFFF,
+               guards=((return_slot, 4),), suffix=object_kind_dispatch_suffix)
+
+
+def object_kind_dispatch_suffix(machine, registers):
+    """00370C after the matched handler's own return: bra.b $36fe; the d7/a0/a2 frame back (pushed
+    before this gate, not by it); bra.w $3158, into 0030CC's own loop -- this candidate's own exit."""
+    if registers['pc'] != OBJECT_KIND_JSR_RESUME:
+        raise UnsupportedCandidate('object kind dispatch suffix needs the machine parked at 00370C')
+    base = registers['a7']
+    frame = int.from_bytes(machine.peek_ram(base & 0xFFFF, 12), 'big')
+    exit_registers = {'d7': (frame >> 64) & 0xFFFFFFFF, 'a0': (frame >> 32) & 0xFFFFFFFF,
+                      'a2': frame & 0xFFFFFFFF, 'a7': (base + 12) & 0xFFFFFFFF, 'pc': OBJECT_KIND_SCAN_LOOP}
+    cycles, instructions = _add(_OKD_BRA_TAIL, _OKD_RESTORE, _OKD_BRA_LOOP)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
+                      last_pc=OBJECT_KIND_LAST_PC)
+
+
 # --- 014084: the hazard tick (game/hazard.py: hazard_tick) -------------------
 #
 # Cost from the tracer (artifacts/gods/evidence/census-014084-fresh): no

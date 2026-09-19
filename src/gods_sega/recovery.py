@@ -44,6 +44,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
                        AF3C_ENTRY, EFFECT_POOL_ADD_ENTRY, EVALUATOR_ENTRY, FALL_KIND_UPDATE_ENTRY, FALL_KIND_UPDATE_MIRROR_ENTRY, FOOTPRINT_STAMP_ENTRY, GRID_CELL_ENTRY, GROUND_CONTACT_UPDATE_ENTRY, GROUND_CONTACT_UPDATE_MIRROR_ENTRY, GROUND_EDGE_TEST_ENTRY, HAZARD_TICK_ENTRY,
                        OBJECT_TILE_ENTRY, object_tile_plan,
+                       OBJECT_KIND_DISPATCH_ENTRY, object_kind_dispatch_plan,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
@@ -392,6 +393,7 @@ PLANNERS = {
     'zone-check': {ZONE_CHECK_ENTRY: zone_check_plan},
     'particle-emit': {PARTICLE_EMIT_ENTRY: particle_emit_plan},
     'object-tile': {OBJECT_TILE_ENTRY: object_tile_plan},
+    'object-kind-dispatch': {OBJECT_KIND_DISPATCH_ENTRY: object_kind_dispatch_plan},
     'hazard-tick': {HAZARD_TICK_ENTRY: hazard_tick_plan},
     'conditions': {CONDITION_ENTRY: condition_plan},
     'pickups': {PICKUP_AWARD_ENTRY: pickup_award_plan},
@@ -612,7 +614,11 @@ PLANNERS = {
                        # OBJECT_TILE_ENTRY (001810): the Decision's own bottom-up order's second bite
                        # (docs/gods/blockers/2026-09-19-003480.md), a second sprite-emitter shape --
                        # 57 -> 58 gates.
-                       OBJECT_TILE_ENTRY: object_tile_plan},
+                       OBJECT_TILE_ENTRY: object_tile_plan,
+                       # OBJECT_KIND_DISPATCH_ENTRY (0036E2): the Decision's own third bite, a seam
+                       # opaque over its own table-matched handler (kind 0x51 -> 0037A0 the only
+                       # witnessed pair) -- 58 -> 59 gates.
+                       OBJECT_KIND_DISPATCH_ENTRY: object_kind_dispatch_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -647,6 +653,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'zone-check-mutant-result': ('zone-check', _mutate_register),
              'particle-emit-mutant-result': ('particle-emit', _mutate_result),
              'object-tile-mutant-register': ('object-tile', _mutate_register),
+             'object-kind-dispatch-mutant-register': ('object-kind-dispatch', _mutate_register),
              'hazard-tick-mutant-result': ('hazard-tick', _mutate_result),
              'score-convert-mutant-result': ('score-convert', _mutate_result),
              'evaluator-mutant-outcome': ('evaluator', _mutate_outcome),
