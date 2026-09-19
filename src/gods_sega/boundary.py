@@ -20471,3 +20471,275 @@ def creature_death_bcd_plan(machine, registers):
                       'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp32 & 0xFFFFFF), 'sr': sr}
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=flat_writes,
                       registers=exit_registers, last_pc=CREATURE_DEATH_BCD_LAST_PC)
+
+
+# --- 00A772: the creature family update (game/creatures.py: attack_update/event_consume/
+# creature_pickup_check/creature_death_bcd, all composed) --------------------------------------
+#
+# 00A772: the recipe-6a family over the creature's own kind byte (00A578's own per-slot walk calls
+# here for every live creature).  Composes, in order: attack_update_plan (009D6C, unconditional --
+# the header's own "moving" arm, bsr $aa50, is 0% witnessed across 1,131 fixtures,
+# artifacts/gods/evidence/census-00A772-*, and is declined up front); the eight-entry kind table at
+# 00A538 (the SAME table kind_frame_offset_plan's own +4 half reads) -- kind 0/1 are this session's
+# own 00AA76/00AB50, kind 2/3 the fall pair (00AE6C/00AED4), kind 4/5 the ground pair
+# (00ACA0/00AD88), and kind 6/7 (00AA80/00AB5A) are 0% witnessed, declined by name; event_consume_
+# plan (00A922) with D2 saved/restored around it; a fresh D0/D1 reload from the creature's own
+# position, then creature_pickup_check_plan (00B944) inside a movem.l d7/a3-a5 frame; and, only
+# when LIFECYCLE ($8(a5), creature_pickup_check's own D2 argument-and-result) comes back negative,
+# creature_death_bcd_plan (00A9F2).
+#
+# From there the routine is a platform tail (docs/gods/grinder-protocol.md's own "one seam, cede
+# the whole remainder, never chain a second seam to own the code between two platform calls" rule,
+# player_tail_plan's own precedent at 0075D6): the prefix ends at the jsr $126a.l itself (its own
+# auto-pushed return address, 00A7C0, already the exit a7 -- an ordinary internal call's own
+# residue, the same technique creature_death_bcd_plan's own call_3f0c uses), and the ENTIRE
+# remainder -- particle_emit's own body, the movem.l (a7)+ that closes the frame opened above, the
+# DISPLAY_TIMER test, and the conditional second device call (jsr $18c8, sprite_emit) inside the
+# rare animation block -- is ceded to the machine untouched.  The seam resumes at 00A772's own SOLE
+# witnessed rts, 00A864: every admitted fixture's own DISPLAY_TIMER (read live, untouched by
+# anything composed above) comes back < 0xc0, so the OTHER rts (00A8A8, reachable only through the
+# >=0xc0 tail) is 0% witnessed and declined up front, before the seam is ever built, exactly like
+# the header's own moving arm.  00A864 pops the same return address that was already on the stack
+# when this activation began: every temporary push this prefix models (the entry D7 word, the D2
+# word around event_consume, the movem frame, each internal call's own return address) nets back to
+# the entry stack pointer by the time any of the routine's own real rts's run, the same balanced-
+# stack argument player_tail_plan's own docstring makes for its own, simpler case.
+CREATURE_FAMILY_ENTRY, CREATURE_FAMILY_LAST_PC, CREATURE_FAMILY_RESUME = 0x00A772, 0x00A7BA, 0x00A864
+CREATURE_FAMILY_KIND_TABLE = 0x00A538
+_CF_PUSH_D7 = (8, 1)              # 00A772 move.w d7,-(a7)
+_CF_TST_MOVING = (12, 1)          # 00A774 tst.w $f38a.w
+_CF_BEQ_ATTACK = (10, 1)          # 00A778 beq.b $a780 (taken: moving == 0, the only witnessed arm)
+_CF_BSR_ATTACK = (18, 1)          # 00A780 bsr.w $9d6c
+_CF_LEA_TABLE = (8, 1)            # 00A784 lea.l $a538(pc),a0
+_CF_LOAD_KIND = (12, 1)           # 00A788 move.w $a(a5),d0
+_CF_SHIFT_KIND = (12, 1)          # 00A78C asl.w #3,d0
+_CF_LOAD_HANDLER = (18, 1)        # 00A78E movea.l (a0,d0.w),a0
+_CF_JSR_HANDLER = (16, 1)         # 00A792 jsr (a0)
+_CF_PUSH_D2 = (8, 1)              # 00A794 move.w d2,-(a7)
+_CF_BSR_EVENT = (18, 1)           # 00A796 bsr.w $a922
+_CF_POP_D2 = (8, 1)               # 00A79A move.w (a7)+,d2
+_CF_POP_D7 = (8, 1)               # 00A79C move.w (a7)+,d7
+_CF_RELOAD_D0 = (8, 1)            # 00A79E move.w (a5),d0
+_CF_RELOAD_D1 = (12, 1)           # 00A7A0 move.w $2(a5),d1
+_CF_MOVEM_PUSH = (40, 1)          # 00A7A4 movem.l d7/a3-a5,-(a7): 8+8*4 registers
+_CF_BSR_PICKUP = (18, 1)          # 00A7A8 bsr.w $b944
+_CF_TST_LIFECYCLE = (12, 1)       # 00A7AC tst.w $8(a5)
+_CF_BPL_SKIP, _CF_BPL_FALL = (10, 1), (8, 1)     # 00A7B0 bpl.b $a7ba (taken: skip / not taken: bcd)
+_CF_LOAD_D5_BYTE = (12, 1)        # 00A7B2 move.b $1(a4),d5 -- lifecycle-negative arm only
+_CF_BSR_DEATH_BCD = (18, 1)       # 00A7B6 bsr.w $a9f2 -- lifecycle-negative arm only
+_CF_JSR_PARTICLE = (20, 1)        # 00A7BA jsr $126a.l
+
+
+def _cf_push_call(current, return_pc):
+    """The same technique _akh_push_call/call_3f0c use: the CPU's own bsr/jsr pushes return_pc at
+    (a7-4) before transfer, so the callee's own plan is asked for with its own entry a7 already
+    there."""
+    push_a7 = (current['a7'] - 4) & 0xFFFFFFFF
+    return push_a7, _bytes(push_a7 & 0xFFFFFF, return_pc, 4)
+
+
+_CF_KIND_HANDLERS = {
+    0x00AA76: (aim_kind_handler_76_plan, 0x00AA76),
+    0x00AB50: (aim_kind_handler_50_plan, 0x00AB50),
+    0x00AE6C: (fall_kind_update_plan, 0x00AE6C),
+    0x00AED4: (fall_kind_update_mirror_plan, 0x00AED4),
+    0x00ACA0: (ground_contact_update_plan, 0x00ACA0),
+    0x00AD88: (ground_contact_update_mirror_plan, 0x00AD88),
+}
+
+
+def creature_family_plan(machine, registers):
+    """00A772: see the module note above."""
+    from .game import creatures
+    if registers['pc'] != CREATURE_FAMILY_ENTRY:
+        raise UnsupportedCandidate('creature family planner needs the machine parked at 00A772')
+    sp32, sr0 = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    a4, a5 = registers['a4'] & 0xFFFFFF, registers['a5'] & 0xFFFFFF
+
+    moving = read(0xFFF38A, 2) & 0xFFFF
+    if moving != 0:
+        raise UnsupportedCandidate('creature family: the moving arm (bsr $aa50) is 0% witnessed '
+                                   'by any of the 1,131 census-00A772 fixtures')
+
+    current = dict(registers)
+    writes = []
+    cycles, instructions = _add(_CF_PUSH_D7, _CF_TST_MOVING, _CF_BEQ_ATTACK)
+    sr = _logic_sr(sr0, registers['d7'] & 0xFFFF, 2)
+    sr = _logic_sr(sr, moving, 2)
+    writes.append(_bytes((sp - 2) & 0xFFFFFF, registers['d7'] & 0xFFFF, 2))
+    current['a7'] = (sp32 - 2) & 0xFFFFFFFF
+
+    def machine_overlay():
+        overlay = {}
+        for group in writes:
+            for addr, value in group:
+                overlay[addr & 0xFFFF] = value
+        return _ConstMachine(machine, overlay)
+
+    def call(plan_func, entry_pc, return_pc):
+        nonlocal cycles, instructions, sr
+        push_a7, push_write = _cf_push_call(current, return_pc)
+        writes.append(push_write)
+        virtual = dict(current, pc=entry_pc, a7=push_a7, sr=sr)
+        inner = plan_func(machine_overlay(), virtual)
+        cycles += inner.cycles
+        instructions += inner.instructions
+        writes.append(inner.writes)
+        current.update(inner.registers)
+        sr = current['sr']
+        return inner
+
+    def tail_call(plan_func, entry_pc):
+        # A bra, not a bsr/jsr: no new return address is pushed, so the callee's own eventual rts
+        # pops whatever is ALREADY on the stack (the kind dispatch's own 00A794, still there --
+        # aim_kind_handler_76/50 and both ground_contact_update variants all end this way, tail-
+        # jumping into kind_frame_offset_plan's own entry rather than returning to their caller
+        # directly; the fall pair already inlines kind_frame_offset and returns straight to 00A794,
+        # so this is skipped for them).
+        nonlocal cycles, instructions, sr
+        virtual = dict(current, pc=entry_pc, sr=sr)
+        inner = plan_func(machine_overlay(), virtual)
+        cycles += inner.cycles
+        instructions += inner.instructions
+        writes.append(inner.writes)
+        current.update(inner.registers)
+        sr = current['sr']
+        return inner
+
+    def charge(*fragments):
+        nonlocal cycles, instructions
+        c, i = _add(*fragments)
+        cycles += c
+        instructions += i
+
+    # -- attack_update_plan (009D6C): unconditional --
+    charge(_CF_BSR_ATTACK)
+    call(attack_update_plan, ATTACK_UPDATE_ENTRY, 0x00A784)
+
+    # -- kind table dispatch (read through the overlay: attack_update can rewrite the creature's own
+    # fields before this read) --
+    kind = _reader(machine_overlay())((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, 2) & 0xFFFF
+    current['d0'] = (current['d0'] & 0xFFFF0000) | kind
+    sr = _logic_sr(sr, kind, 2)
+    sr = _asl_sr(sr, kind, 3, 2)
+    charge(_CF_LEA_TABLE, _CF_LOAD_KIND, _CF_SHIFT_KIND, _CF_LOAD_HANDLER, _CF_JSR_HANDLER)
+    if kind >= 8:
+        raise UnsupportedCandidate('creature family: kind byte out of the eight-entry table domain')
+    handler_address = read((CREATURE_FAMILY_KIND_TABLE + kind * 8) & 0xFFFFFF, 4) & 0xFFFFFFFF
+    if handler_address not in _CF_KIND_HANDLERS:
+        raise UnsupportedCandidate('creature family: kind table entry %06X (kind 6/7, '
+                                   '00AA80/00AB5A) is 0%% witnessed by any recording' % handler_address)
+    handler_plan, handler_entry = _CF_KIND_HANDLERS[handler_address]
+    current['a0'] = handler_address
+    call(handler_plan, handler_entry, 0x00A794)
+    if current['pc'] == KIND_FRAME_OFFSET_ENTRY:
+        tail_call(kind_frame_offset_plan, KIND_FRAME_OFFSET_ENTRY)
+
+    # -- event_consume_plan (00A922), D2 saved/restored around it --
+    d2_before_event = current['d2'] & 0xFFFF
+    writes.append(_bytes((current['a7'] - 2) & 0xFFFFFF, d2_before_event, 2))
+    current['a7'] = (current['a7'] - 2) & 0xFFFFFFFF
+    sr = _logic_sr(sr, d2_before_event, 2)
+    charge(_CF_PUSH_D2, _CF_BSR_EVENT)
+    call(event_consume_plan, EVENT_CONSUME_ENTRY, 0x00A79A)
+    # move.w (a7)+,d2 / move.w (a7)+,d7: both plain MOVEs off the stack, restoring the low words
+    # pushed above (d2 as it stood right before the event-consume call, and 00A772's own entry d7);
+    # each is a real flag-setter in its own right, and each pops 2 bytes back off the stack.
+    current['d2'] = (current['d2'] & 0xFFFF0000) | d2_before_event
+    current['a7'] = (current['a7'] + 2) & 0xFFFFFFFF
+    sr = _logic_sr(sr, d2_before_event, 2)
+    entry_d7 = registers['d7'] & 0xFFFF
+    current['d7'] = (current['d7'] & 0xFFFF0000) | entry_d7
+    current['a7'] = (current['a7'] + 2) & 0xFFFFFFFF
+    sr = _logic_sr(sr, entry_d7, 2)
+    charge(_CF_POP_D2, _CF_POP_D7)
+
+    # -- fresh D0/D1 reload from the creature's own position (read through the overlay: the kind
+    # handler's own aim/search chain can rewrite the creature's own position before this reload) --
+    overlay_read = _reader(machine_overlay())
+    d0_reload = overlay_read(a5 & 0xFFFFFF, 2) & 0xFFFF
+    d1_reload = overlay_read((a5 + 2) & 0xFFFFFF, 2) & 0xFFFF
+    current['d0'] = (current['d0'] & 0xFFFF0000) | d0_reload
+    sr = _logic_sr(sr, d0_reload, 2)
+    current['d1'] = (current['d1'] & 0xFFFF0000) | d1_reload
+    sr = _logic_sr(sr, d1_reload, 2)
+    charge(_CF_RELOAD_D0, _CF_RELOAD_D1)
+
+    # -- movem.l d7/a3-a5,-(a7): predecrement order stores D7 lowest, A5 nearest the (new) old sp,
+    # the same convention 00010E28/00009A9F2's own frames confirmed --
+    frame_base = (current['a7'] - 16) & 0xFFFFFFFF
+    for offset, name in ((0, 'd7'), (4, 'a3'), (8, 'a4'), (12, 'a5')):
+        writes.append(_bytes((frame_base + offset) & 0xFFFFFF, current[name] & 0xFFFFFFFF, 4))
+    current['a7'] = frame_base
+    charge(_CF_MOVEM_PUSH)
+
+    # -- creature_pickup_check_plan (00B944): unconditional --
+    charge(_CF_BSR_PICKUP)
+    call(creature_pickup_check_plan, CREATURE_PICKUP_CHECK_ENTRY, 0x00A7AC)
+
+    # -- LIFECYCLE test ($8(a5), creature_pickup_check's own D2 argument-and-result: read through
+    # the overlay, since 00B944 can rewrite it itself) --
+    lifecycle = int.from_bytes(machine_overlay().peek_ram((a5 + creatures.LIFECYCLE) & 0xFFFF, 2), 'big')
+    sr = _logic_sr(sr, lifecycle, 2)
+    charge(_CF_TST_LIFECYCLE)
+    negative = creatures._signed_word(lifecycle) < 0
+
+    if negative:
+        charge(_CF_BPL_FALL)
+        # a4 (the type pointer) is only ever a caller-supplied constant to 00A772 itself, but the
+        # kind handler's own internal chain can leave it clobbered as scratch (confirmed empirically,
+        # census-00A772-7251bbd0ecf7): 00A772 never reloads it, so this read uses whatever a4 holds
+        # NOW, not the entry value.
+        d5_byte = overlay_read((current['a4'] & 0xFFFFFF) + 1, 1) & 0xFF
+        current['d5'] = (current['d5'] & 0xFFFFFF00) | d5_byte
+        sr = _logic_sr(sr, d5_byte, 1)
+        charge(_CF_LOAD_D5_BYTE, _CF_BSR_DEATH_BCD)
+        call(creature_death_bcd_plan, CREATURE_DEATH_BCD_ENTRY, 0x00A7BA)
+    else:
+        charge(_CF_BPL_SKIP)
+
+    # -- jsr $126a.l: the platform-tail seam's own boundary.  The auto-pushed return address (an
+    # ordinary internal-call residue, the same technique every bsr/jsr above already used) is the
+    # exit a7; nothing else changes. --
+    return_pc = 0x00A7C0
+    push_a7 = (current['a7'] - 4) & 0xFFFFFFFF
+    writes.append(_bytes(push_a7 & 0xFFFFFF, return_pc, 4))
+    charge(_CF_JSR_PARTICLE)
+
+    # native/machine.cpp's own al_atomic requires 0 < cycles <= 100000 and 0 < instructions <= 10000
+    # -- aim_search_scan_plan/aim_search_dispatch_plan/aim_pool_scan_plan each already decline THEIR
+    # OWN incremental cost against this cap, but that self-check has no way to see this composition's
+    # own outer overhead (attack_update, the kind dispatch head, event_consume, creature_pickup_check):
+    # a kind-76/50 activation whose own inner aim chain lands just under the cap on its own can still
+    # push the COMBINED total over it (found empirically, 19 Sep, only on the longest recording,
+    # fb408bc75597 -- 34,904 frames giving far more chances at the combination than the shorter
+    # census fixtures ever hit).  Decline the whole activation the same way the inner leaves do.
+    if cycles > 100000 or instructions > 10000:
+        raise UnsupportedCandidate(
+            f'creature family: projected cost exceeds the native adapter\'s own atomic-plan cap '
+            f'({cycles} cycles, {instructions} instructions)')
+
+    flat_writes = tuple(pair for group in writes for pair in group)
+    exit_registers = dict(current)
+    exit_registers.update(a7=push_a7, pc=PARTICLE_EMIT_ENTRY, sr=sr)
+    prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=flat_writes,
+                        registers=exit_registers, last_pc=CREATURE_FAMILY_LAST_PC)
+
+    def creature_family_suffix(machine, live_registers):
+        # Gated at 00A772's own sole witnessed rts (00A864): the return address already on the
+        # stack when this activation began (every temporary this prefix pushes -- the entry D7
+        # word, the D2 word, the movem frame, every internal call's own return address -- nets
+        # back to the entry stack pointer by the time any real rts here runs, player_tail_plan's
+        # own balanced-stack argument).  00A864 sets no flag of its own; the ceded block's own
+        # residue SR is already live and correct.
+        return AtomicPlan(cycles=16, instructions=1, writes=(),
+                          registers={'a7': (live_registers['a7'] + 4) & 0xFFFFFFFF,
+                                     'pc': _return(machine, live_registers['a7'] & 0xFFFFFF)},
+                          last_pc=CREATURE_FAMILY_RESUME)
+
+    return Seam(prefix=prefix, resume_pc=CREATURE_FAMILY_RESUME, stack_basis=sp32,
+               guards=((sp, 4),), suffix=creature_family_suffix)

@@ -1017,6 +1017,64 @@ below, has the count and the milestone tree numbers).
   its own further tail (`00004AAA` through `00009A9F2`); then `00A578`
   as the walk.
 
+- **19 September, `00A772` itself composed as the family**:
+  `creature_family_plan` (candidate `'creature-family'`) composes, in
+  order, `attack_update_plan` (unconditional -- the header's own
+  "moving" arm is 0% witnessed and declined up front), the eight-entry
+  kind table (kind 0/1 `00AA76`/`00AB50`, 2/3 the fall pair, 4/5 the
+  ground pair, 6/7 `00AA80`/`00AB5A` declined by name), `event_consume_
+  plan` with D2 saved/restored around it, a fresh D0/D1 reload,
+  `creature_pickup_check_plan` inside a `movem.l d7/a3-a5` frame, and,
+  only when LIFECYCLE comes back negative, `creature_death_bcd_plan`.  A
+  genuinely new finding past the already-recovered dispatch:
+  `aim_kind_handler_76_plan`/`aim_kind_handler_50_plan` and both
+  `ground_contact_update` variants do not return to their own caller at
+  all -- they tail-jump (`bra`, no return-address push) into
+  `kind_frame_offset_plan`'s own entry (`00AA50`), which then pops the
+  kind dispatch's own return address on ITS OWN `rts`; the fall pair
+  already inlines `kind_frame_offset` and returns directly.  From there
+  the routine is a platform tail (the "one seam, cede the whole
+  remainder" rule `player_tail_plan` already draws on at `0075D6`): the
+  prefix ends at the `jsr $126a.l` itself, the entire remainder --
+  `particle_emit`'s own body, the closing `movem.l (a7)+`, the
+  `DISPLAY_TIMER` test, and the conditional second device call (`jsr
+  $18c8`, `sprite_emit`) inside the rare animation block -- is ceded to
+  the machine untouched, resuming at `00A772`'s own SOLE witnessed `rts`
+  (`00A864`); the other `rts` (`00A8A8`) is 0% witnessed and declined up
+  front the same way the moving arm is.  Retires ten individual leaf
+  gates from `camera-sprites` (`attack-update`, `event-consume`,
+  `creature-pickup-check`, the ground-contact pair, the fall-kind pair,
+  `creature-grid-cell`, `ground-edge-test`, `af3c`) -- every witnessed
+  call into them now comes from this composition alone; `kind_frame_
+  offset` itself stays armed on its own, since the declined moving arm
+  reaches it directly.  `camera-sprites` drops from sixty-four to
+  **fifty-five** gates.  1,131 retained fixtures: 1,092 MATCH, 39
+  DECLINED, 0 MISMATCH.  Four real defects the FAST tier caught: the D2/
+  D7 push-pop bookkeeping around `event_consume` never advanced the
+  tracked stack pointer (every later internal push landed six bytes too
+  high); the kind dispatch's own hand-off to `kind_frame_offset` was
+  missing from the first draft entirely; the D0/D1/kind reloads read the
+  raw machine instead of this composition's own overlay, missing an
+  aim-chain rewrite of the creature's own position on the deepest kind-76
+  activations; and the LIFECYCLE-negative branch's own type-record read
+  used the entry-time A4 instead of the CURRENT one (the kind handler's
+  own internal chain can leave A4 clobbered as scratch).  A fifth defect
+  surfaced only on the tree milestone's own longest recording
+  (`fb408bc75597`, 34,904 frames): the native adapter's own 100,000-
+  cycle/10,000-instruction atomic-plan cap is checked by the aim-search/
+  aim-pool leaves against their OWN incremental cost alone, blind to
+  this composition's own outer overhead running before them -- fixed
+  with the same cap check at this composition's own outer boundary.
+  Reproduces the original on `f0ac19738f19…`: PASS, 517 hits, 77
+  fallbacks (all adapter refusals or the aim-pool cost-cap decline);
+  PASS on `fb408bc75597…` too (34,904 frames, post cost-cap fix); mutant
+  (`_mutate_creature_family`, D0 off by one) DIVERGENCE at frame 12,265.
+  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-a772b`,
+  107,519 frames, current receipts).  Next: `00A578` as the walk over
+  the nine slots at `FF1496`, composing `00A772` and `00B920`, with its
+  own semantic-operation card.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

@@ -32,6 +32,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        EFFECT_SLOT_ADD_ENTRY, effect_slot_add_plan,
                        BCD_COUNTER_ADD_ENTRY, bcd_counter_add_plan,
                        CREATURE_DEATH_BCD_ENTRY, creature_death_bcd_plan,
+                       CREATURE_FAMILY_ENTRY, creature_family_plan,
                        SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
@@ -326,6 +327,25 @@ def _mutate_player_state_counter(plan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_creature_family(plan) -> AtomicPlan:
+    """Negative control for the composed creature family (00A772): D0 (the ceded particle_emit's own
+    X argument) off by one.  particle_emit reads D0 immediately on entry to pick its own arm and to
+    build its own record -- observable on every admitted occurrence, offscreen-x/y and upload alike,
+    unlike a write-based mutant, which would have to pick one of this seam's own stack-residue writes
+    (the entry D7 word, the D2 word, an internal call's own return address) and risk landing on
+    something dead by the ceded block's own rts, the same blind spot 00B6AE's own mutant note names."""
+    if isinstance(plan, Seam):
+        registers = dict(plan.prefix.registers)
+        registers['d0'] = (registers.get('d0', 0) + 1) & 0xFFFFFFFF
+        prefix = AtomicPlan(plan.prefix.cycles, plan.prefix.instructions, plan.prefix.writes, registers,
+                            plan.prefix.last_pc, plan.prefix.direct_calls)
+        return Seam(prefix=prefix, resume_pc=plan.resume_pc, stack_basis=plan.stack_basis,
+                   guards=plan.guards, suffix=plan.suffix, expect=plan.expect)
+    registers = dict(plan.registers)
+    registers['d0'] = (registers.get('d0', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
 # The fallback reasons that are the adapter's refusal of an exact span (the original runs it; nothing
 # is declined): the caller's observation instant precedes the span's end, the sound driver's Z80
 # bank register points at work RAM, a vertical interrupt falls inside the span, or another condition
@@ -393,6 +413,7 @@ PLANNERS = {
     'effect-slot-add': {EFFECT_SLOT_ADD_ENTRY: effect_slot_add_plan},
     'bcd-counter-add': {BCD_COUNTER_ADD_ENTRY: bcd_counter_add_plan},
     'creature-death-bcd': {CREATURE_DEATH_BCD_ENTRY: creature_death_bcd_plan},
+    'creature-family': {CREATURE_FAMILY_ENTRY: creature_family_plan},
     'spawn-table-find-free': {SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
     'spawn-table-add': {SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
@@ -473,15 +494,18 @@ PLANNERS = {
                        # candidate ('state-18'); with the 25 gates retired there is ample headroom to
                        # arm it too, but that is a separate decision from this composition.
                        PLAYER_STATE_ENTRY: player_state_plan,
-                       # The creature update's recovered pieces, armed as leaves until 00A772 composes them
-                       # (the adapter holds 64 gates; the family composition frees them, as 005700's did).
-                       ATTACK_UPDATE_ENTRY: attack_update_plan, KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan,
-                       CREATURE_GRID_CELL_ENTRY: creature_grid_cell_plan, GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan,
-                       EVENT_CONSUME_ENTRY: event_consume_plan, CREATURE_PICKUP_CHECK_ENTRY: creature_pickup_check_plan,
-                       GROUND_CONTACT_UPDATE_ENTRY: ground_contact_update_plan,
-                       GROUND_CONTACT_UPDATE_MIRROR_ENTRY: ground_contact_update_mirror_plan,
-                       FALL_KIND_UPDATE_ENTRY: fall_kind_update_plan, FALL_KIND_UPDATE_MIRROR_ENTRY: fall_kind_update_mirror_plan,
-                       AF3C_ENTRY: creature_grid_cell_d0d1_plan,
+                       # The creature update's recovered pieces are RETIRED from this combined candidate's
+                       # own gate set, 19 September: every witnessed call into attack_update/event_consume/
+                       # creature_pickup_check/the four kind handlers/00AF3C comes from creature_family_plan's
+                       # own body (00A772, composed below) -- once IT is armed here, the native machine never
+                       # independently reaches any of their own PCs as a live gate, the same "the family
+                       # composition frees them, as 005700's did" retirement already noted for player_state_plan
+                       # above.  KIND_FRAME_OFFSET_ENTRY (00AA50) stays: it is ALSO reachable directly from
+                       # 00A772's own "moving" header arm (bsr $aa50), which creature_family_plan declines
+                       # (0% witnessed) rather than composes, so a real occurrence of that arm still needs it
+                       # armed on its own.  Their own PLANNERS entries and standalone tests are unchanged.
+                       KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan,
+                       CREATURE_FAMILY_ENTRY: creature_family_plan,
                        # AIM_CUE_ENTRY (00B082) and AIM_POOL_RESET_ENTRY (00B02A) are RETIRED here too,
                        # 19 September: both exit exclusively into 00AF52's own body (00AF90/00AF98,
                        # confirmed against their own census fixtures), and AIM_SEARCH_DISPATCH_ENTRY's
@@ -776,6 +800,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'effect-slot-add-mutant-result': ('effect-slot-add', _mutate_result),
              'bcd-counter-add-mutant-result': ('bcd-counter-add', _mutate_result),
              'creature-death-bcd-mutant-result': ('creature-death-bcd', _mutate_result),
+             'creature-family-mutant-result': ('creature-family', _mutate_creature_family),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),
              'spawn-table-find-free-mutant-result': ('spawn-table-find-free', _mutate_spawn_find_free),
              'spawn-table-add-mutant-result': ('spawn-table-add', _mutate_result)}

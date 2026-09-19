@@ -84,7 +84,9 @@ def test_plan_reproduces_every_witnessed_arm(fixture):
 
 def test_candidate_name_is_explicit():
     assert recovery.Candidate('event-consume').gate_pcs == (boundary.EVENT_CONSUME_ENTRY,)
-    assert boundary.EVENT_CONSUME_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from the combined candidate 19 Sep: every witnessed call comes from creature_family_plan's
+    # own body (00A772), which now arms it instead (docs/gods/STATUS.md's own 19 Sep entry).
+    assert boundary.EVENT_CONSUME_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('event-consume-mutant-result').mutation is recovery._mutate_result
 
 
