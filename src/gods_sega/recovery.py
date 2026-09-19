@@ -29,6 +29,8 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_KIND_HANDLER_76_ENTRY, aim_kind_handler_76_plan,
                        AIM_KIND_HANDLER_50_ENTRY, aim_kind_handler_50_plan,
                        EFFECT_SLOT_FIND_ENTRY, effect_slot_find_free_plan,
+                       EFFECT_SLOT_ADD_ENTRY, effect_slot_add_plan,
+                       BCD_COUNTER_ADD_ENTRY, bcd_counter_add_plan,
                        SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
@@ -387,6 +389,8 @@ PLANNERS = {
     'aim-kind-handler-76': {AIM_KIND_HANDLER_76_ENTRY: aim_kind_handler_76_plan},
     'aim-kind-handler-50': {AIM_KIND_HANDLER_50_ENTRY: aim_kind_handler_50_plan},
     'effect-slot-find': {EFFECT_SLOT_FIND_ENTRY: effect_slot_find_free_plan},
+    'effect-slot-add': {EFFECT_SLOT_ADD_ENTRY: effect_slot_add_plan},
+    'bcd-counter-add': {BCD_COUNTER_ADD_ENTRY: bcd_counter_add_plan},
     'spawn-table-find-free': {SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
     'spawn-table-add': {SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
@@ -519,6 +523,12 @@ PLANNERS = {
                        # EFFECT_SLOT_FIND_ENTRY (00004AAA): 00A772's own further tail (00010E28's own
                        # callee), 19 September -- 61 -> 62 gates.
                        EFFECT_SLOT_FIND_ENTRY: effect_slot_find_free_plan,
+                       # EFFECT_SLOT_ADD_ENTRY (00010E28): composes 00004AAA over a full movem.l
+                       # register frame, 19 September -- 62 -> 63 gates.
+                       EFFECT_SLOT_ADD_ENTRY: effect_slot_add_plan,
+                       # BCD_COUNTER_ADD_ENTRY (00003F0C): a shared utility with many callers beyond
+                       # 00A772's own tail, 19 September -- 63 -> 64 gates (the adapter's own cap).
+                       BCD_COUNTER_ADD_ENTRY: bcd_counter_add_plan,
                        SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
@@ -761,6 +771,8 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-kind-handler-76-mutant-result': ('aim-kind-handler-76', _mutate_result),
              'aim-kind-handler-50-mutant-result': ('aim-kind-handler-50', _mutate_result),
              'effect-slot-find-mutant-result': ('effect-slot-find', _mutate_effect_slot_find),
+             'effect-slot-add-mutant-result': ('effect-slot-add', _mutate_result),
+             'bcd-counter-add-mutant-result': ('bcd-counter-add', _mutate_result),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),
              'spawn-table-find-free-mutant-result': ('spawn-table-find-free', _mutate_spawn_find_free),
              'spawn-table-add-mutant-result': ('spawn-table-add', _mutate_result)}

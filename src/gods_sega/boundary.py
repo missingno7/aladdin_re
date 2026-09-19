@@ -20196,3 +20196,151 @@ def effect_slot_find_free_plan(machine, registers):
                                  'a7': (sp + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp & 0xFFFFFF),
                                  'sr': exit_sr},
                       last_pc=EFFECT_SLOT_FIND_LAST_PC)
+
+
+# --- 00010E28: the creature effect-slot add (game/creatures.py: effect_slot_add) --------------------
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-010E28-*, all five recordings).  A
+# full movem.l register frame around the internal 00004AAA call: every register but A7 returns to its
+# own entry value, so only the writes and A7/PC/SR survive into the caller.
+EFFECT_SLOT_ADD_ENTRY, EFFECT_SLOT_ADD_LAST_PC = 0x00010E28, 0x00010E62
+_ESA_MOVEM_PUSH = (72, 1)          # movem.l d2/d5/d7/a0-a1/a3-a5,-(a7)
+_ESA_BSR_4AAA = (20, 1)            # jsr $4aaa.l
+_ESA_BMI_FOUND = (8, 1)            # bmi.b $10e5e -- not taken (found) only; 'exhausted' declines
+_ESA_STORE_D0 = (8, 1)             # move.w d0,(a5)+
+_ESA_STORE_D1 = (8, 1)             # move.w d1,(a5)+
+_ESA_CMP_D2 = (8, 1)               # cmpi.w #$b,d2
+_ESA_BGE = {True: (10, 1), False: (8, 1)}      # bge.b $10e44
+_ESA_ADDI = (8, 1)                 # addi.w #$c0,d2 -- 'wrap' False only
+_ESA_BRA = (10, 1)                 # bra.b $10e48 -- 'wrap' False only
+_ESA_SUBI = (8, 1)                 # subi.w #$b,d2 -- 'wrap' True only
+_ESA_STORE_D2 = (8, 1)             # move.w d2,(a5)+
+_ESA_STORE_ONE = (12, 1)           # move.w #$1,(a5)+
+_ESA_STORE_CURSOR = (16, 1)        # move.l a5,$f2a6.w
+_ESA_LEA_FLAGS = (12, 1)           # lea.l $ffff3fea.l,a0
+_ESA_STORE_FLAG = (18, 1)          # move.b #$ff,(a0,d5.w)
+_ESA_MOVEM_POP = (76, 1)           # movem.l (a7)+,d2/d5/d7/a0-a1/a3-a5
+_ESA_RTS = (16, 1)
+
+
+def effect_slot_add_plan(machine, registers):
+    """00010E28: see game/creatures.py's own module note above effect_slot_add."""
+    from .game import creatures
+    if registers['pc'] != EFFECT_SLOT_ADD_ENTRY:
+        raise UnsupportedCandidate('effect slot add planner needs the machine parked at 00010E28')
+    sr = registers['sr']
+    read = _reader(machine)
+    d0, d1, d2 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF, registers['d2'] & 0xFFFF
+    result = creatures.effect_slot_add(read, d0, d1, d2)
+    if result['arm'] != 'found':
+        raise UnsupportedCandidate(f"effect slot add: {result['arm']}, not witnessed by a recording")
+
+    # movem.l d2/d5/d7/a0-a1/a3-a5,-(a7): predecrement mode always processes A7 down to D0 regardless
+    # of mnemonic order, so A5 lands nearest the OLD a7 and D2 nearest the NEW one -- confirmed against
+    # the tracer, not assumed.  These 32 bytes are real, permanent RAM residue (the pop only moves a7
+    # back; it never erases them), never popped back before this activation's own hand-off.
+    sp32 = registers['a7']
+    frame_base = (sp32 - 32) & 0xFFFFFFFF
+    frame_writes = ()
+    for offset, reg in ((0, 'd2'), (4, 'd5'), (8, 'd7'), (12, 'a0'), (16, 'a1'), (20, 'a3'), (24, 'a4'), (28, 'a5')):
+        frame_writes += _bytes((frame_base + offset) & 0xFFFFFF, registers[reg] & 0xFFFFFFFF, 4)
+    # jsr $4aaa.l's own return-address push, real and permanent (00004AAA's own rts pops it, but
+    # nothing overwrites it again before this activation's own hand-off).
+    frame_writes += _bytes((frame_base - 4) & 0xFFFFFF, 0x00010E32, 4)
+
+    cycles, instructions = _add(_ESA_MOVEM_PUSH, _ESA_BSR_4AAA,
+                               _add(_ESF_HEAD, *([_ESF_CONTINUE] * result['index']), _ESF_FOUND_CHECK, _ESF_TAIL),
+                               _ESA_BMI_FOUND, _ESA_STORE_D0, _ESA_STORE_D1, _ESA_CMP_D2, _ESA_BGE[result['wrap']])
+    if result['wrap']:
+        c, i = _ESA_SUBI
+    else:
+        c, i = _add(_ESA_ADDI, _ESA_BRA)
+    cycles += c
+    instructions += i
+    c, i = _add(_ESA_STORE_D2, _ESA_STORE_ONE, _ESA_STORE_CURSOR, _ESA_LEA_FLAGS, _ESA_STORE_FLAG,
+               _ESA_MOVEM_POP, _ESA_RTS)
+    cycles += c
+    instructions += i
+
+    address = result['address'] & 0xFFFFFF
+    # the CURSOR itself is a full 32-bit work-RAM address (0xFFFFxxxx) -- computed from the full-width
+    # slot address, not the 24-bit one _bytes() below uses for the RAM writes themselves.
+    cursor = (result['address'] + 8) & 0xFFFFFFFF
+    writes = (frame_writes +
+             _bytes(address, result['d0'], 2) + _bytes((address + 2) & 0xFFFFFF, result['d1'], 2) +
+             _bytes((address + 4) & 0xFFFFFF, result['d2'], 2) + _bytes((address + 6) & 0xFFFFFF, 1, 2) +
+             _bytes(creatures.EFFECT_SLOT_CURSOR & 0xFFFFFF, cursor & 0xFFFFFFFF, 4) +
+             (((creatures.EFFECT_SLOT_FLAG_TABLE + result['index']) & 0xFFFFFF, 0xFF),))
+    # move.b #$ff,(a0,d5.w) is the last flag-setter: N=1,Z=0,V=0,C=0 always (a fixed negative byte);
+    # X is unconditionally 0 by then regardless of entry X or which D2 branch ran (subi.w #$b,d2 with
+    # d2 already >= $b never borrows; addi.w #$c0,d2 with d2 < $b never carries into a 17th bit).
+    exit_sr = (sr & ~0x1F) | 0x08
+    sp = registers['a7']
+    # D6 is 00004AAA's own scratch (the pool scan's own remaining count) -- NOT in this routine's own
+    # movem list, so it is the one register that does NOT return to its own entry value.
+    remaining = (creatures.EFFECT_SLOT_COUNT - 1 - result['index']) & 0xFFFF
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'a7': (sp + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp & 0xFFFFFF),
+                                 'd6': (registers['d6'] & 0xFFFF0000) | remaining, 'sr': exit_sr},
+                      last_pc=EFFECT_SLOT_ADD_LAST_PC)
+
+
+# --- 00003F0C: the shared packed-BCD counter add (game/creatures.py: bcd_counter_add) --------------
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-003F0C-*, all five recordings, a
+# single path class each -- the routine is unconditional, no branch of its own).
+BCD_COUNTER_ADD_ENTRY, BCD_COUNTER_ADD_LAST_PC = 0x00003F0C, 0x00003F2C
+_BCA_MOVEM_LOAD = (32, 1)          # movem.w $ef80.w,d0-d3
+_BCA_ANDI_CCR = (20, 1)            # andi.b #$0,ccr
+_BCA_ABCD_D1 = (6, 1)              # abcd.b d7,d1
+_BCA_MOVEQ = (4, 1)                # moveq #$0,d7 (twice)
+_BCA_ABCD_D2 = (6, 1)              # abcd.b d7,d2
+_BCA_ABCD_D3 = (6, 1)              # abcd.b d7,d3
+_BCA_MOVEM_STORE = (28, 1)         # movem.w d0-d3,$ef80.w
+_BCA_STORE_FLAG = (16, 1)          # move.w #$1,$f1ce.w
+_BCA_RTS = (16, 1)
+_BCA_COST = _add(_BCA_MOVEM_LOAD, _BCA_ANDI_CCR, _BCA_ABCD_D1, _BCA_MOVEQ, _BCA_ABCD_D2, _BCA_MOVEQ,
+                 _BCA_ABCD_D3, _BCA_MOVEM_STORE, _BCA_STORE_FLAG, _BCA_RTS)
+
+
+def bcd_counter_add_plan(machine, registers):
+    """00003F0C: see game/creatures.py's own module note above bcd_counter_add.  Pure RAM read/write,
+    one unconditional path, no branch of its own."""
+    from .game import creatures
+    if registers['pc'] != BCD_COUNTER_ADD_ENTRY:
+        raise UnsupportedCandidate('bcd counter add planner needs the machine parked at 00003F0C')
+    sr = registers['sr']
+    read = _reader(machine)
+    amount = registers['d7'] & 0xFF
+    result = creatures.bcd_counter_add(read, amount)
+    cycles, instructions = _BCA_COST
+
+    def sign_extend16(word):
+        word &= 0xFFFF
+        return (word - 0x10000) & 0xFFFFFFFF if word & 0x8000 else word
+
+    base = creatures.BCD_COUNTER_BASE & 0xFFFFFF
+    d0_word = read(base, 2) & 0xFFFF
+    word1_high = read((base + 2) & 0xFFFFFF, 1) & 0xFF
+    word2_high = read((base + 4) & 0xFFFFFF, 1) & 0xFF
+    word3_high = read((base + 6) & 0xFFFFFF, 1) & 0xFF
+    d1_exit = sign_extend16((word1_high << 8) | 0) & 0xFFFFFF00 | result['d1']
+    d2_exit = sign_extend16((word2_high << 8) | 0) & 0xFFFFFF00 | result['d2']
+    d3_exit = sign_extend16((word3_high << 8) | 0) & 0xFFFFFF00 | result['d3']
+    # the dirty flag goes first: its own value only ever needs to be nonzero for the (separate,
+    # unchased) VBlank flush to notice, so a one-byte-off mutant on it would be undetectable -- the
+    # counter's own low digit-pair (read back by whatever displays or compares it) goes last, keeping
+    # _mutate_result's own "flip the last write" convention meaningful here.
+    writes = (_bytes(creatures.BCD_COUNTER_DIRTY & 0xFFFFFF, 1, 2) +
+             _bytes((base + 5) & 0xFFFFFF, result['d2'], 1) +
+             _bytes((base + 7) & 0xFFFFFF, result['d3'], 1) +
+             _bytes((base + 3) & 0xFFFFFF, result['d1'], 1))
+    # move.w #$1,$f1ce.w (a constant, nonzero, positive) is the real last N/Z/V/C setter -- always
+    # Z=0,N=0,V=0,C=0 -- but it RETAINS X, which the abcd chain's own last carry-out (d3's own) set.
+    exit_sr = ((sr & ~0x1F) | (0x10 if result['carry3'] else 0))
+    sp = registers['a7']
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers={'d0': sign_extend16(d0_word), 'd1': d1_exit, 'd2': d2_exit, 'd3': d3_exit,
+                                 'd7': 0, 'a7': (sp + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp & 0xFFFFFF),
+                                 'sr': exit_sr},
+                      last_pc=BCD_COUNTER_ADD_LAST_PC)

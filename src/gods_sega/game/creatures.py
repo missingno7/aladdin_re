@@ -1988,3 +1988,69 @@ def effect_slot_find_free(read):
             remaining = (EFFECT_SLOT_COUNT - 1 - index) & 0xFFFF
             return {'arm': 'found', 'address': address, 'index': index, 'remaining': remaining}
     return {'arm': 'exhausted'}
+
+
+# --- 00010E28: the creature effect-slot add (game/creatures.py: effect_slot_add) -- composes
+# effect_slot_find_free (00004AAA) over a full movem.l register frame: on 'found', stores the caller's
+# own D0/D1 (a world position), an adjusted D2 (a frame/type index wrapped modulo
+# EFFECT_SLOT_INDEX_MOD, both directions real and witnessed) and the literal 1 into the slot, advances
+# the slot cursor (EFFECT_SLOT_CURSOR) past it, and marks the SAME slot's own index in a parallel
+# 200-byte flag table (EFFECT_SLOT_FLAG_TABLE).  'exhausted' (real ROM, never witnessed) skips the
+# slot entirely.  Called from more than one place (00A772's own tail is only one caller); every
+# register this routine touches besides A7 is saved on entry and restored before its own rts, so
+# nothing but the writes and A7/PC/SR survive into its caller.
+EFFECT_SLOT_INDEX_MOD = 0xB          # d2 wrap threshold
+EFFECT_SLOT_INDEX_WRAP = 0xC0        # added when d2 is below the threshold
+EFFECT_SLOT_CURSOR = 0xFFFFF2A6      # long: the slot's own address, advanced past the stored fields
+EFFECT_SLOT_FLAG_TABLE = 0xFFFF3FEA  # byte per slot (EFFECT_SLOT_STRIDE-independent index), set to $FF
+
+
+def effect_slot_add(read, d0, d1, d2):
+    """00010E28: see the module note above."""
+    scan = effect_slot_find_free(read)
+    if scan['arm'] != 'found':
+        return {'arm': 'exhausted'}
+    wrap = d2 >= EFFECT_SLOT_INDEX_MOD
+    d2_adjusted = ((d2 - EFFECT_SLOT_INDEX_MOD) if wrap else (d2 + EFFECT_SLOT_INDEX_WRAP)) & 0xFFFF
+    return {'arm': 'found', 'address': scan['address'], 'index': scan['index'], 'wrap': wrap,
+            'd0': d0 & 0xFFFF, 'd1': d1 & 0xFFFF, 'd2': d2_adjusted}
+
+
+# --- 00003F0C: a shared packed-BCD counter increment (called from 00009A9F2 -- 00A772's own
+# LIFECYCLE-negative arm -- and, far more often, from places this session did not trace) -- a
+# six-digit packed-BCD counter at BCD_COUNTER_BASE, read/written as three words (d1/d2/d3, the low
+# digit pair added the caller's own D7 amount, the other two propagating its own decimal carry only),
+# unconditionally marking BCD_COUNTER_DIRTY for a separate, VBlank-driven display flush this session
+# does not chase (it never touches a device itself).
+BCD_COUNTER_BASE = 0xFFFFEF80        # four words read/written (d0-d3 via movem.w); d0 is untouched
+                                      # scratch, d1/d2/d3 the counter's own three digit-pairs
+BCD_COUNTER_DIRTY = 0xFFFFF1CE       # word: unconditionally set to 1
+
+
+def _bcd_byte_add(a, b, carry_in):
+    """68000 ABCD.b Dy,Dx: two packed-BCD bytes plus a carry-in, decimal digit by digit."""
+    lo = (a & 0xF) + (b & 0xF) + carry_in
+    carry = 0
+    if lo > 9:
+        lo -= 10
+        carry = 1
+    hi = (a >> 4 & 0xF) + (b >> 4 & 0xF) + carry
+    carry_out = 0
+    if hi > 9:
+        hi -= 10
+        carry_out = 1
+    return ((hi & 0xF) << 4) | (lo & 0xF), carry_out
+
+
+def bcd_counter_add(read, amount):
+    """00003F0C: see the module note above.  Returns the three updated digit-pair bytes (the low byte
+    of each of D1/D2/D3) and each ABCD's own carry-out (for the boundary's own CCR)."""
+    # movem.w loads d1/d2/d3 from the words at +2/+4/+6; abcd.b only ever touches a register's own low
+    # BYTE, which is the word's own SECOND (low) byte in memory -- +3/+5/+7, not +2/+4/+6.
+    d1 = read((BCD_COUNTER_BASE + 3) & 0xFFFFFF, 1) & 0xFF
+    d2 = read((BCD_COUNTER_BASE + 5) & 0xFFFFFF, 1) & 0xFF
+    d3 = read((BCD_COUNTER_BASE + 7) & 0xFFFFFF, 1) & 0xFF
+    d1_new, carry1 = _bcd_byte_add(d1, amount & 0xFF, 0)
+    d2_new, carry2 = _bcd_byte_add(d2, 0, carry1)
+    d3_new, carry3 = _bcd_byte_add(d3, 0, carry2)
+    return {'d1': d1_new, 'd2': d2_new, 'd3': d3_new, 'carry1': carry1, 'carry2': carry2, 'carry3': carry3}

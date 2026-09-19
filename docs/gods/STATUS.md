@@ -947,6 +947,42 @@ below, has the count and the milestone tree numbers).
   before `00A772` itself can be composed as the family; `00A578` as the
   walk remains open behind it.
 
+- **19 September, later the same session**: `00010E28` (`'effect-slot-add'`)
+  and `00003F0C` (`'bcd-counter-add'`) both recovered.  `00010E28`
+  composes `00004AAA` over a full `movem.l` register frame (every
+  register but A7 returns to its own entry value except D6, not in the
+  save list, left as the pool scan's own remaining count): on `'found'`
+  it stores the caller's own D0/D1 (a world position), an adjusted D2 (a
+  frame/type index wrapped modulo `0xB`, both directions witnessed), and
+  a literal 1 into the slot, advances a cursor (`F2A6`) past it, and
+  marks the slot's own index in a parallel 200-byte flag table
+  (`FFFF3FEA`); `'exhausted'` real ROM, never witnessed, declined.
+  `00003F0C` is a shared packed-BCD counter add (`FFFFEF80`, three
+  digit-pair bytes via `ABCD`, propagating decimal carry) with FAR more
+  callers than just `00A772`'s own tail (400+ occurrences across the
+  recordings against `00A9F2`'s own 52) -- one path class per recording,
+  the carry-propagation formula verified past the witnessed data with
+  `factcheck branches --vary` (a forced `0x99+1` overflow neither real
+  play nor the retained fixtures happened to reach).  Both new gates
+  bring `camera-sprites` to **sixty-four**, the adapter's own cap: no
+  further leaf can be armed there until a family composition frees gates
+  back (`00A772` itself, next).  Three real defects the FAST tier caught
+  in turn: `00010E28`'s own `movem.l` push frame (32 bytes of real,
+  permanent stack residue) and the internal `jsr`'s own return-address
+  residue were both missing from the first draft entirely, and the
+  `F2A6` cursor used the 24-bit masked slot address instead of the full
+  32-bit one (losing its own `0xFF` top byte); `00003F0C`'s own first
+  draft read the wrong RAM offset for each digit-pair byte (a word's own
+  SECOND byte, `+3`/`+5`/`+7` from the base, not `+2`/`+4`/`+6`).
+  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-bcd`, 107,519
+  frames, current receipts).  Next: `00009A9F2` (composes `00003F0C`,
+  called only when `LIFECYCLE` is negative -- kept out of `camera-sprites`
+  for the same gate cap until `00A772`'s own family composition frees
+  room), the eight kind-handler slots' own remaining unwitnessed pair,
+  then `00A772` itself as the family; `00A578` as the walk remains open
+  behind it.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from
