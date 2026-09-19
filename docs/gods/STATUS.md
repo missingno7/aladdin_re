@@ -2627,12 +2627,48 @@ small leaf):
   `ca2b703b6fd5…`: PASS, 3 hits, 0 fallbacks, bit-exact; mutant
   `pickup-award-group-mutant-result` DIVERGENCE at frame 2,395.  Milestone
   tree PASS on all five leaves (`artifacts/gods/verify-camera-sprites-leaves-2026-09-20`,
-  107,519 frames, 256.1 s).  With this, every piece the `003186`/`003480`
-  Decision named for the object draw-and-update subsystem's own bottom-up
-  order is recovered; what remains of that subsystem is `003186` itself (the
-  phase-table body, composing the now-fully-recovered `003284` tail) and
-  `0030CC` as the 200-entry scan composing it with the phase counters and the
-  tail.
+  107,519 frames, 256.1 s).
+
+  **Correction, 20 September**: the paragraph above overstated the result --
+  `003480` itself is NOT recovered, only its own reconnaissance/escalation
+  (`docs/gods/blockers/2026-09-19-003480.md`) is on record; `012C80` is one
+  of its own callees, recovered independently.  `003480` still stays fully
+  original execution until it is itself composed.
+
+- **20 September, continuing the same session**: `002F2E` (the effect queue
+  append, a fixed 10-slot RAM-only queue at `FFFF09FE`, both of `003480`'s
+  own arms 2/3 reach) is recovered as its own leaf -- `camera-sprites`
+  extended to sixty-one gates.  `00364C` (number-to-digits) turns out to
+  already be recovered (`score_convert_plan`, candidate `'score-convert'`,
+  armed since an earlier session) -- no new work needed there.  Seven of the
+  `0x5958` table's own witnessed handlers are recovered next: the table
+  itself is corrected to a real **23 entries**, not the 16 the blocker's own
+  reconnaissance read (entries 16-22 are real, witnessed handlers too,
+  confirmed by tracing every `jsr (a0)` this dispatch performs across the
+  whole tree and by reading the ROM past entry 15 directly); the "phase
+  accumulator" family (indices 0, 3, 21: `EF3C`/`EF3E`, folding an excess
+  into `pickups.SPECIAL_TIMER`, with a real 4-cycle ADDQ-vs-ADDI cost split
+  the first factcheck run caught), a fixed sound-cue pair (index 10, which
+  also has a second, independent real caller elsewhere), and a shared
+  24-byte ROM-to-RAM copy into `FFFFF53A` (indices 14/15/16).  All seven are
+  standalone candidates only (`kind-accumulator-0/3/21`, `kind-sound-cue-
+  pair`, `kind-copy-table-14/15/16`), kept out of `camera-sprites` for
+  native gate capacity (the `state-18`/`creature-attack` precedent) until
+  `003480` itself is composed, which will retire their individual gates the
+  way `00A772` retired the creature leaves'.  `factcheck check` and
+  `--perturb-upper-halves` both clean (a `moveq`'s own wholesale D3 clear
+  the perturbation caught); full suite PASS (23,639 passed, 15 skipped);
+  spot-checked fresh-process history-verify PASS bit-exact
+  (`kind-accumulator-0` on `ca2b703b6fd5…`), the rest verified via their own
+  test module's reference/mutant tier.  See `docs/gods/blockers/2026-09-19-
+  003480.md`'s own 20 September Progress note for the full remaining scope:
+  four more witnessed `0x5958` handlers (1, 2, 4, 6, 17, 18, 19, 22 -- index
+  1/2 reuse the already-modelled tally cascade internal to `012C80`'s own
+  composition), arm 1's own `FFFFF8C2`/`FFFFF22E` RAM-table dispatch (not
+  yet disassembled), and `003480` itself composing all three of its own
+  arms -- which is what finally closes the object draw-and-update
+  subsystem's own bottom-up order and admits `0036E2`'s own range arm
+  (kinds `0x40`-`0x44`, 7,197 declines on the last tree).
 
 ## Open questions
 

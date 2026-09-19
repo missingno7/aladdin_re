@@ -97,3 +97,97 @@ def queue_append(read, d0, d1, d2):
              (address + 6) & 0xFFFFFF: (QUEUE_LIFETIME, 2), (address + 4) & 0xFFFFFF: (d2 & 0xFFFF, 2),
              (address + 2) & 0xFFFFFF: (d1 & 0xFFFF, 2), address: (d0 & 0xFFFF, 2)}
     return {'arm': arm, 'slot': slot, 'depth': depth, 'stores': stores}
+
+
+# --- the 005958 table's own witnessed handlers (jsr'd from 00352C, inside 003480's own still-
+# unrecovered body -- docs/gods/blockers/2026-09-19-003480.md) -----------------------------------
+#
+# A ROM-constant scan over a 192-byte table (SOUND_SCAN_TABLE) counts zero bytes among the caller's
+# own status-many entries (status is SIGNED: a subq.w #1/bmi test, not a plain count -- status <= 0
+# scans nothing), doubled twice into a real 23-entry (not 16: the prior reconnaissance's own read
+# stopped at the first table-shaped run of bytes, but table-shaped code follows -- confirmed by this
+# session's own full-tree trace of every occurrence, and by reading the ROM past entry 15 directly)
+# function-pointer table at KIND_DISPATCH_TABLE.  Fifteen of the twenty-three are witnessed; seven are
+# recovered here as their own leaves (indices 0, 3, 10, 14, 15, 16, 21); the rest (1, 2, 4, 6, 17, 18,
+# 19, 22 -- witnessed but not yet recovered; and every unwitnessed index) decline by name.  Each
+# handler ends in a plain rts (no seam, no tail branch): 003480's own body resumes at 003532 either
+# way, and at least one of them (index 10, ROM 0x5A48) has a second, independent real caller elsewhere
+# (exit 008616 in this session's own census) -- the leaf does not assume which caller it serves.
+SOUND_SCAN_TABLE = 0x00014B42
+SOUND_SCAN_TABLE_SIZE = 192
+KIND_DISPATCH_TABLE = 0x00005958
+KIND_DISPATCH_COUNT = 23
+KIND_DISPATCH_WITNESSED = frozenset({0, 1, 2, 3, 4, 6, 10, 14, 15, 16, 17, 18, 19, 21, 22})
+KIND_DISPATCH_ADMITTED = frozenset({0, 3, 10, 14, 15, 16, 21})
+
+
+def kind_table_count(read, status):
+    """0x3502-351E: the zero-byte count over SOUND_SCAN_TABLE's own first max(status, 0) bytes."""
+    limit = status if status > 0 else 0
+    return sum(1 for i in range(limit) if read((SOUND_SCAN_TABLE + i) & 0xFFFFFF, 1) == 0)
+
+
+EF3C_BYPASS = 0xFFFFEF3C
+EF3E_COUNTER = 0xFFFFEF3E
+EF3E_CAP = 0x18
+ACCUM_CUE_ADDRESS = 0xFFFFFDF6
+ACCUM_CUE = 0x52
+SPECIAL_TIMER = 0xFFFFF156   # the SAME SPECIAL_TIMER game.pickups already names
+# (increment, has its own sound cue) per handler index; index 20 (increment 4) is real ROM, witnessed
+# by no recording, and stays undescribed here on purpose -- only the four this session found in the
+# ROM at all are named, and only three of those (0, 3, 21) are witnessed.
+ACCUMULATOR_PARAMS = {0: (0xC, True), 3: (0x18, True), 21: (3, False)}
+
+
+def accumulator_step(read, index):
+    """Indices 0, 3, 21: EF3C negative bypasses entirely; otherwise EF3E is incremented by the
+    index's own amount (always stored, even when the cap check below fails), and indices 0/3 ALSO
+    write a fixed sound cue (0x52) unconditionally before the cap check.  Once EF3E exceeds EF3E_CAP
+    it is reset to the cap and the excess, scaled by 32, is folded into SPECIAL_TIMER when
+    SPECIAL_TIMER is not itself negative."""
+    increment, has_cue = ACCUMULATOR_PARAMS[index]
+    if _signed_word(read(EF3C_BYPASS, 2)) < 0:
+        return {'arm': 'bypass', 'stores': {}}
+    stores = {}
+    if has_cue:
+        stores[ACCUM_CUE_ADDRESS & 0xFFFFFF] = (ACCUM_CUE, 2)
+    counter = (read(EF3E_COUNTER, 2) + increment) & 0xFFFF
+    stores[EF3E_COUNTER & 0xFFFFFF] = (counter, 2)
+    if _signed_word(counter) <= EF3E_CAP:
+        return {'arm': 'below-cap', 'stores': stores}
+    stores[EF3E_COUNTER & 0xFFFFFF] = (EF3E_CAP, 2)
+    d0 = ((counter - EF3E_CAP) << 5) & 0xFFFF
+    timer = read(SPECIAL_TIMER, 2)
+    if _signed_word(timer) < 0:
+        return {'arm': 'accumulate-skip', 'stores': stores, 'd0': d0}
+    stores[SPECIAL_TIMER & 0xFFFFFF] = ((timer + d0) & 0xFFFF, 2)
+    return {'arm': 'accumulate', 'stores': stores, 'd0': d0}
+
+
+SOUND_CUE_PAIR_FDF4 = 0xFFFFFDF4
+SOUND_CUE_PAIR_FDF6 = 0xFFFFFDF6
+SOUND_CUE_PAIR_COUNTER = 0xFFFFF1CC
+
+
+def sound_cue_pair(read):
+    """Index 10 (ROM 0x5A48): two fixed sound cues and a shared counter incremented by one."""
+    value = (read(SOUND_CUE_PAIR_COUNTER, 2) + 1) & 0xFFFF
+    return {'stores': {SOUND_CUE_PAIR_FDF4 & 0xFFFFFF: (0x4C, 2), SOUND_CUE_PAIR_FDF6 & 0xFFFFFF: (0x4D, 2),
+                       SOUND_CUE_PAIR_COUNTER & 0xFFFFFF: (value, 2)}}
+
+
+COPY_TABLE_DEST = 0xFFFFF53A
+COPY_TABLE_LONGS = 6
+COPY_SOURCE = {14: 0x0142BC, 15: 0x0142D4, 16: 0x0142EC}
+
+
+def copy_table(read, index):
+    """Indices 14/15/16 (ROM 0x142A6/0x14292/0x1429C): the shared 24-byte (six-long) ROM-to-RAM copy
+    (0x142AA) each feeds with its own fixed source block.  Index 14 reaches the copy by falling
+    through with no store of its own D3 (whatever the caller's D3 already held survives, a real
+    difference from 15/16's own explicit ``moveq #1,d3``, which the boundary's own register file
+    must reproduce, not this pure function)."""
+    source = COPY_SOURCE[index]
+    stores = {(COPY_TABLE_DEST + 4 * i) & 0xFFFFFF: (read((source + 4 * i) & 0xFFFFFF, 4), 4)
+             for i in range(COPY_TABLE_LONGS)}
+    return {'stores': stores}

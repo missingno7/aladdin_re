@@ -22721,3 +22721,185 @@ def queue_append_plan(machine, registers):
     exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=frame_writes + writes, registers=exit_registers,
                       last_pc=QUEUE_APPEND_LAST_PC)
+
+
+# --- the 005958 table's own witnessed handlers (game/world.py) -- jsr'd from 00352C, inside 003480's
+# own still-unrecovered body.  Each ends in a plain rts; no seam, no frame of its own (movem is never
+# used by any of these seven). --------------------------------------------------------------------
+_ACC_ENTRY = {0: 0x005ABE, 3: 0x005AE8, 21: 0x005B3E}
+_ACC_FAIL_PC = 0x005AE6          # the shared bypass/below-cap exit (the rts itself, not the moveq before it)
+_ACC_TAIL_PC = 0x005B1E          # the shared accumulate(-skip) exit
+_ACC_NEEDS_BRA = {0: True, 3: False, 21: True}
+# Indices 0/3 use ADDI.w (their own increment, 0xC/0x18, does not fit ADDQ's 3-bit immediate field);
+# 21 (and the unwitnessed 20) use ADDQ.w (increment 3/4) -- a real 4-cycle cost difference this
+# session's own first factcheck run caught.
+_ACC_USES_ADDQ = {0: False, 3: False, 21: True}
+
+_ACC_TST = (12, 1)
+_ACC_BMI_BYPASS_TAKEN, _ACC_BMI_BYPASS_NOT = (10, 1), (8, 1)
+_ACC_CUE = (16, 1)
+_ACC_ADDI = (20, 1)
+_ACC_ADDQ = (16, 1)
+_ACC_CMPI = (16, 1)
+_ACC_BLE_TAKEN, _ACC_BLE_NOT = (10, 1), (8, 1)
+_ACC_MOVE_D0 = (12, 1)
+_ACC_RESET = (16, 1)
+_ACC_BRA = (10, 1)
+_ACC_SUBI = (8, 1)
+_ACC_ASL = (16, 1)
+_ACC_TST_TIMER = (12, 1)
+_ACC_BMI_TIMER_TAKEN, _ACC_BMI_TIMER_NOT = (10, 1), (8, 1)
+_ACC_ADD_TIMER = (16, 1)
+_ACC_MOVEQ = (4, 1)
+_ACC_RTS = (16, 1)
+
+
+def _accumulator_entries():
+    return {index: pc for pc, index in ((0x005ABE, 0), (0x005AE8, 3), (0x005B3E, 21))}
+
+
+ACCUMULATOR_ENTRIES = _accumulator_entries()
+
+
+def _accumulator_plan(index, machine, registers):
+    from .game import world
+    entry = _ACC_ENTRY[index]
+    if registers['pc'] != entry:
+        raise UnsupportedCandidate('accumulator planner needs the machine parked at %06X' % entry)
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    result = world.accumulator_step(read, index)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    has_cue = world.ACCUMULATOR_PARAMS[index][1]
+    cost = _add(_ACC_TST, _ACC_BMI_BYPASS_NOT if result['arm'] != 'bypass' else _ACC_BMI_BYPASS_TAKEN)
+    if result['arm'] == 'bypass':
+        cost = _add(cost, _ACC_MOVEQ, _ACC_RTS)
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'d3': 1, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                                     'pc': _return(machine, sp), 'sr': _logic_sr(sr, 1, 2)}, last_pc=_ACC_FAIL_PC)
+    if has_cue:
+        cost = _add(cost, _ACC_CUE)
+    cost = _add(cost, _ACC_ADDQ if _ACC_USES_ADDQ[index] else _ACC_ADDI, _ACC_CMPI)
+    if result['arm'] == 'below-cap':
+        cost = _add(cost, _ACC_BLE_TAKEN, _ACC_MOVEQ, _ACC_RTS)
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'d3': 1, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                                     'pc': _return(machine, sp), 'sr': _logic_sr(sr, 1, 2)}, last_pc=_ACC_FAIL_PC)
+    cost = _add(cost, _ACC_BLE_NOT, _ACC_MOVE_D0, _ACC_RESET)
+    if _ACC_NEEDS_BRA[index]:
+        cost = _add(cost, _ACC_BRA)
+    cost = _add(cost, _ACC_SUBI, _ACC_ASL, _ACC_TST_TIMER)
+    d0 = result['d0']
+    if result['arm'] == 'accumulate-skip':
+        cost = _add(cost, _ACC_BMI_TIMER_TAKEN, _ACC_MOVEQ, _ACC_RTS)
+    else:
+        cost = _add(cost, _ACC_BMI_TIMER_NOT, _ACC_ADD_TIMER, _ACC_MOVEQ, _ACC_RTS)
+    exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | d0, 'd3': 1,
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': _logic_sr(sr, 1, 2)}
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=exit_registers,
+                      last_pc=_ACC_TAIL_PC)
+
+
+ACCUMULATOR_0_ENTRY = 0x005ABE
+ACCUMULATOR_3_ENTRY = 0x005AE8
+ACCUMULATOR_21_ENTRY = 0x005B3E
+
+
+def accumulator_0_plan(machine, registers):
+    """005ABE: the 005958 table's own index-0 handler (game.world.accumulator_step)."""
+    return _accumulator_plan(0, machine, registers)
+
+
+def accumulator_3_plan(machine, registers):
+    """005AE8: the 005958 table's own index-3 handler (game.world.accumulator_step)."""
+    return _accumulator_plan(3, machine, registers)
+
+
+def accumulator_21_plan(machine, registers):
+    """005B3E: the 005958 table's own index-21 handler (game.world.accumulator_step)."""
+    return _accumulator_plan(21, machine, registers)
+
+
+SOUND_CUE_PAIR_ENTRY, SOUND_CUE_PAIR_LAST_PC = 0x005A48, 0x005A5A
+_SCP_COST = (16 + 16 + 16 + 4 + 16, 5)   # move #$4c,fdf4; move #$4d,fdf6; addq #1,f1cc; moveq #1,d3; rts
+
+
+def sound_cue_pair_plan(machine, registers):
+    """005A48: the 005958 table's own index-10 handler (game.world.sound_cue_pair) -- a second, real,
+    independent caller elsewhere (exit 008616 in this session's own census) also reaches it; the
+    leaf assumes nothing about either."""
+    from .game import world
+    if registers['pc'] != SOUND_CUE_PAIR_ENTRY:
+        raise UnsupportedCandidate('sound cue pair planner needs the machine parked at 005A48')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    result = world.sound_cue_pair(_reader(machine))
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    exit_registers = {'d3': 1, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                      'pc': _return(machine, sp), 'sr': _logic_sr(sr, 1, 2)}
+    return AtomicPlan(cycles=_SCP_COST[0], instructions=_SCP_COST[1], writes=writes, registers=exit_registers,
+                      last_pc=SOUND_CUE_PAIR_LAST_PC)
+
+
+COPY_TABLE_14_ENTRY, COPY_TABLE_14_LAST_PC = 0x00142A6, 0x000142BA
+COPY_TABLE_15_ENTRY, COPY_TABLE_15_LAST_PC = 0x0014292, 0x001429A
+COPY_TABLE_16_ENTRY, COPY_TABLE_16_LAST_PC = 0x001429C, 0x00142A4
+_CT_BSR_RETURN = {15: 0x00014298, 16: 0x000142A2}   # the bsr.b $142aa's own return address, per caller
+_CT_LEA = (8, 1)
+_CT_BSR = (18, 1)
+_CT_LEA2 = (8, 1)
+_CT_MOVE_L = (20, 1)   # move.l (a0)+,(a1)+, per long
+_CT_RTS = (16, 1)
+_CT_MOVEQ = (4, 1)
+
+
+def _copy_table_plan(index, entry, last_pc, sets_d3, machine, registers):
+    from .game import world
+    if registers['pc'] != entry:
+        raise UnsupportedCandidate('copy table planner needs the machine parked at %06X' % entry)
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    result = world.copy_table(_reader(machine), index)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    source_end = (world.COPY_SOURCE[index] + 4 * world.COPY_TABLE_LONGS) & 0xFFFFFFFF
+    dest_end = (world.COPY_TABLE_DEST + 4 * world.COPY_TABLE_LONGS) & 0xFFFFFFFF
+    if sets_d3:
+        # bsr.b $142aa (the shared copy) then its own inner rts, THEN the caller's own moveq/rts.
+        cost = _add(_CT_LEA, _CT_BSR, _CT_LEA2, *([_CT_MOVE_L] * world.COPY_TABLE_LONGS), _CT_RTS, _CT_MOVEQ, _CT_RTS)
+        stack_writes = _bytes((sp - 4) & 0xFFFFFF, _CT_BSR_RETURN[index], 4)
+        exit_sr = _logic_sr(sr, 1, 2)   # the last flag-setter is moveq #1,d3
+    else:
+        cost = _add(_CT_LEA, _CT_LEA2, *([_CT_MOVE_L] * world.COPY_TABLE_LONGS), _CT_RTS)
+        stack_writes = ()
+        read = _reader(machine)
+        last_long = read((world.COPY_SOURCE[index] + 4 * (world.COPY_TABLE_LONGS - 1)) & 0xFFFFFF, 4)
+        exit_sr = _logic_sr(sr, last_long, 4)   # index 14: the last flag-setter is its own final move.l
+    exit_registers = {'a0': source_end, 'a1': dest_end, 'a7': (sp32 + 4) & 0xFFFFFFFF,
+                      'pc': _return(machine, sp), 'sr': exit_sr}
+    if sets_d3:
+        exit_registers['d3'] = 1
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=stack_writes + writes, registers=exit_registers,
+                      last_pc=last_pc)
+
+
+def copy_table_14_plan(machine, registers):
+    """0142A6: the 005958 table's own index-14 handler -- reaches the shared copy with no store of
+    its own D3 (whatever the caller's D3 already held survives)."""
+    return _copy_table_plan(14, COPY_TABLE_14_ENTRY, COPY_TABLE_14_LAST_PC, False, machine, registers)
+
+
+def copy_table_15_plan(machine, registers):
+    """014292: the 005958 table's own index-15 handler."""
+    return _copy_table_plan(15, COPY_TABLE_15_ENTRY, COPY_TABLE_15_LAST_PC, True, machine, registers)
+
+
+def copy_table_16_plan(machine, registers):
+    """01429C: the 005958 table's own index-16 handler."""
+    return _copy_table_plan(16, COPY_TABLE_16_ENTRY, COPY_TABLE_16_LAST_PC, True, machine, registers)
