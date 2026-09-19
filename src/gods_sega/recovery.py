@@ -36,6 +36,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        CREATURE_WALK_ENTRY, creature_walk_plan,
                        FLOATING_ICON_SPAWN_ENTRY, floating_icon_spawn_plan,
                        SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
+                       SPAWN_SCAN_ENTRY, spawn_scan_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
                        CONTACT_SEARCH_ENTRY, COUNTDOWN_CHECK_ENTRY,
@@ -378,6 +379,7 @@ PLANNERS = {
     'sprites-static': {STATIC_EMIT_ENTRY: static_emit_plan},
     'table-reset': {TABLE_RESET_ENTRY: table_reset_plan},
     'spawn-queue': {SPAWN_QUEUE_ENTRY: spawn_queue_plan},
+    'spawn-scan': {SPAWN_SCAN_ENTRY: spawn_scan_plan},
     'grid-cell': {GRID_CELL_ENTRY: grid_cell_plan},
     'footprint': {FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan},
     'solid-draw': {SOLID_DRAW_ENTRY: draw_solid_plan},
@@ -482,7 +484,11 @@ PLANNERS = {
     'state-14': {STATE14_ENTRY: state14_plan},
     'camera-sprites': {CAMERA_FOLLOW_ENTRY: camera_follow_plan, SPRITE_EMIT_ENTRY: sprite_emit_plan,
                        STATIC_EMIT_ENTRY: static_emit_plan, TABLE_RESET_ENTRY: table_reset_plan,
-                       SPAWN_QUEUE_ENTRY: spawn_queue_plan, GRID_CELL_ENTRY: grid_cell_plan,
+                       SPAWN_QUEUE_ENTRY: spawn_queue_plan,
+                       # SPAWN_SCAN_ENTRY (004926): the box-scan puff spawner, 19 September -- a new
+                       # leaf, not a composition (its two real callers, 0048EA and 0139D2, are both
+                       # still unrecovered) -- 54 -> 55 gates.
+                       SPAWN_SCAN_ENTRY: spawn_scan_plan, GRID_CELL_ENTRY: grid_cell_plan,
                        FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan, SOLID_DRAW_ENTRY: draw_solid_plan,
                        ANIMATION_STEP_ENTRY: animation_step_plan, COUNTDOWN_CHECK_ENTRY: countdown_check_plan,
                        COLLISION_GATE_ENTRY: collision_gate_plan, ZONE_CHECK_ENTRY: zone_check_plan,
@@ -598,6 +604,10 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'sprites-static-mutant-result': ('sprites-static', _mutate_result),
              'table-reset-mutant-result': ('table-reset', _mutate_result),
              'spawn-queue-mutant-result': ('spawn-queue', _mutate_result),
+             # writes are ordered so the LAST pair is the puff's own queued spawn-queue position (not
+             # the scratch F398 counter or the sound cue): a flip there is a real, externally visible
+             # effect (the next tick's own scan_spawn_queue draws the puff at the corrupted position).
+             'spawn-scan-mutant-result': ('spawn-scan', _mutate_result),
              'grid-cell-mutant-result': ('grid-cell', _mutate_address),
              'footprint-mutant-result': ('footprint', _mutate_result),
              # a register, not the stored list: the routine's own last write is the unconditional

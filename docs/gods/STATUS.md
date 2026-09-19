@@ -2329,6 +2329,54 @@ small leaf):
   No further card revision needed unless a later state surfaces persistent
   state or platform interaction this card does not already cover.
 
+- **19 September, grinder session opening on the `0030CC` assignment**
+  (`docs/gods/blockers/2026-09-19-0030CC.md`): its own first bite,
+  `004926`, is recovered -- not merely the "RECORD_TABLE scan" the
+  assignment's own reconnaissance named, but a box-scan puff spawner.  A
+  full-tree census (`--entry 0x004926`, all five recordings, 22 retained
+  fixtures; the fifth recording never reaches it) showed the routine's
+  own head first finds the spawn queue's own first free slot
+  (`spawn_queue.SLOT_BASE`, `0049DA`'s own four slots -- every slot
+  occupied is real ROM, the routine's own fallback overwrites the last
+  one regardless, never witnessed, declined by name); then walks the SAME
+  200-entry `movement.BOX_SCAN_TABLE` the box-overlap scan and `0030CC`
+  itself share, each active entry's own `+4` word doubling as an
+  `achievements.RECORD_TABLE` index (the SAME double/double/double
+  ADDA.W arithmetic `achievements._record_address` already models --
+  reused verbatim, not reimplemented) whose own record status of 4 and a
+  caller-supplied box (`d0`-`d3`) select up to two consumes per
+  activation (a second consume's own early exit, `0049D4`, is real ROM,
+  never witnessed by any of the 22 fixtures -- every one finds 0 or 1 --
+  declined by name); each consumed entry is marked spent and queued into
+  the spawn queue's own next free slot (`x - 8`, raw `y`) with a sound
+  cue (`FDF4 = 0x3D`).  One entry's own record header of exactly `0x60`
+  takes a second, unwitnessed shape (the QUEUED `y`, not the register,
+  also adjusted by `-8`) and stays declined by name too.
+  `game.spawn_scan.{find_spawn_slot,scan_and_spawn}`;
+  `gods_sega.boundary.spawn_scan_plan`; candidate `'spawn-scan'`.  Two
+  real callers reach it (`0048EA`, one of the trigger evaluator's own
+  action-table handlers, three of five witnessed firings per
+  `docs/gods/blockers/2026-09-16-00462C-firing.md`; and a second,
+  unrelated one at `0139D2` inside the collectible-lists subsystem,
+  `tick-map.md` order 14) -- NEITHER is recovered, so this leaf is
+  verified stand-alone and assumes nothing about either caller.  Writes
+  are ordered so the negative control's generic "flip the last write"
+  lands on the puff's own durable spawn-queue position, not the scratch
+  match counter or the sound cue.  `factcheck check` (22 fixtures) and
+  `--perturb-upper-halves` both clean; `run_tests.py gods` (23,059
+  passed, 12 skipped).  `camera-sprites` extended to fifty-five gates (a
+  new leaf, not a composition: both real callers are still original
+  execution).  Reproduces the original on `f0ac19738f19…` (the shortest
+  exercising leaf, five hits): PASS, bit-exact; mutant
+  `spawn-scan-mutant-result` DIVERGENCE at frame 1019.  Next, per the
+  assignment's own order: `0048EA` itself over it (a small leaf: reads
+  the caller's own record position at `+0xC`/`+0xE`, one rare
+  position/flag substitution gated on `hazard.TRIGGER_COUNTER`, builds a
+  ±12 box, calls `spawn_scan` -- disassembled but not yet censused), then
+  `003186`'s body and `003284` for the object table update itself, then
+  `004926`'s own sibling bite (`0048EA`'s own reachability into the
+  evaluator's firing arm as a 6a family).
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second

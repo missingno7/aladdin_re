@@ -444,6 +444,166 @@ def spawn_queue_plan(machine, registers):
                       registers=exit_registers, last_pc=SPAWN_QUEUE_LAST_PC)
 
 
+# --- 004926: the box-scan puff spawner (game/spawn_scan.py) ------------------
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-0X004926-*), 68000 cycles and
+# instruction counts, matching game/spawn_scan.py's own per-entry arms.  Two callers park the
+# machine here (0048EA, not yet recovered, and a second one at 0139D2 inside the collectible-lists
+# subsystem); this planner only reads d0-d3 (the caller-supplied box) and the live table, and never
+# assumes which caller it is.
+SPAWN_SCAN_ENTRY = 0x004926
+SPAWN_SCAN_LAST_PC_FOUND, SPAWN_SCAN_LAST_PC_EMPTY = 0x0049D8, 0x00497A   # exit via 0049D6 / 004978
+
+_SS_HEAD = (64, 6)                # clr.w f398; lea a0; lea a1; move.l a3,-(a7); moveq #3,d4; lea a3
+_SS_SLOT_FREE = (18, 2)           # tst.w (a3); bmi taken
+_SS_SLOT_OCCUPIED_STEP = (30, 4)  # tst.w (a3); bmi not taken; addq.w #6,a3; dbra taken
+_SS_SCAN_INIT = (8, 1)            # move.w #$c7,d4
+_SS_ENTRY_INACTIVE = (22, 2)      # tst.w $4(a0); bmi taken
+_SS_ENTRY_ACTIVE_HEAD = (20, 2)   # tst.w $4(a0); bmi not taken
+_SS_RECORD_LOOKUP = (60, 8)       # move.w $4(a0),d5 .. cmpi.w #4,$4(a2)
+_SS_STATUS_MISS = (8, 1)          # beq not taken
+_SS_STATUS_HIT = (10, 1)          # beq taken
+_SS_READ_XY = (20, 2)             # move.w (a0),d6; move.w $2(a0),d7
+_SS_X_MIN_FAIL = (14, 2)          # cmp d6,d0; bgt taken
+_SS_X_MIN_PASS = (12, 2)          # cmp d6,d0; bgt not taken
+_SS_X_MAX_FAIL = (14, 2)          # cmp d6,d2; blt taken
+_SS_X_MAX_PASS = (12, 2)          # cmp d6,d2; blt not taken
+_SS_Y_MIN_FAIL = (14, 2)          # cmp d7,d1; bgt taken
+_SS_Y_MIN_PASS = (12, 2)          # cmp d7,d1; bgt not taken
+_SS_Y_MAX_FAIL = (14, 2)          # cmp d7,d3; blt taken
+_SS_Y_MAX_PASS = (12, 2)          # cmp d7,d3; blt not taken
+_SS_SPECIAL_TEST = (16, 1)        # cmpi.w #$60,$4(a0)
+_SS_NOT_SPECIAL = (10, 1)         # bne taken
+_SS_CONSUME = (64, 6)             # move #$ffff,$4(a0); clr $6(a0); subq d6; clr/move/move (a3)+ x3
+_SS_TAIL = (58, 4)                # move #$3d,fdf4; addq f398; cmpi #2,f398; bne taken (continue)
+_SS_ADVANCE = (4, 1)              # addq.w #8,a0
+_SS_DBRA_MID, _SS_DBRA_LAST = (10, 1), (14, 1)   # dbra: continuing vs the 200th (final) iteration
+_SS_FINAL_TEST = (12, 1)          # tst.w $f398.w
+_SS_EXIT_MATCH = (10, 1)          # bne.b $49d6 taken (at least one consume)
+_SS_EXIT_EMPTY = (8, 1)           # bne.b $49d6 not taken (no consume)
+_SS_RESTORE = (12 + 16, 2)        # movea.l (a7)+,a3; rts
+
+
+def _ss_entry_cost(entry):
+    arm = entry['arm']
+    if arm == 'inactive':
+        return _SS_ENTRY_INACTIVE
+    lead = tuple(a + b for a, b in zip(_SS_ENTRY_ACTIVE_HEAD, _SS_RECORD_LOOKUP))
+    if arm == 'status-miss':
+        return tuple(a + b for a, b in zip(lead, _SS_STATUS_MISS))
+    lead = tuple(a + b for a, b in zip(lead, _SS_STATUS_HIT))
+    lead = tuple(a + b for a, b in zip(lead, _SS_READ_XY))
+    if arm == 'box-miss-x-min':
+        return tuple(a + b for a, b in zip(lead, _SS_X_MIN_FAIL))
+    lead = tuple(a + b for a, b in zip(lead, _SS_X_MIN_PASS))
+    if arm == 'box-miss-x-max':
+        return tuple(a + b for a, b in zip(lead, _SS_X_MAX_FAIL))
+    lead = tuple(a + b for a, b in zip(lead, _SS_X_MAX_PASS))
+    if arm == 'box-miss-y-min':
+        return tuple(a + b for a, b in zip(lead, _SS_Y_MIN_FAIL))
+    lead = tuple(a + b for a, b in zip(lead, _SS_Y_MIN_PASS))
+    if arm == 'box-miss-y-max':
+        return tuple(a + b for a, b in zip(lead, _SS_Y_MAX_FAIL))
+    # 'match': box fully passed; the special (0x60) arm is unwitnessed and declined before this runs.
+    lead = tuple(a + b for a, b in zip(lead, _SS_Y_MAX_PASS))
+    lead = tuple(a + b for a, b in zip(lead, _SS_SPECIAL_TEST))
+    lead = tuple(a + b for a, b in zip(lead, _SS_NOT_SPECIAL))
+    lead = tuple(a + b for a, b in zip(lead, _SS_CONSUME))
+    lead = tuple(a + b for a, b in zip(lead, _SS_TAIL))
+    return lead
+
+
+def spawn_scan_plan(machine, registers):
+    """004926: the box-scan puff spawner, over ``d0``-``d3`` as the caller's own box (min-x, min-y,
+    max-x, max-y)."""
+    from .game import achievements, movement, pickups, spawn_queue, spawn_scan
+    if registers['pc'] != SPAWN_SCAN_ENTRY:
+        raise UnsupportedCandidate('spawn scan planner needs the machine parked at 004926')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    slot = spawn_scan.find_spawn_slot(read)
+    if slot['exhausted'] or slot['checked'] > 2:
+        raise UnsupportedCandidate(f"spawn scan: slot search not witnessed past 2 checked ({slot['checked']})")
+    result = spawn_scan.scan_and_spawn(read, registers['d0'], registers['d1'], registers['d2'], registers['d3'])
+    consumed = result['consumed']
+    if len(consumed) > 1:
+        raise UnsupportedCandidate('spawn scan: a second consume in one activation is not witnessed')
+    if any(entry.get('special') for entry in consumed):
+        raise UnsupportedCandidate('spawn scan: the 0x60 special record header is not witnessed')
+    if result['end_index'] != movement.BOX_SCAN_COUNT:
+        raise UnsupportedCandidate('spawn scan: an early scan exit is not witnessed')
+
+    cycles, instructions = _SS_HEAD
+    slot_cost = _SS_SLOT_FREE if slot['checked'] == 1 else tuple(
+        a + b for a, b in zip(_SS_SLOT_OCCUPIED_STEP, _SS_SLOT_FREE))
+    cycles += slot_cost[0]
+    instructions += slot_cost[1]
+    scan_init_cy, scan_init_ins = _SS_SCAN_INIT
+    cycles += scan_init_cy
+    instructions += scan_init_ins
+
+    writes = ()
+    frame = (sp - 4, registers['a3'])
+    writes += _bytes(frame[0], frame[1] & 0xFFFFFFFF, 4)
+
+    for entry_index, entry in enumerate(result['entries']):
+        entry_cy, entry_ins = _ss_entry_cost(entry)
+        cycles += entry_cy
+        instructions += entry_ins
+        last = entry_index == len(result['entries']) - 1
+        advance_cy, advance_ins = _SS_ADVANCE
+        dbra = _SS_DBRA_LAST if last else _SS_DBRA_MID
+        cycles += advance_cy + dbra[0]
+        instructions += advance_ins + dbra[1]
+
+    slot_base = spawn_queue.SLOT_BASE + spawn_queue.SLOT_SIZE * slot['index']
+    for match in consumed:
+        writes += _bytes((match['addr'] + 4) & 0xFFFFFF, 0xFFFF, 2)
+        writes += _bytes((match['addr'] + 6) & 0xFFFFFF, 0, 2)
+    sound_writes, counter_writes = (), ()
+    if consumed:
+        exit_cy, exit_ins = _SS_EXIT_MATCH
+        sound_writes = _bytes(pickups.SOUND_CUE, spawn_scan.SPAWN_SOUND_CUE, 2)
+        counter_writes = _bytes(spawn_scan.FOUND_COUNT, len(consumed), 2)
+    else:
+        exit_cy, exit_ins = _SS_EXIT_EMPTY
+        counter_writes = _bytes(spawn_scan.FOUND_COUNT, 0, 2)
+    final_test_cy, final_test_ins = _SS_FINAL_TEST
+    cycles += final_test_cy + exit_cy
+    instructions += final_test_ins + exit_ins
+    restore_cy, restore_ins = _SS_RESTORE
+    cycles += restore_cy
+    instructions += restore_ins
+
+    # Order writes so the LAST pair is the puff's own durable spawn-queue position (the byte a later
+    # tick's own scan_spawn_queue actually consumes), not the scratch counter or sound cue: the
+    # negative control's generic "flip the last write" must land on something observable.
+    writes += sound_writes + counter_writes
+    for match in consumed:
+        writes += _bytes(slot_base, 0, 2)
+        writes += _bytes(slot_base + 2, match['queued_x'], 2)
+        writes += _bytes(slot_base + 4, match['queued_y'], 2)
+
+    d5, a2 = registers['d5'], registers['a2']
+    if result['last_active'] is not None:
+        d5 = (registers['d5'] & 0xFFFF0000) | ((result['last_active'] * 8) & 0xFFFF)
+        a2 = achievements._record_address(result['last_active'])
+    d6, d7 = registers['d6'], registers['d7']
+    if result['last_status_match'] is not None:
+        d6 = (registers['d6'] & 0xFFFF0000) | (result['last_status_match'][0] & 0xFFFF)
+        d7 = (registers['d7'] & 0xFFFF0000) | (result['last_status_match'][1] & 0xFFFF)
+
+    exit_registers = {
+        'a0': 0xFFFF4982, 'a1': 0xFFFFF8C2, 'a2': a2,
+        'd4': 0x0000FFFF, 'd5': d5, 'd6': d6, 'd7': d7,
+        'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': _logic_sr(sr, len(consumed), 2),
+    }
+    last_pc = SPAWN_SCAN_LAST_PC_FOUND if consumed else SPAWN_SCAN_LAST_PC_EMPTY
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                      registers=exit_registers, last_pc=last_pc)
+
+
 # --- 004150: the work-table reset (game/tables.py: reset_table) --------------
 #
 # Cost from the tracer (artifacts/gods/evidence/census-004150*): fully
