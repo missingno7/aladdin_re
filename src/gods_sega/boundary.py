@@ -19423,8 +19423,12 @@ def aim_search_flag_dispatch_plan(machine, registers):
     writes = (_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, result['kind'] & 0xFFFF, 2) +
              _bytes((a5 + creatures.FALL_PHASE) & 0xFFFFFF, d1_exit & 0xFFFF, 2) +
              _bytes((a5 + creatures.FRAME_STEP) & 0xFFFFFF, 0, 2))
-    # clr.w $4(a5) is the last flag-setter: Z=1, N=V=C=0 always, X retained.
-    exit_sr = _logic_sr(sr, 0, 2)
+    # clr.w $4(a5) never touches X (retained) -- but the REAL last X-setter is 00AC46's own
+    # subq.w #2,d0, not this CLR: every arm reaching here has f2ce (signed) > 1 (the bgt.b that
+    # selects 'extended' at all), so the subtraction never borrows and X is unconditionally 0 --
+    # not retained from entry.  A real defect a fresh caller's own entry X=1 exposed (19 Sep,
+    # composed from 00AB50): every existing fixture's own entry X happened to already be 0 here.
+    exit_sr = _logic_sr(sr, 0, 2) & ~0x10
     # D0's own last write in both sub-arms is a word op (andi.w/subq.w on Dn) -- entry upper half
     # survives.  D1's own last write is always moveq (#7 or #$d) -- clears the whole register, not
     # preserved from entry.
@@ -19860,3 +19864,298 @@ def aim_kind_handler_76_plan(machine, registers):
     # left it (X position): the last flag-setter is still this move's own immediate value, 1.
     sr = _logic_sr(sr, 1, 2)
     return handoff(AKH76_KIND1_LAST_PC)
+
+
+# --- 00AB50: the other most-witnessed kind handler -- 00AA76's own mirror, but NOT byte-identical
+# (confirmed by direct disassembly, not assumed): its own shared-exit test is `f2ce == 1`, not
+# `f2ce == 0` (00AA76's own, via a plain tst.w; here `tst.l $f2ce.w` gates the negative arm and a
+# SEPARATE `cmpi.w #1,f2ce.w` gates the shortcut -- the same N bit either way, since bit 31 of the
+# long is bit 15 of its own high word, but a real cost/instruction difference); its own arm-2 sets
+# KIND 3 (00AA76's own sets KIND 2); its own two neighbor cascades run in the OPPOSITE offset order
+# (game.creatures.aim_kind_handler_search's own `offsets` parameter); and its own KIND polarity is
+# the mirror of 00AA76's own: the shared reset ($ABFE / $ABE8, both byte-identical copies of each
+# other) writes KIND=1 (00AA76's own $AB1A/$AB06 write KIND=0), while the cascade's own immediate exit
+# ($ABE0, no counter/FALL_PHASE touch at all) writes KIND=0 (00AA76's own kind1 arm writes KIND=1) --
+# and the header-field adjustment around the reseed tail is ADDQ where 00AA76's own is SUBQ (position
+# deltas negate between these two mirrors the same way ground_contact_update's own pair does).
+AIM_KIND_HANDLER_50_ENTRY = 0x00AB50
+AKH50_RESET_ABFE_LAST_PC = 0x00AC0C     # the header guard / f2ce==1 shortcut / group1-probe-c shortcut,
+                                        # all via $ABFE, counter stays non-negative
+AKH50_RESET_ABE8_LAST_PC = 0x00ABF6     # the neighbor cascade's own shared exit via $ABE8, non-negative
+AKH50_RESEED_LAST_PC = 0x00AC32         # any negative-counter arm, from either entry point
+AKH50_ARM2_LAST_PC = 0x00ABA2           # $100(a2) != 1
+AKH50_KIND0_LAST_PC = 0x00ABE4          # the neighbor cascade's own immediate KIND:=0 exit
+AKH50_AC36_LAST_PC = 0x00AB8A           # f2ce not in {negative, 1}
+
+_AKH50_LOAD_HEADER = (8, 1)             # 00AB50 move.w (a5),d0
+_AKH50_MASK_HEADER = (8, 1)             # 00AB52 andi.w #$1c,d0
+_AKH50_BNE_HEADER = {True: (10, 1), False: (12, 1)}     # 00AB56 bne.w $abfe (word)
+_AKH50_LOAD_X = (8, 1)                  # 00AB5A move.w (a5),d0
+_AKH50_LOAD_Y = (12, 1)                 # 00AB5C move.w $2(a5),d1
+_AKH50_BSR_AF3C_1 = (18, 1)             # 00AB60 bsr.w $af3c
+_AKH50_CMP_MODE = (16, 1)               # 00AB64 cmpi.b #1,$100(a2)
+_AKH50_BNE_MODE = {True: (10, 1), False: (8, 1)}        # 00AB6A bne.b $ab8e (byte)
+_AKH50_MOVEM_PUSH = (32, 1)             # 00AB6C movem.l a3-a5,-(a7)
+_AKH50_BSR_AF52 = (18, 1)               # 00AB70 bsr.w $af52
+_AKH50_MOVEM_POP = (36, 1)              # 00AB74 movem.l (a7)+,a3-a5
+_AKH50_TST_FLAG = (16, 1)               # 00AB78 tst.l $f2ce.w
+_AKH50_BMI_FLAG = {True: (10, 1), False: (8, 1)}        # 00AB7C bmi.b $aba6
+_AKH50_CMP_ONE = (16, 1)                # 00AB7E cmpi.w #1,$f2ce.w
+_AKH50_BEQ_ONE = {True: (10, 1), False: (8, 1)}         # 00AB84 beq.b $abfe
+_AKH50_BSR_AC36 = (18, 1)               # 00AB86 bsr.w $ac36
+_AKH50_BRA_AC36_TAIL = (10, 1)          # 00AB8A bra.w $aa50
+
+_AKH50_ARM2_MOVEQ = (4, 1)              # 00AB8E moveq #1,d0
+_AKH50_ARM2_KIND = (16, 1)              # 00AB90 move.w #3,$a(a5)
+_AKH50_ARM2_FALLPHASE = (12, 1)         # 00AB96 move.w d0,$12(a5)
+_AKH50_ARM2_POSY = (16, 1)              # 00AB9A add.w d0,$2(a5)
+_AKH50_ARM2_FRAMESTEP = (16, 1)         # 00AB9E clr.w $4(a5)
+_AKH50_ARM2_BRA = (10, 1)               # 00ABA2 bra.w $aa50
+
+_AKH50_ABA6_LOAD_X = (8, 1)             # 00ABA6 move.w (a5),d0
+_AKH50_ABA6_LOAD_Y = (12, 1)            # 00ABA8 move.w $2(a5),d1
+_AKH50_BSR_AF3C_2 = (18, 1)             # 00ABAC bsr.w $af3c
+
+# group 1 (offsets 1, 0x81, 0x101 -- the shortcut, probe_c, jumps to $ABFE)
+_AKH50_CMP_A = (16, 1)                  # 00ABB0 cmpi.b #1,$1(a2)
+_AKH50_BEQ_A = {True: (10, 1), False: (8, 1)}           # 00ABB6 beq.b $abc8
+_AKH50_CMP_B = (16, 1)                  # 00ABB8 cmpi.b #1,$81(a2)
+_AKH50_BEQ_B = {True: (10, 1), False: (8, 1)}           # 00ABBE beq.b $abc8
+_AKH50_CMP_C = (16, 1)                  # 00ABC0 cmpi.b #1,$101(a2)
+_AKH50_BEQ_C = {True: (10, 1), False: (8, 1)}           # 00ABC6 beq.b $abfe
+
+# group 2 (offsets -1, 0x7f, 0xff -- probe_f's own match reaches $ABE0 (KIND=0); a miss, or an
+# earlier probe_d/probe_e match, reaches $ABE8 (KIND=1, the shared reset again))
+_AKH50_CMP_D = (16, 1)                  # 00ABC8 cmpi.b #1,-1(a2)
+_AKH50_BEQ_D = {True: (10, 1), False: (8, 1)}           # 00ABCE beq.b $abe8
+_AKH50_CMP_E = (16, 1)                  # 00ABD0 cmpi.b #1,$7f(a2)
+_AKH50_BEQ_E = {True: (10, 1), False: (8, 1)}           # 00ABD6 beq.b $abe8
+_AKH50_CMP_F = (16, 1)                  # 00ABD8 cmpi.b #1,$ff(a2)
+_AKH50_BNE_F = {True: (10, 1), False: (8, 1)}           # 00ABDE bne.b $abe8
+
+_AKH50_KIND0_STORE = (16, 1)            # 00ABE0 clr.w $a(a5)
+_AKH50_KIND0_BRA = (10, 1)              # 00ABE4 bra.w $aa50
+
+_AKH50_RESET_KIND = (16, 1)             # move.w #1,$a(a5)             ($ABFE / $ABE8)
+_AKH50_RESET_FALLPHASE = (16, 1)        # clr.w $12(a5)
+_AKH50_RESET_DEC = (16, 1)              # subq.w #1,$6(a5)
+_AKH50_RESET_BPL = {True: (10, 1), False: (12, 1)}      # bpl.w $aa50 (word)
+_AKH50_ABE8_SUBQ = (12, 1)              # 00ABFA subq.w #4,(a5)  -- $ABE8's own negative arm only
+_AKH50_ABE8_BRA = (10, 1)               # 00ABFC bra.b $ac10
+
+_AKH50_RESEED_MOVEQ = (4, 1)            # $AC10 moveq #$a,d0
+_AKH50_RESEED_SUB = (12, 1)             # sub.b $b(a4),d0
+_AKH50_RESEED_EXT = (4, 1)              # ext.w d0
+_AKH50_RESEED_MULU = (62, 1)            # mulu.w $eebe.w,d0
+_AKH50_RESEED_ADDL = (6, 1)             # add.l d0,d0
+_AKH50_RESEED_SWAP = (4, 1)             # swap d0
+_AKH50_RESEED_ADDQ = (4, 1)             # addq.w #1,d0
+_AKH50_RESEED_STORE = (12, 1)           # move.w d0,$6(a5)
+_AKH50_RESEED_FRAMESTEP_INC = (16, 1)   # addq.w #1,$4(a5)
+_AKH50_RESEED_FRAMESTEP_MASK = (20, 1)  # andi.w #7,$4(a5)
+_AKH50_RESEED_HEADER_INC = (12, 1)      # addq.w #4,(a5)
+_AKH50_RESEED_BRA = (10, 1)             # bra.w $aa50
+
+_AKH50_SEARCH_OFFSETS = (0x1, 0x81, 0x101, -1, 0x7F, 0xFF)
+
+
+def aim_kind_handler_50_plan(machine, registers):
+    """00AB50: see the module note above."""
+    from .game import creatures
+    if registers['pc'] != AIM_KIND_HANDLER_50_ENTRY:
+        raise UnsupportedCandidate('aim kind handler 50 planner needs the machine parked at 00AB50')
+    sr = registers['sr']
+    read = _reader(machine)
+    current = dict(registers)
+    a4 = current['a4'] & 0xFFFFFF
+    a5 = current['a5'] & 0xFFFFFF
+    writes = []
+    cycles, instructions = 0, 0
+
+    def charge(*fragments):
+        nonlocal cycles, instructions
+        c, i = _add(*fragments)
+        cycles += c
+        instructions += i
+
+    def call(plan_func, entry_pc, return_pc, read_machine=None):
+        nonlocal cycles, instructions
+        push_a7, push_write = _akh_push_call(current, return_pc)
+        writes.append(push_write)
+        virtual = dict(current, pc=entry_pc, a7=push_a7, sr=sr)
+        inner = plan_func(read_machine if read_machine is not None else machine, virtual)
+        cycles += inner.cycles
+        instructions += inner.instructions
+        writes.append(inner.writes)
+        current.update(inner.registers)
+        return inner
+
+    def handoff(last_pc):
+        flat_writes = tuple(pair for group in writes for pair in group)
+        exit_registers = dict(current)
+        exit_registers['pc'] = KIND_FRAME_OFFSET_ENTRY
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=flat_writes,
+                          registers=exit_registers, last_pc=last_pc)
+
+    def retry_tail(counter_addr_read, via_abe8):
+        nonlocal sr
+        charge(_AKH50_RESET_KIND, _AKH50_RESET_FALLPHASE, _AKH50_RESET_DEC)
+        writes.append(_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, 1, 2))
+        writes.append(_bytes((a5 + creatures.FALL_PHASE) & 0xFFFFFF, 0, 2))
+        counter_before = counter_addr_read((a5 + creatures.AIM_RETRY_COUNTER) & 0xFFFFFF, 2) & 0xFFFF
+        result = creatures.aim_retry_counter_step(read, a4, counter_before)
+        counter_after = (counter_before - 1) & 0xFFFF
+        # subq.w #1,$6(a5) is a real X-setter every path from here sees.
+        sr = _sub_sr(sr, counter_before, 1, 2)
+        writes.append(_bytes((a5 + creatures.AIM_RETRY_COUNTER) & 0xFFFFFF, counter_after, 2))
+        positive = result['arm'] == 'positive'
+        charge(_AKH50_RESET_BPL[positive])
+        if positive:
+            return handoff(AKH50_RESET_ABE8_LAST_PC if via_abe8 else AKH50_RESET_ABFE_LAST_PC)
+        if via_abe8:
+            charge(_AKH50_ABE8_SUBQ, _AKH50_ABE8_BRA)
+        charge(_AKH50_RESEED_MOVEQ, _AKH50_RESEED_SUB, _AKH50_RESEED_EXT, _AKH50_RESEED_MULU,
+               _AKH50_RESEED_ADDL, _AKH50_RESEED_SWAP, _AKH50_RESEED_ADDQ, _AKH50_RESEED_STORE,
+               _AKH50_RESEED_FRAMESTEP_INC, _AKH50_RESEED_FRAMESTEP_MASK, _AKH50_RESEED_HEADER_INC,
+               _AKH50_RESEED_BRA)
+        frame_step_before = counter_addr_read((a5 + creatures.FRAME_STEP) & 0xFFFFFF, 2) & 0xFFFF
+        frame_step_after = (frame_step_before + 1) & 7
+        header_before = counter_addr_read(a5 & 0xFFFFFF, 2) & 0xFFFF
+        # $ABE8's own negative arm already subtracted 4 (00ABFA, charged above) before falling into
+        # this SAME addq -- net zero on the header field; $ABFE's own arm never touched it first,
+        # net +4 (00AA76's own mirror is -4/0: the position delta negates between the two).
+        header_at_addq = (header_before - 4) & 0xFFFF if via_abe8 else header_before
+        header_after = (header_at_addq + 4) & 0xFFFF
+        writes.append(_bytes(a5 & 0xFFFFFF, header_after, 2))
+        writes.append(_bytes((a5 + creatures.FRAME_STEP) & 0xFFFFFF, frame_step_after, 2))
+        writes.append(_bytes((a5 + creatures.AIM_RETRY_COUNTER) & 0xFFFFFF, result['counter'], 2))
+        current['d0'] = result['d0'] & 0xFFFFFFFF
+        # addq.w #4,(a5) (the header increment) is the true LAST flag-setter -- andi.w #7,$4(a5) just
+        # before it is overwritten, even though the header FIELD it touches is otherwise dead by the
+        # hand-off (kind_frame_offset never reads it).
+        sr = _add_sr(sr, header_at_addq, 4, 2)
+        return handoff(AKH50_RESEED_LAST_PC)
+
+    # -- head: the header guard --
+    header = read(a5, 2) & 0xFFFF
+    masked = header & 0x1C
+    charge(_AKH50_LOAD_HEADER, _AKH50_MASK_HEADER)
+    current['d0'] = (current['d0'] & 0xFFFF0000) | masked
+    sr = _logic_sr(sr, masked, 2)
+    charge(_AKH50_BNE_HEADER[masked != 0])
+    if masked != 0:
+        return retry_tail(read, via_abe8=False)
+
+    # -- $100(a2) guard: the first 00AF3C call --
+    charge(_AKH50_LOAD_X, _AKH50_LOAD_Y)
+    x0 = read(a5, 2) & 0xFFFF
+    y0 = read((a5 + creatures.POSITION_Y) & 0xFFFFFF, 2) & 0xFFFF
+    current['d0'] = (current['d0'] & 0xFFFF0000) | x0
+    current['d1'] = (current['d1'] & 0xFFFF0000) | y0
+    call(creature_grid_cell_d0d1_plan, AF3C_ENTRY, 0x00AB64)
+    charge(_AKH50_BSR_AF3C_1)
+    a2 = current['a2'] & 0xFFFFFF
+    mode = read((a2 + 0x100) & 0xFFFFFF, 1) & 0xFF
+    charge(_AKH50_CMP_MODE)
+    # cmpi.b #1,$100(a2) retains X -- from 00AF3C's own real exit SR.
+    sr = _cmp_sr(current['sr'], mode, 1, 1)
+    skip_af52 = mode != 1
+    charge(_AKH50_BNE_MODE[skip_af52])
+    if skip_af52:
+        writes.append(_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, 3, 2))
+        writes.append(_bytes((a5 + creatures.FALL_PHASE) & 0xFFFFFF, 1, 2))
+        pos_y_after = (y0 + 1) & 0xFFFF
+        writes.append(_bytes((a5 + creatures.POSITION_Y) & 0xFFFFFF, pos_y_after, 2))
+        writes.append(_bytes((a5 + creatures.FRAME_STEP) & 0xFFFFFF, 0, 2))
+        charge(_AKH50_ARM2_MOVEQ, _AKH50_ARM2_KIND, _AKH50_ARM2_FALLPHASE, _AKH50_ARM2_POSY,
+               _AKH50_ARM2_FRAMESTEP, _AKH50_ARM2_BRA)
+        # moveq #1,d0 clears the whole 32-bit register.
+        current['d0'] = 1
+        # clr.w $4(a5) is the last flag-setter: Z=1, N=V=C=0, X retained.
+        sr = _logic_sr(sr, 0, 2)
+        return handoff(AKH50_ARM2_LAST_PC)
+
+    # -- 00AF52: aim search dispatch --
+    charge(_AKH50_MOVEM_PUSH)
+    movem_a7 = (current['a7'] - 12) & 0xFFFFFFFF
+    writes.append(_bytes(movem_a7 & 0xFFFFFF, current['a3'] & 0xFFFFFFFF, 4))
+    writes.append(_bytes((movem_a7 + 4) & 0xFFFFFF, current['a4'] & 0xFFFFFFFF, 4))
+    writes.append(_bytes((movem_a7 + 8) & 0xFFFFFF, current['a5'] & 0xFFFFFFFF, 4))
+    current['a7'] = movem_a7
+    call(aim_search_dispatch_plan, AIM_SEARCH_DISPATCH_ENTRY, 0x00AB74)
+    charge(_AKH50_BSR_AF52, _AKH50_MOVEM_POP)
+    current['a7'] = (current['a7'] + 12) & 0xFFFFFFFF
+    current['a3'], current['a4'], current['a5'] = registers['a3'], registers['a4'], registers['a5']
+    overlay = {}
+    for group in writes:
+        for addr, value in group:
+            overlay[addr & 0xFFFF] = value
+    machine_post_af52 = _ConstMachine(machine, overlay)
+    post_af52 = _reader(machine_post_af52)
+    f2ce = post_af52(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFFFF, 4) & 0xFFFFFFFF
+    f2ce_word = (f2ce >> 16) & 0xFFFF   # AIM_SEARCH_BEST_FLAG is the HIGH word of this long
+    charge(_AKH50_TST_FLAG)
+    # tst.l $f2ce.w retains X -- from 00AF52's own real exit SR.
+    sr = _logic_sr(current['sr'], f2ce, 4)
+    f2ce_signed = creatures._signed_word(f2ce_word)
+    charge(_AKH50_BMI_FLAG[f2ce_signed < 0])
+    if f2ce_signed >= 0:
+        charge(_AKH50_CMP_ONE)
+        sr = _cmp_sr(sr, f2ce_word, 1, 2)
+        is_one = f2ce_word == 1
+        charge(_AKH50_BEQ_ONE[is_one])
+        if is_one:
+            return retry_tail(post_af52, via_abe8=False)
+        call(aim_search_flag_dispatch_plan, AIM_SEARCH_FLAG_DISPATCH_ENTRY, 0x00AB8A, read_machine=machine_post_af52)
+        charge(_AKH50_BSR_AC36, _AKH50_BRA_AC36_TAIL)
+        # bra.w $aa50 never touches flags: 00AC36's own exit SR survives.
+        sr = current['sr']
+        return handoff(AKH50_AC36_LAST_PC)
+
+    # -- f2ce < 0: a SECOND 00AF3C call on the ORIGINAL position, then the neighbor cascade --
+    charge(_AKH50_ABA6_LOAD_X, _AKH50_ABA6_LOAD_Y)
+    current['d0'] = (current['d0'] & 0xFFFF0000) | x0
+    current['d1'] = (current['d1'] & 0xFFFF0000) | y0
+    call(creature_grid_cell_d0d1_plan, AF3C_ENTRY, 0x00ABB0, read_machine=machine_post_af52)
+    charge(_AKH50_BSR_AF3C_2)
+    cell_addr = current['a2'] & 0xFFFFFF
+    search = creatures.aim_kind_handler_search(post_af52, cell_addr, offsets=_AKH50_SEARCH_OFFSETS)
+    charge(_AKH50_CMP_A)
+    # cmpi.b #1,$1(a2) retains X -- from the second 00AF3C call's own real exit SR.
+    sr = _cmp_sr(current['sr'], 1 if search['probe_a'] else 0, 1, 1)
+    charge(_AKH50_BEQ_A[search['probe_a']])
+    if not search['probe_a']:
+        charge(_AKH50_CMP_B)
+        sr = _cmp_sr(sr, 1 if search['probe_b'] else 0, 1, 1)
+        charge(_AKH50_BEQ_B[search['probe_b']])
+        if not search['probe_b']:
+            charge(_AKH50_CMP_C)
+            sr = _cmp_sr(sr, 1 if search['probe_c'] else 0, 1, 1)
+            charge(_AKH50_BEQ_C[search['probe_c']])
+            if search['probe_c']:
+                return retry_tail(post_af52, via_abe8=False)
+    if search['route'] not in ('a', 'fallthrough'):
+        raise UnsupportedCandidate("aim kind handler 50: neighbor route " + repr(search['route'])
+                                   + ", not witnessed by a recording")
+    charge(_AKH50_CMP_D)
+    sr = _cmp_sr(sr, 1 if search['probe_d'] else 0, 1, 1)
+    charge(_AKH50_BEQ_D[search['probe_d']])
+    if search['probe_d']:
+        return retry_tail(post_af52, via_abe8=True)
+    charge(_AKH50_CMP_E)
+    sr = _cmp_sr(sr, 1 if search['probe_e'] else 0, 1, 1)
+    charge(_AKH50_BEQ_E[search['probe_e']])
+    if search['probe_e']:
+        raise UnsupportedCandidate('aim kind handler 50: neighbor probe_e match, not witnessed by a recording')
+    charge(_AKH50_CMP_F)
+    sr = _cmp_sr(sr, 1 if search['probe_f'] else 0, 1, 1)
+    f_matched = search['probe_f']
+    charge(_AKH50_BNE_F[not f_matched])
+    if not f_matched:
+        return retry_tail(post_af52, via_abe8=True)
+    writes.append(_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, 0, 2))
+    charge(_AKH50_KIND0_STORE, _AKH50_KIND0_BRA)
+    # clr.w $a(a5) is the last flag-setter: Z=1,N=V=C=0, X retained.
+    sr = _logic_sr(sr, 0, 2)
+    return handoff(AKH50_KIND0_LAST_PC)

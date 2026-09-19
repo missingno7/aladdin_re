@@ -882,6 +882,45 @@ below, has the count and the milestone tree numbers).
   opposite order -- confirmed by direct disassembly, not assumed), then
   `00A772` as the family, then `00A578` as the walk.
 
+- **19 September, grinder session on `00AB50`**: recovered -- 00AA76's own
+  mirror, confirmed NOT byte-identical the same way every other mirror
+  pair in this game has been (ground-contact/fall-kind before it): its
+  own shared-exit test is `f2ce == 1`, reached via a separate `cmpi.w`
+  after the `tst.l` that gates the negative arm (00AA76's own is a plain
+  `tst.w` against 0, so `f2ce == 0` shortcuts there directly; here it
+  falls through to 00AC36 like any other non-negative, non-1 value);
+  its own arm-2 sets KIND 3; its own two neighbor cascades run in the
+  opposite offset order; and past them its own KIND polarity inverts
+  end to end (the shared reset writes KIND 1 where 00AA76's own writes
+  KIND 0, the cascade's own immediate exit writes KIND 0 where 00AA76's
+  own writes KIND 1) with the header-field adjustment flipped from SUBQ
+  to ADDQ to match -- the same "position deltas negate between mirrors"
+  pattern `ground_contact_update`'s own pair already established.  Reused
+  `game/creatures.py`'s own `aim_retry_counter_step`/
+  `aim_kind_handler_search` verbatim, parameterised on offset order.  A
+  real, PRE-EXISTING defect in the already-shipped `aim_search_flag_
+  dispatch_plan` (00AC36) surfaced only through this new caller: its own
+  `'extended'` arm's exit SR assumed `clr.w $4(a5)` was the last X-setter
+  and retained the caller's own entry X, but the routine's REAL last
+  X-setter is `00AC46`'s own `subq.w #2,d0` (unconditionally X=0 in this
+  arm, since every path reaching it has `f2ce` signed `> 1`) -- every
+  EXISTING caller of 00AC36 happened to always enter with X already 0, so
+  the bug was invisible until 00AB50's own composition produced a real
+  X=1 entry; fixed in `aim_search_flag_dispatch_plan` itself, not worked
+  around in the caller, and re-verified clean on its own original
+  14-fixture set plus both kind-handler callers.  `factcheck check` clean
+  on all 346 retained fixtures (257 MATCH, 0 MISMATCH, 89 DECLINED -- all
+  inherited cost-cap declines or the two never-witnessed neighbor-cascade
+  routes/outcomes).  `camera-sprites` extended to sixty-one gates.
+  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-ab50`, 107,519
+  frames, current receipts).  Reproduces the original on `f0ac19738f19…`:
+  PASS, 153 hits, 20 fallbacks (all atomic-plan-cap/observation
+  deadline); mutant (`_mutate_result`) DIVERGENCE at frame 12,265.  Next,
+  per the Decision's own order: `00A772` as the family (frees the
+  creature gates further), then `00A578` as the walk with its own
+  semantic-operation card.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

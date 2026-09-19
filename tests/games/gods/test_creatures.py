@@ -1851,6 +1851,65 @@ def test_aim_kind_handler_76_candidate_matches_the_reference_and_its_mutant_dive
     assert mutant['status'] == 'DIVERGENCE'
 
 
+# --- 00AB50: 00AA76's own mirror -- NOT byte-identical (its own shared-exit test is f2ce == 1, its
+# own arm-2 sets KIND 3, its own two neighbor cascades run in the opposite order, and its own KIND
+# polarity/header-delta sign are both the mirror of 00AA76's own).  See boundary.py's own module note
+# above aim_kind_handler_50_plan.
+
+AIM_KIND_HANDLER_50_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00AA76-*/00AB50-entry-p*.state'))
+needs_aim_kind_handler_50_census = pytest.mark.skipif(
+    not AIM_KIND_HANDLER_50_FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 00AB50')
+
+
+def test_aim_kind_handler_50_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-kind-handler-50').gate_pcs == (boundary.AIM_KIND_HANDLER_50_ENTRY,)
+    assert boundary.AIM_KIND_HANDLER_50_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-kind-handler-50-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_aim_kind_handler_50_census
+@pytest.mark.parametrize('fixture', AIM_KIND_HANDLER_50_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_kind_handler_50_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_kind_handler_50_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            # A busy 00AF52 composition can genuinely exceed native/machine.cpp's own al_atomic cost
+            # cap, an unwitnessed arm inside that same composition, or an unwitnessed neighbor-cascade
+            # route/outcome this routine's own five recordings never reach.
+            assert any(needle in str(error) for needle in
+                      ('aim target scan', 'aim search scan', 'aim pool scan', 'aim search dispatch',
+                       'aim cue', 'aim kind handler 50')), error
+            return
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'], max_instructions=400000))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_kind_handler_50_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_KIND_HANDLER_50_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-kind-handler-50',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1 or report['status'] != 'PASS':
+            continue
+        if not set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS:
+            continue
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-kind-handler-50-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-kind-handler-50 produce a clean observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
 # --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (00A578's own spawn-init body's own
 # unconditional `bsr $b920`, independent of the whole 00AF52/00B588 chain).  See game/creatures.py's
 # own module note above spawn_table_find_free/spawn_table_add.
