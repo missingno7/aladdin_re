@@ -26,6 +26,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_SEARCH_SCAN_ENTRY, aim_search_scan_plan,
                        AIM_SEARCH_DISPATCH_ENTRY, aim_search_dispatch_plan,
                        AIM_SEARCH_FLAG_DISPATCH_ENTRY, aim_search_flag_dispatch_plan,
+                       AIM_KIND_HANDLER_76_ENTRY, aim_kind_handler_76_plan,
                        SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
@@ -370,6 +371,7 @@ PLANNERS = {
     'aim-search-scan': {AIM_SEARCH_SCAN_ENTRY: aim_search_scan_plan},
     'aim-search-dispatch': {AIM_SEARCH_DISPATCH_ENTRY: aim_search_dispatch_plan},
     'aim-search-flag-dispatch': {AIM_SEARCH_FLAG_DISPATCH_ENTRY: aim_search_flag_dispatch_plan},
+    'aim-kind-handler-76': {AIM_KIND_HANDLER_76_ENTRY: aim_kind_handler_76_plan},
     'spawn-table-find-free': {SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
     'spawn-table-add': {SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
@@ -493,6 +495,9 @@ PLANNERS = {
                        AIM_SEARCH_SCAN_ENTRY: aim_search_scan_plan,
                        AIM_SEARCH_DISPATCH_ENTRY: aim_search_dispatch_plan,
                        AIM_SEARCH_FLAG_DISPATCH_ENTRY: aim_search_flag_dispatch_plan,
+                       # AIM_KIND_HANDLER_76_ENTRY (00AA76): the most-witnessed kind handler, 19
+                       # September -- 59 -> 60 gates.
+                       AIM_KIND_HANDLER_76_ENTRY: aim_kind_handler_76_plan,
                        SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
@@ -732,6 +737,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-search-flag-dispatch-mutant-result': ('aim-search-flag-dispatch', _mutate_result),
              'aim-target-scan-mutant-result': ('aim-target-scan', _mutate_result),
              'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
+             'aim-kind-handler-76-mutant-result': ('aim-kind-handler-76', _mutate_result),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),
              'spawn-table-find-free-mutant-result': ('spawn-table-find-free', _mutate_spawn_find_free),
              'spawn-table-add-mutant-result': ('spawn-table-add', _mutate_result)}

@@ -836,6 +836,52 @@ below, has the count and the milestone tree numbers).
   Next, per the Decision's own order (unchanged by this fix): `00AA76`/
   `00AB50`, then `00A772` as the family, then `00A578` as the walk.
 
+- **19 September, grinder session opening on `00AA76`**: recovered.  Read
+  `$AAE4`, the `$AB1A` not-taken (negative-counter) arm and confirmed
+  `$2(a5)`/`$6(a5)` by role (`POSITION_Y` and, for `$6(a5)`, a per-instance
+  search-retry counter -- the SAME offset `LIFECYCLE_RESET`/
+  `GROUND_HOLD_TIMER` other callers already name, `creatures.
+  AIM_RETRY_COUNTER` here) -- five real arms, not the "about twenty
+  instructions" the reconnaissance first estimated: the header guard
+  (`(a5) & $1c`), the `$100(a2)` footing guard (00AF3C), 00AF52's own
+  three-way re-dispatch on `AIM_SEARCH_BEST_FLAG` (negative runs a SECOND
+  00AF3C on the original position then a six-probe neighbor cascade;
+  zero and the cascade's own third-probe shortcut both reach the shared
+  reset; positive runs 00AC36), and the shared reset itself (two entry
+  points, `$AB1A`/`$AB06`) reseeding the retry counter via a per-type byte
+  and the shared `timers.FREQUENCY_SCALE` multiplier when it goes
+  negative -- verified against a real trace including MULU's own
+  unsigned treatment of a byte-subtraction underflow.  Of the neighbor
+  cascade's six probes, only two routes and two second-group outcomes are
+  witnessed by any of the five recordings; the rest (`probe_b` alone, the
+  second group's first two probes) are real ROM, declined by name.
+  Composed in `boundary.aim_kind_handler_76_plan` over
+  `creature_grid_cell_d0d1_plan`/`aim_search_dispatch_plan`/
+  `aim_search_flag_dispatch_plan` as real internal `bsr` calls, ending at
+  a hand-off to `kind_frame_offset`'s own separately-armed gate -- the
+  SAME shape `ground_contact_update_plan`'s own trigger arms already use.
+  Two real defects the FAST tier caught before any fixture matched: the
+  `movem.l a3-a5,-(a7)` frame around the 00AF52 call needs its own -12
+  stack-pointer effect modelled explicitly (every one of 00AF52's own
+  internal residues is computed relative to it) and its own SR threading
+  after each internal call must read the CALLEE's own real exit SR, never
+  this routine's own stale pre-call value; a third (`--perturb-upper-halves`):
+  `moveq #1,d0` clears the whole register, not preserved from entry.
+  `factcheck check` clean on all 349 retained fixtures (247 MATCH, 0
+  MISMATCH, 102 DECLINED -- all inherited cost-cap declines from the
+  composed 00AF52/00B7DA, or the two never-witnessed neighbor-cascade
+  routes/outcomes).  `camera-sprites` extended to sixty gates.  Milestone
+  tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-aa76`, 107,519
+  frames, current receipts).  Reproduces the original on
+  `f0ac19738f19…`: PASS, 59 hits, 7 fallbacks (all atomic-plan-cap);
+  mutant (`_mutate_result`) DIVERGENCE at frame 13,901.  Next, per the
+  Decision's own order: `00AB50` (the same shape, NOT byte-identical:
+  its own shared-exit test is `f2ce == 1` not `f2ce == 0`, its own arm-2
+  sets KIND 3 not 2, and its own two neighbor cascades run in the
+  opposite order -- confirmed by direct disassembly, not assumed), then
+  `00A772` as the family, then `00A578` as the walk.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

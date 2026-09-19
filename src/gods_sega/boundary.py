@@ -19548,3 +19548,315 @@ def spawn_table_add_plan(machine, registers):
                       registers={'a0': exit_a0, 'd0': d0_final,  # moveq #9,d0 clears the upper half
                                  'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
                       last_pc=SPAWN_TABLE_ADD_DECLINE_PC)
+
+
+# --- 00AA76: the most-witnessed kind handler (docs/gods/blockers/2026-09-18-00A578.md's own 19
+# September Progress/Decision) -- five real arms over the record's own header word before a hand-off
+# to kind_frame_offset's own separately-armed gate (00AA50): `(a5) & $1c != 0` skips straight to the
+# shared retry-counter reset ($AB1A); `$100(a2) == 1` (a5's own grid footing, via 00AF3C) but that
+# fails writes KIND=2/FALL_PHASE=1/POSITION_Y+=1/FRAME_STEP=0 directly; otherwise 00AF52 (aim search
+# dispatch) runs and its own AIM_SEARCH_BEST_FLAG result re-dispatches a THIRD time: negative runs a
+# SECOND 00AF3C on the ORIGINAL position and a six-probe neighbor cascade
+# (game.creatures.aim_kind_handler_search); zero falls to the SAME shared reset as the header guard;
+# positive runs 00AC36 (aim search flag dispatch) then hands off unconditionally.  Every internal call
+# is genuine 68000 bsr/rts (never a chained atomic plan the way 00B002's own family composes planners
+# as internal calls with no real return) -- but since NONE of 00AA76's own writes are ever read back by
+# a LATER internal call (its own stores are all late, and the two 00AF3C calls / 00AF52 / 00AC36 read
+# only fields none of them touch), every sub-plan is composed against the real machine directly, no
+# _ConstMachine overlay needed except to see 00AF52's own AIM_SEARCH_BEST_FLAG result (a real RAM write
+# its own caller must read back).
+AIM_KIND_HANDLER_76_ENTRY = 0x00AA76
+AKH76_RESET_AB1A_LAST_PC = 0x00AB26     # the header guard / f2ce==0 / neighbor-probe-c shortcut, all
+                                        # via $AB1A, counter stays non-negative
+AKH76_RESET_AB06_LAST_PC = 0x00AB12     # the neighbor cascade's own shared exit via $AB06, non-negative
+AKH76_RESEED_LAST_PC = 0x00AB4C         # any negative-counter arm, from either entry point
+AKH76_ARM2_LAST_PC = 0x00AAC0           # $100(a2) != 1
+AKH76_KIND1_LAST_PC = 0x00AB02          # the neighbor cascade's own KIND:=1 arm
+AKH76_AC36_LAST_PC = 0x00AAAA           # f2ce > 0
+
+_AKH76_LOAD_HEADER = (8, 1)             # 00AA76 move.w (a5),d0
+_AKH76_MASK_HEADER = (8, 1)             # 00AA78 andi.w #$1c,d0
+_AKH76_BNE_HEADER = {True: (10, 1), False: (12, 1)}     # 00AA7C bne.w $ab1a (word)
+_AKH76_LOAD_X = (8, 1)                  # 00AA80 move.w (a5),d0
+_AKH76_LOAD_Y = (12, 1)                 # 00AA82 move.w $2(a5),d1
+_AKH76_BSR_AF3C_1 = (18, 1)             # 00AA86 bsr.w $af3c
+_AKH76_CMP_MODE = (16, 1)               # 00AA8A cmpi.b #1,$100(a2)
+_AKH76_BNE_MODE = {True: (10, 1), False: (8, 1)}        # 00AA90 bne.b $aaac (byte)
+_AKH76_MOVEM_PUSH = (32, 1)             # 00AA92 movem.l a3-a5,-(a7)
+_AKH76_BSR_AF52 = (18, 1)               # 00AA96 bsr.w $af52
+_AKH76_MOVEM_POP = (36, 1)              # 00AA9A movem.l (a7)+,a3-a5
+_AKH76_TST_FLAG = (12, 1)               # 00AA9E tst.w $f2ce.w
+_AKH76_BMI_FLAG = {True: (10, 1), False: (8, 1)}        # 00AAA2 bmi.b $aac2
+_AKH76_BEQ_ZERO = {True: (10, 1), False: (8, 1)}        # 00AAA4 beq.b $ab1a
+_AKH76_BSR_AC36 = (18, 1)               # 00AAA6 bsr.w $ac36
+_AKH76_BRA_AC36_TAIL = (10, 1)          # 00AAAA bra.b $aa50
+
+_AKH76_ARM2_KIND = (16, 1)              # 00AAAC move.w #2,$a(a5)
+_AKH76_ARM2_MOVEQ = (4, 1)              # 00AAB2 moveq #1,d0
+_AKH76_ARM2_FALLPHASE = (12, 1)         # 00AAB4 move.w d0,$12(a5)
+_AKH76_ARM2_POSY = (16, 1)              # 00AAB8 add.w d0,$2(a5)
+_AKH76_ARM2_FRAMESTEP = (16, 1)         # 00AABC clr.w $4(a5)
+_AKH76_ARM2_BRA = (10, 1)               # 00AAC0 bra.b $aa50
+
+_AKH76_AAC2_LOAD_X = (8, 1)             # 00AAC2 move.w (a5),d0
+_AKH76_AAC2_LOAD_Y = (12, 1)            # 00AAC4 move.w $2(a5),d1
+_AKH76_BSR_AF3C_2 = (18, 1)             # 00AAC8 bsr.w $af3c
+
+_AKH76_CMP_A = (16, 1)                  # 00AACC cmpi.b #1,-1(a2)
+_AKH76_BEQ_A = {True: (10, 1), False: (8, 1)}           # 00AAD2 beq.b $aae4
+_AKH76_CMP_B = (16, 1)                  # 00AAD4 cmpi.b #1,$7f(a2)
+_AKH76_BEQ_B = {True: (10, 1), False: (8, 1)}           # 00AADA beq.b $aae4
+_AKH76_CMP_C = (16, 1)                  # 00AADC cmpi.b #1,$ff(a2)
+_AKH76_BEQ_C = {True: (10, 1), False: (8, 1)}           # 00AAE2 beq.b $ab1a
+
+_AKH76_CMP_D = (16, 1)                  # 00AAE4 cmpi.b #1,$1(a2)
+_AKH76_BEQ_D = {True: (10, 1), False: (8, 1)}           # 00AAEA beq.b $ab06
+_AKH76_CMP_E = (16, 1)                  # 00AAEC cmpi.b #1,$81(a2)
+_AKH76_BEQ_E = {True: (10, 1), False: (8, 1)}           # 00AAF2 beq.b $ab06
+_AKH76_CMP_F = (16, 1)                  # 00AAF4 cmpi.b #1,$101(a2)
+_AKH76_BNE_F = {True: (10, 1), False: (8, 1)}           # 00AAFA bne.b $ab06
+
+_AKH76_KIND1_STORE = (16, 1)            # 00AAFC move.w #1,$a(a5)
+_AKH76_KIND1_BRA = (10, 1)              # 00AB02 bra.w $aa50
+
+_AKH76_RESET_KIND = (16, 1)             # clr.w $a(a5)                ($AB1A / $AB06)
+_AKH76_RESET_FALLPHASE = (16, 1)        # clr.w $12(a5)
+_AKH76_RESET_DEC = (16, 1)              # subq.w #1,$6(a5)
+_AKH76_RESET_BPL = {True: (10, 1), False: (12, 1)}      # bpl.w $aa50 (word)
+_AKH76_AB06_ADDQ = (12, 1)              # 00AB16 addq.w #4,(a5)  -- $AB06's own negative arm only
+_AKH76_AB06_BRA = (10, 1)               # 00AB18 bra.b $ab2a
+
+_AKH76_RESEED_MOVEQ = (4, 1)            # $AB2A moveq #$a,d0
+_AKH76_RESEED_SUB = (12, 1)             # sub.b $b(a4),d0
+_AKH76_RESEED_EXT = (4, 1)              # ext.w d0
+_AKH76_RESEED_MULU = (62, 1)            # mulu.w $eebe.w,d0
+_AKH76_RESEED_ADDL = (6, 1)             # add.l d0,d0
+_AKH76_RESEED_SWAP = (4, 1)             # swap d0
+_AKH76_RESEED_ADDQ = (4, 1)             # addq.w #1,d0
+_AKH76_RESEED_STORE = (12, 1)           # move.w d0,$6(a5)
+_AKH76_RESEED_FRAMESTEP_INC = (16, 1)   # addq.w #1,$4(a5)
+_AKH76_RESEED_FRAMESTEP_MASK = (20, 1)  # andi.w #7,$4(a5)
+_AKH76_RESEED_HEADER_DEC = (12, 1)      # subq.w #4,(a5)
+_AKH76_RESEED_BRA = (10, 1)             # bra.w $aa50
+
+_AKH76_SEARCH_OFFSETS = (-1, 0x7F, 0xFF, 0x1, 0x81, 0x101)
+
+
+def _akh_push_call(current, return_pc):
+    """The stack effect of one internal bsr: the CPU pushes return_pc at (a7-4) before transfer, so
+    the callee's own plan is asked for with its own entry a7 already there -- the caller (never the
+    callee) is responsible for this write, the same technique _asd_invoke_search_scan already uses."""
+    push_a7 = (current['a7'] - 4) & 0xFFFFFFFF
+    return push_a7, _bytes(push_a7 & 0xFFFFFF, return_pc, 4)
+
+
+def aim_kind_handler_76_plan(machine, registers):
+    """00AA76: see the module note above."""
+    from .game import creatures
+    if registers['pc'] != AIM_KIND_HANDLER_76_ENTRY:
+        raise UnsupportedCandidate('aim kind handler 76 planner needs the machine parked at 00AA76')
+    sr = registers['sr']
+    read = _reader(machine)
+    current = dict(registers)
+    a4 = current['a4'] & 0xFFFFFF
+    a5 = current['a5'] & 0xFFFFFF
+    writes = []
+    cycles, instructions = 0, 0
+
+    def charge(*fragments):
+        nonlocal cycles, instructions
+        c, i = _add(*fragments)
+        cycles += c
+        instructions += i
+
+    def call(plan_func, entry_pc, return_pc, extra=None, read_machine=None):
+        nonlocal cycles, instructions
+        push_a7, push_write = _akh_push_call(current, return_pc)
+        writes.append(push_write)
+        virtual = dict(current, pc=entry_pc, a7=push_a7, sr=sr)
+        if extra:
+            virtual.update(extra)
+        inner = plan_func(read_machine if read_machine is not None else machine, virtual)
+        cycles += inner.cycles
+        instructions += inner.instructions
+        writes.append(inner.writes)
+        current.update(inner.registers)
+        return inner
+
+    def handoff(last_pc):
+        flat_writes = tuple(pair for group in writes for pair in group)
+        exit_registers = dict(current)
+        exit_registers['pc'] = KIND_FRAME_OFFSET_ENTRY
+        exit_registers['sr'] = sr
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=flat_writes,
+                          registers=exit_registers, last_pc=last_pc)
+
+    def retry_tail(counter_addr_read, via_ab06):
+        nonlocal sr
+        charge(_AKH76_RESET_KIND, _AKH76_RESET_FALLPHASE, _AKH76_RESET_DEC)
+        writes.append(_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, 0, 2))
+        writes.append(_bytes((a5 + creatures.FALL_PHASE) & 0xFFFFFF, 0, 2))
+        counter_before = counter_addr_read((a5 + creatures.AIM_RETRY_COUNTER) & 0xFFFFFF, 2) & 0xFFFF
+        result = creatures.aim_retry_counter_step(read, a4, counter_before)
+        counter_after = (counter_before - 1) & 0xFFFF
+        # subq.w #1,$6(a5) is a real X-setter every path from here sees.
+        sr = _sub_sr(sr, counter_before, 1, 2)
+        writes.append(_bytes((a5 + creatures.AIM_RETRY_COUNTER) & 0xFFFFFF, counter_after, 2))
+        positive = result['arm'] == 'positive'
+        charge(_AKH76_RESET_BPL[positive])
+        if positive:
+            return handoff(AKH76_RESET_AB06_LAST_PC if via_ab06 else AKH76_RESET_AB1A_LAST_PC)
+        if via_ab06:
+            charge(_AKH76_AB06_ADDQ, _AKH76_AB06_BRA)
+        charge(_AKH76_RESEED_MOVEQ, _AKH76_RESEED_SUB, _AKH76_RESEED_EXT, _AKH76_RESEED_MULU,
+               _AKH76_RESEED_ADDL, _AKH76_RESEED_SWAP, _AKH76_RESEED_ADDQ, _AKH76_RESEED_STORE,
+               _AKH76_RESEED_FRAMESTEP_INC, _AKH76_RESEED_FRAMESTEP_MASK, _AKH76_RESEED_HEADER_DEC,
+               _AKH76_RESEED_BRA)
+        frame_step_before = counter_addr_read((a5 + creatures.FRAME_STEP) & 0xFFFFFF, 2) & 0xFFFF
+        frame_step_after = (frame_step_before + 1) & 7
+        header_before = counter_addr_read(a5 & 0xFFFFFF, 2) & 0xFFFF
+        # $AB06's own negative arm already added 4 (00AB16, charged above) before falling into this
+        # SAME subq -- net zero on the header field; $AB1A's own arm never touched it first, net -4.
+        header_at_subq = (header_before + 4) & 0xFFFF if via_ab06 else header_before
+        header_after = (header_at_subq - 4) & 0xFFFF
+        # The header write goes first (a field kind_frame_offset never reads: dead by the hand-off,
+        # the same class of blind spot 00B6AE's own mutant note names) so the retry counter's own
+        # reseed -- real, observable state a LATER activation reads back -- is the LAST write in the
+        # flattened list, keeping _mutate_result's own "flip the last write" convention meaningful here.
+        writes.append(_bytes(a5 & 0xFFFFFF, header_after, 2))
+        writes.append(_bytes((a5 + creatures.FRAME_STEP) & 0xFFFFFF, frame_step_after, 2))
+        writes.append(_bytes((a5 + creatures.AIM_RETRY_COUNTER) & 0xFFFFFF, result['counter'], 2))
+        current['d0'] = result['d0'] & 0xFFFFFFFF
+        # subq.w #4,(a5) (the header decrement) is the true LAST flag-setter -- andi.w #7,$4(a5) just
+        # before it is overwritten, even though the header FIELD it touches is otherwise dead by the
+        # hand-off (kind_frame_offset never reads it).
+        sr = _sub_sr(sr, header_at_subq, 4, 2)
+        return handoff(AKH76_RESEED_LAST_PC)
+
+    # -- head: the header guard --
+    header = read(a5, 2) & 0xFFFF
+    masked = header & 0x1C
+    charge(_AKH76_LOAD_HEADER, _AKH76_MASK_HEADER)
+    current['d0'] = (current['d0'] & 0xFFFF0000) | masked
+    sr = _logic_sr(sr, masked, 2)
+    charge(_AKH76_BNE_HEADER[masked != 0])
+    if masked != 0:
+        return retry_tail(read, via_ab06=False)
+
+    # -- $100(a2) guard: the first 00AF3C call --
+    charge(_AKH76_LOAD_X, _AKH76_LOAD_Y)
+    x0 = read(a5, 2) & 0xFFFF
+    y0 = read((a5 + creatures.POSITION_Y) & 0xFFFFFF, 2) & 0xFFFF
+    current['d0'] = (current['d0'] & 0xFFFF0000) | x0
+    current['d1'] = (current['d1'] & 0xFFFF0000) | y0
+    call(creature_grid_cell_d0d1_plan, AF3C_ENTRY, 0x00AA8A)
+    charge(_AKH76_BSR_AF3C_1)
+    a2 = current['a2'] & 0xFFFFFF
+    mode = read((a2 + 0x100) & 0xFFFFFF, 1) & 0xFF
+    charge(_AKH76_CMP_MODE)
+    # cmpi.b #1,$100(a2) retains X -- from 00AF3C's own real exit SR, not this function's stale
+    # pre-call sr.
+    sr = _cmp_sr(current['sr'], mode, 1, 1)
+    skip_af52 = mode != 1
+    charge(_AKH76_BNE_MODE[skip_af52])
+    if skip_af52:
+        writes.append(_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, 2, 2))
+        writes.append(_bytes((a5 + creatures.FALL_PHASE) & 0xFFFFFF, 1, 2))
+        pos_y_after = (y0 + 1) & 0xFFFF
+        writes.append(_bytes((a5 + creatures.POSITION_Y) & 0xFFFFFF, pos_y_after, 2))
+        writes.append(_bytes((a5 + creatures.FRAME_STEP) & 0xFFFFFF, 0, 2))
+        charge(_AKH76_ARM2_KIND, _AKH76_ARM2_MOVEQ, _AKH76_ARM2_FALLPHASE, _AKH76_ARM2_POSY,
+               _AKH76_ARM2_FRAMESTEP, _AKH76_ARM2_BRA)
+        # moveq #1,d0 clears the WHOLE 32-bit register -- not preserved from entry
+        # (--perturb-upper-halves caught this).
+        current['d0'] = 1
+        # clr.w $4(a5) is the last flag-setter: Z=1, N=V=C=0, X retained.
+        sr = _logic_sr(sr, 0, 2)
+        return handoff(AKH76_ARM2_LAST_PC)
+
+    # -- 00AF52: aim search dispatch --
+    charge(_AKH76_MOVEM_PUSH)
+    # movem.l a3-a5,-(a7): predecrement order stores A5 nearest the OLD a7, A3 nearest the NEW one
+    # (empirically confirmed against the tracer, not assumed) -- a7 itself really moves by -12 here,
+    # which every one of 00AF52's own internal stack residues is computed relative to.
+    movem_a7 = (current['a7'] - 12) & 0xFFFFFFFF
+    writes.append(_bytes(movem_a7 & 0xFFFFFF, current['a3'] & 0xFFFFFFFF, 4))
+    writes.append(_bytes((movem_a7 + 4) & 0xFFFFFF, current['a4'] & 0xFFFFFFFF, 4))
+    writes.append(_bytes((movem_a7 + 8) & 0xFFFFFF, current['a5'] & 0xFFFFFFFF, 4))
+    current['a7'] = movem_a7
+    call(aim_search_dispatch_plan, AIM_SEARCH_DISPATCH_ENTRY, 0x00AA9A)
+    charge(_AKH76_BSR_AF52, _AKH76_MOVEM_POP)
+    # movem.l (a7)+,a3-a5: a7 moves back by +12 (undoing the push above) and a3/a4/a5 return to THEIR
+    # OWN entry values regardless of what 00AF52's own internal composition left them as.
+    current['a7'] = (current['a7'] + 12) & 0xFFFFFFFF
+    current['a3'], current['a4'], current['a5'] = registers['a3'], registers['a4'], registers['a5']
+    overlay = {}
+    for group in writes:
+        for addr, value in group:
+            overlay[addr & 0xFFFF] = value
+    machine_post_af52 = _ConstMachine(machine, overlay)
+    post_af52 = _reader(machine_post_af52)
+    f2ce = post_af52(creatures.AIM_SEARCH_BEST_FLAG & 0xFFFFFF, 2) & 0xFFFF
+    charge(_AKH76_TST_FLAG)
+    # tst.w $f2ce.w retains X -- from 00AF52's own real exit SR (current['sr']), never this function's
+    # own stale pre-call sr (00AF52's own internal composition is the last thing to touch it).
+    sr = _logic_sr(current['sr'], f2ce, 2)
+    f2ce_signed = creatures._signed_word(f2ce)
+    charge(_AKH76_BMI_FLAG[f2ce_signed < 0])
+    if f2ce_signed >= 0:
+        charge(_AKH76_BEQ_ZERO[f2ce_signed == 0])
+        if f2ce_signed == 0:
+            return retry_tail(post_af52, via_ab06=False)
+        call(aim_search_flag_dispatch_plan, AIM_SEARCH_FLAG_DISPATCH_ENTRY, 0x00AAAA, read_machine=machine_post_af52)
+        charge(_AKH76_BSR_AC36, _AKH76_BRA_AC36_TAIL)
+        # bra.b $aa50 never touches flags: 00AC36's own exit SR (its own last flag-setter) survives.
+        sr = current['sr']
+        return handoff(AKH76_AC36_LAST_PC)
+
+    # -- f2ce < 0: a SECOND 00AF3C call on the ORIGINAL position, then the neighbor cascade --
+    charge(_AKH76_AAC2_LOAD_X, _AKH76_AAC2_LOAD_Y)
+    current['d0'] = (current['d0'] & 0xFFFF0000) | x0
+    current['d1'] = (current['d1'] & 0xFFFF0000) | y0
+    call(creature_grid_cell_d0d1_plan, AF3C_ENTRY, 0x00AACC, read_machine=machine_post_af52)
+    charge(_AKH76_BSR_AF3C_2)
+    cell_addr = current['a2'] & 0xFFFFFF
+    search = creatures.aim_kind_handler_search(post_af52, cell_addr, offsets=_AKH76_SEARCH_OFFSETS)
+    charge(_AKH76_CMP_A)
+    # cmpi.b #1,-1(a2) retains X -- from the second 00AF3C call's own real exit SR.
+    sr = _cmp_sr(current['sr'], 1 if search['probe_a'] else 0, 1, 1)
+    charge(_AKH76_BEQ_A[search['probe_a']])
+    if not search['probe_a']:
+        charge(_AKH76_CMP_B)
+        sr = _cmp_sr(sr, 1 if search['probe_b'] else 0, 1, 1)
+        charge(_AKH76_BEQ_B[search['probe_b']])
+        if not search['probe_b']:
+            charge(_AKH76_CMP_C)
+            sr = _cmp_sr(sr, 1 if search['probe_c'] else 0, 1, 1)
+            charge(_AKH76_BEQ_C[search['probe_c']])
+            if search['probe_c']:
+                return retry_tail(post_af52, via_ab06=False)
+    if search['route'] not in ('a', 'fallthrough'):
+        raise UnsupportedCandidate("aim kind handler 76: neighbor route " + repr(search['route'])
+                                   + ", not witnessed by a recording")
+    charge(_AKH76_CMP_D)
+    sr = _cmp_sr(sr, 1 if search['probe_d'] else 0, 1, 1)
+    charge(_AKH76_BEQ_D[search['probe_d']])
+    if search['probe_d']:
+        raise UnsupportedCandidate('aim kind handler 76: neighbor probe_d match, not witnessed by a recording')
+    charge(_AKH76_CMP_E)
+    sr = _cmp_sr(sr, 1 if search['probe_e'] else 0, 1, 1)
+    charge(_AKH76_BEQ_E[search['probe_e']])
+    if search['probe_e']:
+        raise UnsupportedCandidate('aim kind handler 76: neighbor probe_e match, not witnessed by a recording')
+    charge(_AKH76_CMP_F)
+    sr = _cmp_sr(sr, 1 if search['probe_f'] else 0, 1, 1)
+    f_taken = not search['probe_f']
+    charge(_AKH76_BNE_F[f_taken])
+    if f_taken:
+        return retry_tail(post_af52, via_ab06=True)
+    writes.append(_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, 1, 2))
+    charge(_AKH76_KIND1_STORE, _AKH76_KIND1_BRA)
+    # move.w #1,$a(a5) writes MEMORY, not D0 -- D0 stays whatever the second 00AF3C call's own entry
+    # left it (X position): the last flag-setter is still this move's own immediate value, 1.
+    sr = _logic_sr(sr, 1, 2)
+    return handoff(AKH76_KIND1_LAST_PC)

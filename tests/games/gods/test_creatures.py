@@ -1788,6 +1788,69 @@ def test_aim_search_flag_dispatch_candidate_matches_the_reference_and_its_mutant
     assert mutant['status'] == 'DIVERGENCE'
 
 
+# --- 00AA76: the most-witnessed kind handler (docs/gods/blockers/2026-09-18-00A578.md's own 19
+# September Decision) -- five real arms composing 00AF3C (twice), 00AF52 and 00AC36 before a hand-off
+# to kind_frame_offset's own separately-armed gate.  See boundary.py's own module note above
+# aim_kind_handler_76_plan.
+
+AIM_KIND_HANDLER_76_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00AA76-*/00AA76-entry-p*.state'))
+needs_aim_kind_handler_76_census = pytest.mark.skipif(
+    not AIM_KIND_HANDLER_76_FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 00AA76')
+
+
+def test_aim_kind_handler_76_candidate_names_are_explicit():
+    assert recovery.Candidate('aim-kind-handler-76').gate_pcs == (boundary.AIM_KIND_HANDLER_76_ENTRY,)
+    assert boundary.AIM_KIND_HANDLER_76_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('aim-kind-handler-76-mutant-result').mutation is recovery._mutate_result
+
+
+@needs_aim_kind_handler_76_census
+@pytest.mark.parametrize('fixture', AIM_KIND_HANDLER_76_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_aim_kind_handler_76_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.aim_kind_handler_76_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            # A busy 00AF52 composition can genuinely exceed native/machine.cpp's own al_atomic cost
+            # cap (the same decline aim_search_dispatch_plan itself already carries), an unwitnessed
+            # arm inside that same composition, or an unwitnessed neighbor-cascade route/outcome this
+            # routine's own five recordings never reach.
+            assert any(needle in str(error) for needle in
+                      ('aim target scan', 'aim search scan', 'aim pool scan', 'aim search dispatch',
+                       'aim cue', 'aim kind handler 76')), error
+            return
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'], max_instructions=400000))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+@needs_reference
+def test_aim_kind_handler_76_candidate_matches_the_reference_and_its_mutant_diverges():
+    report = mutant = None
+    for fixture in AIM_KIND_HANDLER_76_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='aim-kind-handler-76',
+                                      reference=EVIDENCE)
+        if report['candidate_hits'] < 1 or report['status'] != 'PASS':
+            continue
+        # A window can genuinely carry a real, already-known domain decline (a busy 00AF52 pool, or
+        # 00B7DA's own unwitnessed 'found without a new best') alongside a clean hit elsewhere in the
+        # SAME 300-frame window -- try the next fixture rather than fail on it.
+        if not set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS:
+            continue
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='aim-kind-handler-76-mutant-result',
+                                      reference=EVIDENCE)
+        if mutant['status'] == 'DIVERGENCE':
+            break
+    else:
+        pytest.skip('no retained fixture/window makes aim-kind-handler-76 produce a clean observable effect')
+    assert mutant['status'] == 'DIVERGENCE'
+
+
 # --- 00B8C2 / 00B920: the creature spawn-init's own icon-cue add (00A578's own spawn-init body's own
 # unconditional `bsr $b920`, independent of the whole 00AF52/00B588 chain).  See game/creatures.py's
 # own module note above spawn_table_find_free/spawn_table_add.

@@ -1875,3 +1875,90 @@ def aim_search_flag_dispatch(f2ce):
     if x == 0:
         return {'arm': 'fall-phase-9', 'kind': kind}
     return {'arm': 'extended', 'kind': kind, 'fall_phase': 13}
+
+
+# --- 00AA76 / 00AB50: the two most-witnessed kind handlers (docs/gods/blockers/2026-09-18-00A578.md's
+# own 19 September Progress) -- each a real ~70-instruction body composing 00AF3C (twice), 00AF52 and
+# 00AC36 before a hand-off to kind_frame_offset's own separately-armed gate (00AA50), the SAME "one
+# gate hands off to a separately-armed gate" shape ground_contact_update's own trigger arms already
+# use.  NOT a byte-identical pair (confirmed by direct disassembly, not assumed by mirror symmetry):
+# 00AB50's own shared-exit test is `f2ce == 1`, not `f2ce == 0`; its own arm-2 sets KIND 3 (00AA76's
+# own sets KIND 2); and its own two neighbor cascades run in the OPPOSITE order.  Both helpers below
+# are shared, parameterised on what differs.
+
+AIM_RETRY_COUNTER = 0x6            # instance_ptr word: the SAME offset LIFECYCLE_RESET/GROUND_HOLD_TIMER
+                                    # name for other callers -- here a per-instance search-retry
+                                    # countdown, decremented once per activation and reseeded (below)
+                                    # when it goes negative.
+TYPE_RETRY_SEED_BYTE = 0xB         # type_ptr byte: the retry counter's own reseed source -- the SAME
+                                    # offset TYPE_GROUND_RELOAD_BYTE names for a different caller.
+
+
+def aim_retry_counter_step(read, type_ptr, counter_before):
+    """`$AB1A`/`$AB06` (00AA76) and their own mirror in 00AB50: `subq.w #1,$6(a5); bpl.w $aa50` -- the
+    non-negative arm hands off with no further effect.  The negative arm (`$AB2A`) reseeds the counter
+    from a per-type byte and the shared random-table multiplier (`timers.FREQUENCY_SCALE`, the SAME RAM
+    word `mulu.w $eebe.w` always resolves to): `moveq #$a,d0; sub.b $b(a4),d0; ext.w d0; mulu.w
+    $eebe.w,d0; add.l d0,d0; swap d0; addq.w #1,d0` -- MULU treats the sign-extended word as UNSIGNED (a
+    byte subtraction that goes negative becomes a LARGE multiplier, not a small negative one), and the
+    doubling before the SWAP can carry past 32 bits (dropped, real 68000 wraparound)."""
+    counter_after = (counter_before - 1) & 0xFFFF
+    if not (counter_after & 0x8000):
+        return {'arm': 'positive', 'counter': counter_after}
+    from .grid import _signed_byte
+    byte = read((type_ptr + TYPE_RETRY_SEED_BYTE) & 0xFFFFFF, 1) & 0xFF
+    diff = (0xA - byte) & 0xFF                       # sub.b: byte subtraction, upper bits stay 0 (moveq)
+    word = _signed_byte(diff) & 0xFFFF               # ext.w: sign-extend the byte into the word
+    freq = read(timers.FREQUENCY_SCALE, 2) & 0xFFFF
+    product = (word * freq) & 0xFFFFFFFF             # mulu.w: both operands unsigned
+    doubled = (product * 2) & 0xFFFFFFFF             # add.l d0,d0
+    swapped_low = (doubled >> 16) & 0xFFFF           # swap d0 -- becomes D0's new low word
+    swapped_high = doubled & 0xFFFF                  # swap d0 -- becomes D0's new UPPER word, and
+                                                      # survives the following addq.w (a word op, the
+                                                      # LAST write to D0 in this routine): D0's exit
+                                                      # value is this residue, not the caller's own
+                                                      # entry upper half.
+    reseeded = (swapped_low + 1) & 0xFFFF            # addq.w #1,d0
+    d0_exit = (swapped_high << 16) | reseeded
+    return {'arm': 'reseed', 'counter': reseeded, 'd0': d0_exit, 'byte': byte, 'diff': diff,
+            'product': product}
+
+
+def aim_kind_handler_search(read, cell_addr, *, offsets):
+    """The neighbor cascade 00AA76 (`$AAC2`-`$AAFC`, `offsets=(-1, 0x7F, 0xFF, 0x1, 0x81, 0x101)`) and
+    00AB50 (`$ABA6`-`$ABE8`, `offsets=(0x1, 0x81, 0x101, -1, 0x7F, 0xFF)` -- the opposite cascade order)
+    both run on 00AF52's own 'nothing found' result (`f2ce < 0`): up to six byte compares against
+    `cell_addr`'s neighbors in ROM order with real short-circuiting.  `probe_c` alone (the THIRD test
+    of the first group) exits straight to the shared retry-counter reset; the first two probes of that
+    group instead jump into the second group on a match (`route`), which the routine also falls into
+    when none of the first three match.  Returns every probe outcome (for the boundary's own
+    per-instruction cost) plus `route` ('a' -- probe_a matched; 'fallthrough' -- none of the first
+    three did; 'b' -- probe_b alone, real ROM, never witnessed by any recording) and, from the second
+    group, `outcome` ('kind' -- the third probe of the second group matches, the real KIND store;
+    'reset-d'/'reset-e' -- the first two probes of the second group, real ROM never witnessed;
+    'reset-no-f' -- neither the first two nor the third probe of the second group matches)."""
+    off_a, off_b, off_c, off_d, off_e, off_f = offsets
+    # Real short-circuiting: probe_b is read only when probe_a misses, probe_c only when both miss --
+    # the ROM never re-reads a neighbor byte it already branched away on.
+    probe_a = (read((cell_addr + off_a) & 0xFFFFFF, 1) & 0xFF) == 1
+    probe_b = False if probe_a else (read((cell_addr + off_b) & 0xFFFFFF, 1) & 0xFF) == 1
+    probe_c = False if (probe_a or probe_b) else (read((cell_addr + off_c) & 0xFFFFFF, 1) & 0xFF) == 1
+    if probe_c:
+        return {'route': 'c', 'probe_a': probe_a, 'probe_b': probe_b, 'probe_c': probe_c}
+    route = 'a' if probe_a else ('b' if probe_b else 'fallthrough')
+    probe_d = (read((cell_addr + off_d) & 0xFFFFFF, 1) & 0xFF) == 1
+    probe_e = (read((cell_addr + off_e) & 0xFFFFFF, 1) & 0xFF) == 1
+    probe_f = (read((cell_addr + off_f) & 0xFFFFFF, 1) & 0xFF) == 1
+    if probe_d:
+        outcome = 'reset-d'
+    elif probe_e:
+        outcome = 'reset-e'
+    elif not probe_f:
+        outcome = 'reset-no-f'
+    else:
+        outcome = 'kind'
+    return {'route': route, 'probe_a': probe_a, 'probe_b': probe_b, 'probe_c': probe_c,
+            'probe_d': probe_d, 'probe_e': probe_e, 'probe_f': probe_f, 'outcome': outcome}
+
+
+AIM_KIND_HANDLER_76_SEARCH_OFFSETS = (-1, 0x7F, 0xFF, 0x1, 0x81, 0x101)
