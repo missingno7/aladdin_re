@@ -2504,6 +2504,47 @@ small leaf):
   merits even before `003284` is closed, and `004926`'s own second real
   caller at `0139D2` remains untouched.
 
+- **19 September, next grinder session (the Decision's own order)**:
+  `003480` turned out NOT to be the small screen-visibility gate the prior
+  reconnaissance named (ROM read only, never traced): every one of 40
+  retained fixtures traced with `factcheck facts --path` shows its
+  in-range arm falling through, past the bounds check, into a second real
+  body before either of its two `rtr` exits -- a RAM template table
+  (`FFFFF8C2`), a further RAM range table (`FFFFF22E`), a SECOND real
+  indirect-`jsr` function-pointer table (`0x5958`, 16 entries, one already
+  the recovered `0075D6`), a real `jsr` into the SAME unrecovered
+  pickup-award entry (`jsr $12C80`) `003186`'s own blocker already named,
+  a self-contained 10-slot queue append (`FFFFF09E` via `002F2E`), and a
+  number-to-digits routine (`0x364C`) whose own destination is unread;
+  instruction counts across the 40 fixtures span 4 to 522.  Escalated
+  `NEW_GODS_SUBSYSTEM` (`docs/gods/blockers/2026-09-19-003480.md`).
+  Recovered `001810` instead, the Decision's own second bite: a second
+  sprite-emitter shape (`game/sprites.py: paint_object_tile`, candidate
+  `'object-tile'`) -- off-screen (a 16-pixel margin) is a plain leaf;
+  on-screen always uploads fresh (no cache, like `00126A`) but paints
+  directly into the scrolling background plane at a nametable cell built
+  from the WORLD position (not the screen position), never appending to
+  the sprite list; the VDP command formula was verified bit-for-bit
+  against three live traced activations before being trusted.  9 fixtures
+  over two of five recordings, all MATCH plain and under
+  `--perturb-upper-halves`; `f40d7bcc9ddae7a9…`, 17,620 frames, PASS
+  bit-exact (11,518 hits, 38 fallbacks, all Z80 bank guard); mutant
+  `object-tile-mutant-register` DIVERGENCE at frame 2,236; milestone tree
+  PASS (107,519 frames, current receipts).  `camera-sprites` grew
+  fifty-seven -> fifty-eight gates.  Reconnaissance only, not attempted:
+  `0036E2` (reached from `003284`'s own `status > 4` arm, NOT from
+  `003480`) is a genuine 13-entry indirect-`jsr` scan over `0x370E`
+  (confirmed by direct ROM read: kinds `0x31/0x83/0x5F/0x6A/0x6B/0x6C/0x67`
+  point straight at the already-recovered `0018C8`; `0x37/0x51/0x52`
+  point at `00377A`/`0037A0`/`00375C`, each a small per-frame index lookup
+  ending in a tail-call into the now-recovered `001810`; `0x6F/0x70/0x72`
+  point at `0037C6`/`003884`/`003896`, a further, distinct screen-test +
+  device shape reading TWO OTHER solid-pointer globals at `0x67654`/
+  `0x675D4` this session did not verify) with a no-match fallback into
+  `001810` directly and an exit `bra.w $3158` back into `003284`'s own
+  flow (not an `rts`) -- a real "seam over a seam" composition
+  (`004790`'s own shape) once censused; the next candidate.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second
