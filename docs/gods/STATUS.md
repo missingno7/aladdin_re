@@ -2545,6 +2545,48 @@ small leaf):
   flow (not an `rts`) -- a real "seam over a seam" composition
   (`004790`'s own shape) once censused; the next candidate.
 
+- **19 September, continuing the same session**: `0036E2` recovered
+  (candidate `'object-kind-dispatch'`, `game/world.py:
+  classify_object_kind`).  The standard census tooling cannot classify
+  this gate at all -- `census_all.py --entry 0x0036E2` confirmed
+  empirically that every real occurrence on both firing recordings ran to
+  the frame deadline and past a 48,000-instruction offline retry, 0
+  fixtures retained, because `0036E2` is reached by a plain branch from
+  inside `003284`'s own body (not a `bsr`) and its own real exit is
+  `bra.w $3158` (0030CC's own 200-entry scan loop), not an `rts`:
+  `pathfacts`' own "returns to its caller" heuristic waits for a return
+  through the whole rest of that scan, tens of thousands of instructions
+  away.  Fixtures were instead materialized by advancing retained
+  `003186` census fixtures with `pathfacts.park`, and the exact exit
+  verified directly (`factcheck facts --park 0x36E2 --stop 0x3158`, 257
+  real instructions for the one witnessed arm).  The six `00370E`
+  handlers were each censused at their own entry first, exactly as
+  planned: `00377A`/`00375C`/`0037C6`/`003884`/`003896` never fire on any
+  of the five recordings; `0037A0` fires 777 times on `f40d7bcc9dda`
+  alone (4 real path classes) -- the only witnessed table entry (kind
+  `0x51`).  The matched handler's own internals are never modelled --
+  opaque to this composition, the same "0047DA is opaque" seam-over-a-seam
+  shape `achievement_slot_dispatch_plan` already proved for `0018C8`/
+  `001810`'s own kind.  Kind `0x71` (no-op) and the table's own
+  exhaustion (fallback into `001810`) both decline by name too, unwitnessed
+  by every recording.  45 fixtures MATCH plain and under
+  `--perturb-upper-halves`; `f40d7bcc9dda…`, 17,620 frames, PASS bit-exact
+  (1,554 hits, 5,153 fallbacks, all real unwitnessed kinds such as `0x41`/
+  `0x44`, honestly declined); mutant `object-kind-dispatch-mutant-register`
+  DIVERGENCE at frame 2,236; milestone tree PASS (107,519 frames, current
+  receipts).  `camera-sprites` grew fifty-eight -> fifty-nine gates.
+  Next in the Decision's own order, `012C80` (the pickup-award group
+  dispatch, reached from `003480`'s own `>= 0xC0` arm): fully
+  disassembled this session (`012C80` itself, `012D30`'s own group
+  selection -- kind 2 is hard-coded to group 2 and also sets `FFFFF380`,
+  an unmodelled ROM effect -- `012A3E`'s own item registration into the
+  SAME `CONTACT_ITEM_RECORDS_BASE`/`CONTACT_ITEM_RECORD_STRIDE` layout
+  `game/pickups.py`'s contact search already names, `012A34`'s own
+  0x48-word buffer clear, and `011468`'s own leading-group re-derivation
+  into `TIME_MARK`/`FFFFF154`) -- every piece confirmed bounded, RAM-only,
+  no device access, no blocker condition, but not yet implemented; the
+  next candidate for whoever picks this up.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second
