@@ -911,3 +911,206 @@ def contact_consume(read, routine):
         if result['arm'] == 'unrecovered':
             break
     return {'slots': results, 'tail_slot': len(results) - 1}
+
+
+# --- 012C80: the pickup award group dispatch (with its own chain, 012D30/012A3E/012A34/011468) -----
+#
+# Reached from 003480's own '>= 0xC0' arm (`docs/gods/blockers/2026-09-19-003480.md`) and from a
+# second, still-unrecovered caller this session's own census found (return site 00874E, distinct from
+# 003480's own 003638) -- D2 is an item id, the SAME 0-10 domain `collect`/`contact_search` already
+# use (`ITEM_RECORDS`).  Two top-level arms, both ending by recomputing TIME_MARK:
+#
+#  'already-active': D2 already names one of the three GROUP_TABLES' own active-id words (a plain
+#    cmp.w against each, in order) -- the item's own per-item RAM record (`ITEM_RECORDS[d2]`, the SAME
+#    record `contact_search`/`contact_consume` already use) has its own ITEM_VALUE (+8) incremented by
+#    one, then `time_mark_cascade` recomputes TIME_MARK and the routine returns directly.
+#  'register': D2 names an item not currently tracked by any group -- `select_group_slot` (012D30)
+#    picks a group (declining a real 'contested' evict-the-lower-value tie-break arm, and a real
+#    generic "GROUP_TABLES[2] empty" arm, that no recording enters), the chosen table's own active-id
+#    word is set to D2, `register_item` (012A3E) re-arms the item's own record (ITEM_VALUE reset to
+#    ITEM_RANGE_LOW), the chosen table's own extended slot area is cleared (`group_extended_clear`,
+#    012A34), `time_mark_cascade` recomputes TIME_MARK, and `leading_group_recheck` (011468) re-tests
+#    SPECIAL_TIMER -- negative on every witnessed occurrence; its own non-negative arm (a further
+#    TIME_MARK/FFFFF154 derivation over the active groups) is real ROM no recording enters.
+#
+# Pure functions of `read(address, size)`; no cycles, CCR, stack or registers.
+GROUP_OVERRIDE_ID = 2                  # item id 2 always hard-codes group 2 (012D3E's own d3==2 test)
+GROUP_OVERRIDE_POOL_BASE = 0x12        # written to CONTACT_POOL_INDEX_BASE (FFFFF380) on the override arm
+ITEM_REGISTER_RESET = 0x4              # record field: cleared by register_item; no further evidence of its own role
+ITEM_FIELD_TEST = 0x2                  # record field: compared to 3 by register_item; never witnessed equal (the clear declines)
+GROUP_SLOT_CLEAR_WORDS = 0x48          # 012A34's own dbra count: 72 words (0x90 bytes) cleared from the chosen table's own +2,
+                                        # well past the nine 8-byte slots (0x48 bytes) GROUP_SIZE/SLOT_SIZE name -- the further
+                                        # 0x48 bytes are real, traced, unexplained by any field this module names; for group 2
+                                        # this clear runs past the table array's own end into whatever RAM follows, every time.
+GROUP_EIGHT_TEST = 8                   # register_item's own triple compare (EF8C/F01E/F0B0 == 8): never witnessed true
+
+
+def select_group_slot(read, item_id):
+    """012D30: choose which GROUP_TABLES slot registers ``item_id`` (only called once the caller has
+    already confirmed ``item_id`` matches none of the three groups' own current active ids).
+
+    ``item_id == GROUP_OVERRIDE_ID`` (2) always hard-codes group 2 and arms CONTACT_POOL_INDEX_BASE --
+    a real, witnessed ROM special case.  Otherwise: group 0 is chosen when the item's own contact
+    record's first word (``ITEM_RECORDS[item_id]``) is zero; group 1 when GROUP_TABLES[1]'s own
+    active-id word is negative (empty) -- both witnessed.  Group 2 by the SAME "negative active id"
+    test, and the further "both occupied: evict whichever of GROUP_TABLES[1]/[2]'s own item records
+    has the lower ITEM_VALUE" tie-break (0x12D58-0x12D82), are real ROM code no recording enters:
+    returned as their own arms so the boundary can decline them by name, not modelled further.
+    """
+    record = read(ITEM_RECORDS + _signed_word(4 * item_id), 4) & 0xFFFFFFFF
+    if item_id == GROUP_OVERRIDE_ID:
+        return {'arm': 'override', 'group': 2, 'table': GROUP_TABLES[2], 'record': record,
+                'stores': {CONTACT_POOL_INDEX_BASE & 0xFFFFFF: (GROUP_OVERRIDE_POOL_BASE, 2)}}
+    if (read(record & 0xFFFFFF, 2) & 0xFFFF) == 0:
+        return {'arm': 'group0', 'group': 0, 'table': GROUP_TABLES[0], 'record': record, 'stores': {}}
+    if _signed_word(read(GROUP_TABLES[1], 2)) < 0:
+        return {'arm': 'group1', 'group': 1, 'table': GROUP_TABLES[1], 'record': record, 'stores': {}}
+    if _signed_word(read(GROUP_TABLES[2], 2)) < 0:
+        return {'arm': 'group2-empty', 'group': 2, 'table': GROUP_TABLES[2], 'record': record, 'stores': {}}
+    return {'arm': 'contested', 'group': None, 'table': None, 'record': record, 'stores': {}}
+
+
+def register_item(read, item_id):
+    """012A3E: (re)arm ``item_id``'s own per-item RAM record for tracking -- ITEM_VALUE (+8) reset to
+    ITEM_RANGE_LOW (+6), ITEM_REGISTER_RESET (+4) cleared, then ARRAY_GATE (FFFFEF8A) is raised
+    (0xFFFF) and either left set (SPECIAL_TIMER negative AND none of the three groups' own active id
+    is GROUP_EIGHT_TEST (8) -- the 'left-set' arm) or immediately cleared back to 0 (SPECIAL_TIMER
+    non-negative, or one of the three DOES equal 8 -- the 'cleared' arm; both real and witnessed).
+    Neither arm stops the registration itself -- ``award_group_dispatch``'s own ``leading_group_recheck``
+    (011468), re-testing the SAME SPECIAL_TIMER unchanged since this read, decides whether the whole
+    activation completes.
+    """
+    record = (CONTACT_ITEM_RECORDS_BASE + item_id * CONTACT_ITEM_RECORD_STRIDE) & 0xFFFFFFFF
+    field2 = read((record + ITEM_FIELD_TEST) & 0xFFFFFF, 2) & 0xFFFF
+    if field2 == 3:
+        return {'arm': 'unrecovered-field2', 'record': record, 'stores': {}}
+    range_low = read((record + ITEM_RANGE_LOW) & 0xFFFFFF, 2) & 0xFFFF
+    stores = {(record + ITEM_REGISTER_RESET) & 0xFFFFFF: (0, 2),
+              (record + ITEM_VALUE) & 0xFFFFFF: (range_low, 2)}
+    timer_negative = _signed_word(read(SPECIAL_TIMER, 2)) < 0
+    ids = tuple(read(table, 2) & 0xFFFF for table in GROUP_TABLES) if timer_negative else None
+    cleared = (not timer_negative) or (GROUP_EIGHT_TEST in ids)
+    stores[ARRAY_GATE & 0xFFFFFF] = (0, 2) if cleared else (0xFFFF, 2)
+    return {'arm': 'cleared' if cleared else 'left-set', 'record': record, 'stores': stores,
+            'timer_negative': timer_negative, 'ids': ids}
+
+
+def group_extended_clear(table):
+    """012A34: clear GROUP_SLOT_CLEAR_WORDS (0x48) words starting at ``table + SLOT_BASE`` (+2)."""
+    base = (table + SLOT_BASE) & 0xFFFFFFFF
+    return {(base + 2 * index) & 0xFFFFFF: (0, 2) for index in range(GROUP_SLOT_CLEAR_WORDS)}
+
+
+def _tally_group(read, active_id):
+    """012CD6: one group's own contribution to TIME_MARK (an unrolled, up-to-three-step accumulation
+    of ITEM_RANGE_LOW, the last step carrying whatever remains of ITEM_VALUE-ITEM_RANGE_LOW
+    unconditionally), or none at all when the group's own active id is negative (empty).
+
+    Returns the amount added to TIME_MARK and ``steps`` (0 for an empty group, else 1/2/3 -- the
+    boundary's own cost varies with it) for the boundary's own per-step cost table.
+    """
+    doubled = _signed_word((active_id & 0xFFFF) * 4)
+    if doubled < 0:
+        return 0, 0
+    record = read(ITEM_RECORDS + doubled, 4) & 0xFFFFFFFF
+    range_low = read((record + ITEM_RANGE_LOW) & 0xFFFFFF, 2) & 0xFFFF
+    value = read((record + ITEM_VALUE) & 0xFFFFFF, 2) & 0xFFFF
+    added = range_low
+    remaining = (value - range_low) & 0xFFFF
+    if remaining == 0:
+        return added, 1
+    added = (added + range_low) & 0xFFFF
+    remaining = (remaining - 1) & 0xFFFF
+    if remaining == 0:
+        return added, 2
+    added = (added + range_low) & 0xFFFF
+    remaining = (remaining - 1) & 0xFFFF
+    added = (added + remaining) & 0xFFFF
+    return added, 3
+
+
+def time_mark_cascade(read):
+    """012CC2: clear TIME_MARK, then fold in each of the three groups' own contribution in order."""
+    f36c = 0
+    steps = []
+    for table in GROUP_TABLES:
+        active_id = read(table, 2) & 0xFFFF
+        added, step = _tally_group(read, active_id)
+        f36c = (f36c + added) & 0xFFFF
+        steps.append(step)
+    return {'value': f36c, 'stores': {TIME_MARK & 0xFFFFFF: (f36c, 2)}, 'steps': tuple(steps)}
+
+
+def leading_group_recheck(read):
+    """011468: SPECIAL_TIMER re-tested once registration is complete; negative on every witnessed
+    occurrence.  The non-negative arm (a further count-active-groups/TIME_MARK derivation into
+    FFFFF154) is real ROM no recording enters: declined, not modelled."""
+    return {'negative': _signed_word(read(SPECIAL_TIMER, 2)) < 0}
+
+
+def _with_stores(read, stores):
+    """A reader that sees ``stores`` (an ``{address: (value, size)}`` map, exact address+size match
+    only) as if they had already landed -- the real CPU sees its own earlier stores in this same
+    activation before the tally cascade re-reads GROUP_TABLES/ITEM_RECORDS; a plain ``read`` would
+    not."""
+    def wrapped(address, size):
+        entry = stores.get(address & 0xFFFFFF)
+        if entry is not None and entry[1] == size:
+            return entry[0]
+        return read(address, size)
+    return wrapped
+
+
+def award_group_dispatch(read, item_id):
+    """012C80: register ``item_id`` into one of the three GROUP_TABLES, or bump its own contact
+    record's own ITEM_VALUE if it is already tracked -- either way TIME_MARK is recomputed.
+
+    ``stores`` is ordered so its own last entry is the one durable effect (ITEM_VALUE, or the
+    GROUP_TABLES active-id word), not TIME_MARK: TIME_MARK is rebuilt from scratch by every future
+    call to this same routine (``time_mark_cascade``'s own ``clr.w f36c.w``), so a negative control
+    that flips only it self-heals the next time an item is collected nearby, before ``collect``'s own
+    read of it as the time-bonus baseline could ever observe the corruption.
+    """
+    item_id &= 0xFFFF
+    ids = tuple(read(table, 2) & 0xFFFF for table in GROUP_TABLES)
+    if item_id in ids:
+        matched = ids.index(item_id)
+        record = read(ITEM_RECORDS + _signed_word(4 * item_id), 4) & 0xFFFFFFFF
+        value = read((record + ITEM_VALUE) & 0xFFFFFF, 2) & 0xFFFF
+        new_value = (value + 1) & 0xFFFF
+        value_key = (record + ITEM_VALUE) & 0xFFFFFF
+        tally = time_mark_cascade(_with_stores(read, {value_key: (new_value, 2)}))
+        stores = dict(tally['stores'])
+        stores[value_key] = (new_value, 2)
+        return {'arm': 'already-active', 'item_id': item_id, 'matched': matched, 'record': record,
+                'stores': stores, 'tally': tally}
+
+    selection = select_group_slot(read, item_id)
+    if selection['arm'] not in ('override', 'group0', 'group1'):
+        return {'arm': 'unrecovered-' + selection['arm'], 'item_id': item_id, 'stores': {}, 'selection': selection}
+
+    table_key = selection['table'] & 0xFFFFFF
+    overlay = dict(selection['stores'])
+    overlay[table_key] = (item_id, 2)
+    registration = register_item(_with_stores(read, overlay), item_id)
+    overlay.update(registration['stores'])
+    if registration['arm'] == 'unrecovered-field2':
+        stores = dict(overlay)
+        return {'arm': registration['arm'], 'item_id': item_id, 'stores': stores,
+                'selection': selection, 'registration': registration}
+    overlay.update(group_extended_clear(selection['table']))
+    live_read = _with_stores(read, overlay)
+    tally = time_mark_cascade(live_read)
+    recheck = leading_group_recheck(live_read)
+    if not recheck['negative']:
+        stores = dict(overlay)
+        stores.update(tally['stores'])
+        return {'arm': 'unrecovered-leading-group', 'item_id': item_id, 'stores': stores,
+                'selection': selection, 'registration': registration, 'tally': tally}
+    stores = dict(selection['stores'])
+    stores.update(registration['stores'])
+    stores.update(group_extended_clear(selection['table']))
+    stores.update(tally['stores'])
+    stores[table_key] = (item_id, 2)
+    return {'arm': 'register', 'item_id': item_id, 'group': selection['group'], 'group_arm': selection['arm'],
+            'stores': stores, 'selection': selection, 'registration': registration, 'tally': tally}

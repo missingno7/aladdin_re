@@ -22429,3 +22429,254 @@ def creature_walk_plan(machine, registers):
     exit_registers.update(a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=sr)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=flat_writes,
                       registers=exit_registers, last_pc=CREATURE_WALK_LAST_PC)
+
+
+# --- 012C80: the pickup award group dispatch, with its own chain (012D30/012A3E/012A34/011468) ----
+#
+# game/pickups.py: award_group_dispatch.  The tally cascade's own first instruction (group 0's own
+# "add.w d0,d0") always runs on every path this planner admits and always explicitly sets every flag
+# ADD touches, so no incoming SR needs threading into it -- the exit CCR is either the cascade's own
+# last flag-setter directly (the already-active arm) or 011468's own final tst.w f156.w (the register
+# arm; N/Z from SPECIAL_TIMER, X retained from the cascade's own last ADD/SUB).  Cost fragments from
+# the tracer (artifacts/gods/evidence/census-0X012C80-*).
+PICKUP_AWARD_GROUP_ENTRY = 0x012C80
+PICKUP_AWARD_GROUP_LAST_PC_MATCH = 0x012D02
+PICKUP_AWARD_GROUP_LAST_PC_REGISTER = 0x01153E
+
+_PG_CMP, _PG_BEQ_TAKEN, _PG_BEQ_NOT = (12, 1), (10, 1), (8, 1)
+_PG_MATCH_HEAD = (4 + 4 + 8 + 18, 4)          # add.w d2,d2 x2; lea; movea.l (a1,d2.w),a1
+_PG_INCREMENT = (16, 1)                       # addq.w #1,8(a1)
+_PG_HEAD_CLEAR = (16, 1)                      # clr.w f36c.w -- falls straight in from the match arm
+_PG_HEAD_CLEAR_BSR = (18, 1)                  # bsr.b 12cc2 -- the register arm's own call into the same head
+
+_PG_REGISTER_ARM_HEAD = _add(_PG_CMP, _PG_BEQ_NOT, _PG_CMP, _PG_BEQ_NOT, _PG_CMP, _PG_BEQ_NOT)
+_PG_BSR_12D30 = (18, 1)                       # bsr.w 12d30
+_PG_STORE_TABLE = (8, 1)                      # move.w d3,(a0)+
+_PG_MOVE_D1 = (4, 1)                          # move.w d3,d1
+_PG_SAVE_D7 = (12, 1)                         # move.l d7,-(a7)
+_PG_JSR_12A3E = (20, 1)                       # jsr 12a3e.l
+_PG_RESTORE_D7 = (12, 1)                      # move.l (a7)+,d7
+_PG_JSR_12A34 = (20, 1)                       # jsr 12a34.l
+_PG_JMP_11468 = (12, 1)                       # jmp 11468.l
+
+# 012D30's own three witnessed arms -- "contested" and the generic group-2 cascade are real ROM no
+# recording enters (see game.pickups.select_group_slot).
+_PG_SELECT_OVERRIDE = (92, 10)
+_PG_SELECT_GROUP0 = (92, 11)
+_PG_SELECT_GROUP1 = (112, 13)
+
+# 012A3E's own fixed head (move d2,d5; move d1,d2; asl #4,d1; lea; adda; add.w d1,d1 x2; adda; clr
+# 4(a1); move 6(a1),8(a1)) and its own field-2 test (unwitnessed-equal declined by the semantics).
+_PG_REGISTER_HEAD = (4 + 4 + 14 + 8 + 8 + 4 + 4 + 8 + 16 + 20, 10)
+_PG_REGISTER_FIELD_TEST = (16 + 10, 2)        # cmpi.w #3,2(a1); bne taken
+_PG_REGISTER_SET_GATE = (16, 1)               # move.w #$ffff,ef8a.w
+_PG_REGISTER_TIMER_TEST = (12, 1)             # tst.w f156.w
+_PG_REGISTER_BPL_TAKEN = (8, 1)               # bpl.b 12a8a -- taken: SPECIAL_TIMER non-negative
+_PG_REGISTER_BPL_NOT = (8, 1)                 # bpl.b 12a8a -- not taken: negative, continue to the id tests
+_PG_EIGHT_CMPI = (16, 1)
+_PG_EIGHT_BEQ_NOT, _PG_EIGHT_BEQ_TAKEN = (8, 1), (10, 1)      # positions 0/1 (EF8C, F01E)
+_PG_EIGHT_BNE_NOT, _PG_EIGHT_BNE_TAKEN = (8, 1), (10, 1)      # position 2 (F0B0): polarity inverted
+_PG_REGISTER_CLEAR_GATE = (16, 1)             # clr.w ef8a.w (012A8A)
+_PG_REGISTER_RTS = (16, 1)
+
+_PG_CLEAR_LOOP_HEAD = (4, 1)                  # moveq #$47,d0
+_PG_CLEAR_STEP = (12, 1)                      # clr.w (a0)+
+_PG_CLEAR_DBRA_TAKEN = (10, 1)                # dbra d0,$12a36 -- taken
+_PG_CLEAR_DBRA_LAST = (14, 1)                 # dbra d0,$12a36 -- not taken: the loop's own last iteration
+_PG_CLEAR_RTS = (16, 1)
+_PG_CLEAR_TOTAL = _add(_PG_CLEAR_LOOP_HEAD, *([_PG_CLEAR_STEP] * 72), *([_PG_CLEAR_DBRA_TAKEN] * 71),
+                      _PG_CLEAR_DBRA_LAST, _PG_CLEAR_RTS)
+
+_PG_TALLY_MOVE_BSR = (12 + 18, 2)             # move.w table,d0; bsr.b 12cd6 -- groups 0 and 1
+_PG_TALLY_MOVE_FALL = (12, 1)                 # move.w table,d0 -- group 2 falls straight into the body
+_PG_TALLY_HEAD = (4 + 4, 2)                   # add.w d0,d0 x2 -- the doubling, every group
+_PG_TALLY_BMI_TAKEN = (10, 1)                 # bmi.b 12d02 -- empty: taken
+_PG_TALLY_BMI_NOT = (8, 1)                    # bmi.b 12d02 -- not empty: not taken
+_PG_TALLY_RTS = (16, 1)
+_PG_TALLY_OPEN = (18 + 12 + 12, 3)            # movea.l; move.w 6(a1),d0; move.w 8(a1),d1
+_PG_TALLY_ADD_SUB = (16 + 4, 2)               # add.w d0,f36c.w; sub.w d0,d1
+_PG_TALLY_BEQ_TAKEN, _PG_TALLY_BEQ_NOT = (10, 1), (8, 1)
+_PG_TALLY_ADD2 = (16, 1)                      # add.w d0,f36c.w -- step 2 or 3
+_PG_TALLY_SUBQ = (4, 1)                       # subq.w #1,d1
+_PG_TALLY_ADD_REMAINDER = (16, 1)             # add.w d1,f36c.w -- the unconditional close of step 3
+
+_PG_RECHECK_TEST = (12, 1)                    # tst.w f156.w (011468)
+_PG_RECHECK_BMI_TAKEN = (10, 1)               # bmi.w 1153e -- negative: done
+_PG_RECHECK_RTS = (16, 1)                     # 01153E's own rts
+
+
+def _pg_match_head_cost(matched):
+    parts = []
+    for _ in range(matched):
+        parts += [_PG_CMP, _PG_BEQ_NOT]
+    parts += [_PG_CMP, _PG_BEQ_TAKEN]
+    return _add(*parts)
+
+
+def _pg_tally_group(read, table, entry_via_bsr, sr, f36c):
+    """012CD6: one group's own pass, threading SR (X is the only bit that outlives it -- N/Z/V/C are
+    overwritten by whatever runs after) and F36C through, returning its own cost and the (d0, d1, a1)
+    residue it leaves (None for whichever an empty group's own code never touches)."""
+    from .game import pickups
+    active_id = read(table, 2) & 0xFFFF
+    doubled16 = (active_id * 4) & 0xFFFF
+    half = (active_id * 2) & 0xFFFF
+    cost = _add(_PG_TALLY_MOVE_BSR if entry_via_bsr else _PG_TALLY_MOVE_FALL, _PG_TALLY_HEAD)
+    sr = _add_sr(sr, active_id, active_id, 2)
+    sr = _add_sr(sr, half, half, 2)
+    if doubled16 & 0x8000:
+        return {'cost': _add(cost, _PG_TALLY_BMI_TAKEN, _PG_TALLY_RTS),
+                'd0': doubled16, 'd1': None, 'a1': None, 'sr': sr, 'f36c': f36c}
+    record = read(pickups.ITEM_RECORDS + doubled16, 4) & 0xFFFFFFFF
+    range_low = read((record + pickups.ITEM_RANGE_LOW) & 0xFFFFFF, 2) & 0xFFFF
+    value = read((record + pickups.ITEM_VALUE) & 0xFFFFFF, 2) & 0xFFFF
+    cost = _add(cost, _PG_TALLY_BMI_NOT, _PG_TALLY_OPEN)
+    sr = _add_sr(sr, f36c, range_low, 2)
+    f36c = (f36c + range_low) & 0xFFFF
+    remaining = (value - range_low) & 0xFFFF
+    sr = _sub_sr(sr, value, range_low, 2)
+    cost = _add(cost, _PG_TALLY_ADD_SUB)
+    if remaining == 0:
+        return {'cost': _add(cost, _PG_TALLY_BEQ_TAKEN, _PG_TALLY_RTS),
+                'd0': range_low, 'd1': 0, 'a1': record, 'sr': sr, 'f36c': f36c}
+    sr = _add_sr(sr, f36c, range_low, 2)
+    f36c = (f36c + range_low) & 0xFFFF
+    remaining2 = (remaining - 1) & 0xFFFF
+    sr = _sub_sr(sr, remaining, 1, 2)
+    cost = _add(cost, _PG_TALLY_BEQ_NOT, _PG_TALLY_ADD2, _PG_TALLY_SUBQ)
+    if remaining2 == 0:
+        return {'cost': _add(cost, _PG_TALLY_BEQ_TAKEN, _PG_TALLY_RTS),
+                'd0': range_low, 'd1': 0, 'a1': record, 'sr': sr, 'f36c': f36c}
+    sr = _add_sr(sr, f36c, range_low, 2)
+    f36c = (f36c + range_low) & 0xFFFF
+    remaining3 = (remaining2 - 1) & 0xFFFF
+    sr = _sub_sr(sr, remaining2, 1, 2)
+    sr = _add_sr(sr, f36c, remaining3, 2)
+    f36c = (f36c + remaining3) & 0xFFFF
+    cost = _add(cost, _PG_TALLY_BEQ_NOT, _PG_TALLY_ADD2, _PG_TALLY_SUBQ, _PG_TALLY_ADD_REMAINDER, _PG_TALLY_RTS)
+    return {'cost': cost, 'd0': range_low, 'd1': remaining3, 'a1': record, 'sr': sr, 'f36c': f36c}
+
+
+def _pg_tally_cascade(read, sr):
+    """012CC2: clear TIME_MARK, then fold in each of the three GROUP_TABLES' own contribution."""
+    from .game import pickups
+    d0 = d1 = a1 = None
+    f36c = 0
+    cost = _PG_HEAD_CLEAR
+    sr = _logic_sr(sr, 0, 2)
+    for index, table in enumerate(pickups.GROUP_TABLES):
+        step = _pg_tally_group(read, table, entry_via_bsr=(index in (0, 1)), sr=sr, f36c=f36c)
+        cost = _add(cost, step['cost'])
+        sr, f36c, d0 = step['sr'], step['f36c'], step['d0']
+        if step['d1'] is not None:
+            d1 = step['d1']
+        if step['a1'] is not None:
+            a1 = step['a1']
+    return {'cost': cost, 'd0': d0, 'd1': d1, 'a1': a1, 'sr': sr, 'f36c': f36c}
+
+
+def _pg_register_item_cost(registration):
+    """012A3E's own cost: the fixed head and field-2 test, then either the immediate non-negative-
+    SPECIAL_TIMER exit or the up-to-three id compares (the third's own branch polarity is inverted:
+    bne instead of beq -- see game.pickups.register_item)."""
+    from .game import pickups
+    cost = _add(_PG_REGISTER_HEAD, _PG_REGISTER_FIELD_TEST, _PG_REGISTER_SET_GATE, _PG_REGISTER_TIMER_TEST)
+    if not registration['timer_negative']:
+        return _add(cost, _PG_REGISTER_BPL_TAKEN, _PG_REGISTER_CLEAR_GATE, _PG_REGISTER_RTS)
+    cost = _add(cost, _PG_REGISTER_BPL_NOT)
+    ids = registration['ids']
+    for index, table_id in enumerate(ids):
+        is_match = table_id == pickups.GROUP_EIGHT_TEST
+        cost = _add(cost, _PG_EIGHT_CMPI)
+        if index < 2:
+            cost = _add(cost, _PG_EIGHT_BEQ_TAKEN if is_match else _PG_EIGHT_BEQ_NOT)
+        else:
+            cost = _add(cost, _PG_EIGHT_BNE_NOT if is_match else _PG_EIGHT_BNE_TAKEN)
+        if is_match:
+            return _add(cost, _PG_REGISTER_CLEAR_GATE, _PG_REGISTER_RTS)
+    return _add(cost, _PG_REGISTER_RTS)
+
+
+def pickup_award_group_plan(machine, registers):
+    """012C80 (with its own chain, 012D30/012A3E/012A34/011468): game/pickups.py's
+    award_group_dispatch."""
+    from .game import pickups
+    if registers['pc'] != PICKUP_AWARD_GROUP_ENTRY:
+        raise UnsupportedCandidate('pickup award group planner needs the machine parked at 012C80')
+    sp32 = registers['a7']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    item_id = registers['d2'] & 0xFFFF
+    result = pickups.award_group_dispatch(read, item_id)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # The tally cascade re-reads GROUP_TABLES/ITEM_RECORDS after this activation's own earlier
+    # stores (the table write, the registration, the increment) have already landed on the real
+    # machine; a plain ``read`` would still see the pre-store values.
+    live_read = pickups._with_stores(read, result['stores'])
+
+    if result['arm'] == 'already-active':
+        matched = result['matched']
+        cost = _add(_pg_match_head_cost(matched), _PG_MATCH_HEAD, _PG_INCREMENT)
+        tally = _pg_tally_cascade(live_read, registers['sr'])
+        cost = _add(cost, tally['cost'])
+        # Group 0 and group 1's own "bsr.b 12cd6" always run (empty or not -- only their own body's
+        # first instruction, the doubling, is skipped); group 2 falls straight through with no bsr of
+        # its own.  The activation's own stack residue is therefore the fixed ROM return address of
+        # whichever bsr ran last (group 1's, at 012CD0 -- two bytes -- returning to 012CD2), not data.
+        stack_writes = _bytes((sp - 4) & 0xFFFFFF, 0x00012CD2, 4)
+        exit_registers = {
+            'd0': (registers['d0'] & 0xFFFF0000) | tally['d0'],
+            'd1': (registers['d1'] & 0xFFFF0000) | (tally['d1'] or 0),
+            'd2': (registers['d2'] & 0xFFFF0000) | ((item_id * 4) & 0xFFFF),
+            'a1': tally['a1'] & 0xFFFFFFFF,
+            'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': tally['sr'],
+        }
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=stack_writes + writes,
+                          registers=exit_registers, last_pc=PICKUP_AWARD_GROUP_LAST_PC_MATCH)
+
+    if result['arm'] != 'register':
+        raise UnsupportedCandidate('pickup award group: %s is not witnessed' % result['arm'])
+
+    selection, registration = result['selection'], result['registration']
+    select_cost = {'override': _PG_SELECT_OVERRIDE, 'group0': _PG_SELECT_GROUP0,
+                  'group1': _PG_SELECT_GROUP1}[selection['arm']]
+    cost = _add(_PG_REGISTER_ARM_HEAD, _PG_BSR_12D30, select_cost, _PG_STORE_TABLE, _PG_MOVE_D1,
+               _PG_SAVE_D7, _PG_JSR_12A3E)
+    cost = _add(cost, _pg_register_item_cost(registration))
+    cost = _add(cost, _PG_RESTORE_D7, _PG_JSR_12A34, _PG_CLEAR_TOTAL, _PG_HEAD_CLEAR_BSR)
+    tally = _pg_tally_cascade(live_read, registers['sr'])
+    cost = _add(cost, tally['cost'], _PG_JMP_11468, _PG_RECHECK_TEST, _PG_RECHECK_BMI_TAKEN, _PG_RECHECK_RTS)
+
+    timer = live_read(pickups.SPECIAL_TIMER, 2) & 0xFFFF
+    exit_sr = _logic_sr(tally['sr'], timer, 2)
+    table = selection['table']
+    a0_exit = (table + pickups.SLOT_BASE + 2 * pickups.GROUP_SLOT_CLEAR_WORDS) & 0xFFFFFFFF
+    group = selection['group'] & 0xFFFF
+    exit_registers = {
+        # group_extended_clear's own "moveq #$47,d0" clears D0's WHOLE register before the tally
+        # cascade ever runs, and DBRA/MOVE.W never restore an upper half after that: unlike the
+        # already-active arm, D0's own upper word is always 0 here, not the caller's entry value
+        # (--perturb-upper-halves caught this).
+        'd0': tally['d0'] & 0xFFFF,
+        'd1': (registers['d1'] & 0xFFFF0000) | (tally['d1'] or 0),
+        # register_item's own head overwrites d2 a second time ("move.w d1,d2", d1 = item_id) after
+        # 012D30's own moveq left it holding the group -- item_id is what survives to the exit, not
+        # the group (d5 keeps the group instead, saved by register_item's own first instruction).
+        # The SAME moveq clears D2's own upper half too, and the following MOVE.W never restores it
+        # (also caught by --perturb-upper-halves).
+        'd2': item_id & 0xFFFF,
+        'd3': (registers['d3'] & 0xFFFF0000) | item_id,
+        'd5': (registers['d5'] & 0xFFFF0000) | group,
+        'a0': a0_exit, 'a1': tally['a1'] & 0xFFFFFFFF,
+        'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr,
+    }
+    # Two frame slots, both fixed ROM return addresses (see the already-active arm's own note):
+    # (sp-4) is the outer "bsr.b 12cc2" (012CAA, returning to 012CAC), landed last since it is pushed
+    # AFTER 12A3E/12A34 have already returned; (sp-8) is the inner group-1 "bsr.b 12cd6" (012CD0,
+    # returning to 012CD2) -- group 2's own fallthrough consumes the OUTER slot on its own final rts,
+    # never touching (sp-8) again after group 1's own return.
+    stack_writes = _bytes((sp - 4) & 0xFFFFFF, 0x00012CAC, 4) + _bytes((sp - 8) & 0xFFFFFF, 0x00012CD2, 4)
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=stack_writes + writes,
+                      registers=exit_registers, last_pc=PICKUP_AWARD_GROUP_LAST_PC_REGISTER)

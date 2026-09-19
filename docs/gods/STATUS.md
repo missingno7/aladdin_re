@@ -2587,6 +2587,53 @@ small leaf):
   no device access, no blocker condition, but not yet implemented; the
   next candidate for whoever picks this up.
 
+- **20 September, grinder session opening on `012C80`**: recovered, closing
+  the Decision's own bottom-up order in full.  A full-tree census (all five
+  recordings, 32 retained fixtures, no overflow) confirmed the reconnaissance's
+  own read almost exactly, with one correction: `012A3E`'s own message/pool
+  cascade has TWO real witnessed tails, not one -- `SPECIAL_TIMER` negative
+  and none of the three `GROUP_TABLES`' own active id equal to 8 leaves
+  `ARRAY_GATE` (`FFFFEF8A`) set; either `SPECIAL_TIMER` non-negative or one
+  id equal to 8 clears it back to 0 immediately -- neither stops the
+  registration itself, which always continues into `012A34`'s own extended
+  slot clear and the tally cascade; only `011468`'s own final re-test of the
+  SAME `SPECIAL_TIMER` (unchanged since `012A3E`'s own read) decides whether
+  the whole activation completes (negative: done, one of 32 fixtures) or
+  falls into a further, real, unwitnessed `TIME_MARK`/`FFFFF154` derivation
+  (declined by name).  `012D30`'s own group-2 selection (the generic,
+  non-override cascade) and its own 'contested' evict-the-lower-value
+  tie-break are likewise real ROM no recording enters: declined.  The tally
+  cascade itself (`012CC2`/`012CD6`, folding each of the three groups' own
+  contribution into `TIME_MARK`) needed a `_with_stores` overlay reader
+  (`game.pickups`, shared by the semantics and the boundary) since it
+  re-reads `GROUP_TABLES`/`ITEM_RECORDS` after this SAME activation's own
+  earlier stores (the table write, the registration, the increment) have
+  already landed -- a plain `read` would still see the pre-store values, a
+  real defect the FIRST fixture check caught immediately (`tally['a1']` was
+  `None`).  `factcheck check` (32 fixtures: 31 MATCH, 1 honest decline) and
+  `--perturb-upper-halves` both clean after one more real defect: D0 and D2's
+  own upper half are cleared by `012A34`'s own `moveq #$47,d0` once the
+  register arm reaches the extended-clear loop, not preserved from the
+  caller's own entry value (the already-active arm, which never reaches that
+  loop, keeps the caller's own upper half as expected).  The negative control
+  needed its own real fix too: `award_group_dispatch`'s own `stores` dict is
+  ordered so TIME_MARK is NOT its last entry -- TIME_MARK is rebuilt from
+  scratch by every future call to this same routine, so a generic "flip the
+  last write" mutant on it self-healed before any consumer (`collect`'s own
+  time-bonus read) could ever observe the corruption, PASSing at up to 2,400
+  frames on three different fixtures; reordering so the durable effect
+  (ITEM_VALUE, or the GROUP_TABLES active-id word) is last fixed it.
+  `camera-sprites` extended to sixty gates.  Reproduces the original on
+  `ca2b703b6fd5…`: PASS, 3 hits, 0 fallbacks, bit-exact; mutant
+  `pickup-award-group-mutant-result` DIVERGENCE at frame 2,395.  Milestone
+  tree PASS on all five leaves (`artifacts/gods/verify-camera-sprites-leaves-2026-09-20`,
+  107,519 frames, 256.1 s).  With this, every piece the `003186`/`003480`
+  Decision named for the object draw-and-update subsystem's own bottom-up
+  order is recovered; what remains of that subsystem is `003186` itself (the
+  phase-table body, composing the now-fully-recovered `003284` tail) and
+  `0030CC` as the 200-entry scan composing it with the phase counters and the
+  tail.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second
