@@ -1,10 +1,10 @@
 """003480: the object activity gate (`docs/gods/blockers/2026-09-19-003480.md`), composing the
-bounds-check head, the achievements.RECORD_TABLE dispatch, and both the pickup-award (012C80) and
-sound-request (the 005958 table's own admitted handlers + 002F2E) arms as real internal jsr/bsr
-calls, the same "virtual park" technique spawn_puff_box_plan already proves. The 0x354C
-record-status-1 sub-dispatch (a genuine second real sub-mechanism) and 005958 indices 4/6/17/18
-(each its own real, unrecovered complexity) decline by name. Three tiers as for the other leaves;
-the evidence tiers skip when the local census or reference artifacts are absent.
+bounds-check head, the achievements.RECORD_TABLE dispatch, and the pickup-award (012C80),
+sound-request (the 005958 table's own admitted handlers + 002F2E) and record-status-one (00354C,
+game/test_record_status_one.py) arms as real internal jsr/bsr calls, the same "virtual park"
+technique spawn_puff_box_plan already proves. 00354C's own table-match ('found') sub-arm and 005958
+indices 4/6/17/18 (each its own real, unrecovered complexity) decline by name. Three tiers as for
+the other leaves; the evidence tiers skip when the local census or reference artifacts are absent.
 """
 from pathlib import Path
 
@@ -72,14 +72,15 @@ def test_record_status_fail_when_the_matched_record_status_exceeds_one():
     assert result['stores'][world.GATE_FIELD_WORD & 0xFFFFFF] == (status, 2)
 
 
-def test_unrecovered_record_status_one_is_named_not_guessed():
+def test_record_status_one_hands_off_to_the_sub_dispatch_with_f3f2_stored():
     from gods_sega.game.achievements import _record_address
     status = 3
     values = _in_box(status)
     record = _record_address(status)
     values[(record + world.OBJECT_STATUS_OFFSET) & 0xFFFFFF, 2] = 1
     result = world.object_activity_gate(_reader(values), 0x2000, 0, 0)
-    assert result['arm'] == 'unrecovered-record-status-one'
+    assert result['arm'] == 'record-status-one'
+    assert result['stores'][world.GATE_FIELD_WORD & 0xFFFFFF] == (status, 2)
 
 
 def test_sound_request_arm_when_the_matched_record_status_is_zero_or_negative():
@@ -151,9 +152,12 @@ def test_candidate_name_is_explicit_and_composes_the_retired_gates():
     assert boundary.QUEUE_APPEND_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     # The 005958 table's own ten composed handlers stay standalone-only; sound-cue-pair (index 10)
     # too, since it has a second, independent real caller this composition does not cover.
+    # 00354C (record-status-one) stays standalone-only too: this composition already reaches it
+    # internally.
     for entry_name in ('ACCUMULATOR_0_ENTRY', 'ACCUMULATOR_3_ENTRY', 'ACCUMULATOR_19_ENTRY',
                        'ACCUMULATOR_21_ENTRY', 'SOUND_CUE_PAIR_ENTRY', 'COPY_TABLE_14_ENTRY',
-                       'COPY_TABLE_15_ENTRY', 'COPY_TABLE_16_ENTRY', 'HALF_FRAME_COUNTER_ENTRY'):
+                       'COPY_TABLE_15_ENTRY', 'COPY_TABLE_16_ENTRY', 'HALF_FRAME_COUNTER_ENTRY',
+                       'RECORD_ONE_ENTRY'):
         entry = getattr(boundary, entry_name)
         assert entry not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('object-activity-gate-mutant-result').mutation is recovery._mutate_register

@@ -55,6 +55,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        BUMP_TALLY_1_ENTRY, bump_tally_1_plan, BUMP_TALLY_2_ENTRY, bump_tally_2_plan,
                        HALF_FRAME_COUNTER_ENTRY, half_frame_counter_plan,
                        OBJECT_ACTIVITY_GATE_ENTRY, object_activity_gate_plan,
+                       RECORD_ONE_ENTRY, record_status_one_plan,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
@@ -418,6 +419,9 @@ PLANNERS = {
     'kind-bump-tally-2': {BUMP_TALLY_2_ENTRY: bump_tally_2_plan},
     'kind-half-frame-counter': {HALF_FRAME_COUNTER_ENTRY: half_frame_counter_plan},
     'object-activity-gate': {OBJECT_ACTIVITY_GATE_ENTRY: object_activity_gate_plan},
+    # 00354C: the record-status-1 sub-dispatch, composed inside object-activity-gate as a real
+    # internal call; standalone-only for the SAME native gate capacity reason the 005958 handlers are.
+    'record-status-one': {RECORD_ONE_ENTRY: record_status_one_plan},
     'kind-sound-cue-pair': {SOUND_CUE_PAIR_ENTRY: sound_cue_pair_plan},
     'kind-copy-table-14': {COPY_TABLE_14_ENTRY: copy_table_14_plan},
     'kind-copy-table-15': {COPY_TABLE_15_ENTRY: copy_table_15_plan},
@@ -728,6 +732,10 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # own mutant avoids); D0 is always either explicitly restored (sign-extended) or left
              # provably unchanged, so corrupting it diverges in every arm, including the no-op ones.
              'object-activity-gate-mutant-result': ('object-activity-gate', _mutate_register),
+             # _mutate_register, not _mutate_result: EVERY admitted arm's own writes tuple ends with
+             # tail_zero_write (the shared 0034B6 clr.w -(a7) scratch the SAME rtr immediately consumes),
+             # the SAME dead-last-write blind spot object-activity-gate's own mutant note already names.
+             'record-status-one-mutant-register': ('record-status-one', _mutate_register),
              'hazard-tick-mutant-result': ('hazard-tick', _mutate_result),
              'score-convert-mutant-result': ('score-convert', _mutate_result),
              'evaluator-mutant-outcome': ('evaluator', _mutate_outcome),

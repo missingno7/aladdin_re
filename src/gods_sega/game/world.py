@@ -268,10 +268,10 @@ def half_frame_counter(read):
 # off to the pickup-award group dispatch (012C80, already recovered) plus the queue append (002F2E,
 # already recovered); otherwise the SAME status indexes achievements.RECORD_TABLE (0xFFFFF8C2, the
 # SAME 10-byte-stride arithmetic achievements._record_address already models) for a second status
-# word at +4: > 1 is the real fail exit named above; == 1 reaches a genuine second real sub-dispatch
-# (0x354C, over a further 4-entry FFFFF22E table) this session did not model -- declined by name;
-# <= 1 [sic: <= 0, since == 1 is handled separately] reaches the SAME 005958 handler dispatch this
-# session already recovered eleven of fifteen witnessed entries for (composing whichever handler the
+# word at +4: > 1 is the real fail exit named above; == 1 reaches a second real sub-dispatch, modelled
+# below as `record_status_one_dispatch` (0x354C, over a further 4-entry FFFFF22E table); <= 0 reaches
+# the SAME 005958 handler dispatch this session already recovered eleven of fifteen witnessed entries
+# for (composing whichever handler the
 # SAME SOUND_SCAN_TABLE zero-byte count selects, keyed here by the achievements record's own template
 # status word, not the object's own +4 status), then the queue append again.
 CAMERA_GATE_BYPASS = 0xFFFFEF3C
@@ -323,7 +323,7 @@ def object_activity_gate(read, a0, d0, d1):
     if record_status > 1:
         return {'arm': 'record-status-fail', 'stores': status_store}
     if record_status == 1:
-        return {'arm': 'unrecovered-record-status-one', 'stores': {}}
+        return {'arm': 'record-status-one', 'stores': status_store}
 
     # FDF6 is written 0x34 twice here (both before the matched 005958 handler runs) -- left out of
     # this arm's own stores since the handler itself may write FDF6 again afterward (the accumulator
@@ -332,3 +332,52 @@ def object_activity_gate(read, a0, d0, d1):
             'stores': {(a0 + OBJECT_STATUS_OFFSET) & 0xFFFFFF: (0xFFFF, 2),
                       (a0 + OBJECT_TEMPLATE_OFFSET) & 0xFFFFFF: (0, 2),
                       GATE_FIELD_WORD & 0xFFFFFF: (status, 2)}}
+
+
+# --- 00354C: the object activity gate's own record-status-1 sub-dispatch --------------------------
+#
+# Reached from object_activity_gate's own body by a plain branch (0034EC `beq.w $354c`, the SAME
+# non-call-boundary shape `classify_object_kind`'s own 0036E2 already proved) when the matched
+# `achievements.RECORD_TABLE` entry's own status field is exactly 1.  D2 at this point is still the
+# OBJECT's own status word (0034C4's own `move.w 4(a0),d2`, never overwritten before the branch) --
+# the SAME value `object_activity_gate`'s own caller already computed and passed here as `status`.
+# Every arm rejoins the gate's own shared "pass" exit (`bra.w $34b2`), never returning on its own.
+RECORD_ONE_RANGE_LOW, RECORD_ONE_RANGE_HIGH = 0x000C, 0x0012      # [LOW, HIGH): the table-lookup range
+RECORD_ONE_TABLE = 0xFFFFF22E
+RECORD_ONE_TABLE_COUNT = 4
+RECORD_ONE_ACCUM = 0xFFFFF296             # a long accumulator this arm folds the record's own +6 field into
+RECORD_ONE_SCORE_BUFFER = 0xFFFFEF80      # score_convert's own destination base for this call site
+
+
+def _signed_word_asr(value, count):
+    """asr.w #count,d -- an arithmetic shift confined to the low 16 bits, as the ROM's own `asr.w`
+    leaves the untouched upper word (the caller re-extends with `ext.l` afterward, modelled by the
+    caller of this helper, not here)."""
+    value &= 0xFFFF
+    signed = value - 0x10000 if value & 0x8000 else value
+    return (signed >> count) & 0xFFFF
+
+
+def record_status_one_dispatch(read, status, record):
+    """00354C: ``status`` is the object's own status word (D2, unchanged since 0034C4); ``record`` is
+    ``achievements._record_address(status)``, already computed by the caller.  Returns the arm --
+    'award' (status outside [0xC, 0x12): a sound cue, then the record's own +6 field folded into
+    RECORD_ONE_ACCUM and converted through the already-recovered score conversion, then queued);
+    'odd' (status inside the range, odd: a plain store, no calls); 'found'/'not-found' (status inside
+    the range, even: a derived index looked up against the 4-entry RECORD_ONE_TABLE) -- and, for
+    'award', the accumulator delta and the value score_convert itself receives; for 'found'/'not-found',
+    the derived index and, for 'found', which of the four slots matched."""
+    if status < RECORD_ONE_RANGE_LOW or status >= RECORD_ONE_RANGE_HIGH:
+        raw = read((record + 6) & 0xFFFFFF, 2) & 0xFFFF
+        accum_delta = raw - 0x10000 if raw & 0x8000 else raw
+        shifted = _signed_word_asr(raw, 3)
+        value = shifted - 0x10000 if shifted & 0x8000 else shifted
+        return {'arm': 'award', 'accum_delta': accum_delta, 'value': value}
+    if status & 1:
+        return {'arm': 'odd'}
+    index = ((status - RECORD_ONE_RANGE_LOW) >> 1) + 0x15
+    for slot in range(RECORD_ONE_TABLE_COUNT):
+        entry = read((RECORD_ONE_TABLE + 2 * slot) & 0xFFFFFF, 2) & 0xFFFF
+        if entry == index:
+            return {'arm': 'found', 'slot': slot, 'index': index}
+    return {'arm': 'not-found', 'index': index}

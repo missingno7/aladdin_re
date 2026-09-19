@@ -2772,6 +2772,50 @@ small leaf):
   status chains (`0039EA`/`003AE6`/`003BBA`) as families, `003186`'s head,
   `003284` composing the chains, and `0030CC` as the scan.
 
+- **20 September, grinder session on `00354C`**: recovered in full except
+  its own table-match sub-arm.  Fixtures are censused the SAME way
+  `0036E2` needed (a real gate, but reached by a plain branch, not a bsr:
+  the standard census tool cannot classify it), except the discriminant
+  here (the object's own status word) is already a register at this
+  entry, not a memory word, so the built-in `reg:d2.w` classifier over
+  `recovery_census.capture_entries` (plain mode) sufficed directly.  Three
+  real arms: `status` outside `[0xC, 0x12)` ('award') folds the matched
+  achievements record's own `+6` field into a long accumulator
+  (`FFFFF296`), converts it through the already-recovered score
+  conversion (`00364C`) and queues the result (`002F2E`), reusing the
+  caller's own pre-adjustment D0/D1 read back off `object_activity_gate`'s
+  own stack frame; `status` odd inside the range ('odd') is a plain
+  two-field store, no calls; `status` even inside the range keys a
+  derived index against a 4-entry table (`FFFFF22E`) -- a miss
+  ('not-found') is another plain store, a match ('found', reached through
+  the already-recovered `achievement_slot_reset_plan`/`0047DA` and a new,
+  unread producer `0x2FE6`) is real ROM no recording ever enters (0 of 12
+  sampled `status=0xC`/`0x10` occurrences matched), declined by name.
+  Composed as a real internal call inside `object_activity_gate_plan`
+  (the pickup-award/sound-request arms' own "virtual park" shape), and
+  also factored into its own standalone-gateable candidate
+  (`record_status_one_plan`, `'record-status-one'`) since it is itself a
+  branch target like `0036E2` -- composing it back needed a `_ConstMachine`
+  overlay of the outer's own not-yet-applied d0/d1/d2 frame (the "read my
+  own prior write" shape `creature_pickup_check_plan` already proves),
+  since the composed leaf reads that frame back off the stack rather than
+  taking it as an argument.  135 fixtures across all five recordings MATCH
+  plain and under `--perturb-upper-halves` after three real defects (the
+  X flag threading into `score_convert_plan`, the virtual frame overlay,
+  and D3's own entry value into the virtual call -- see `ledger.md`'s own
+  entry for the full account).  `record-status-one` stays standalone-only
+  (native gate capacity, the `005958`-handler precedent); `camera-sprites`
+  unchanged at sixty gates.  Milestone tree PASS
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-20d`, 107,519
+  frames, 250.7 s, 8,567 fallbacks -- down from 9,052; only two honest
+  `00354C` table-match declines remain on the whole tree).  Next, per the
+  original assignment's own order: `003BBA` (composes only
+  `003480`/`0018C8`), the `0032F6` kind dispatch's default/`0x53`/`0x36`
+  arms, the five still-unread routines (`01191A`, `011D32`, `012010`,
+  `00173C`, `003BEC`), the status chains (`0039EA`/`003AE6`/`003BBA`) as
+  families, `003186`'s head, `003284` composing the chains, and `0030CC`
+  as the scan.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second

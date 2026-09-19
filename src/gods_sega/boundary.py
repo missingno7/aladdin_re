@@ -23164,6 +23164,160 @@ _GATE_SR_BRA = (10, 1)
 
 _GATE_5958_PLANS = {}   # populated at module end, once every referenced *_plan is defined
 
+# --- 00354C: the record-status-1 sub-dispatch (game.world.record_status_one_dispatch) --------------
+# Cost fragments from the tracer (artifacts/gods/evidence/census-0X00354C-d2-*): the head range test,
+# the 'award' arm's own accumulate-and-convert-and-queue tail (composing the already-recovered
+# score_convert_plan/queue_append_plan as real internal bsr calls, the SAME "virtual park" technique
+# this candidate's own pickup-award/sound-request arms already prove), the 'odd' arm's own plain
+# store, and the 'not-found' arm's own four-entry table scan.  'found' (a table match) is real ROM
+# code no recording enters (0/18 sampled occurrences of the two witnessed in-range status values, all
+# five recordings) and stays declined by name.
+_R1_CMP_LOW = (8, 1)                             # 00354C cmpi.w #$c,d2
+_R1_BLT_TAKEN, _R1_BLT_NOT = (10, 1), (8, 1)      # 003550 blt.b $3590
+_R1_CMP_HIGH = (8, 1)                             # 003552 cmpi.w #$12,d2
+_R1_BGE_TAKEN, _R1_BGE_NOT = (10, 1), (8, 1)      # 003556 bge.b $3590
+_R1_BTST = (10, 1)                                # 003558 btst.b #0,d2
+_R1_BNE_TAKEN, _R1_BNE_NOT = (10, 1), (12, 1)     # 00355C bne.w $3612
+_R1_CUE = (16, 1)                                 # 003590 move.w #$34,fdf6.w
+_R1_CLR4 = (16, 1)                                # 003596 move.w #$ffff,4(a0)
+_R1_CLR6 = (16, 1)                                # 00359C clr.w 6(a0)
+_R1_LOAD_D6 = (12, 1)                             # 0035A0 move.w 6(a1),d6
+_R1_EXT = (4, 1)                                  # 0035A4/0035AC ext.l d6
+_R1_ACCUM = (24, 1)                               # 0035A6 add.l d6,f296.w
+_R1_ASR = (12, 1)                                 # 0035AA asr.w #3,d6
+_R1_LEA_EF80 = (8, 1)                             # 0035AE lea.l ef80.w,a0
+_R1_BSR_SC = (18, 1)                              # 0035B2 bsr.w $364c
+_R1_LOAD_D0 = (8, 1)                              # 0035B6 move.w (a7),d0
+_R1_LOAD_D1 = (12, 1)                             # 0035B8 move.w 2(a7),d1
+_R1_LOAD_D2 = (12, 1)                             # 0035BC move.w f3f2.w,d2
+_R1_BSR_QA = (18, 1)                              # 0035C0 bsr.w $2f2e
+_R1_BRA_EXIT = (10, 1)                            # 0035C4/00361C/00358C bra.w $34b2
+_R1_ODD_STORE4 = (12, 1)                          # 003612 move.w d2,4(a0)
+_R1_ODD_STORE6 = (16, 1)                          # 003616 move.w #1,6(a0)
+_R1_NF_MOVE_D3 = (4, 1)                           # 003560 move.w d2,d3
+_R1_NF_SUBI = (8, 1)                              # 003562 subi.w #$c,d3
+_R1_NF_ASR = (8, 1)                               # 003566 asr.w #1,d3
+_R1_NF_ADDI = (8, 1)                              # 003568 addi.w #$15,d3
+_R1_NF_LEA = (8, 1)                               # 00356C lea.l f22e.w,a4
+_R1_NF_CMP = (8, 1)                               # cmp.w (a4)+,d3, one per table entry
+_R1_NF_BEQ_NOT = (12, 1)                          # beq.w $35c8, not taken, one per table entry
+_R1_NF_STORE = (12, 1)                            # 003588 move.w d2,4(a0)
+
+RECORD_ONE_ENTRY = 0x00354C
+
+
+def record_status_one_plan(machine, registers):
+    """00354C: the record-status-1 sub-dispatch (game.world.record_status_one_dispatch).  A real,
+    directly-gateable entry (like object_kind_dispatch_plan's own 0036E2): D2 is the object's own
+    status word, A1 the achievements record address, A0 the object pointer, A7 the SAME activation
+    frame object_activity_gate's own head already pushed (d0/d1/d2 at (a7)/(a7+2)/(a7+4)).  Every arm
+    rejoins the gate's own shared 'pass' exit (0034B2's own movem-pop/clr/rtr tail), owned here the
+    same way object_kind_dispatch_plan's own suffix owns 0030CC's shared loop-continue branch."""
+    from .game import world
+    if registers['pc'] != RECORD_ONE_ENTRY:
+        raise UnsupportedCandidate('record status one planner needs the machine parked at 00354C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    a0 = registers['a0'] & 0xFFFFFFFF
+    a1 = registers['a1'] & 0xFFFFFFFF
+    status = registers['d2'] & 0xFFFF
+    read = _reader(machine)
+    one = world.record_status_one_dispatch(read, status, a1 & 0xFFFFFF)
+    frame = machine.peek_ram(sp & 0xFFFF, 6)
+    d0_entry, d1_entry, d2_entry = (int.from_bytes(frame[0:2], 'big'), int.from_bytes(frame[2:4], 'big'),
+                                    int.from_bytes(frame[4:6], 'big'))
+    restored_d0, restored_d1, restored_d2 = (_sign_extend_word(d0_entry) & 0xFFFFFFFF,
+                                             _sign_extend_word(d1_entry) & 0xFFFFFFFF,
+                                             _sign_extend_word(d2_entry) & 0xFFFFFFFF)
+    # object_activity_gate's own movem.w d0-d2,-(a7) frame is already live by the time this gate is
+    # reached (every arm here runs past it): the ORIGINAL caller's own return address -- pushed by
+    # 003480's own bsr, at what was 003480's own entry A7 -- sits six bytes above this A7, not at it.
+    entry_sp32 = (sp32 + 6) & 0xFFFFFFFF
+    entry_sp = entry_sp32 & 0xFFFFFF
+    exit_sr = sr & ~0x1F   # every arm below shares the SAME "clr.w -(a7); rtr" tail: SR wholesale 0.
+    # 0034B6 clr.w -(a7): a real, transient push of 0x0000 two bytes below the restored entry A7 --
+    # object_activity_gate_plan's own bypass/box-miss/pickup-award/sound-request arms all write this
+    # same byte pair (tail_zero_write there); this gate owns the SAME tail, so it owns the same write.
+    tail_zero_write = _bytes((entry_sp - 2) & 0xFFFFFF, 0, 2)
+    head_cost = _add(_R1_CMP_LOW)
+
+    if status < world.RECORD_ONE_RANGE_LOW or status >= world.RECORD_ONE_RANGE_HIGH:
+        if status < world.RECORD_ONE_RANGE_LOW:
+            head_cost = _add(head_cost, _R1_BLT_TAKEN)
+        else:
+            head_cost = _add(head_cost, _R1_BLT_NOT, _R1_CMP_HIGH, _R1_BGE_TAKEN)
+        old_accum = read(world.RECORD_ONE_ACCUM, 4) & 0xFFFFFFFF
+        new_accum = (old_accum + one['accum_delta']) & 0xFFFFFFFF
+        accum_write = _bytes(world.RECORD_ONE_ACCUM & 0xFFFFFF, new_accum, 4)
+        cue_write = _bytes(0xFFFFFDF6 & 0xFFFFFF, 0x34, 2)
+        clr_write = (_bytes((a0 + world.OBJECT_STATUS_OFFSET) & 0xFFFFFF, 0xFFFF, 2)
+                    + _bytes((a0 + world.OBJECT_TEMPLATE_OFFSET) & 0xFFFFFF, 0, 2))
+        cost = _add(head_cost, _R1_CUE, _R1_CLR4, _R1_CLR6, _R1_LOAD_D6, _R1_EXT, _R1_ACCUM, _R1_ASR,
+                   _R1_EXT, _R1_LEA_EF80, _R1_BSR_SC)
+        # bsr.w $364c pushes its OWN 4-byte return address one slot below A7; score_convert_plan's own
+        # internal scratch writes are relative to THIS sp, not the entry sp itself.
+        sc_sp = (sp32 - 4) & 0xFFFFFFFF
+        sc_write = _bytes(sc_sp & 0xFFFFFF, 0x000035B6, 4)
+        # asr.w #3,d6 (0035AA) is the last flag-setter before the bsr (ext.l/lea do not touch X): X and
+        # C both take the LAST bit shifted out, the record's own +6 raw word's own bit 2.
+        raw = read(((a1 & 0xFFFFFF) + 6) & 0xFFFFFF, 2) & 0xFFFF
+        sc_sr = (sr & ~0x10) | (0x10 if (raw >> 2) & 1 else 0)
+        sc_regs = dict(registers)
+        sc_regs.update(pc=SCORE_CONVERT_ENTRY, a7=sc_sp, a0=world.RECORD_ONE_SCORE_BUFFER & 0xFFFFFFFF,
+                      d6=one['value'] & 0xFFFFFFFF, sr=sc_sr)
+        sc = score_convert_plan(machine, sc_regs)
+        cost = _add(cost, (sc.cycles, sc.instructions))
+        live = dict(sc.registers)
+        live['d0'] = (live['d0'] & 0xFFFF0000) | d0_entry
+        live['d1'] = (live['d1'] & 0xFFFF0000) | d1_entry
+        live['d2'] = (live['d2'] & 0xFFFF0000) | status
+        cost = _add(cost, _R1_LOAD_D0, _R1_LOAD_D1, _R1_LOAD_D2, _R1_BSR_QA)
+        # score_convert's own bsr/rts pair is self-balancing (A7 is back at its entry value once it
+        # returns), so bsr.w $2f2e pushes its OWN return address at the SAME relative slot.
+        qa_sp = (sp32 - 4) & 0xFFFFFFFF
+        qa_write = _bytes(qa_sp & 0xFFFFFF, 0x000035C4, 4)
+        qa_regs = dict(registers); qa_regs.update(live)
+        qa_regs.update(pc=QUEUE_APPEND_ENTRY, a7=qa_sp, d0=live['d0'], d1=live['d1'], d2=live['d2'])
+        qa = queue_append_plan(machine, qa_regs)
+        cost = _add(cost, (qa.cycles, qa.instructions))
+        cost = _add(cost, _R1_BRA_EXIT, _GATE_MOVEM_POP, _GATE_CLR_PUSH, _GATE_RTR_ZERO)
+        live.update(a7=(entry_sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, entry_sp), sr=exit_sr)
+        writes = (cue_write + clr_write + accum_write + sc_write + sc.writes + qa_write + qa.writes
+                 + tail_zero_write)
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=live,
+                          last_pc=OBJECT_GATE_ZERO_PC)
+
+    head_cost = _add(head_cost, _R1_BLT_NOT, _R1_CMP_HIGH, _R1_BGE_NOT, _R1_BTST)
+    if status & 1:
+        cost = _add(head_cost, _R1_BNE_TAKEN, _R1_ODD_STORE4, _R1_ODD_STORE6, _R1_BRA_EXIT,
+                   _GATE_MOVEM_POP, _GATE_CLR_PUSH, _GATE_RTR_ZERO)
+        exit_registers = {'d0': restored_d0, 'd1': restored_d1, 'd2': restored_d2,
+                          'a7': (entry_sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, entry_sp), 'sr': exit_sr}
+        store_writes = (_bytes((a0 + world.OBJECT_STATUS_OFFSET) & 0xFFFFFF, status, 2)
+                       + _bytes((a0 + world.OBJECT_TEMPLATE_OFFSET) & 0xFFFFFF, 1, 2))
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=store_writes + tail_zero_write,
+                          registers=exit_registers, last_pc=OBJECT_GATE_ZERO_PC)
+
+    # status is even, in range: the FFFFF22E table lookup.
+    if one['arm'] == 'found':
+        raise UnsupportedCandidate('record status one: a table match (00360A onward) is not witnessed '
+                                   'by a recording')
+    index = one['index']
+    scan_cost = _add(_R1_NF_MOVE_D3, _R1_NF_SUBI, _R1_NF_ASR, _R1_NF_ADDI, _R1_NF_LEA)
+    for _ in range(world.RECORD_ONE_TABLE_COUNT):
+        scan_cost = _add(scan_cost, _R1_NF_CMP, _R1_NF_BEQ_NOT)
+    cost = _add(head_cost, _R1_BNE_NOT, scan_cost, _R1_NF_STORE, _R1_BRA_EXIT,
+               _GATE_MOVEM_POP, _GATE_CLR_PUSH, _GATE_RTR_ZERO)
+    exit_registers = {'d0': restored_d0, 'd1': restored_d1, 'd2': restored_d2,
+                      'd3': (registers['d3'] & 0xFFFF0000) | (index & 0xFFFF),
+                      'a4': (world.RECORD_ONE_TABLE + 2 * world.RECORD_ONE_TABLE_COUNT) & 0xFFFFFFFF,
+                      'a7': (entry_sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, entry_sp), 'sr': exit_sr}
+    store_write = _bytes((a0 + world.OBJECT_STATUS_OFFSET) & 0xFFFFFF, status, 2)
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=store_write + tail_zero_write,
+                      registers=exit_registers, last_pc=OBJECT_GATE_ZERO_PC)
+
 
 def _gate_scan_cost(read, status):
     """0x3502-3520: the SAME zero-byte count game.world.kind_table_count models, costed here since
@@ -23362,8 +23516,36 @@ def object_activity_gate_plan(machine, registers):
                           writes=frame_writes + status_stores + tail_fail_write,
                           registers=exit_registers, last_pc=OBJECT_GATE_FAIL_PC)
 
-    if result['arm'] == 'unrecovered-record-status-one':
-        raise UnsupportedCandidate('object activity gate: the 00354C record-status-1 sub-dispatch is not witnessed')
+    if result['arm'] == 'record-status-one':
+        # 00354C: reached by a plain branch (beq.w $354c), the SAME activation frame -- D2 is still
+        # `status`, A1 already holds `record` (the SAME record-address arithmetic above), A7 is
+        # already this activation's own frame pointer.  Composed as a real internal call, the SAME
+        # "virtual park" technique the pickup-award/sound-request arms already prove; F3F2 <- status
+        # is unconditional here too (0x34D0, before the branch), so it is this OUTER scope's own
+        # write, not record_status_one_plan's (a real gate at 0x354C would already see it in RAM).
+        f3f2_write = tuple(pair for a, (v, s) in result['stores'].items() for pair in _bytes(a, v, s))
+        cost = _add(cost, _GATE_RECORD_BGT_NOT, _GATE_RECORD_BEQ_TAKEN)
+        # record_status_one_plan expects A7 already past object_activity_gate's own movem push (a real
+        # gate at 0x354C would see exactly that) AND reads d0/d1/d2 back from that pushed frame -- but
+        # this composition's own frame_writes is staged, never literally applied to the live machine
+        # during planning, so record_status_one_plan must see it through a _ConstMachine overlay (the
+        # SAME "read my own prior write" shape creature_pickup_check_plan already proves), not the
+        # live machine directly.
+        virtual = dict(base_registers)
+        virtual.update(pc=RECORD_ONE_ENTRY, a0=a0, a1=record, d2=d2_status, a7=frame_sp,
+                      d3=(base_registers['d3'] & 0xFFFF0000) | d3_record)
+        frame_overlay = {address & 0xFFFF: value for address, value in frame_writes}
+        inner = record_status_one_plan(_ConstMachine(machine, frame_overlay), virtual)
+        cost = _add(cost, (inner.cycles, inner.instructions))
+        # record_status_one_plan's own 'odd' arm never touches D3 at all, so its own exit registers
+        # say nothing about it -- correct from ITS OWN entry, but base_registers['d3'] is the box
+        # test's own residue (d3_box), not this dispatch's own d3_record (status*8) that was actually
+        # live when 0x354C's body ran; seed with the value this composition itself fed it, THEN let
+        # inner.registers override it where an arm (record-status-one's own 'not-found') really does.
+        live = dict(base_registers); live['d3'] = virtual['d3']; live.update(inner.registers)
+        writes = frame_writes + f3f2_write + inner.writes
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=live,
+                          last_pc=inner.last_pc)
 
     # 'sound-request': record_status <= 0.
     from .game.world import kind_table_count, KIND_DISPATCH_ADMITTED
