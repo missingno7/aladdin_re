@@ -28,6 +28,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        AIM_SEARCH_FLAG_DISPATCH_ENTRY, aim_search_flag_dispatch_plan,
                        AIM_KIND_HANDLER_76_ENTRY, aim_kind_handler_76_plan,
                        AIM_KIND_HANDLER_50_ENTRY, aim_kind_handler_50_plan,
+                       EFFECT_SLOT_FIND_ENTRY, effect_slot_find_free_plan,
                        SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
@@ -194,6 +195,17 @@ def _mutate_creature_grid_cell_d0d1(plan: AtomicPlan) -> AtomicPlan:
     "flip the address a caller dereferences" shape creature_grid_cell's own mutant already uses."""
     registers = dict(plan.registers)
     registers['a2'] = (registers.get('a2', 0) + 1) & 0xFFFFFFFF
+    return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
+
+
+def _mutate_effect_slot_find(plan: AtomicPlan) -> AtomicPlan:
+    """Negative control for 00004AAA: A5 (the found slot's own address, the routine's own real output
+    -- its only real caller, 00010E28, writes a whole record through it immediately) off by one WHOLE
+    slot (its own 8-byte stride, not a raw +1: a real caller word-writes through A5, and an odd
+    address there is a genuine M68000 address error, not a control -- this leaf writes no RAM of its
+    own, so _mutate_result would be a no-op)."""
+    registers = dict(plan.registers)
+    registers['a5'] = (registers.get('a5', 0) + 8) & 0xFFFFFFFF
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
@@ -374,6 +386,7 @@ PLANNERS = {
     'aim-search-flag-dispatch': {AIM_SEARCH_FLAG_DISPATCH_ENTRY: aim_search_flag_dispatch_plan},
     'aim-kind-handler-76': {AIM_KIND_HANDLER_76_ENTRY: aim_kind_handler_76_plan},
     'aim-kind-handler-50': {AIM_KIND_HANDLER_50_ENTRY: aim_kind_handler_50_plan},
+    'effect-slot-find': {EFFECT_SLOT_FIND_ENTRY: effect_slot_find_free_plan},
     'spawn-table-find-free': {SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
     'spawn-table-add': {SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
@@ -503,6 +516,9 @@ PLANNERS = {
                        # AIM_KIND_HANDLER_50_ENTRY (00AB50): the other most-witnessed kind handler,
                        # 19 September -- 60 -> 61 gates.
                        AIM_KIND_HANDLER_50_ENTRY: aim_kind_handler_50_plan,
+                       # EFFECT_SLOT_FIND_ENTRY (00004AAA): 00A772's own further tail (00010E28's own
+                       # callee), 19 September -- 61 -> 62 gates.
+                       EFFECT_SLOT_FIND_ENTRY: effect_slot_find_free_plan,
                        SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
@@ -744,6 +760,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'aim-target-scan-backward-mutant-result': ('aim-target-scan-backward', _mutate_result),
              'aim-kind-handler-76-mutant-result': ('aim-kind-handler-76', _mutate_result),
              'aim-kind-handler-50-mutant-result': ('aim-kind-handler-50', _mutate_result),
+             'effect-slot-find-mutant-result': ('effect-slot-find', _mutate_effect_slot_find),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),
              'spawn-table-find-free-mutant-result': ('spawn-table-find-free', _mutate_spawn_find_free),
              'spawn-table-add-mutant-result': ('spawn-table-add', _mutate_result)}

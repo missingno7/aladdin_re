@@ -1962,3 +1962,29 @@ def aim_kind_handler_search(read, cell_addr, *, offsets):
 
 
 AIM_KIND_HANDLER_76_SEARCH_OFFSETS = (-1, 0x7F, 0xFF, 0x1, 0x81, 0x101)
+
+
+# --- 00004AAA: the creature effect-slot pool scan (00A772's own further tail, called from 00010E28)
+# -- a 200-slot, 8-byte pool distinct from every spawn/hazard/aim pool already named (game/timers.py,
+# game/hazard.py, game/creatures.py's own AIM_POOL).  A free slot's own word at +4 holds a negative
+# value; the 74 retained fixtures over all five recordings all find one within the first 176 of 200
+# slots -- full exhaustion is real ROM, never witnessed, declined.
+EFFECT_SLOT_POOL = 0xFFFF4342
+EFFECT_SLOT_STRIDE = 8
+EFFECT_SLOT_COUNT = 0xC8            # 200
+EFFECT_SLOT_ACTIVE_OFFSET = 4       # word: negative selects this slot as free
+
+
+def effect_slot_find_free(read):
+    """00004AAA: `lea.l EFFECT_SLOT_POOL,a5; move.w #$c7,d6` then, for each of 200 slots in order,
+    `tst.w $4(a5)` (free iff negative) -- on a match, D5 becomes the slot's own 0-based index (`$c7 -
+    d6`), D6 the remaining count from there, A5 the slot's own address; the CCR is `tst.w d6`'s own
+    (Z only when the match falls on the very last slot).  Exhausting all 200 slots without a match is
+    real ROM, never witnessed: declined."""
+    for index in range(EFFECT_SLOT_COUNT):
+        address = (EFFECT_SLOT_POOL + index * EFFECT_SLOT_STRIDE) & 0xFFFFFFFF
+        active = read(address + EFFECT_SLOT_ACTIVE_OFFSET, 2) & 0xFFFF
+        if _signed_word(active) < 0:
+            remaining = (EFFECT_SLOT_COUNT - 1 - index) & 0xFFFF
+            return {'arm': 'found', 'address': address, 'index': index, 'remaining': remaining}
+    return {'arm': 'exhausted'}

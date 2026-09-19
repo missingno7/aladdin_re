@@ -20159,3 +20159,40 @@ def aim_kind_handler_50_plan(machine, registers):
     # clr.w $a(a5) is the last flag-setter: Z=1,N=V=C=0, X retained.
     sr = _logic_sr(sr, 0, 2)
     return handoff(AKH50_KIND0_LAST_PC)
+
+
+# --- 00004AAA: the creature effect-slot pool scan (game/creatures.py: effect_slot_find_free) --------
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-004AAA-*, 74 retained fixtures over
+# all five recordings, every one a 'found' arm within the first 176 of 200 slots).
+EFFECT_SLOT_FIND_ENTRY, EFFECT_SLOT_FIND_LAST_PC = 0x00004AAA, 0x00004AC8
+_ESF_HEAD = (12 + 8, 2)            # lea.l $ffff4342.l,a5; move.w #$c7,d6
+_ESF_CONTINUE = (12 + 8 + 4 + 10, 4)   # tst.w $4(a5); bmi.b (not taken); addq.w #8,a5; dbra (taken)
+_ESF_FOUND_CHECK = (12 + 10, 2)    # tst.w $4(a5); bmi.b (taken)
+_ESF_TAIL = (8 + 4 + 4 + 16, 4)    # move.w #$c7,d5; sub.w d6,d5; tst.w d6; rts
+
+
+def effect_slot_find_free_plan(machine, registers):
+    """00004AAA: pure RAM reads, a bounded 200-iteration scan, no store."""
+    from .game import creatures
+    if registers['pc'] != EFFECT_SLOT_FIND_ENTRY:
+        raise UnsupportedCandidate('effect slot find free planner needs the machine parked at 00004AAA')
+    sr = registers['sr']
+    read = _reader(machine)
+    result = creatures.effect_slot_find_free(read)
+    if result['arm'] != 'found':
+        raise UnsupportedCandidate(f"effect slot find free: {result['arm']}, not witnessed by a recording")
+    index = result['index']
+    cycles, instructions = _add(_ESF_HEAD, *([_ESF_CONTINUE] * index), _ESF_FOUND_CHECK, _ESF_TAIL)
+    remaining = result['remaining']
+    # sub.w d6,d5 (00AC44 -- 199 - remaining, always >= 0 in-domain, so X=C=0 unconditionally) is the
+    # real last X-setter; tst.w d6 (Z iff remaining == 0, N never) never touches X, only retains it.
+    exit_sr = _logic_sr(_sub_sr(sr, creatures.EFFECT_SLOT_COUNT - 1, remaining, 2), remaining, 2)
+    sp = registers['a7']
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
+                      registers={'a5': result['address'] & 0xFFFFFFFF,
+                                 'd5': (registers['d5'] & 0xFFFF0000) | (index & 0xFFFF),
+                                 'd6': (registers['d6'] & 0xFFFF0000) | remaining,
+                                 'a7': (sp + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp & 0xFFFFFF),
+                                 'sr': exit_sr},
+                      last_pc=EFFECT_SLOT_FIND_LAST_PC)

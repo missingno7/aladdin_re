@@ -966,6 +966,55 @@ def test_creature_grid_cell_d0d1_candidate_matches_the_reference_and_its_mutant_
     assert mutant['status'] == 'DIVERGENCE'
 
 
+# --- 00004AAA: the creature effect-slot pool scan (00A772's own further tail, called from 00010E28)
+# -- a 200-slot, 8-byte pool distinct from every spawn/hazard/aim pool already named.  See
+# game/creatures.py's own module note above effect_slot_find_free.
+
+EFFECT_SLOT_FIND_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-004AAA-*/004AAA-entry-p*.state'))
+needs_effect_slot_find_census = pytest.mark.skipif(
+    not EFFECT_SLOT_FIND_FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 00004AAA')
+
+
+@needs_effect_slot_find_census
+@pytest.mark.parametrize('fixture', EFFECT_SLOT_FIND_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_effect_slot_find_free_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        try:
+            plan = boundary.effect_slot_find_free_plan(machine, registers)
+        except UnsupportedCandidate as error:
+            assert 'effect slot find free' in str(error), error
+            return
+    facts = pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'])
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+    assert facts['exit_pc'] == plan.registers['pc'] and facts['last_pc'] == plan.last_pc
+
+
+def test_effect_slot_find_free_candidate_names_are_explicit():
+    assert recovery.Candidate('effect-slot-find').gate_pcs == (boundary.EFFECT_SLOT_FIND_ENTRY,)
+    assert boundary.EFFECT_SLOT_FIND_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('effect-slot-find-mutant-result').mutation is recovery._mutate_effect_slot_find
+
+
+@needs_reference
+def test_effect_slot_find_free_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in EFFECT_SLOT_FIND_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='effect-slot-find', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00004AAA within 300 frames')
+    assert report['status'] == 'PASS', report
+    assert set(report['fallback_reasons']) <= recovery.ADAPTER_REFUSALS
+    mutant = segment_verify.check(state, game=GODS, frames=300, candidate='effect-slot-find-mutant-result',
+                                  reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
 # --- 00B082: the aim-cue update (docs/gods/blockers/2026-09-18-00A578.md's own "Decision on
 # 00AF52", 19 Sep) -- the second of 00AF52's own three unconditional callees.  Every call refills a
 # fixed 400-byte table from ROM constants, then (unless AIM_CUE_SKIP_FLAG is set, unwitnessed) draws

@@ -921,6 +921,32 @@ below, has the count and the milestone tree numbers).
   creature gates further), then `00A578` as the walk with its own
   semantic-operation card.
 
+- **19 September, grinder session opening on `00A772` itself**: fresh
+  disassembly shows the routine is real ~310 bytes, not the ~0x60 the
+  original blocker's own reconnaissance transcribed -- past the
+  already-recovered kind-table dispatch and its own three composing
+  calls, execution ALWAYS continues (no early `rts`) into a further tail:
+  an animation-frame/sprite-position update through the SAME frame table
+  `kind_frame_offset` already reads, a call into the already-recovered
+  sprite emitter (`0018C8`) and, conditionally, the already-recovered
+  next-random draw (`014A3C`) -- but also TWO genuinely new, previously
+  unexamined calls: `00004AAA` (a 200-slot creature effect-slot pool,
+  now recovered, above) via its own caller `00010E28` (not yet
+  recovered), and `00009A9F2` (called only when the creature's own
+  `LIFECYCLE` word is negative -- 52 of 1,131 retained fixtures witness
+  it) which itself calls `000003F0C`, a BCD digit-increment utility on a
+  counter array at `$EF80` that only sets a dirty flag (`$F1CE`) for a
+  separate, VBlank-driven display flush this session does not chase.
+  Neither new call touches a device directly.  `00A772`'s own "moving"
+  arm (`$F38A.w != 0`, hand off to `00AA50` instead of the attack timer)
+  is real ROM, never witnessed by any of the five recordings across
+  1,131 retained fixtures -- every occurrence takes the attack-timer arm.
+  `00004AAA` closes this session (own entry above); `00010E28`,
+  `00009A9F2`/`000003F0C`, and the eight kind-handler slots' own
+  remaining unwitnessed pair (`00AA80`/`00AB5A`) are the next bites
+  before `00A772` itself can be composed as the family; `00A578` as the
+  walk remains open behind it.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from
