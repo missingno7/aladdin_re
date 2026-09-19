@@ -2377,6 +2377,36 @@ small leaf):
   `004926`'s own sibling bite (`0048EA`'s own reachability into the
   evaluator's firing arm as a 6a family).
 
+- **19 September, same session, continuing the `0030CC` assignment**:
+  `0048EA` itself is recovered too -- composes `spawn_scan_plan` (004926)
+  as a real internal `bsr`, not a seam and not a `_ConstMachine` overlay:
+  the prefix (read the record's own position, the substitution test, the
+  box arithmetic) never touches RAM, so the live machine is unaffected
+  between 0048EA's own entry and the point of "parking" at 004926 for the
+  inner call.  A rare position/flag substitution (`x == 0x6CC`, `y ==
+  0x3C0`, a global long reading exactly 1) is real ROM, never witnessed by
+  any of the 17 retained fixtures (four of the five recordings; the fifth
+  never reaches it), declined by name.  One real defect
+  `--perturb-upper-halves` caught: `d2`/`d3` are freshly `MOVEQ`'d before
+  the box add, so their own exit upper half is always 0, never the
+  caller's entry value, unlike `d0`/`d1`'s plain `MOVE.W` load from the
+  record.  `game.actions.spawn_puff_box`; `gods_sega.boundary.
+  spawn_puff_box_plan`; candidate `'spawn-puff-box'`.  `factcheck check`
+  (17 fixtures) and `--perturb-upper-halves` both clean; `run_tests.py
+  gods` (23,081 passed, 12 skipped); `camera-sprites` extended to
+  fifty-six gates (`SPAWN_SCAN_ENTRY` stays armed too -- it still has a
+  second, real, unrecovered caller at `0139D2`).  Reproduces the original
+  on `f0ac19738f19…`: PASS, 5 hits, 0 fallbacks, bit-exact; mutant
+  `spawn-puff-box-mutant-result` DIVERGENCE at frame 1019.  Milestone tree
+  PASS on all five leaves (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-spawnpuffbox`,
+  107,519 frames).  With this, both of the `0030CC` assignment's own
+  reconnaissance callees for the evaluator's firing arm are recovered;
+  what remains of that assignment: the evaluator's firing arm itself (the
+  6a family over the record's own `+10` word, removing the 331 declines
+  at `00462C`) and the object table update `0030CC` itself (`003186`'s
+  body and `003284`, then the 200-slot scan composing it with the phase
+  counters and the tail).
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second

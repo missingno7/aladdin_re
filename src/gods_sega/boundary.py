@@ -2755,11 +2755,12 @@ def record_id_scan_plan(machine, registers):
 
 
 # --- The trigger evaluator's action table (game/actions.py) -- part 3 of the trigger firing --------
-# subsystem blocker's Split: two admissible handlers, reached by 00462C's own firing tail through a
+# subsystem blocker's Split: admissible handlers, reached by 00462C's own firing tail through a
 # tail JUMP (jmp (a5), 0046CE) with no frame of its own -- exactly 0048B4's own shape, so a handler's
 # own entry PC needs no seam at all: its own rts returns straight past the whole evaluator activation
-# to whoever called it. The other action-table entries (004A0A, 004D04, 004E1C, 004E74, 0048EA,
-# 005024, 00772E; 004A74/005074 unwitnessed) call still-unrecovered helper routines (004AAA, 004926,
+# to whoever called it. 0048EA is recovered too (19 September, the 0030CC assignment's own first
+# bite composing over it -- see below); the other action-table entries (004A0A, 004D04, 004E1C,
+# 004E74, 005024, 00772E; 004A74/005074 unwitnessed) call still-unrecovered helper routines (004AAA,
 # 004ECE/004D7E, 0050A4, 0077A8, 004F16) or write the level grid across several blocks, and stay
 # unrecovered until those callees are -- an ordinary decline, not a new mechanism.
 
@@ -2784,6 +2785,83 @@ def action_reset_elapsed_plan(machine, registers):
     return AtomicPlan(cycles=c, instructions=i, writes=_bytes(address & 0xFFFFFF, 0, 4),
                       registers={'a7': (registers['a7'] + 4) & 0xFFFFFFFF, 'pc': exit_pc, 'sr': exit_sr},
                       last_pc=ACTION_RESET_ELAPSED_LAST_PC)
+
+
+# --- 0048EA: spawn a puff in a box around the record's own position (game/actions.py) ---------------
+#
+# Composes spawn_scan_plan (004926) as a real internal bsr: the prefix builds the box in d0-d3 (no
+# RAM write of its own) and pushes d7, spawn_scan_plan runs from that virtual park (the live machine
+# is unaffected by the prefix, so no _ConstMachine overlay is needed), then d7 is popped back to its
+# OWN entry value (0048EA's own frame, not spawn_scan's own d7 residue) and this routine's own rts
+# returns to whatever the evaluator's tail jump already left on the stack.  Cost fragments from the
+# tracer (artifacts/gods/evidence/census-0X0048EA-*).
+SPAWN_PUFF_BOX_ENTRY, SPAWN_PUFF_BOX_LAST_PC = 0x0048EA, 0x004924
+SPAWN_PUFF_BOX_CALL_RETURN = 0x004922    # the PC bsr.w 004926 pushes and returns to
+_SPB_READ_XY = (24, 2)            # move.w $c(a1),d0; move.w $e(a1),d1
+_SPB_SUBSTITUTE_TEST = (18, 2)    # cmpi.w #$6cc,d0; bne taken (not substituting)
+_SPB_BOX = (16, 4)                # moveq #c,d2; moveq #c,d3; add.w d0,d2; add.w d1,d3
+_SPB_TRIM = (16, 2)               # subi.w #c,d0; subi.w #c,d1
+_SPB_SAVE = (12, 2)               # movea.l a1,a5; move.w d7,-(a7)
+_SPB_BSR = (18, 1)                # bsr.b $4926 (the call overhead itself; the callee's own cost is separate)
+_SPB_RESTORE = (8 + 16, 2)        # move.w (a7)+,d7; rts
+
+
+def spawn_puff_box_plan(machine, registers):
+    """0048EA: over d0-d3 as the box spawn_scan_plan (004926) consumes."""
+    from .game import actions
+    if registers['pc'] != SPAWN_PUFF_BOX_ENTRY:
+        raise UnsupportedCandidate('spawn puff box planner needs the machine parked at 0048EA')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    a1 = registers['a1']
+    box = actions.spawn_puff_box(_reader(machine), a1)
+    if box['substitute']:
+        raise UnsupportedCandidate('spawn puff box: the position/flag substitution is not witnessed')
+
+    x, y = box['x'], box['y']
+    sr = _logic_sr(sr, x, 2)
+    sr = _logic_sr(sr, y, 2)
+    sr = _cmp_sr(sr, x, actions.SPAWN_SUBSTITUTE_X, 2)
+    sr = _logic_sr(sr, 0xC, 4)
+    sr = _logic_sr(sr, 0xC, 4)
+    sr = _add_sr(sr, 0xC, x, 2)
+    sr = _add_sr(sr, 0xC, y, 2)
+    sr = _sub_sr(sr, x, 0xC, 2)
+    sr = _sub_sr(sr, y, 0xC, 2)
+    entry_d7 = registers['d7']
+    sr = _logic_sr(sr, entry_d7, 2)   # move.w d7,-(a7): MOVE affects flags too, X retained
+
+    inner_a7 = (sp32 - 6) & 0xFFFFFFFF   # -2 for the d7 push, -4 for the bsr's own return-address push
+    virtual = dict(registers)
+    virtual.update(pc=SPAWN_SCAN_ENTRY, a7=inner_a7, sr=sr,
+                   d0=(registers['d0'] & 0xFFFF0000) | box['x_min'], d1=(registers['d1'] & 0xFFFF0000) | box['y_min'],
+                   d2=(registers['d2'] & 0xFFFF0000) | box['x_max'], d3=(registers['d3'] & 0xFFFF0000) | box['y_max'])
+    inner = spawn_scan_plan(machine, virtual)
+
+    cycles, instructions = _add(_SPB_READ_XY, _SPB_SUBSTITUTE_TEST, _SPB_BOX, _SPB_TRIM, _SPB_SAVE, _SPB_BSR)
+    cycles += inner.cycles
+    instructions += inner.instructions
+    rc, ri = _SPB_RESTORE
+    cycles += rc
+    instructions += ri
+    exit_sr = _logic_sr(inner.registers['sr'], entry_d7, 2)
+
+    # The d7 push and the bsr's own return-address push are both real, persistent RAM writes (dead by
+    # the time this routine returns, but real): the tracer sees them, so the plan must declare them.
+    d7_push_addr = (sp32 - 2) & 0xFFFFFF
+    call_frame_writes = _bytes(d7_push_addr, entry_d7 & 0xFFFF, 2) + _bytes(inner_a7 & 0xFFFFFF, SPAWN_PUFF_BOX_CALL_RETURN, 4)
+
+    exit_registers = {'a5': a1 & 0xFFFFFFFF, 'd7': entry_d7,
+                      'a0': inner.registers['a0'], 'a1': inner.registers['a1'], 'a2': inner.registers['a2'],
+                      'd0': (registers['d0'] & 0xFFFF0000) | box['x_min'], 'd1': (registers['d1'] & 0xFFFF0000) | box['y_min'],
+                      # d2/d3 are freshly MOVEQ'd (moveq #c,d2/d3 clears the whole register), then only
+                      # ADD.W'd into -- unlike d0/d1 (a plain MOVE.W load), their own upper half is NOT
+                      # the caller's entry value: it is always 0 (--perturb-upper-halves caught this).
+                      'd2': box['x_max'] & 0xFFFF, 'd3': box['y_max'] & 0xFFFF,
+                      'd4': inner.registers['d4'], 'd5': inner.registers['d5'], 'd6': inner.registers['d6'],
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=call_frame_writes + inner.writes,
+                      registers=exit_registers, last_pc=SPAWN_PUFF_BOX_LAST_PC)
 
 
 # --- 004ACA: clear a matched pickup group's own active-id word (ACTION_CLEAR_GROUP) ----------------

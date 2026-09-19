@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
+                       SPAWN_PUFF_BOX_ENTRY, spawn_puff_box_plan,
                        AIM_CUE_ENTRY, aim_cue_update_plan, AIM_POOL_RESET_ENTRY, aim_pool_reset_plan, AIM_POOL_ADD_ENTRY, aim_pool_add_plan,
                        AIM_WINDOW_ADDRESS_ENTRY, aim_window_address_plan,
                        AIM_PROBE_MARK_ENTRY, aim_probe_mark_plan,
@@ -408,6 +409,7 @@ PLANNERS = {
     'slot-scan': {SLOT_SCAN_ENTRY: slot_scan_plan},
     'record-id-scan': {RECORD_ID_SCAN_ENTRY: record_id_scan_plan},
     'action-reset-elapsed': {ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan},
+    'spawn-puff-box': {SPAWN_PUFF_BOX_ENTRY: spawn_puff_box_plan},
     'action-clear-group': {ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
     'player-tail': {PLAYER_TAIL_ENTRY: player_tail_plan},
     'player-state': {PLAYER_STATE_ENTRY: player_state_plan},
@@ -503,6 +505,10 @@ PLANNERS = {
                        ACHIEVEMENT_DISPATCH_ENTRY: achievement_slot_dispatch_plan,
                        SLOT_SCAN_ENTRY: slot_scan_plan, RECORD_ID_SCAN_ENTRY: record_id_scan_plan,
                        ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan, ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan,
+                       # SPAWN_PUFF_BOX_ENTRY (0048EA): the 0030CC assignment's own second bite, 19
+                       # September -- SPAWN_SCAN_ENTRY (004926) stays armed too, it has a second, real,
+                       # still-unrecovered caller (0139D2) -- 55 -> 56 gates.
+                       SPAWN_PUFF_BOX_ENTRY: spawn_puff_box_plan,
                        PLAYER_TAIL_ENTRY: player_tail_plan, CONTACT_SEARCH_ENTRY: contact_search_plan,
                        CONTACT_CONSUME_PRIMARY_ENTRY: contact_consume_primary_plan,
                        CONTACT_CONSUME_SECONDARY_ENTRY: contact_consume_secondary_plan,
@@ -608,6 +614,10 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # the scratch F398 counter or the sound cue): a flip there is a real, externally visible
              # effect (the next tick's own scan_spawn_queue draws the puff at the corrupted position).
              'spawn-scan-mutant-result': ('spawn-scan', _mutate_result),
+             # the composed spawn_scan_plan's own writes lead (a real puff position, ordered last by
+             # spawn_scan_plan itself for the same reason); the outer d7-push/return-address bytes
+             # this routine's own writes prepend are dead scratch by the time it returns.
+             'spawn-puff-box-mutant-result': ('spawn-puff-box', _mutate_result),
              'grid-cell-mutant-result': ('grid-cell', _mutate_address),
              'footprint-mutant-result': ('footprint', _mutate_result),
              # a register, not the stored list: the routine's own last write is the unconditional
