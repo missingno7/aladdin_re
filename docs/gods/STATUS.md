@@ -983,6 +983,40 @@ below, has the count and the milestone tree numbers).
   then `00A772` itself as the family; `00A578` as the walk remains open
   behind it.
 
+- **19 September, later the same session**: `00009A9F2` (`'creature-death-bcd'`)
+  recovered -- composes `00003F0C` up to twice over a partial `movem.w`
+  register frame (D3 and D5 are NOT in the save list, so both stay as
+  whatever the last internal call and this routine's own arithmetic left
+  them).  Derives up to two ABCD "amount" bytes from the creature's own
+  type-template byte: `((byte & $ff) >> 1) + 1`, divided by 10 (`DIVU`);
+  the quotient/remainder pack into a first amount fed to `00003F0C`
+  unmodified even when the quotient exceeds 9 (a non-BCD nibble
+  `00003F0C`'s own digit-carry arithmetic still resolves correctly, the
+  same way real ABCD hardware does on any byte); a quotient above 9 also
+  triggers a second, corrective amount and a second `00003F0C` call --
+  both branches witnessed.  Kept OUT of `camera-sprites` (the adapter's
+  own 64-gate cap, already reached) until `00A772`'s own family
+  composition frees room.  Four real defects the FAST tier caught in
+  turn: the `movem.w` frame used 4-byte (`movem.L`) spacing instead of
+  2-byte; every restored register sign-extends its own saved WORD on the
+  pop rather than preserving the caller's own entry upper half; the
+  second internal `00003F0C` call was missing its own `jsr` instruction's
+  cost entirely; and the shared exit's own SR test read the caller's
+  entry D6 instead of this routine's own local value.  `factcheck check`
+  and `--perturb-upper-halves` both clean on all 7 retained fixtures.
+  Reproduces the original on `f0ac19738f19…`: PASS, 78 hits, 2 fallbacks
+  (`z80 bank guard`); mutant DIVERGENCE at frame 601.  With this,
+  `00A772`'s own further tail is FULLY recovered piecewise
+  (`00004AAA`/`00010E28`/`00003F0C`/`00009A9F2`, all composing back to
+  already-recovered leaves and each other); the eight kind-handler
+  slots' own remaining unwitnessed pair (`00AA80`/`00AB5A`, real ROM,
+  never reached by any of the five recordings) need no further
+  reconnaissance -- they decline by name inside `00A772`'s own future
+  composition.  Next: `00A772` itself as the family, composing
+  `009D6C`/`00AA50`/`00B944`/`00A922`, the eight kind-handler slots, and
+  its own further tail (`00004AAA` through `00009A9F2`); then `00A578`
+  as the walk.
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from

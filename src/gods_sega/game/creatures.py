@@ -2054,3 +2054,22 @@ def bcd_counter_add(read, amount):
     d2_new, carry2 = _bcd_byte_add(d2, 0, carry1)
     d3_new, carry3 = _bcd_byte_add(d3, 0, carry2)
     return {'d1': d1_new, 'd2': d2_new, 'd3': d3_new, 'carry1': carry1, 'carry2': carry2, 'carry3': carry3}
+
+
+# --- 00009A9F2: the creature death BCD-amount split (00A772's own LIFECYCLE-negative arm, composing
+# 00003F0C up to twice) -- derives up to two ABCD 'amount' bytes from the creature's own type-template
+# byte (D5 on entry, `move.b $1(a4),d5` in 00A772's own caller): `((d5&0xff)>>1)+1`, divided by 10
+# (unsigned): the quotient and remainder pack into the first amount as `(quotient<<4)|remainder`, fed
+# to 00003F0C's own ABCD chain UNMODIFIED -- a quotient above 9 packs a genuinely non-BCD nibble
+# there, which 00003F0C's own digit-carry arithmetic still resolves correctly, exactly as real ABCD
+# hardware does on any byte.  When the quotient exceeds 9, a second amount, `(quotient-9)<<4`, corrects
+# the overflow with its own second 00003F0C call.
+def creature_death_bcd_amounts(d5_entry):
+    """00009A9F2: see the module note above."""
+    value = (((d5_entry & 0xFF) >> 1) + 1) & 0xFFFF
+    quotient, remainder = divmod(value, 10)
+    tens_overflow = max(0, quotient - 9)
+    first = ((quotient & 0xFF) << 4 | (remainder & 0xFF)) & 0xFF
+    second = ((tens_overflow & 0xFF) << 4) & 0xFF
+    return {'quotient': quotient, 'remainder': remainder, 'first': first,
+            'has_second': tens_overflow != 0, 'second': second}

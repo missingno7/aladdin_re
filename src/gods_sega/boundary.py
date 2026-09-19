@@ -20344,3 +20344,130 @@ def bcd_counter_add_plan(machine, registers):
                                  'd7': 0, 'a7': (sp + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp & 0xFFFFFF),
                                  'sr': exit_sr},
                       last_pc=BCD_COUNTER_ADD_LAST_PC)
+
+
+# --- 00009A9F2: the creature death BCD-amount split (game/creatures.py: creature_death_bcd_amounts)
+# -- composes 00003F0C up to twice over a partial movem.w register frame (d0-d2/d6-d7; D3 and D5 are
+# NOT saved, so both stay as whatever the arithmetic and the LAST internal call left them).
+#
+# Cost fragments from the tracer (artifacts/gods/evidence/census-00A9F2-*, all five recordings).
+CREATURE_DEATH_BCD_ENTRY, CREATURE_DEATH_BCD_LAST_PC = 0x0000A9F2, 0x0000AA36
+_A9F2_MOVEM_PUSH = (28, 1)         # movem.w d0-d2/d6-d7,-(a7)
+_A9F2_ANDI_D5 = (8, 1)             # andi.w #$ff,d5
+_A9F2_ASR_D5 = (8, 1)              # asr.w #1,d5
+_A9F2_ADDQ_D5 = (4, 1)             # addq.w #1,d5
+_A9F2_EXT_D5 = (4, 1)              # ext.l d5
+_A9F2_DIVU = (144, 1)              # divu.w #$a,d5
+_A9F2_CLR_D6 = (4, 1)              # clr.w d6
+_A9F2_CMP_D5 = (8, 1)              # cmpi.w #9,d5
+_A9F2_BLE = {True: (10, 1), False: (8, 1)}       # ble.b $aa12
+_A9F2_MOVE_D5_D6 = (4, 1)          # move.w d5,d6 -- 'has_second' only
+_A9F2_SUBI_D6 = (8, 1)             # subi.w #9,d6 -- 'has_second' only
+_A9F2_CLR_D7 = (4, 1)              # clr.w d7
+_A9F2_LSL_D5 = (14, 1)             # lsl.w #4,d5
+_A9F2_MOVE_D5_D7 = (4, 1)          # move.w d5,d7
+_A9F2_SWAP_D5 = (4, 1)             # swap d5
+_A9F2_OR_D5_D7 = (4, 1)            # or.w d5,d7
+_A9F2_ANDI_CCR = (20, 1)           # andi.b #$0,ccr
+_A9F2_JSR_3F0C = (20, 1)           # jsr $3f0c.l
+_A9F2_MOVE_D6_D7 = (4, 1)          # move.w d6,d7
+_A9F2_BEQ = {True: (10, 1), False: (8, 1)}       # beq.b $aa32
+_A9F2_LSL_D7 = (14, 1)             # lsl.w #4,d7 -- 'has_second' only
+_A9F2_MOVEM_POP = (32, 1)          # movem.w (a7)+,d0-d2/d6-d7
+_A9F2_RTS = (16, 1)
+
+
+def creature_death_bcd_plan(machine, registers):
+    """00009A9F2: see game/creatures.py's own module note above creature_death_bcd_amounts."""
+    from .game import creatures
+    if registers['pc'] != CREATURE_DEATH_BCD_ENTRY:
+        raise UnsupportedCandidate('creature death bcd planner needs the machine parked at 00009A9F2')
+    sr = registers['sr']
+    d5_entry = registers['d5'] & 0xFF
+    result = creatures.creature_death_bcd_amounts(d5_entry)
+
+    # movem.w d0-d2/d6-d7,-(a7): a WORD-sized transfer, two bytes per register (unlike 00010E28's own
+    # movem.L frame) -- predecrement order still processes A7 down to D0, so D7 lands nearest the OLD
+    # a7 and D0 nearest the NEW one.
+    sp32 = registers['a7']
+    frame_base = (sp32 - 10) & 0xFFFFFFFF
+    frame_writes = ()
+    for offset, reg in ((0, 'd0'), (2, 'd1'), (4, 'd2'), (6, 'd6'), (8, 'd7')):
+        frame_writes += _bytes((frame_base + offset) & 0xFFFFFF, registers[reg] & 0xFFFF, 2)
+
+    current = dict(registers, a7=frame_base)
+    writes = [frame_writes]
+    cycles, instructions = _add(_A9F2_MOVEM_PUSH, _A9F2_ANDI_D5, _A9F2_ASR_D5, _A9F2_ADDQ_D5,
+                               _A9F2_EXT_D5, _A9F2_DIVU, _A9F2_CLR_D6, _A9F2_CMP_D5,
+                               _A9F2_BLE[not result['has_second']])
+    if result['has_second']:
+        c, i = _add(_A9F2_MOVE_D5_D6, _A9F2_SUBI_D6)
+        cycles += c
+        instructions += i
+    c, i = _add(_A9F2_CLR_D7, _A9F2_LSL_D5, _A9F2_MOVE_D5_D7, _A9F2_SWAP_D5, _A9F2_OR_D5_D7,
+               _A9F2_ANDI_CCR, _A9F2_JSR_3F0C)
+    cycles += c
+    instructions += i
+
+    def call_3f0c(amount, return_pc):
+        nonlocal cycles, instructions
+        push_a7 = (current['a7'] - 4) & 0xFFFFFFFF
+        writes.append(_bytes(push_a7 & 0xFFFFFF, return_pc, 4))
+        virtual = dict(current, pc=BCD_COUNTER_ADD_ENTRY, a7=push_a7, d7=amount & 0xFF, sr=sr)
+        inner = bcd_counter_add_plan(machine_overlay(), virtual)
+        cycles += inner.cycles
+        instructions += inner.instructions
+        writes.append(inner.writes)
+        current.update(inner.registers)
+        return inner
+
+    def machine_overlay():
+        overlay = {}
+        for group in writes:
+            for addr, value in group:
+                overlay[addr & 0xFFFF] = value
+        return _ConstMachine(machine, overlay)
+
+    call_3f0c(result['first'], 0x0000AA26)
+    sr = current['sr']
+    c, i = _A9F2_MOVE_D6_D7
+    cycles += c
+    instructions += i
+    # move.w d6,d7 (a plain MOVE) is the real last flag-setter if there is no second call -- D6 is
+    # this ROUTINE's own local value (0, or the tens overflow), never the caller's own entry D6.
+    d6_local = ((result['quotient'] - 9) & 0xFFFF) if result['has_second'] else 0
+    sr = _logic_sr(sr, d6_local, 2)
+    c, i = _A9F2_BEQ[not result['has_second']]
+    cycles += c
+    instructions += i
+    if result['has_second']:
+        c, i = _add(_A9F2_LSL_D7, _A9F2_JSR_3F0C)
+        cycles += c
+        instructions += i
+        # lsl.w #4,d7 is a real flag-setter (shift), overwritten again by the second call's own chain.
+        sr = _logic_sr(sr, result['second'], 2)
+        call_3f0c(result['second'], 0x0000AA32)
+        sr = current['sr']
+
+    c, i = _add(_A9F2_MOVEM_POP, _A9F2_RTS)
+    cycles += c
+    instructions += i
+    # movem.w (a7)+ never touches flags: the last real 00003F0C call's own exit SR survives.
+    flat_writes = tuple(pair for group in writes for pair in group)
+    # D5's own exit value is whatever the swap/or sequence left it as (never touched again): high
+    # word = (quotient<<4)&0xffff, low word = the DIVU remainder.
+    d5_exit = (((result['quotient'] << 4) & 0xFFFF) << 16) | (result['remainder'] & 0xFFFF)
+
+    def sign_extend16(word):
+        word &= 0xFFFF
+        return (word - 0x10000) & 0xFFFFFFFF if word & 0x8000 else word
+
+    # movem.w (a7)+,... is a memory-to-register load: for word size it SIGN-EXTENDS each loaded word
+    # to the full 32-bit register, discarding whatever upper half the register held at entry (a real
+    # defect the first draft's "restore to the raw entry value" assumption missed).
+    exit_registers = {'d0': sign_extend16(registers['d0']), 'd1': sign_extend16(registers['d1']),
+                      'd2': sign_extend16(registers['d2']), 'd3': current['d3'], 'd5': d5_exit & 0xFFFFFFFF,
+                      'd6': sign_extend16(registers['d6']), 'd7': sign_extend16(registers['d7']),
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp32 & 0xFFFFFF), 'sr': sr}
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=flat_writes,
+                      registers=exit_registers, last_pc=CREATURE_DEATH_BCD_LAST_PC)
