@@ -20743,3 +20743,860 @@ def creature_family_plan(machine, registers):
 
     return Seam(prefix=prefix, resume_pc=CREATURE_FAMILY_RESUME, stack_basis=sp32,
                guards=((sp, 4),), suffix=creature_family_suffix)
+
+
+# --- 0010D7C: the floating icon/message spawn (game/spawns.py: floating_icon_spawn) -- reached from
+# the achievement highlight cycle (states 19/18's own inline composition) AND, this session, from
+# 00A578's own icon-spawn sub-machine and wave-complete check.  Given its own standalone shape (no
+# stack use, no branch of its own beyond the two declined arms), it is composed the same way at every
+# call site rather than duplicated: a small, reusable plan function.
+FLOATING_ICON_SPAWN_ENTRY, FLOATING_ICON_SPAWN_LAST_PC = 0x0010D7C, 0x0010D9C
+_FIS_CMPI = (8, 1)                 # 010D7C cmpi.w #$3d,d2
+_FIS_BEQ_NOT = (8, 1)              # 010D80 beq.b -- not taken (the only witnessed case)
+_FIS_TST_BUSY = (12, 1)            # 010D82 tst.w f1f6.w
+_FIS_BPL_NOT = (12, 1)             # 010D86 bpl.w -- not taken (the only witnessed case)
+_FIS_STORE = (12 + 12 + 16 + 12, 4)    # move d0,f1f0; move d1,f1f2; move#$fffd,f1f4; move d2,f1f6
+_FIS_RTS = (16, 1)
+_FIS_COST = _add(_FIS_CMPI, _FIS_BEQ_NOT, _FIS_TST_BUSY, _FIS_BPL_NOT, _FIS_STORE, _FIS_RTS)
+
+
+def floating_icon_spawn_plan(machine, registers):
+    """0010D7C: see game/spawns.py's own module note above floating_icon_spawn.  'special' (kind ==
+    0x3D) and 'busy' (a spawn already pending) are real ROM this session did not trace past their own
+    first branch: declined, matching every other caller's own treatment of this leaf."""
+    from .game import spawns
+    if registers['pc'] != FLOATING_ICON_SPAWN_ENTRY:
+        raise UnsupportedCandidate('floating icon spawn planner needs the machine parked at 0010D7C')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    read = _reader(machine)
+    result = spawns.floating_icon_spawn(read, registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                                        registers['d2'] & 0xFFFF)
+    if result['arm'] != 'spawn':
+        raise UnsupportedCandidate(f"floating icon spawn: {result['arm']}, not witnessed by a recording")
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # move.w d2,f1f6.w (the last store) is a plain MOVE, the real last flag-setter before rts.
+    exit_sr = _logic_sr(sr, registers['d2'] & 0xFFFF, 2)
+    return AtomicPlan(cycles=_FIS_COST[0], instructions=_FIS_COST[1], writes=writes,
+                      registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                      last_pc=FLOATING_ICON_SPAWN_LAST_PC)
+
+
+def _lsr1_sr(sr, value, width):
+    """68000 LSR flags of a logical shift right by 1: N always clear (unsigned), Z from the result,
+    V always clear, X=C the bit shifted out (bit 0 of the pre-shift value)."""
+    mask = (1 << (8 * width)) - 1
+    value &= mask
+    bit_out = value & 1
+    result = (value >> 1) & mask
+    out = sr & ~0x1F
+    if result == 0:
+        out |= 0x04
+    if bit_out:
+        out |= 0x11
+    return out
+
+
+# --- 00A578: the 9(+1)-slot creature list walk (game/creatures.py's own module note above
+# creature_walk_gate) -- 00A578's own outer loop is a platform tail exactly like 00A772's own: once
+# ANY composed creature_family_plan activation resolves to a Seam (needs the particle emitter), the
+# ENTIRE remainder of this whole tick's own walk -- every further instance, every further slot -- is
+# ceded to the machine untouched, resuming at THIS routine's own final rts (00A662), never at
+# creature_family's own 00A864 (the "one seam, cede the whole remainder" rule applies to the WHOLE
+# region a gate owns, not just to the one composed call that happened to need the device).  This is
+# sound because the walk's own only persistent stack use is the loop counter itself, pushed once at
+# entry and popped once right before 00A662's own rts: every real activation, ceded portion included,
+# nets the stack back to the entry depth by the time any real rts here runs.
+CREATURE_WALK_ENTRY, CREATURE_WALK_LAST_PC, CREATURE_WALK_RESUME = 0x00A578, 0x00A662, 0x00A662
+_CW_TST_GATE = (12, 1)                     # 00A578 tst.b $eed1.w
+_CW_BEQ_GATE = {True: (10, 1), False: (12, 1)}     # 00A57C beq.w $a662
+_CW_RTS = (16, 1)
+_CW_RESET_TRACKED = (16, 1)                # 00A580 move.w #$ffff,$f1be.w
+_CW_LEA_LIST = (12, 1)                     # 00A586 lea.l $ffff1496.l,a3
+_CW_LEA_INST = (12, 1)                     # 00A58C lea.l $ffff2602.l,a5
+_CW_PUSH_COUNTER = (12, 1)                 # 00A592 move.w #$9,-(a7)
+_CW_SAVE_A5 = (16, 1)                      # 00A596 move.l a5,$f2c2.w
+_CW_LOAD_HEADER = (8, 1)                   # 00A59A move.w (a3),d0
+_CW_BEQ_HEADER = {True: (10, 1), False: (12, 1)}   # 00A59C beq.w $a64e
+_CW_LOAD_TYPE = (16, 1)                    # 00A5A0 movea.l $2(a3),a4
+_CW_SUBQ_HEADER = (4, 1)                   # 00A5A4 subq.w #1,d0
+_CW_BEQ_PERFRAME = {True: (10, 1), False: (12, 1)} # 00A5A6 beq.w $a66a
+_CW_RESTORE_A5 = (16, 1)                   # 00A64E movea.l $f2c2.w,a5
+_CW_ADV_A3 = (8, 1)                        # 00A652 lea.l $12(a3),a3
+_CW_ADV_A5 = (8, 1)                        # 00A656 lea.l $f0(a5),a5
+_CW_DEC_COUNTER = (12, 1)                  # 00A65A subq.w #1,(a7) -- confirmed against the tracer
+_CW_BPL_LOOP = {True: (10, 1), False: (12, 1)}     # 00A65C bpl.w $a596
+_CW_POP_COUNTER = (4, 1)                   # 00A660 addq.w #2,a7 -- confirmed against the tracer
+
+_CW_SI_LOAD_COUNT = (8, 1)                 # 00A5AA move.b (a4),d7
+_CW_SI_EXT = (4, 1)                        # 00A5AC ext.w d7
+_CW_SI_SUBQ = (4, 1)                       # 00A5AE subq.w #1,d7
+_CW_SI_BMI = {True: (10, 1), False: (8, 1)}    # 00A5B0 bmi.w $a64e
+_CW_SI_MOVEQ_D6 = (4, 1)                   # 00A5B4 moveq #0,d6
+_CW_SI_MOVEQ_D0 = (4, 1)                   # 00A5B6 moveq #0,d0
+_CW_SI_MOVEQ_D1 = (4, 1)                   # 00A5B8 moveq #0,d1
+_CW_SI_LOAD_XB = (12, 1)                   # 00A5BA move.b $12(a4),d0
+_CW_SI_LOAD_YB = (12, 1)                   # 00A5BE move.b $13(a4),d1
+_CW_SI_ASL_X = (16, 1)                     # 00A5C2 asl.w #5,d0
+_CW_SI_ASL_Y = (14, 1)                     # 00A5C4 asl.w #4,d1
+_CW_SI_STORE_X = (8, 1)                    # 00A5C6 move.w d0,(a5)
+_CW_SI_STORE_Y = (12, 1)                   # 00A5C8 move.w d1,$2(a5)
+_CW_SI_CLR_FS = (16, 1)                    # 00A5CC clr.w $4(a5)
+_CW_SI_STORE_LC = (16, 1)                  # 00A5D0 move.w #$fffe,$8(a5)
+_CW_SI_STORE_D6 = (12, 1)                  # 00A5D6 move.w d6,$6(a5)
+_CW_SI_TST_D6 = (4, 1)                     # 00A5DA tst.w d6
+_CW_SI_BNE_D6 = {True: (10, 1), False: (8, 1)}     # 00A5DC bne.b $a5e2 -- confirmed against the tracer
+_CW_SI_BSR_ADD = (18, 1)                   # 00A5DE bsr.w $b920
+_CW_SI_LOAD_KB = (12, 1)                   # 00A5E2 move.b $6(a4),d0
+_CW_SI_AND_KB = (8, 1)                     # 00A5E6 andi.w #$f,d0
+_CW_SI_BEQ_KB = {True: (10, 1), False: (8, 1)}     # 00A5EA beq.b $a5fa
+_CW_SI_MOVEQ_D4 = (4, 1)                   # 00A5EC moveq #$10,d4
+_CW_SI_SUB_D4 = (4, 1)                     # 00A5EE sub.b d0,d4
+_CW_SI_EXT_D4 = (4, 1)                     # 00A5F0 ext.w d4
+_CW_SI_ADD_D4 = (4, 1)                     # 00A5F2 / 00A5F4 add.w d4,d4 (charged twice)
+_CW_SI_STORE_CD = (12, 1)                  # 00A5F6 move.w d4,$e(a5)
+_CW_SI_BSR_GRID = (18, 1)                  # 00A5FA bsr.w $aa38
+_CW_SI_MOVEQ_D2 = (4, 1)                   # 00A5FE moveq #0,d2
+_CW_SI_CMPI_ZONE = (16, 1)                 # 00A600 cmpi.b #1,$100(a1)
+_CW_SI_BEQ_ZONE = {True: (10, 1), False: (8, 1)}   # 00A606 beq.b $a60a
+_CW_SI_MOVEQ_D2B = (4, 1)                  # 00A608 moveq #2,d2
+_CW_SI_MOVEQ_D0B = (4, 1)                  # 00A60A moveq #0,d0
+_CW_SI_LOAD_ZB = (12, 1)                   # 00A60C move.b $4(a4),d0
+_CW_SI_LSR_D0 = (8, 1)                     # 00A610 lsr.w #1,d0
+_CW_SI_AND_D0 = (8, 1)                     # 00A612 andi.w #1,d0
+_CW_SI_ADD_D2D0 = (4, 1)                   # 00A616 add.w d2,d0
+_CW_SI_STORE_DI = (12, 1)                  # 00A618 move.w d0,$a(a5)
+_CW_SI_STORE_FP = (16, 1)                  # 00A61C move.w #2,$12(a5)
+_CW_SI_STORE_C = (16, 1)                   # 00A622 move.w #$ffff,$c(a5)
+_CW_SI_STORE_DT = (16, 1)                  # 00A628 move.w #$ffff,$10(a5)
+_CW_SI_MOVEQ_D0C = (4, 1)                  # 00A62E moveq #0,d0
+_CW_SI_LOAD_FREQ = (12, 1)                 # 00A630 move.b $14(a4),d0
+_CW_SI_MULU = (62, 1)                      # 00A634 mulu.w $eebe.w,d0
+_CW_SI_ADDL = (6, 1)                       # 00A638 add.l d0,d0 -- confirmed against the tracer
+_CW_SI_SWAP = (4, 1)                       # 00A63A swap d0
+_CW_SI_ADDQ_D0 = (4, 1)                    # 00A63C addq.w #1,d0
+_CW_SI_ADD_D6 = (4, 1)                     # 00A63E add.w d0,d6
+_CW_SI_ADV_A5 = (8, 1)                     # 00A640 lea.l $18(a5),a5
+_CW_SI_DBRA_TAKEN = (10, 1)                # 00A644 dbra d7 -- taken
+_CW_SI_DBRA_LAST = (14, 1)                 # 00A644 dbra d7 -- last
+_CW_SI_SUBQ_HDR = (16, 1)                  # 00A648 subq.w #1,(a3)
+_CW_SI_CLR_WAVE = (16, 1)                  # 00A64A clr.b $10(a3)
+
+_CW_PF_MOVEQ_D7 = (4, 1)                   # 00A66A moveq #0,d7
+_CW_PF_LOAD_COUNT = (8, 1)                 # 00A66C move.b (a4),d7
+_CW_PF_SUBQ_D7 = (4, 1)                    # 00A66E subq.w #1,d7
+_CW_PF_CLR_F2C6 = (16, 1)                  # 00A670 clr.w $f2c6.w
+_CW_PF_CLR_F2C8 = (16, 1)                  # 00A674 clr.w $f2c8.w
+_CW_PF_TST_LC = (12, 1)                    # 00A678 tst.w $8(a5)
+_CW_PF_BMI_LC = {True: (10, 1), False: (12, 1)}    # 00A67C bmi.w $a6c8 -- word-form branch
+_CW_PF_BEQ_LC = {True: (10, 1), False: (8, 1)}     # 00A680 beq.b $a664
+_CW_PF_BSR_FAMILY = (18, 1)                # 00A682 bsr.w $a772
+_CW_PF_ADV_A5 = (8, 1)                     # 00A686 lea.l $18(a5),a5
+_CW_PF_DBRA_TAKEN = (10, 1)                # 00A68A dbra d7 -- taken
+_CW_PF_DBRA_LAST = (14, 1)                 # 00A68A dbra d7 -- last
+_CW_PF_ADDQ_SETTLED = (16, 1)              # 00A664 addq.w #1,$f2c6.w -- confirmed against the tracer
+_CW_PF_BRA_TAIL = (10, 1)                  # 00A668 bra.b $a686
+_CW_PF_LOAD_F2C6 = (12, 1)                 # 00A68E move.w $f2c6.w,d7
+_CW_PF_ADD_F2C8 = (12, 1)                  # 00A692 add.w $f2c8.w,d7
+_CW_PF_CMP_COUNT = (8, 1)                  # 00A696 cmp.b (a4),d7 -- bare (An), confirmed
+_CW_PF_BNE_WAVE = {True: (10, 1), False: (8, 1)}   # 00A698 bne.b $a6bc
+_CW_PF_LOAD_CACHE_X = (12, 1)              # 00A69A move.w $f26c.w,d0
+_CW_PF_LOAD_CACHE_Y = (12, 1)              # 00A69E move.w $f26e.w,d1
+_CW_PF_ADDQ_X = (4, 1)                     # 00A6A2 addq.w #8,d0
+_CW_PF_TST_WAVE_FLAG = (12, 1)             # 00A6A4 tst.b $10(a3)
+_CW_PF_BNE_WAVEFLAG = {True: (10, 1), False: (8, 1)}   # 00A6A8 bne.b $a6bc
+_CW_PF_LOAD_WAVE_ICON = (12, 1)            # 00A6AA move.w $10(a4),d2 -- confirmed against the tracer
+_CW_PF_BMI_WAVE = {True: (10, 1), False: (8, 1)}   # 00A6AE bmi.b $a6b6
+_CW_PF_JSR_WAVE = (20, 1)                  # 00A6B0 jsr $10d7c.l
+_CW_PF_STORE_WAVEFLAG = (16, 1)            # 00A6B6 move.b #1,$10(a3)
+_CW_PF_LOAD_F2C6B = (12, 1)                # 00A6BC move.w $f2c6.w,d6
+_CW_PF_CMP_COUNTB = (8, 1)                 # 00A6C0 cmp.b (a4),d6 -- bare (An), confirmed
+_CW_PF_BLT_TAIL = {True: (10, 1), False: (8, 1)}   # 00A6C2 blt.b $a64e
+_CW_PF_CLR_HEADER = (12, 1)                # 00A6C4 clr.w (a3)
+_CW_PF_BRA_TAIL2 = (10, 1)                 # 00A6C6 bra.b $a64e
+
+_CW_IS_CMPI_ARMED = (16, 1)                # 00A6C8 cmpi.w #$fffe,$8(a5)
+_CW_IS_BEQ_ARMED = {True: (10, 1), False: (8, 1)}      # 00A6CE beq.b $a700
+_CW_IS_CMPI_COUNTING = (16, 1)             # 00A6D0 cmpi.w #$fffd,$8(a5)
+_CW_IS_BNE_COUNTING = {True: (10, 1), False: (8, 1)}   # 00A6D6 bne.b $a70e
+_CW_IS_SUBQ_RELOAD = (16, 1)               # 00A6D8 subq.w #1,$6(a5)
+_CW_IS_BNE_RELOAD = {True: (10, 1), False: (8, 1)}     # 00A6DC bne.b $a686 -- confirmed
+_CW_IS_MOVEQ_D0 = (4, 1)                   # 00A6DE moveq #0,d0
+_CW_IS_LOAD_ICON_KIND = (12, 1)            # 00A6E0 move.b $1(a4),d0
+_CW_IS_STORE_LC2 = (12, 1)                 # 00A6E4 move.w d0,$8(a5)
+_CW_IS_MOVEQ_D0B = (4, 1)                  # 00A6E8 moveq #$a,d0
+_CW_IS_SUB_BYTE = (12, 1)                  # 00A6EA sub.b $b(a4),d0
+_CW_IS_EXT = (4, 1)                        # 00A6EE ext.w d0
+_CW_IS_MULU = (62, 1)                      # 00A6F0 mulu.w $eebe.w,d0
+_CW_IS_ADDL = (6, 1)                       # 00A6F4 add.l d0,d0 -- confirmed against the tracer
+_CW_IS_SWAP = (4, 1)                       # 00A6F6 swap d0
+_CW_IS_ADDQ = (4, 1)                       # 00A6F8 addq.w #1,d0
+_CW_IS_STORE_RELOAD = (12, 1)              # 00A6FA move.w d0,$6(a5)
+_CW_IS_BRA1 = (10, 1)                      # 00A6FE bra.b $a686
+_CW_IS_SUBQ_RELOAD2 = (16, 1)              # 00A700 subq.w #1,$6(a5)
+_CW_IS_BNE_RELOAD2 = {True: (10, 1), False: (8, 1)}    # 00A704 bne.b $a686 -- confirmed
+_CW_IS_BSR_ADD2 = (18, 1)                  # 00A706 bsr.w $b920
+_CW_IS_BRA2 = (10, 1)                      # 00A70A bra.w $a686
+_CW_IS_ADDQ_F2C8 = (16, 1)                 # 00A70E addq.w #1,$f2c8.w -- confirmed against the tracer
+_CW_IS_TST_FS = (12, 1)                    # 00A712 tst.w $4(a5)
+_CW_IS_BPL_FS = {True: (10, 1), False: (8, 1)}         # 00A716 bpl.b $a744
+_CW_IS_CACHE_POS = (24, 1)                 # 00A718 move.l (a5),$f26c.w -- confirmed against the tracer
+_CW_IS_TST_DT = (12, 1)                    # 00A71C tst.w $10(a5)
+_CW_IS_BMI_DT = {True: (10, 1), False: (8, 1)}         # 00A720 bmi.b $a744
+_CW_IS_LOAD_DT = (12, 1)                   # 00A722 move.w $10(a5),d2
+_CW_IS_CMPI_DT = (8, 1)                    # 00A726 cmpi.w #$c0,d2
+_CW_IS_BGE_DT = {True: (10, 1), False: (8, 1)}         # 00A72A bge.b $a732
+_CW_IS_ADDI_DT = (8, 1)                    # 00A72C addi.w #$b,d2
+_CW_IS_BRA_DT = (10, 1)                    # 00A730 bra.b $a736
+_CW_IS_SUBI_DT = (8, 1)                    # 00A732 subi.w #$c0,d2
+_CW_IS_LOAD_POSX = (8, 1)                  # 00A736 move.w (a5),d0
+_CW_IS_LOAD_POSY = (12, 1)                 # 00A738 move.w $2(a5),d1
+_CW_IS_ADDQ_POSX = (4, 1)                  # 00A73C addq.w #8,d0
+_CW_IS_JSR_ICON = (20, 1)                  # 00A73E jsr $10d7c.l
+_CW_IS_ADDQ_FS = (16, 1)                   # 00A744 addq.w #1,$4(a5) -- confirmed against the tracer
+_CW_IS_CMPI_FS = (16, 1)                   # 00A748 cmpi.w #7,$4(a5)
+_CW_IS_BLT_FS = {True: (10, 1), False: (8, 1)}         # 00A74E blt.b $a75c
+_CW_IS_CLR_LC = (16, 1)                    # 00A750 clr.w $8(a5)
+_CW_IS_CLR_RELOAD = (16, 1)                # 00A754 clr.w $6(a5)
+_CW_IS_BRA3 = (10, 1)                      # 00A758 bra.w $a686
+_CW_IS_LOAD_POSX2 = (8, 1)                 # 00A75C move.w (a5),d0
+_CW_IS_LOAD_POSY2 = (12, 1)                # 00A75E move.w $2(a5),d1
+_CW_IS_MOVEQ_D2C = (4, 1)                  # 00A762 moveq #$1e,d2
+_CW_IS_ADD_FS = (12, 1)                    # 00A764 add.w $4(a5),d2
+_CW_IS_JSR_STATIC = (20, 1)                # 00A768 jsr $1164.l
+_CW_IS_BRA4 = (10, 1)                      # 00A76E bra.w $a686
+
+
+def _cw_push_call(current, return_pc):
+    push_a7 = (current['a7'] - 4) & 0xFFFFFFFF
+    return push_a7, _bytes(push_a7 & 0xFFFFFF, return_pc, 4)
+
+
+class _WalkDeviceEntry(Exception):
+    """Raised the moment a composed creature_family_plan activation resolves to a Seam: unwinds
+    straight out of every loop this planner runs, since the whole rest of the walk (this instance's
+    own remaining lifecycle, every further instance, every further slot) is ceded to the machine from
+    there, exactly like creature_family_plan's own platform tail over the particle emitter."""
+
+
+def creature_walk_plan(machine, registers):
+    """00A578: see game/creatures.py's own module note above creature_walk_gate."""
+    from .game import creatures, spawns
+    if registers['pc'] != CREATURE_WALK_ENTRY:
+        raise UnsupportedCandidate('creature walk planner needs the machine parked at 00A578')
+    sp32, sr0 = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+
+    gate = read(creatures.WALK_GATE, 1) & 0xFF
+    if gate == 0:
+        cycles, instructions = _add(_CW_TST_GATE, _CW_BEQ_GATE[True], _CW_RTS)
+        sr = _logic_sr(sr0, 0, 1)
+        return AtomicPlan(cycles=cycles, instructions=instructions, writes=(),
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': sr},
+                          last_pc=CREATURE_WALK_LAST_PC)
+
+    current = dict(registers)
+    writes = []
+    cycles, instructions = _add(_CW_TST_GATE, _CW_BEQ_GATE[False], _CW_RESET_TRACKED, _CW_LEA_LIST,
+                               _CW_LEA_INST, _CW_PUSH_COUNTER)
+    sr = _logic_sr(sr0, gate, 1)
+    writes.append(_bytes(0xFFF1BE, 0xFFFF, 2))
+    writes.append(_bytes((sp - 2) & 0xFFFFFF, 9, 2))
+    current['a7'] = (sp32 - 2) & 0xFFFFFFFF
+    current['a3'] = creatures.CREATURE_LIST_BASE & 0xFFFFFFFF
+    current['a5'] = creatures.CREATURE_INSTANCE_BASE & 0xFFFFFFFF
+    a1 = current['a1'] & 0xFFFFFF
+
+    def machine_overlay():
+        overlay = {}
+        for group in writes:
+            for addr, value in group:
+                overlay[addr & 0xFFFF] = value
+        return _ConstMachine(machine, overlay)
+
+    def call(plan_func, entry_pc, return_pc, extra=None):
+        nonlocal cycles, instructions, sr
+        push_a7, push_write = _cw_push_call(current, return_pc)
+        writes.append(push_write)
+        virtual = dict(current, pc=entry_pc, a7=push_a7, sr=sr)
+        if extra:
+            virtual.update(extra)
+        inner = plan_func(machine_overlay(), virtual)
+        cycles += inner.cycles
+        instructions += inner.instructions
+        writes.append(inner.writes)
+        current.update(inner.registers)
+        sr = current['sr']
+        return inner
+
+    def call_family(return_pc):
+        nonlocal cycles, instructions, sr
+        push_a7, push_write = _cw_push_call(current, return_pc)
+        writes.append(push_write)
+        virtual = dict(current, pc=CREATURE_FAMILY_ENTRY, a7=push_a7, sr=sr)
+        inner = creature_family_plan(machine_overlay(), virtual)
+        if isinstance(inner, Seam):
+            prefix = inner.prefix
+            cycles += prefix.cycles
+            instructions += prefix.instructions
+            writes.append(prefix.writes)
+            current.update(prefix.registers)
+            sr = current['sr']
+            raise _WalkDeviceEntry()
+        cycles += inner.cycles
+        instructions += inner.instructions
+        writes.append(inner.writes)
+        current.update(inner.registers)
+        sr = current['sr']
+
+    def charge(*fragments):
+        nonlocal cycles, instructions
+        c, i = _add(*fragments)
+        cycles += c
+        instructions += i
+
+    def overlay_read():
+        return _reader(machine_overlay())
+
+    def do_spawn_init(type_ptr):
+        nonlocal sr
+        read1 = overlay_read()
+        count_byte = read1(type_ptr & 0xFFFFFF, 1) & 0xFF
+        if count_byte >= 0x80:
+            raise UnsupportedCandidate('creature spawn-init: type instance count byte >= 0x80, '
+                                       'not witnessed by a recording')
+        # move.b (a4),d7 only ever touches d7's own low byte; ext.w then sign-extends that byte to
+        # the full low word, leaving d7's own upper word exactly as the caller's entry left it.
+        current['d7'] = (current['d7'] & 0xFFFFFF00) | count_byte
+        sr = _logic_sr(sr, count_byte, 1)
+        charge(_CW_SI_LOAD_COUNT)
+        d7 = count_byte & 0xFFFF
+        current['d7'] = (current['d7'] & 0xFFFF0000) | d7
+        sr = _logic_sr(sr, d7, 2)
+        charge(_CW_SI_EXT)
+        d7 = (d7 - 1) & 0xFFFF
+        current['d7'] = (current['d7'] & 0xFFFF0000) | d7
+        sr = _sub_sr(sr, count_byte, 1, 2)
+        charge(_CW_SI_SUBQ)
+        if d7 & 0x8000:
+            charge(_CW_SI_BMI[True])
+            return
+        charge(_CW_SI_BMI[False])
+        d6 = 0
+        current['d6'] = 0
+        sr = _logic_sr(sr, 0, 2)
+        charge(_CW_SI_MOVEQ_D6)
+        remaining = d7 + 1
+        for step in range(remaining):
+            current['d7'] = (current['d7'] & 0xFFFF0000) | d7
+            read1 = overlay_read()
+            r = creatures.creature_spawn_init_instance(read1, type_ptr, a1, d6)
+            a5 = current['a5'] & 0xFFFFFF
+            sr = _logic_sr(sr, 0, 2)
+            charge(_CW_SI_MOVEQ_D0)
+            sr = _logic_sr(sr, 0, 2)
+            charge(_CW_SI_MOVEQ_D1)
+            x_byte = read1((type_ptr + creatures.TYPE_SPAWN_X) & 0xFFFFFF, 1) & 0xFF
+            sr = _logic_sr(sr, x_byte, 1)
+            charge(_CW_SI_LOAD_XB)
+            y_byte = read1((type_ptr + creatures.TYPE_SPAWN_Y) & 0xFFFFFF, 1) & 0xFF
+            sr = _logic_sr(sr, y_byte, 1)
+            charge(_CW_SI_LOAD_YB)
+            sr = _asl_sr(sr, x_byte, 5, 2)
+            charge(_CW_SI_ASL_X)
+            sr = _asl_sr(sr, y_byte, 4, 2)
+            charge(_CW_SI_ASL_Y)
+            sr = _logic_sr(sr, r['position_x'], 2)
+            charge(_CW_SI_STORE_X)
+            sr = _logic_sr(sr, r['position_y'], 2)
+            charge(_CW_SI_STORE_Y)
+            # moveq #0,d1 (0xA5B8) clears d1's own upper half fully; nothing later in this whole
+            # activation touches d1 again, so this instance's own position_y is d1's real exit value.
+            current['d1'] = r['position_y'] & 0xFFFFFFFF
+            sr = _logic_sr(sr, 0, 2)
+            charge(_CW_SI_CLR_FS)
+            sr = _logic_sr(sr, 0xFFFE, 2)
+            charge(_CW_SI_STORE_LC)
+            sr = _logic_sr(sr, d6, 2)
+            charge(_CW_SI_STORE_D6)
+            sr = _logic_sr(sr, d6, 2)
+            charge(_CW_SI_TST_D6)
+            writes.append(_bytes(a5, r['position_x'], 2))
+            writes.append(_bytes((a5 + 2) & 0xFFFFFF, r['position_y'], 2))
+            writes.append(_bytes((a5 + creatures.FRAME_STEP) & 0xFFFFFF, 0, 2))
+            writes.append(_bytes((a5 + creatures.LIFECYCLE) & 0xFFFFFF, 0xFFFE, 2))
+            writes.append(_bytes((a5 + creatures.LIFECYCLE_RESET) & 0xFFFFFF, d6, 2))
+            if r['add_icon_cue']:
+                charge(_CW_SI_BNE_D6[False], _CW_SI_BSR_ADD)
+                call(spawn_table_add_plan, SPAWN_TABLE_ADD_ENTRY, 0x00A5E2)
+            else:
+                charge(_CW_SI_BNE_D6[True])
+            kind_byte_raw = read1((type_ptr + creatures.TYPE_ATTACK_KIND_BYTE) & 0xFFFFFF, 1) & 0xFF
+            sr = _logic_sr(sr, kind_byte_raw, 1)
+            charge(_CW_SI_LOAD_KB)
+            kind_field = kind_byte_raw & 0xF
+            sr = _logic_sr(sr, kind_field, 2)
+            charge(_CW_SI_AND_KB)
+            if kind_field == 0:
+                charge(_CW_SI_BEQ_KB[True])
+            else:
+                charge(_CW_SI_BEQ_KB[False])
+                sr = _logic_sr(sr, 0x10, 2)
+                charge(_CW_SI_MOVEQ_D4)
+                diff = (0x10 - kind_field) & 0xFF
+                sr = _sub_sr(sr, 0x10, kind_field, 1)
+                charge(_CW_SI_SUB_D4)
+                sr = _logic_sr(sr, diff, 2)
+                charge(_CW_SI_EXT_D4)
+                doubled1 = (diff + diff) & 0xFFFF
+                sr = _add_sr(sr, diff, diff, 2)
+                charge(_CW_SI_ADD_D4)
+                doubled2 = (doubled1 + doubled1) & 0xFFFF
+                sr = _add_sr(sr, doubled1, doubled1, 2)
+                charge(_CW_SI_ADD_D4)
+                sr = _logic_sr(sr, doubled2, 2)
+                charge(_CW_SI_STORE_CD)
+                current['d4'] = doubled2 & 0xFFFFFFFF  # moveq cleared d4's own upper half; nothing
+                                                        # here ever widens it again
+                writes.append(_bytes((a5 + creatures.COUNTDOWN) & 0xFFFFFF, doubled2, 2))
+            charge(_CW_SI_BSR_GRID)
+            call(creature_grid_cell_plan, CREATURE_GRID_CELL_ENTRY, 0x00A5FE)
+            sr = _logic_sr(sr, 0, 2)
+            charge(_CW_SI_MOVEQ_D2)
+            # creature_grid_cell_plan's own exit sets a1 to the computed grid-cell address (the SAME
+            # convention creature_grid_cell_plan already documents) -- the REAL 00A600 zone-mode test
+            # runs AFTER 00A5FA's own bsr $aa38, so it reads THAT a1, not 00A578's own entry a1.
+            current_a1 = current['a1'] & 0xFFFFFF
+            zone_byte = read1((current_a1 + creatures.ZONE_MODE_FLAG) & 0xFFFFFF, 1) & 0xFF
+            sr = _cmp_sr(sr, zone_byte, 1, 1)
+            charge(_CW_SI_CMPI_ZONE)
+            if zone_byte == 1:
+                charge(_CW_SI_BEQ_ZONE[True])
+                zone_bit = 0
+            else:
+                charge(_CW_SI_BEQ_ZONE[False])
+                sr = _logic_sr(sr, 2, 2)
+                charge(_CW_SI_MOVEQ_D2B)
+                zone_bit = 2
+            current['d2'] = zone_bit & 0xFFFFFFFF
+            sr = _logic_sr(sr, 0, 2)
+            charge(_CW_SI_MOVEQ_D0B)
+            type_bit4 = read1((type_ptr + creatures.TYPE_ZONE_BIT_BYTE) & 0xFFFFFF, 1) & 0xFF
+            sr = _logic_sr(sr, type_bit4, 1)
+            charge(_CW_SI_LOAD_ZB)
+            shifted = (type_bit4 >> 1) & 0xFF
+            sr = _lsr1_sr(sr, type_bit4, 2)
+            charge(_CW_SI_LSR_D0)
+            bit = shifted & 1
+            sr = _logic_sr(sr, bit, 2)
+            charge(_CW_SI_AND_D0)
+            direction_index = (bit + zone_bit) & 0xFFFF
+            sr = _add_sr(sr, zone_bit, bit, 2)
+            charge(_CW_SI_ADD_D2D0)
+            sr = _logic_sr(sr, direction_index, 2)
+            charge(_CW_SI_STORE_DI)
+            sr = _logic_sr(sr, 2, 2)
+            charge(_CW_SI_STORE_FP)
+            sr = _logic_sr(sr, 0xFFFF, 2)
+            charge(_CW_SI_STORE_C)
+            sr = _logic_sr(sr, 0xFFFF, 2)
+            charge(_CW_SI_STORE_DT)
+            sr = _logic_sr(sr, 0, 2)
+            charge(_CW_SI_MOVEQ_D0C)
+            freq_byte = read1((type_ptr + creatures.TYPE_FREQUENCY_BYTE) & 0xFFFFFF, 1) & 0xFF
+            sr = _logic_sr(sr, freq_byte, 1)
+            charge(_CW_SI_LOAD_FREQ)
+            freq_scale = read1(creatures.timers.FREQUENCY_SCALE, 2) & 0xFFFF
+            product = (freq_byte * freq_scale) & 0xFFFFFFFF
+            sr = _logic_sr(sr, product, 4)
+            charge(_CW_SI_MULU)
+            doubled = (product * 2) & 0xFFFFFFFF
+            sr = _add_sr(sr, product, product, 4)
+            charge(_CW_SI_ADDL)
+            swapped = ((doubled & 0xFFFF) << 16) | (doubled >> 16)
+            sr = _logic_sr(sr, swapped, 4)
+            charge(_CW_SI_SWAP)
+            reload = ((swapped & 0xFFFF) + 1) & 0xFFFF
+            sr = _add_sr(sr, swapped & 0xFFFF, 1, 2)
+            charge(_CW_SI_ADDQ_D0)
+            d6_after = (d6 + reload) & 0xFFFF
+            sr = _add_sr(sr, d6, reload, 2)
+            charge(_CW_SI_ADD_D6)
+            writes.append(_bytes((a5 + creatures.DIRECTION_INDEX) & 0xFFFFFF, direction_index, 2))
+            writes.append(_bytes((a5 + creatures.FALL_PHASE) & 0xFFFFFF, 2, 2))
+            writes.append(_bytes((a5 + creatures.AIM_WINDOW_STATE) & 0xFFFFFF, 0xFFFF, 2))
+            writes.append(_bytes((a5 + creatures.DISPLAY_TIMER) & 0xFFFFFF, 0xFFFF, 2))
+            current['d0'] = ((swapped & 0xFFFF0000) | reload) & 0xFFFFFFFF
+            current['a5'] = (current['a5'] + creatures.CREATURE_INSTANCE_STRIDE) & 0xFFFFFFFF
+            charge(_CW_SI_ADV_A5)
+            d6 = d6_after
+            current['d6'] = (current['d6'] & 0xFFFF0000) | d6
+            d7 = (d7 - 1) & 0xFFFF
+            current['d7'] = (current['d7'] & 0xFFFF0000) | d7
+            charge(_CW_SI_DBRA_TAKEN if step != remaining - 1 else _CW_SI_DBRA_LAST)
+        a3 = current['a3'] & 0xFFFFFF
+        read1 = overlay_read()
+        header_before = read1(a3, 2) & 0xFFFF
+        header_after = (header_before - 1) & 0xFFFF
+        sr = _sub_sr(sr, header_before, 1, 2)
+        charge(_CW_SI_SUBQ_HDR)
+        sr = _logic_sr(sr, 0, 1)
+        charge(_CW_SI_CLR_WAVE)
+        writes.append(_bytes(a3, header_after, 2))
+        writes.append(_bytes((a3 + creatures.CREATURE_LIST_WAVE_TRIGGERED) & 0xFFFFFF, 0, 1))
+
+    def do_per_frame(type_ptr, slot_addr):
+        nonlocal sr
+        settled_count = 0
+        display_count = 0
+
+        def do_icon_spawn_step():
+            nonlocal sr, settled_count, display_count
+            instance_ptr = current['a5'] & 0xFFFFFF
+            read1 = overlay_read()
+            lifecycle = read1((instance_ptr + creatures.LIFECYCLE) & 0xFFFFFF, 2) & 0xFFFF
+            sr = _cmp_sr(sr, lifecycle, 0xFFFE, 2)
+            charge(_CW_IS_CMPI_ARMED)
+            if lifecycle == creatures.ICON_SPAWN_ARMED:
+                charge(_CW_IS_BEQ_ARMED[True])
+                reload_before = read1((instance_ptr + creatures.LIFECYCLE_RESET) & 0xFFFFFF, 2) & 0xFFFF
+                reload_after = (reload_before - 1) & 0xFFFF
+                sr = _sub_sr(sr, reload_before, 1, 2)
+                charge(_CW_IS_SUBQ_RELOAD2)
+                writes.append(_bytes((instance_ptr + creatures.LIFECYCLE_RESET) & 0xFFFFFF, reload_after, 2))
+                if reload_after != 0:
+                    charge(_CW_IS_BNE_RELOAD2[True])
+                else:
+                    charge(_CW_IS_BNE_RELOAD2[False], _CW_IS_BSR_ADD2)
+                    call(spawn_table_add_plan, SPAWN_TABLE_ADD_ENTRY, 0x00A70A)
+                    charge(_CW_IS_BRA2)
+                return
+            charge(_CW_IS_BEQ_ARMED[False])
+            sr = _cmp_sr(sr, lifecycle, 0xFFFD, 2)
+            charge(_CW_IS_CMPI_COUNTING)
+            if lifecycle == creatures.ICON_SPAWN_COUNTING:
+                charge(_CW_IS_BNE_COUNTING[False])
+                reload_before = read1((instance_ptr + creatures.LIFECYCLE_RESET) & 0xFFFFFF, 2) & 0xFFFF
+                reload_after = (reload_before - 1) & 0xFFFF
+                sr = _sub_sr(sr, reload_before, 1, 2)
+                charge(_CW_IS_SUBQ_RELOAD)
+                writes.append(_bytes((instance_ptr + creatures.LIFECYCLE_RESET) & 0xFFFFFF, reload_after, 2))
+                if reload_after != 0:
+                    charge(_CW_IS_BNE_RELOAD[True])
+                    return
+                charge(_CW_IS_BNE_RELOAD[False])
+                sr = _logic_sr(sr, 0, 2)
+                charge(_CW_IS_MOVEQ_D0)
+                icon_kind = read1((type_ptr + creatures.TYPE_ICON_KIND_BYTE) & 0xFFFFFF, 1) & 0xFF
+                sr = _logic_sr(sr, icon_kind, 1)
+                charge(_CW_IS_LOAD_ICON_KIND)
+                sr = _logic_sr(sr, icon_kind, 2)
+                charge(_CW_IS_STORE_LC2)
+                writes.append(_bytes((instance_ptr + creatures.LIFECYCLE) & 0xFFFFFF, icon_kind, 2))
+                sr = _logic_sr(sr, 0xA, 2)
+                charge(_CW_IS_MOVEQ_D0B)
+                ground_byte = read1((type_ptr + creatures.TYPE_GROUND_RELOAD_BYTE) & 0xFFFFFF, 1) & 0xFF
+                diff = (0xA - ground_byte) & 0xFF
+                sr = _sub_sr(sr, 0xA, ground_byte, 1)
+                charge(_CW_IS_SUB_BYTE)
+                word = creatures._signed_byte(diff) & 0xFFFF
+                sr = _logic_sr(sr, word, 2)
+                charge(_CW_IS_EXT)
+                freq_scale = read1(creatures.timers.FREQUENCY_SCALE, 2) & 0xFFFF
+                product = (word * freq_scale) & 0xFFFFFFFF
+                sr = _logic_sr(sr, product, 4)
+                charge(_CW_IS_MULU)
+                doubled = (product * 2) & 0xFFFFFFFF
+                sr = _add_sr(sr, product, product, 4)
+                charge(_CW_IS_ADDL)
+                swapped = ((doubled & 0xFFFF) << 16) | (doubled >> 16)
+                sr = _logic_sr(sr, swapped, 4)
+                charge(_CW_IS_SWAP)
+                reseeded = ((swapped & 0xFFFF) + 1) & 0xFFFF
+                sr = _add_sr(sr, swapped & 0xFFFF, 1, 2)
+                charge(_CW_IS_ADDQ)
+                sr = _logic_sr(sr, reseeded, 2)
+                charge(_CW_IS_STORE_RELOAD)
+                writes.append(_bytes((instance_ptr + creatures.LIFECYCLE_RESET) & 0xFFFFFF, reseeded, 2))
+                current['d0'] = ((swapped & 0xFFFF0000) | reseeded) & 0xFFFFFFFF
+                charge(_CW_IS_BRA1)
+                return
+            charge(_CW_IS_BNE_COUNTING[True])
+            # 'display': any other negative LIFECYCLE -- the only icon-spawn sub-arm F2C8 counts.
+            display_count += 1
+            writes.append(_bytes(0xFFF2C8, display_count & 0xFFFF, 2))
+            charge(_CW_IS_ADDQ_F2C8)
+            frame_step = read1((instance_ptr + creatures.FRAME_STEP) & 0xFFFFFF, 2) & 0xFFFF
+            sr = _logic_sr(sr, frame_step, 2)
+            charge(_CW_IS_TST_FS)
+            frame_step_signed = frame_step - 0x10000 if frame_step & 0x8000 else frame_step
+            if frame_step_signed >= 0:
+                charge(_CW_IS_BPL_FS[True])
+            else:
+                charge(_CW_IS_BPL_FS[False])
+                pos_x = read1(instance_ptr, 2) & 0xFFFF
+                pos_y = read1((instance_ptr + 2) & 0xFFFFFF, 2) & 0xFFFF
+                charge(_CW_IS_CACHE_POS)
+                writes.append(_bytes(0xFFF26C, pos_x, 2))
+                writes.append(_bytes(0xFFF26E, pos_y, 2))
+                display_timer = read1((instance_ptr + creatures.DISPLAY_TIMER) & 0xFFFFFF, 2) & 0xFFFF
+                sr = _logic_sr(sr, display_timer, 2)
+                charge(_CW_IS_TST_DT)
+                display_signed = display_timer - 0x10000 if display_timer & 0x8000 else display_timer
+                if display_signed >= 0:
+                    charge(_CW_IS_BMI_DT[False])
+                    sr = _logic_sr(sr, display_timer, 2)
+                    charge(_CW_IS_LOAD_DT)
+                    sr = _cmp_sr(sr, display_timer, 0xC0, 2)
+                    charge(_CW_IS_CMPI_DT)
+                    if display_signed >= 0xC0:
+                        charge(_CW_IS_BGE_DT[True])
+                        icon_kind = (display_signed - 0xC0) & 0xFFFF
+                        sr = _sub_sr(sr, display_timer, 0xC0, 2)
+                        charge(_CW_IS_SUBI_DT)
+                    else:
+                        charge(_CW_IS_BGE_DT[False])
+                        icon_kind = (display_signed + 0xB) & 0xFFFF
+                        sr = _add_sr(sr, display_timer, 0xB, 2)
+                        charge(_CW_IS_ADDI_DT, _CW_IS_BRA_DT)
+                    sr = _logic_sr(sr, pos_x, 2)
+                    charge(_CW_IS_LOAD_POSX)
+                    sr = _logic_sr(sr, pos_y, 2)
+                    charge(_CW_IS_LOAD_POSY)
+                    d0_arg = (pos_x + 8) & 0xFFFF
+                    sr = _add_sr(sr, pos_x, 8, 2)
+                    charge(_CW_IS_ADDQ_POSX)
+                    charge(_CW_IS_JSR_ICON)
+                    # floating_icon_spawn_plan touches no register of its own (game/spawns.py's own
+                    # "no cycles, CCR, stack or registers" note) -- D0/D1/D2 exit exactly as entered.
+                    current['d0'] = (current['d0'] & 0xFFFF0000) | d0_arg
+                    current['d1'] = (current['d1'] & 0xFFFF0000) | pos_y
+                    current['d2'] = (current['d2'] & 0xFFFF0000) | icon_kind
+                    call(floating_icon_spawn_plan, FLOATING_ICON_SPAWN_ENTRY, 0x00A744,
+                        extra={'d0': current['d0'], 'd1': current['d1'], 'd2': current['d2']})
+                else:
+                    charge(_CW_IS_BMI_DT[True])
+            frame_step_after = (frame_step + 1) & 0xFFFF
+            sr = _add_sr(sr, frame_step, 1, 2)
+            charge(_CW_IS_ADDQ_FS)
+            writes.append(_bytes((instance_ptr + creatures.FRAME_STEP) & 0xFFFFFF, frame_step_after, 2))
+            sr = _cmp_sr(sr, frame_step_after, 7, 2)
+            charge(_CW_IS_CMPI_FS)
+            frame_step_after_signed = frame_step_after - 0x10000 if frame_step_after & 0x8000 else frame_step_after
+            if frame_step_after_signed < 7:
+                charge(_CW_IS_BLT_FS[True])
+                pos_x = read1(instance_ptr, 2) & 0xFFFF
+                pos_y = read1((instance_ptr + 2) & 0xFFFFFF, 2) & 0xFFFF
+                sr = _logic_sr(sr, pos_x, 2)
+                charge(_CW_IS_LOAD_POSX2)
+                sr = _logic_sr(sr, pos_y, 2)
+                charge(_CW_IS_LOAD_POSY2)
+                sr = _logic_sr(sr, 0x1E, 2)
+                charge(_CW_IS_MOVEQ_D2C)
+                d2_arg = (0x1E + frame_step_after) & 0xFFFF
+                sr = _add_sr(sr, 0x1E, frame_step_after, 2)
+                charge(_CW_IS_ADD_FS)
+                charge(_CW_IS_JSR_STATIC)
+                current['d0'] = (current['d0'] & 0xFFFF0000) | pos_x
+                current['d1'] = (current['d1'] & 0xFFFF0000) | pos_y
+                current['d2'] = d2_arg & 0xFFFFFFFF   # moveq #$1e,d2 clears the FULL 32-bit register
+                call(static_emit_plan, STATIC_EMIT_ENTRY, 0x00A76E,
+                    extra={'d0': current['d0'], 'd1': current['d1'], 'd2': current['d2']})
+                charge(_CW_IS_BRA4)
+                return
+            charge(_CW_IS_BLT_FS[False])
+            sr = _logic_sr(sr, 0, 2)
+            charge(_CW_IS_CLR_LC)
+            writes.append(_bytes((instance_ptr + creatures.LIFECYCLE) & 0xFFFFFF, 0, 2))
+            sr = _logic_sr(sr, 0, 2)
+            charge(_CW_IS_CLR_RELOAD)
+            writes.append(_bytes((instance_ptr + creatures.LIFECYCLE_RESET) & 0xFFFFFF, 0, 2))
+            charge(_CW_IS_BRA3)
+
+        read1 = overlay_read()
+        count_byte = read1(type_ptr & 0xFFFFFF, 1) & 0xFF
+        current['d7'] = 0   # moveq #0,d7 clears the FULL 32-bit register
+        sr = _logic_sr(sr, 0, 2)
+        charge(_CW_PF_MOVEQ_D7)
+        sr = _logic_sr(sr, count_byte, 1)
+        charge(_CW_PF_LOAD_COUNT)
+        d7 = (count_byte - 1) & 0xFFFF
+        sr = _sub_sr(sr, count_byte, 1, 2)
+        charge(_CW_PF_SUBQ_D7)
+        if count_byte == 0:
+            raise UnsupportedCandidate('creature per-frame update: type instance count byte is 0, '
+                                       'not witnessed by a recording')
+        sr = _logic_sr(sr, 0, 2)
+        charge(_CW_PF_CLR_F2C6)
+        sr = _logic_sr(sr, 0, 2)
+        charge(_CW_PF_CLR_F2C8)
+        writes.append(_bytes(0xFFF2C6, 0, 2))
+        writes.append(_bytes(0xFFF2C8, 0, 2))
+        remaining = d7 + 1
+        for step in range(remaining):
+            current['d7'] = (current['d7'] & 0xFFFF0000) | d7
+            read1 = overlay_read()
+            instance_ptr = current['a5'] & 0xFFFFFF
+            lifecycle = read1((instance_ptr + creatures.LIFECYCLE) & 0xFFFFFF, 2) & 0xFFFF
+            sr = _logic_sr(sr, lifecycle, 2)
+            charge(_CW_PF_TST_LC)
+            signed = lifecycle - 0x10000 if lifecycle & 0x8000 else lifecycle
+            if signed < 0:
+                charge(_CW_PF_BMI_LC[True])
+                do_icon_spawn_step()
+            elif signed == 0:
+                charge(_CW_PF_BMI_LC[False], _CW_PF_BEQ_LC[True])
+                settled_count += 1
+                sr = _add_sr(sr, 0, 1, 2)
+                charge(_CW_PF_ADDQ_SETTLED)
+                writes.append(_bytes(0xFFF2C6, settled_count & 0xFFFF, 2))
+                charge(_CW_PF_BRA_TAIL)
+            else:
+                charge(_CW_PF_BMI_LC[False], _CW_PF_BEQ_LC[False], _CW_PF_BSR_FAMILY)
+                call_family(0x00A686)
+            current['a5'] = (current['a5'] + creatures.CREATURE_INSTANCE_STRIDE) & 0xFFFFFFFF
+            charge(_CW_PF_ADV_A5)
+            d7 = (d7 - 1) & 0xFFFF
+            current['d7'] = (current['d7'] & 0xFFFF0000) | d7
+            charge(_CW_PF_DBRA_TAKEN if step != remaining - 1 else _CW_PF_DBRA_LAST)
+        # wave-complete + slot-deactivate checks
+        read1 = overlay_read()
+        settled_final = read1(0xFFF2C6, 2) & 0xFFFF
+        display_final = read1(0xFFF2C8, 2) & 0xFFFF
+        d7v = (settled_final + display_final) & 0xFFFF
+        # move.w f2c6.w,d7 / add.w f2c8.w,d7 (both WORD ops) overwrite the per-instance loop's own
+        # dbra residue in d7's own low word -- the upper half stays 0, cleared by THIS activation's
+        # own moveq #0,d7 at its own head and never widened again (dbra is a word op too).
+        current['d7'] = (current['d7'] & 0xFFFF0000) | settled_final
+        sr = _logic_sr(sr, settled_final, 2)
+        charge(_CW_PF_LOAD_F2C6)
+        current['d7'] = (current['d7'] & 0xFFFF0000) | d7v
+        sr = _add_sr(sr, settled_final, display_final, 2)
+        charge(_CW_PF_ADD_F2C8)
+        type_count = read1(type_ptr & 0xFFFFFF, 1) & 0xFF
+        sr = _cmp_sr(sr, d7v & 0xFF, type_count, 1)
+        charge(_CW_PF_CMP_COUNT)
+        if (d7v & 0xFF) == type_count:
+            charge(_CW_PF_BNE_WAVE[False])
+            cache_x = read1(0xFFF26C, 2) & 0xFFFF
+            cache_y = read1(0xFFF26E, 2) & 0xFFFF
+            current['d0'] = (current['d0'] & 0xFFFF0000) | cache_x
+            sr = _logic_sr(sr, cache_x, 2)
+            charge(_CW_PF_LOAD_CACHE_X)
+            current['d1'] = (current['d1'] & 0xFFFF0000) | cache_y
+            sr = _logic_sr(sr, cache_y, 2)
+            charge(_CW_PF_LOAD_CACHE_Y)
+            d0v = (cache_x + 8) & 0xFFFF
+            current['d0'] = (current['d0'] & 0xFFFF0000) | d0v
+            sr = _add_sr(sr, cache_x, 8, 2)
+            charge(_CW_PF_ADDQ_X)
+            wave_flag = read1((slot_addr + creatures.CREATURE_LIST_WAVE_TRIGGERED) & 0xFFFFFF, 1) & 0xFF
+            sr = _logic_sr(sr, wave_flag, 1)
+            charge(_CW_PF_TST_WAVE_FLAG)
+            if wave_flag != 0:
+                charge(_CW_PF_BNE_WAVEFLAG[True])
+            else:
+                charge(_CW_PF_BNE_WAVEFLAG[False])
+                wave_icon = read1((type_ptr + creatures.TYPE_WAVE_ICON_KIND) & 0xFFFFFF, 2) & 0xFFFF
+                current['d2'] = (current['d2'] & 0xFFFF0000) | wave_icon
+                sr = _logic_sr(sr, wave_icon, 2)
+                charge(_CW_PF_LOAD_WAVE_ICON)
+                wave_icon_signed = wave_icon - 0x10000 if wave_icon & 0x8000 else wave_icon
+                if wave_icon_signed < 0:
+                    charge(_CW_PF_BMI_WAVE[True])
+                else:
+                    charge(_CW_PF_BMI_WAVE[False], _CW_PF_JSR_WAVE)
+                    current['d0'] = (current['d0'] & 0xFFFF0000) | d0v
+                    current['d1'] = (current['d1'] & 0xFFFF0000) | cache_y
+                    current['d2'] = (current['d2'] & 0xFFFF0000) | wave_icon
+                    call(floating_icon_spawn_plan, FLOATING_ICON_SPAWN_ENTRY, 0x00A6B6,
+                        extra={'d0': current['d0'], 'd1': current['d1'], 'd2': current['d2']})
+                sr = _logic_sr(sr, 1, 1)
+                charge(_CW_PF_STORE_WAVEFLAG)
+                writes.append(_bytes((slot_addr + creatures.CREATURE_LIST_WAVE_TRIGGERED) & 0xFFFFFF, 1, 1))
+        else:
+            charge(_CW_PF_BNE_WAVE[True])
+        read1 = overlay_read()
+        settled_final = read1(0xFFF2C6, 2) & 0xFFFF
+        type_count2 = read1(type_ptr & 0xFFFFFF, 1) & 0xFF
+        current['d6'] = (current['d6'] & 0xFFFF0000) | settled_final
+        sr = _logic_sr(sr, settled_final, 2)
+        charge(_CW_PF_LOAD_F2C6B)
+        sr = _cmp_sr(sr, settled_final & 0xFF, type_count2, 1)
+        charge(_CW_PF_CMP_COUNTB)
+        settled_byte_signed = creatures._signed_byte(settled_final)
+        if settled_byte_signed < creatures._signed_byte(type_count2):
+            charge(_CW_PF_BLT_TAIL[True])
+        else:
+            charge(_CW_PF_BLT_TAIL[False], _CW_PF_CLR_HEADER)
+            sr = _logic_sr(sr, 0, 2)
+            writes.append(_bytes(slot_addr & 0xFFFFFF, 0, 2))
+            charge(_CW_PF_BRA_TAIL2)
+
+    try:
+        slot_addr = creatures.CREATURE_LIST_BASE & 0xFFFFFFFF
+        loop_counter = 9
+        for slot_index in range(creatures.CREATURE_LIST_COUNT):
+            slot_start_a5 = current['a5']
+            writes.append(_bytes(0xFFF2C2, slot_start_a5 & 0xFFFFFFFF, 4))
+            charge(_CW_SAVE_A5)
+            current['a3'] = slot_addr & 0xFFFFFFFF
+            read1 = overlay_read()
+            header = read1(slot_addr & 0xFFFFFF, 2) & 0xFFFF
+            sr = _logic_sr(sr, header, 2)
+            current['d0'] = (current['d0'] & 0xFFFF0000) | header
+            charge(_CW_LOAD_HEADER)
+            if header == 0:
+                charge(_CW_BEQ_HEADER[True])
+            else:
+                charge(_CW_BEQ_HEADER[False])
+                type_ptr = read1((slot_addr + creatures.CREATURE_LIST_TYPE_PTR) & 0xFFFFFF, 4) & 0xFFFFFFFF
+                current['a4'] = type_ptr
+                charge(_CW_LOAD_TYPE)
+                after = (header - 1) & 0xFFFF
+                sr = _sub_sr(sr, header, 1, 2)
+                current['d0'] = (current['d0'] & 0xFFFF0000) | after
+                charge(_CW_SUBQ_HEADER)
+                if after == 0:
+                    charge(_CW_BEQ_PERFRAME[True])
+                    do_per_frame(type_ptr, slot_addr & 0xFFFFFFFF)
+                else:
+                    charge(_CW_BEQ_PERFRAME[False])
+                    do_spawn_init(type_ptr)
+            current['a5'] = (slot_start_a5 + creatures.CREATURE_SLOT_BLOCK) & 0xFFFFFFFF
+            charge(_CW_RESTORE_A5, _CW_ADV_A3, _CW_ADV_A5)
+            slot_addr = (slot_addr + creatures.CREATURE_LIST_STRIDE) & 0xFFFFFFFF
+            counter_before = loop_counter
+            loop_counter = (loop_counter - 1) & 0xFFFF
+            sr = _sub_sr(sr, counter_before, 1, 2)
+            writes.append(_bytes((sp - 2) & 0xFFFFFF, loop_counter, 2))
+            last = slot_index == creatures.CREATURE_LIST_COUNT - 1
+            charge(_CW_DEC_COUNTER, _CW_BPL_LOOP[not last])
+        # The real lea.l $12(a3),a3 runs on every iteration including the last, so a3's own exit
+        # value reflects the FINAL advance too, not merely whatever it held entering the last slot.
+        current['a3'] = slot_addr & 0xFFFFFFFF
+    except _WalkDeviceEntry:
+        flat_writes = tuple(pair for group in writes for pair in group)
+        exit_registers = dict(current)
+        exit_registers.update(sr=sr)
+        prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=flat_writes,
+                            registers=exit_registers, last_pc=CREATURE_FAMILY_LAST_PC)
+
+        def creature_walk_suffix(machine, live_registers):
+            return AtomicPlan(cycles=16, instructions=1, writes=(),
+                              registers={'a7': (live_registers['a7'] + 4) & 0xFFFFFFFF,
+                                         'pc': _return(machine, live_registers['a7'] & 0xFFFFFF)},
+                              last_pc=CREATURE_WALK_RESUME)
+
+        return Seam(prefix=prefix, resume_pc=CREATURE_WALK_RESUME, stack_basis=sp32,
+                   guards=((sp, 4),), suffix=creature_walk_suffix)
+
+    charge(_CW_POP_COUNTER, _CW_RTS)
+    flat_writes = tuple(pair for group in writes for pair in group)
+    exit_registers = dict(current)
+    exit_registers.update(a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=sr)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=flat_writes,
+                      registers=exit_registers, last_pc=CREATURE_WALK_LAST_PC)

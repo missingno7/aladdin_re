@@ -33,6 +33,8 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        BCD_COUNTER_ADD_ENTRY, bcd_counter_add_plan,
                        CREATURE_DEATH_BCD_ENTRY, creature_death_bcd_plan,
                        CREATURE_FAMILY_ENTRY, creature_family_plan,
+                       CREATURE_WALK_ENTRY, creature_walk_plan,
+                       FLOATING_ICON_SPAWN_ENTRY, floating_icon_spawn_plan,
                        SPAWN_FIND_FREE_ENTRY, spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY, spawn_table_add_plan,
                        ANIMATION_STEP_ENTRY, ATTACK_UPDATE_ENTRY, CAMERA_FOLLOW_ENTRY, CREATURE_GRID_CELL_ENTRY, CREATURE_PICKUP_CHECK_ENTRY, EVENT_CONSUME_ENTRY,
                        COLLISION_GATE_ENTRY, CONDITION_ENTRY, CONTACT_CONSUME_PRIMARY_ENTRY, CONTACT_CONSUME_SECONDARY_ENTRY,
@@ -346,6 +348,24 @@ def _mutate_creature_family(plan) -> AtomicPlan:
     return AtomicPlan(plan.cycles, plan.instructions, plan.writes, registers, plan.last_pc, plan.direct_calls)
 
 
+def _mutate_creature_walk(plan) -> AtomicPlan:
+    """Negative control for the composed 9(+1)-slot walk (00A578): when a family activation reaches
+    the device (a Seam, the same platform tail creature_family_plan's own mutant already draws on),
+    D0 (particle_emit's own X argument) off by one, for the identical reason.  When no instance in
+    this whole tick reaches the device (a plain AtomicPlan -- every slot either skips, spawns new
+    instances, or runs the icon-spawn sub-machine with no live 'family' arm), the last write instead:
+    a real, permanent RAM field (a creature's own position/lifecycle/reload timer, or one of the
+    per-slot F2C6/F2C8/F26C tallies) a LATER tick's own walk reads back, never dead stack residue."""
+    if isinstance(plan, Seam):
+        registers = dict(plan.prefix.registers)
+        registers['d0'] = (registers.get('d0', 0) + 1) & 0xFFFFFFFF
+        prefix = AtomicPlan(plan.prefix.cycles, plan.prefix.instructions, plan.prefix.writes, registers,
+                            plan.prefix.last_pc, plan.prefix.direct_calls)
+        return Seam(prefix=prefix, resume_pc=plan.resume_pc, stack_basis=plan.stack_basis,
+                   guards=plan.guards, suffix=plan.suffix, expect=plan.expect)
+    return _mutate_result(plan)
+
+
 # The fallback reasons that are the adapter's refusal of an exact span (the original runs it; nothing
 # is declined): the caller's observation instant precedes the span's end, the sound driver's Z80
 # bank register points at work RAM, a vertical interrupt falls inside the span, or another condition
@@ -414,6 +434,7 @@ PLANNERS = {
     'bcd-counter-add': {BCD_COUNTER_ADD_ENTRY: bcd_counter_add_plan},
     'creature-death-bcd': {CREATURE_DEATH_BCD_ENTRY: creature_death_bcd_plan},
     'creature-family': {CREATURE_FAMILY_ENTRY: creature_family_plan},
+    'creature-walk': {CREATURE_WALK_ENTRY: creature_walk_plan},
     'spawn-table-find-free': {SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
     'spawn-table-add': {SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
     'ground-edge-test': {GROUND_EDGE_TEST_ENTRY: ground_edge_test_plan},
@@ -505,7 +526,11 @@ PLANNERS = {
                        # (0% witnessed) rather than composes, so a real occurrence of that arm still needs it
                        # armed on its own.  Their own PLANNERS entries and standalone tests are unchanged.
                        KIND_FRAME_OFFSET_ENTRY: kind_frame_offset_plan,
-                       CREATURE_FAMILY_ENTRY: creature_family_plan,
+                       # CREATURE_FAMILY_ENTRY (00A772) is RETIRED here too, 19 September, the same day:
+                       # its own SOLE caller is 00A578's own per-frame-update body (creature_walk_plan,
+                       # below) -- once IT is armed here, the native machine never independently reaches
+                       # 00A772 as a gate hit.  Its own PLANNERS entry and standalone tests are unchanged.
+                       CREATURE_WALK_ENTRY: creature_walk_plan,
                        # AIM_CUE_ENTRY (00B082) and AIM_POOL_RESET_ENTRY (00B02A) are RETIRED here too,
                        # 19 September: both exit exclusively into 00AF52's own body (00AF90/00AF98,
                        # confirmed against their own census fixtures), and AIM_SEARCH_DISPATCH_ENTRY's
@@ -555,7 +580,14 @@ PLANNERS = {
                        # BCD_COUNTER_ADD_ENTRY (00003F0C): a shared utility with many callers beyond
                        # 00A772's own tail, 19 September -- 63 -> 64 gates (the adapter's own cap).
                        BCD_COUNTER_ADD_ENTRY: bcd_counter_add_plan,
-                       SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan, SPAWN_TABLE_ADD_ENTRY: spawn_table_add_plan},
+                       # SPAWN_TABLE_ADD_ENTRY (00B920) is RETIRED here too, 19 September: its own SOLE
+                       # caller is 00A578's own body (creature_walk_plan composes it directly, both from
+                       # the spawn-init loop and the icon-spawn 'reload-wait' arm) -- once creature_walk
+                       # is armed here the native machine never independently reaches 00B920 as a gate
+                       # hit.  SPAWN_FIND_FREE_ENTRY (00B8C2) stays armed: it is spawn_table_add's own
+                       # internal callee, composed transitively, but its own PLANNERS entry/tests are
+                       # unchanged and this candidate does not itself claim it reaches no other caller.
+                       SPAWN_FIND_FREE_ENTRY: spawn_table_find_free_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -801,6 +833,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'bcd-counter-add-mutant-result': ('bcd-counter-add', _mutate_result),
              'creature-death-bcd-mutant-result': ('creature-death-bcd', _mutate_result),
              'creature-family-mutant-result': ('creature-family', _mutate_creature_family),
+             'creature-walk-mutant-result': ('creature-walk', _mutate_creature_walk),
              'aim-target-resolve-mutant-result': ('aim-target-resolve', _mutate_aim_target_resolve),
              'spawn-table-find-free-mutant-result': ('spawn-table-find-free', _mutate_spawn_find_free),
              'spawn-table-add-mutant-result': ('spawn-table-add', _mutate_result)}

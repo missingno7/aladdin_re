@@ -2123,7 +2123,9 @@ def test_spawn_find_free_candidate_names_are_explicit():
 
 def test_spawn_table_add_candidate_names_are_explicit():
     assert recovery.Candidate('spawn-table-add').gate_pcs == (boundary.SPAWN_TABLE_ADD_ENTRY,)
-    assert boundary.SPAWN_TABLE_ADD_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from the combined candidate 19 Sep: its own SOLE caller is 00A578's own body
+    # (creature_walk_plan), which now arms it instead.
+    assert boundary.SPAWN_TABLE_ADD_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('spawn-table-add-mutant-result').mutation is recovery._mutate_result
 
 
@@ -2239,7 +2241,9 @@ def test_creature_family_plan_reproduces_every_witnessed_occurrence(fixture):
 
 def test_creature_family_candidate_names_are_explicit():
     assert recovery.Candidate('creature-family').gate_pcs == (boundary.CREATURE_FAMILY_ENTRY,)
-    assert boundary.CREATURE_FAMILY_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from the combined candidate 19 Sep: its own SOLE caller is 00A578's own body
+    # (creature_walk_plan), which now arms it instead.
+    assert boundary.CREATURE_FAMILY_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert boundary.ATTACK_UPDATE_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert boundary.EVENT_CONSUME_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
     assert boundary.CREATURE_PICKUP_CHECK_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
@@ -2282,4 +2286,111 @@ def test_creature_family_candidate_matches_the_reference_and_its_mutant_diverges
     assert all(reason.startswith(allowed_prefixes) for reason in other), other
     mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-family-mutant-result',
                                   reference=EVIDENCE)
+    assert mutant['status'] == 'DIVERGENCE'
+
+
+# --- 00A578: the 9(+1)-slot creature list walk (game/creatures.py's own module note above
+# creature_walk_gate) -- composes attack_update_plan/the eight-entry kind table/event_consume_plan/
+# creature_pickup_check_plan/creature_death_bcd_plan through creature_family_plan (00A772), plus
+# spawn_table_add_plan (00B920), creature_grid_cell_plan (00AA38), static_emit_plan (001164) and the
+# new floating_icon_spawn_plan (0010D7C) directly.  A platform tail exactly like 00A772's own: once
+# any composed creature_family_plan activation reaches the device, the WHOLE remainder of the tick's
+# own walk is ceded, resuming at 00A578's own sole rts (00A662), never at 00A772's own 00A864.
+CREATURE_WALK_FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X00A578-*/00A578-entry-p*.state'))
+needs_creature_walk_census = pytest.mark.skipif(not CREATURE_WALK_FIXTURES or not GODS.rom_path.is_file(),
+                                                 reason='no local census of 00A578')
+
+
+def check_creature_walk_seam(seam, state):
+    """The strict witness of a seam: the prefix to the platform entry (00126A), the suffix from the
+    resume (00A578's own sole rts, 00A662) -- one instruction, the return address already on the
+    stack when this whole tick's own walk began."""
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=seam.prefix.registers['pc'],
+                                                  max_instructions=200000))
+    problems = [p for p in pathfacts.check_plan(seam.prefix, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], ('prefix', problems)
+    resumed = pathfacts.park(state, seam.resume_pc, game=GODS, max_instructions=200000)
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(resumed)
+        registers = machine.registers()
+        assert registers['a7'] == seam.stack_basis
+        suffix = seam.suffix(machine, registers)
+    facts = pathfacts.region_only(pathfacts.trace(resumed, game=GODS, stop_pc=suffix.registers['pc'],
+                                                   max_instructions=200000))
+    problems = [p for p in pathfacts.check_plan(suffix, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], ('suffix', problems)
+    return facts
+
+
+@needs_creature_walk_census
+@pytest.mark.parametrize('fixture', CREATURE_WALK_FIXTURES, ids=lambda p: f'{p.parent.name}/{p.stem}')
+def test_creature_walk_plan_reproduces_every_witnessed_occurrence(fixture):
+    state = fixture.read_bytes()
+    with Machine(GODS.read_rom()) as machine:
+        machine.restore(state)
+        registers = machine.registers()
+        assert registers['pc'] == boundary.CREATURE_WALK_ENTRY
+        try:
+            plan = boundary.creature_walk_plan(machine, registers)
+        except UnsupportedCandidate:
+            return
+    from genesis_re.seam import Seam
+    if isinstance(plan, Seam):
+        check_creature_walk_seam(plan, state)
+        return
+    facts = pathfacts.region_only(pathfacts.trace(state, game=GODS, stop_pc=plan.registers['pc'],
+                                                  max_instructions=200000))
+    problems = [p for p in pathfacts.check_plan(plan, facts, facts['entry_registers']) if not p.startswith('note:')]
+    assert problems == [], problems
+
+
+def test_creature_walk_candidate_names_are_explicit():
+    assert recovery.Candidate('creature-walk').gate_pcs == (boundary.CREATURE_WALK_ENTRY,)
+    assert boundary.CREATURE_WALK_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.CREATURE_FAMILY_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.SPAWN_TABLE_ADD_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert recovery.Candidate('creature-walk-mutant-result').mutation is recovery._mutate_creature_walk
+
+
+@needs_creature_walk_census
+def test_creature_walk_gate_zero_is_a_plain_early_exit():
+    for fixture in CREATURE_WALK_FIXTURES:
+        state = fixture.read_bytes()
+        with Machine(GODS.read_rom()) as machine:
+            machine.restore(state)
+            registers = machine.registers()
+            if not creatures.creature_walk_gate(boundary._reader(machine)):
+                plan = boundary.creature_walk_plan(machine, registers)
+                assert not isinstance(plan, boundary.Seam)
+                assert plan.writes == ()
+                return
+    pytest.skip('no retained fixture witnesses WALK_GATE == 0')
+
+
+@needs_reference
+def test_creature_walk_candidate_matches_the_reference_and_its_mutant_diverges():
+    for fixture in CREATURE_WALK_FIXTURES:
+        state = fixture
+        report = segment_verify.check(state, game=GODS, frames=300, candidate='creature-walk', reference=EVIDENCE)
+        if report['candidate_hits'] >= 1:
+            break
+    else:
+        pytest.skip('no retained fixture reaches 00A578 within 300 frames')
+    assert report['status'] == 'PASS', report
+    other = {reason for reason in report['fallback_reasons'] if reason not in recovery.ADAPTER_REFUSALS}
+    allowed_prefixes = ('unsupported domain: creature family:', 'unsupported domain: aim target scan',
+                        'unsupported domain: aim search', 'unsupported domain: aim pool',
+                        'unsupported domain: creature per-frame update:',
+                        'unsupported domain: creature spawn-init:')
+    assert all(reason.startswith(allowed_prefixes) for reason in other), other
+    # A mutated D0 (particle_emit's own X argument) can fault the M68000 outright, deep inside the
+    # ceded code, rather than merely diverge cleanly -- a real consequence of the corruption, not a
+    # control failure (the same class countdown-check's own creature-frame-offset mutant hits);
+    # history-verify's own crash-tolerant comparison would report it as DIVERGENCE the same way.
+    try:
+        mutant = segment_verify.check(state, game=GODS, frames=300, candidate='creature-walk-mutant-result',
+                                      reference=EVIDENCE)
+    except NativeError as error:
+        assert 'address error' in str(error).lower(), error
+        return
     assert mutant['status'] == 'DIVERGENCE'

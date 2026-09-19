@@ -2073,3 +2073,213 @@ def creature_death_bcd_amounts(d5_entry):
     second = ((tens_overflow & 0xFF) << 4) & 0xFF
     return {'quotient': quotient, 'remainder': remainder, 'first': first,
             'has_second': tens_overflow != 0, 'second': second}
+
+
+# --- 00A578: the 9-slot creature list walk (docs/gods/blockers/2026-09-18-00A578.md's own "not just
+# a walk") -- called once per tick, gated by WALK_GATE.  A fixed 9-slot list at CREATURE_LIST_BASE
+# (CREATURE_LIST_STRIDE bytes each: a header word, a type-template pointer long, and, at +0x10, a
+# byte this module calls WAVE_TRIGGERED) walks a shared instance array at CREATURE_INSTANCE_BASE
+# (CREATURE_INSTANCE_STRIDE bytes per instance, CREATURE_SLOT_BLOCK reserved per slot so a slot's own
+# instances never spill into the next slot's own reserved block).  A zero header skips the slot
+# outright.  A header of exactly 1 selects the PER-FRAME UPDATE body: walk `(type_ptr)+1` live
+# instances, and for each one whose own LIFECYCLE word is positive, call the family (00A772);
+# LIFECYCLE == 0 is a plain skip, LIFECYCLE < 0 is the ICON-SPAWN sub-machine below.  Any OTHER
+# nonzero header selects the SPAWN-INIT body: initialise `(type_ptr)+1` brand-new instances (position,
+# LIFECYCLE = -2, a per-type attack countdown, DIRECTION_INDEX, a fresh DISPLAY_TIMER/AIM_WINDOW_STATE,
+# and a staggered "spawn frequency" reload timer accumulated across the new instances) and decrement
+# the slot's own header, so a header > 1 spreads its own new-instance batch over several ticks.
+WALK_GATE = 0xFFFFEED1                 # byte: 0 skips the whole walk for this tick
+CREATURE_LIST_BASE = 0xFFFF1496        # 9 real slots, CREATURE_LIST_STRIDE bytes each
+CREATURE_LIST_STRIDE = 0x12
+# The loop counter is pushed as 9 and tested AFTER each decrement (`subq.w #1,(a7); bpl.w`, not a
+# DBRA), so the loop body actually runs TEN times (9, 8, ..., 0 are all still >= 0) -- confirmed
+# directly against the tracer (`0xA596` visited exactly 10 times on every retained fixture) and
+# against RAM: the tenth slot's own header (`CREATURE_LIST_BASE + 9*CREATURE_LIST_STRIDE`) is 0 on
+# all 1,283 retained fixtures across all five recordings, so this real off-by-one always lands on a
+# harmless 'skip' -- modelled here as a real 10th iteration, not assumed away.
+CREATURE_LIST_COUNT = 10
+CREATURE_LIST_TYPE_PTR = 0x2           # slot word+2: the type template pointer (a4)
+CREATURE_LIST_WAVE_TRIGGERED = 0x10    # slot byte: this slot's own "icon wave already cued" latch
+CREATURE_INSTANCE_BASE = 0xFFFF2602    # the shared instance array a slot's own instances walk
+CREATURE_INSTANCE_STRIDE = 0x18        # 24 bytes per instance (creatures.py's own established stride)
+CREATURE_SLOT_BLOCK = 0xF0             # 240 bytes = 10 instances reserved per slot, used or not
+AIM_WINDOW_STATE = 0xC                 # instance_ptr word: reset to -1 by spawn-init; its own aim-
+                                        # subsystem consumer is outside this session's scope
+DISPLAY_TIMER = 0x10                   # instance_ptr word: 00A772's own DISPLAY_TIMER, reset to -1 here
+TYPE_INSTANCE_COUNT = 0x0              # type_ptr byte: `(type_ptr)+1` instances this activation walks
+TYPE_SPAWN_X, TYPE_SPAWN_Y = 0x12, 0x13    # type_ptr bytes: the spawn-init position, <<5/<<4
+TYPE_ATTACK_KIND_BYTE = 0x6            # type_ptr byte: low nibble reloads COUNTDOWN, 0 skips it
+TYPE_ZONE_BIT_BYTE = 0x4               # type_ptr byte: bit 1 folds into DIRECTION_INDEX
+TYPE_FREQUENCY_BYTE = 0x14             # type_ptr byte: unsigned, the spawn-stagger frequency's own scale
+TYPE_ICON_KIND_BYTE = 0x1              # type_ptr byte: the icon-spawn 'other negative' arm's new LIFECYCLE
+TYPE_GROUND_RELOAD_BYTE = 0xB          # type_ptr byte: the SAME offset TYPE_RETRY_SEED_BYTE names for
+                                        # 00AA76/00AB50's own retry reseed -- the icon-spawn -3 arm's
+                                        # own reseed uses it identically (`10 - byte`)
+ZONE_MODE_FLAG = 0x100                 # a1-relative byte (the caller's own live zone/tile-map pointer,
+                                        # not traced further this session): ==1 selects zone bit 0,
+                                        # anything else selects zone bit 2
+WALK_A5_SAVE = 0xFFFFF2C2              # long: this slot's own starting instance base, saved/restored
+                                        # around the per-frame-update body's own internal a5 advance
+                                        # (purely a register-spill; nothing else reads it back)
+WALK_SETTLED_COUNT = 0xFFFFF2C6        # word: per-slot tally of 'settled' (LIFECYCLE == 0) instances
+WALK_DISPLAY_COUNT = 0xFFFFF2C8        # word: per-slot tally of icon-spawn 'display' instances
+WALK_CACHED_POSITION = 0xFFFFF26C      # long (two words): the LAST icon-spawn 'display' instance's
+                                        # own position this tick, read back by the wave-complete check
+
+
+def creature_walk_gate(read):
+    """WALK_GATE == 0 skips the ENTIRE 9-slot walk for this tick (`tst.b $eed1.w; beq.w $a662`)."""
+    return (read(WALK_GATE, 1) & 0xFF) != 0
+
+
+def creature_walk_slot_dispatch(read, slot_addr):
+    """One slot's own header dispatch (`move.w (a3),d0; beq...; subq.w#1,d0; beq...`): 'skip' (header
+    was 0), 'per-frame' (header was 1) or 'spawn-init' (header was anything else, decremented)."""
+    header = read(slot_addr & 0xFFFFFF, 2) & 0xFFFF
+    if header == 0:
+        return {'arm': 'skip', 'header': header}
+    type_ptr = read((slot_addr + CREATURE_LIST_TYPE_PTR) & 0xFFFFFF, 4) & 0xFFFFFFFF
+    after = (header - 1) & 0xFFFF
+    if after == 0:
+        return {'arm': 'per-frame', 'header': header, 'type_ptr': type_ptr}
+    return {'arm': 'spawn-init', 'header': header, 'header_after': after, 'type_ptr': type_ptr}
+
+
+def creature_spawn_init_instance(read, type_ptr, a1, d6_before):
+    """00A5AA-00A644: one new instance's own init, and the running spawn-stagger accumulator (`d6`)
+    the WHOLE spawn-init body threads across every new instance in this activation.  `bsr $b920`
+    (the icon-cue add) fires only for the very FIRST new instance (`d6` still 0 at that point)."""
+    x_byte = read((type_ptr + TYPE_SPAWN_X) & 0xFFFFFF, 1) & 0xFF
+    y_byte = read((type_ptr + TYPE_SPAWN_Y) & 0xFFFFFF, 1) & 0xFF
+    position_x = (x_byte << 5) & 0xFFFF
+    position_y = (y_byte << 4) & 0xFFFF
+    add_icon_cue = d6_before == 0
+    kind_field = (read((type_ptr + TYPE_ATTACK_KIND_BYTE) & 0xFFFFFF, 1)) & 0xF
+    countdown = None if kind_field == 0 else (((0x10 - kind_field) & 0xFFFF) << 2) & 0xFFFF
+    zone_byte = read((a1 + ZONE_MODE_FLAG) & 0xFFFFFF, 1) & 0xFF
+    zone_bit = 0 if zone_byte == 1 else 2
+    type_bit4 = read((type_ptr + TYPE_ZONE_BIT_BYTE) & 0xFFFFFF, 1) & 0xFF
+    direction_index = (((type_bit4 >> 1) & 1) + zone_bit) & 0xFFFF
+    freq_byte = read((type_ptr + TYPE_FREQUENCY_BYTE) & 0xFFFFFF, 1) & 0xFF
+    freq_scale = read(timers.FREQUENCY_SCALE, 2) & 0xFFFF
+    product = (freq_byte * freq_scale) & 0xFFFFFFFF
+    doubled = (product * 2) & 0xFFFFFFFF
+    reload_low = (doubled >> 16) & 0xFFFF          # swap d0's own new low word
+    reload_high = doubled & 0xFFFF                 # swap d0's own new upper word (D0's exit residue)
+    reload = (reload_low + 1) & 0xFFFF             # addq.w #1,d0
+    d6_after = (d6_before + reload) & 0xFFFF
+    return {'position_x': position_x, 'position_y': position_y, 'lifecycle_reset': d6_before,
+            'add_icon_cue': add_icon_cue, 'countdown': countdown, 'direction_index': direction_index,
+            'reload': reload, 'reload_d0_exit': (reload_high << 16) | reload, 'd6_after': d6_after}
+
+
+def creature_per_frame_instance_dispatch(read, instance_ptr):
+    """00A678-00A682: one live instance's own top-level dispatch inside the per-frame update body.
+    LIFECYCLE < 0 is the icon-spawn sub-machine (below); == 0 a plain skip (bumps the "settled" tally
+    the wave-complete check below reads); > 0 calls the family (00A772)."""
+    lifecycle = read((instance_ptr + LIFECYCLE) & 0xFFFFFF, 2) & 0xFFFF
+    signed = lifecycle - 0x10000 if lifecycle & 0x8000 else lifecycle
+    if signed < 0:
+        return {'arm': 'icon-spawn', 'lifecycle': lifecycle}
+    if signed == 0:
+        return {'arm': 'settled', 'lifecycle': lifecycle}
+    return {'arm': 'family', 'lifecycle': lifecycle}
+
+
+ICON_SPAWN_ARMED = 0xFFFE              # LIFECYCLE value fresh off creature_death_bcd's own store (-2)
+ICON_SPAWN_COUNTING = 0xFFFD           # LIFECYCLE value once the reload timer starts running (-3)
+
+
+def creature_icon_spawn_step(read, type_ptr, instance_ptr):
+    """00A6C8-00A76E: the icon-spawn sub-machine one live instance with LIFECYCLE < 0 runs, once per
+    per-frame-update activation.  Three LIFECYCLE bands: exactly -2 (`'reload-wait'`, the icon-cue's
+    own second add.w, `bsr $b920`, on its own reload's own expiry), exactly -3 (`'seed-wait'`, the
+    per-instance reload's own expiry reseeds LIFECYCLE from the type's own icon-kind byte and reseeds
+    the SAME reload timer, the SAME `10 - byte` shape 00AA76/00AB50's own retry reseed uses), and any
+    other negative value (`'display'`, a small state machine over FRAME_STEP driving a floating-icon
+    spawn through the already-recovered 010D7C on its own first frame -- when DISPLAY_TIMER is still
+    live and under 0xC0 -- then the already-recovered static sprite emitter (001164) every frame after,
+    until FRAME_STEP reaches 7 and LIFECYCLE/LIFECYCLE_RESET both clear, settling the instance)."""
+    lifecycle = read((instance_ptr + LIFECYCLE) & 0xFFFFFF, 2) & 0xFFFF
+    if lifecycle == ICON_SPAWN_ARMED:
+        reload_before = read((instance_ptr + LIFECYCLE_RESET) & 0xFFFFFF, 2) & 0xFFFF
+        reload_after = (reload_before - 1) & 0xFFFF
+        if reload_after != 0:
+            return {'arm': 'reload-wait', 'fired': False, 'reload_before': reload_before, 'reload_after': reload_after}
+        return {'arm': 'reload-wait', 'fired': True, 'reload_before': reload_before, 'reload_after': reload_after}
+    if lifecycle == ICON_SPAWN_COUNTING:
+        reload_before = read((instance_ptr + LIFECYCLE_RESET) & 0xFFFFFF, 2) & 0xFFFF
+        reload_after = (reload_before - 1) & 0xFFFF
+        if reload_after != 0:
+            return {'arm': 'seed-wait', 'fired': False, 'reload_before': reload_before, 'reload_after': reload_after}
+        icon_kind = read((type_ptr + TYPE_ICON_KIND_BYTE) & 0xFFFFFF, 1) & 0xFF
+        byte = read((type_ptr + TYPE_GROUND_RELOAD_BYTE) & 0xFFFFFF, 1) & 0xFF
+        diff = (0xA - byte) & 0xFF
+        from .grid import _signed_byte
+        word = _signed_byte(diff) & 0xFFFF
+        freq = read(timers.FREQUENCY_SCALE, 2) & 0xFFFF
+        product = (word * freq) & 0xFFFFFFFF
+        doubled = (product * 2) & 0xFFFFFFFF
+        swapped_low = (doubled >> 16) & 0xFFFF
+        swapped_high = doubled & 0xFFFF
+        reseeded = (swapped_low + 1) & 0xFFFF
+        return {'arm': 'seed-wait', 'fired': True, 'reload_before': reload_before, 'reload_after': reload_after,
+                'new_lifecycle': icon_kind, 'byte': byte, 'diff': diff, 'reseed': reseeded,
+                'reseed_d0_exit': (swapped_high << 16) | reseeded}
+    # 'display': any other negative LIFECYCLE.  FRAME_STEP >= 0 skips straight to the frame-step
+    # advance below (00A744); FRAME_STEP < 0 (only the icon's own first frame) additionally spawns
+    # the floating icon through 010D7C, but only while DISPLAY_TIMER is still live (>= 0).
+    frame_step = read((instance_ptr + FRAME_STEP) & 0xFFFFFF, 2) & 0xFFFF
+    frame_step_signed = frame_step - 0x10000 if frame_step & 0x8000 else frame_step
+    result = {'arm': 'display', 'lifecycle': lifecycle, 'frame_step': frame_step, 'spawn_icon': False}
+    if frame_step_signed < 0:
+        display_timer = read((instance_ptr + DISPLAY_TIMER) & 0xFFFFFF, 2) & 0xFFFF
+        display_signed = display_timer - 0x10000 if display_timer & 0x8000 else display_timer
+        if display_signed >= 0:
+            # cmpi.w #$c0,d2; bge.b (>= 0xc0: subi.w #$c0,d2); else (< 0xc0: addi.w #$b,d2) -- two
+            # DISTINCT ROM arms, not the same arithmetic: the icon "kind" 010D7C's own D2 argument
+            # becomes is display_timer - 0xc0 when display_timer is at or past 0xc0, else
+            # display_timer + 0xb below it.
+            icon_kind = (display_signed - 0xC0) & 0xFFFF if display_signed >= 0xC0 else (display_signed + 0xB) & 0xFFFF
+            result['spawn_icon'] = True
+            result['icon_kind'] = icon_kind
+            result['icon_kind_high_arm'] = display_signed >= 0xC0
+            result['position'] = (read(instance_ptr & 0xFFFFFF, 2) & 0xFFFF, read((instance_ptr + 2) & 0xFFFFFF, 2) & 0xFFFF)
+            result['display_timer'] = display_timer
+    return result
+
+
+TYPE_WAVE_ICON_KIND = 0x10             # type_ptr word: negative skips the wave-complete icon spawn
+
+
+def creature_wave_complete_check(read, type_ptr, slot_addr, settled_count, other_negative_count, cached_position):
+    """00A68E-00A6BC: once every live instance in this slot's own per-frame-update batch is either
+    'settled' (LIFECYCLE == 0) or in the icon-spawn sub-machine's own 'display' arm, and the slot's
+    own WAVE_TRIGGERED latch is not yet set, cue one more floating icon (010D7C) at the LAST 'display'
+    instance's own cached position (F26C/F26E, only ever written by that arm) -- unless the type's own
+    TYPE_WAVE_ICON_KIND word is negative, which still sets the latch but skips the call."""
+    type_count = read(type_ptr & 0xFFFFFF, 1) & 0xFF
+    if (settled_count + other_negative_count) & 0xFF != type_count:
+        return {'arm': 'not-yet', 'settled_count': settled_count, 'other_negative_count': other_negative_count}
+    if read((slot_addr + CREATURE_LIST_WAVE_TRIGGERED) & 0xFFFFFF, 1) & 0xFF:
+        return {'arm': 'already-triggered'}
+    wave_icon = read((type_ptr + TYPE_WAVE_ICON_KIND) & 0xFFFFFF, 2) & 0xFFFF
+    wave_icon_signed = wave_icon - 0x10000 if wave_icon & 0x8000 else wave_icon
+    if wave_icon_signed < 0:
+        return {'arm': 'skip-negative', 'wave_icon': wave_icon}
+    x, y = cached_position
+    return {'arm': 'trigger', 'wave_icon': wave_icon, 'x': (x + 8) & 0xFFFF, 'y': y & 0xFFFF}
+
+
+def _signed_byte(value):
+    value &= 0xFF
+    return value - 0x100 if value & 0x80 else value
+
+
+def creature_slot_deactivate_check(read, type_ptr, settled_count):
+    """00A6BC-00A6C6: `cmp.b (a4),d6; blt.b $a64e` -- a BYTE, signed comparison (only d6's own low byte
+    participates).  Once EVERY instance in this slot's own per-frame batch is 'settled' (not merely
+    displaying an icon), the slot itself deactivates (its own header clears to 0, freeing the slot for
+    a future spawn-init header)."""
+    type_count = _signed_byte(read(type_ptr & 0xFFFFFF, 1))
+    return not (_signed_byte(settled_count) < type_count)

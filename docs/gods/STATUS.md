@@ -1075,6 +1075,138 @@ below, has the count and the milestone tree numbers).
   the nine slots at `FF1496`, composing `00A772` and `00B920`, with its
   own semantic-operation card.
 
+- **19 September, `00A578` itself composed as the walk**: real
+  disassembly shows the loop counter is pushed as 9 and tested AFTER
+  each decrement (`subq.w #1,(a7); bpl.w`, not a DBRA), so the body
+  actually runs TEN times -- confirmed directly against the tracer and
+  against RAM (the tenth slot's own header is 0 on all 1,283 retained
+  fixtures across all five recordings) and modelled as a real 10th
+  iteration.  `creature_walk_plan` composes `creature_family_plan`
+  (00A772) from the per-frame-update body's own `LIFECYCLE > 0` arm,
+  `spawn_table_add_plan` (00B920) from both the spawn-init body and the
+  icon-spawn sub-machine's own `-2` arm, `creature_grid_cell_plan`
+  (00AA38) and `static_emit_plan` (001164) directly, and a new reusable
+  `floating_icon_spawn_plan` (0010D7C, composed at all three of its own
+  call sites here rather than duplicated).  The SAME platform-tail rule
+  as 00A772's own: once any composed family activation reaches the
+  device, the entire remainder of the WHOLE TICK's own walk is ceded,
+  resuming at 00A578's own sole rts (00A662), never at 00A772's own
+  00A864.  Retires two more leaf gates from `camera-sprites`
+  (`creature-family`, `spawn-table-add` -- 00A578 is confirmed their own
+  sole caller) -- fifty-five to **fifty-four** gates.  1,283 retained
+  fixtures: 1,245 MATCH, 38 DECLINED, 0 MISMATCH, `--perturb-upper-halves`
+  clean.  A long chain of real defects the FAST tier caught (full list in
+  `ledger.md`'s own entry): the loop-counter's own off-by-one; stack/list
+  pointers tracked as 24-bit-masked locals then used as the base for the
+  NEXT advance, silently dropping the `0xFFFF` page prefix; the outer
+  a3/a5 registers only updated at the top of each slot iteration, one
+  iteration stale by the time the loop exits; half a dozen real
+  MOVE/MOVEQ/ADDQ sites across the three bodies left D0/D1/D2/D4/D6/D7
+  untracked; the kind dispatch's own zone-mode test reading 00A578's own
+  ENTRY a1 instead of `creature_grid_cell_plan`'s own live exit a1 (its
+  own bsr runs first and documents overwriting a1); two bare `bra`
+  instructions right after an internal call's own return point missing
+  their own charge entirely; and two real 68000 timing quirks new to
+  this session -- ADDQ/CLR to an absolute-word or `(d16,An)` destination
+  costs 4 more than a plain MOVE of the same shape (the same
+  read-modify-write quirk this session's own CLR finding already named,
+  now confirmed for ADDQ too), while a plain MOVE.W `(d16,An)` SOURCE
+  read does not carry it.  Reproduces the original on `f0ac19738f19…`:
+  PASS, 6,756 hits, 70 fallbacks (all adapter refusals or the aim-pool
+  cost-cap decline); mutant (`_mutate_creature_walk`) `CANDIDATE_ERROR`
+  (an M68000 address error) rather than a clean divergence -- the same
+  "a mutant that faults the machine is a finding about the game, not a
+  control" class `kind_frame_offset`'s own mutant note already names,
+  confirmed separately via `segment_verify` and the test suite's own
+  NativeError-tolerant check.  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-a578`,
+  107,519 frames, current receipts).  See `00A578`'s own
+  semantic-operation card immediately below.  With this, the ENTIRE
+  creature subsystem the 18 September blocker opened
+  (`docs/gods/blockers/2026-09-18-00A578.md`) is closed end to end.
+
+### `00A578` semantic-operation card
+
+Per `docs/common/recovery-process.md`'s own card fields, now that the
+walk owns real persistent per-slot/per-instance state and composes
+several other candidates into a genuine composite region:
+
+- **Semantic operation**: once per tick, while `WALK_GATE` (`FFFFEED1`)
+  is nonzero, reset `TRACKED_SIGN` (`FFFFF1BE`) to -1 and walk the
+  9(+1)-slot creature list at `FF1496` (`CREATURE_LIST_STRIDE` = 0x12
+  bytes each), each slot owning a reserved, fixed-size block of the
+  shared instance array at `FFFF2602` (`CREATURE_SLOT_BLOCK` = 0xF0
+  bytes, ten instance-sized slots, used or not).  A zero header skips a
+  slot outright; header `== 1` walks its own live instances, calling the
+  family (00A772) for each with a positive `LIFECYCLE`; any other
+  nonzero header spawns `(type_ptr)+1` brand-new instances and
+  decrements the header, spreading a batch over several ticks.
+- **Entry/exit boundary**: entry `00A578` with the machine parked at
+  `WALK_GATE`'s own test.  A zero gate is a bare `rts` at `00A662`.
+  Otherwise exit is the SAME `00A662`, reached either directly (every
+  slot resolved in pure Python) or through the platform tail described
+  above, ceding everything from the first device-touching family
+  activation onward.
+- **Persistent state**: the 9(+1) list slots themselves (header, type
+  pointer, `WAVE_TRIGGERED` latch) and every field of every instance the
+  walk creates or steps (`POSITION_X/Y`, `FRAME_STEP`, `LIFECYCLE`,
+  `LIFECYCLE_RESET`, `DIRECTION_INDEX`, `FALL_PHASE`, `AIM_WINDOW_STATE`,
+  `DISPLAY_TIMER`, `COUNTDOWN`) -- all named in `game/creatures.py`, none
+  owned by 00A578 itself beyond the list/slot bookkeeping.  Three
+  tick-scoped globals belong to the walk alone: `WALK_SETTLED_COUNT`
+  (`F2C6`) and `WALK_DISPLAY_COUNT` (`F2C8`), both reset to 0 at the top
+  of every per-frame-update slot, and `WALK_CACHED_POSITION` (`F26C`),
+  the last icon-spawn 'display' instance's own position this tick.
+  `WALK_A5_SAVE` (`F2C2`) is pure register-spill scratch, read back by
+  nothing.
+- **External observations**: none of its own beyond what the family
+  (00A772) and the two device leaves (`floating_icon_spawn_plan`,
+  `static_emit_plan`) already own -- the walk's own new code (the
+  spawn-init and icon-spawn bodies) is entirely RAM-only.
+- **Pending effects**: none synchronous.  A slot's own header
+  transition (activated, decremented, or cleared) and every instance
+  field this tick writes become durable the moment the NEXT tick's own
+  walk re-reads them; nothing is left pending across a commit boundary.
+- **Permitted interference**: not proven for the walk as a whole beyond
+  what `creature_family_plan`'s own mutant already demonstrates (a
+  corrupted D0 reaching the ceded particle emitter faults or diverges,
+  confirmed observable).  No cross-slot or cross-tick reordering has
+  been attempted; every admitted activation is still gated as an exact
+  L0 region.
+- **Proven movable events**: none -- a synchronous per-tick walk, not an
+  event queue.
+- **Required ordering boundaries**: the outer gate's own `WALK_GATE`
+  read must precede everything else; within a slot, the header dispatch
+  must precede the type-pointer read (the type pointer is only valid
+  once the header is known nonzero); within spawn-init, the zone-mode
+  test at `00A600` must read `creature_grid_cell_plan`'s own LIVE exit
+  a1 (the grid-cell address `bsr $aa38` just computed), not the walk's
+  own entry a1 -- a real ordering bug this session's own FAST tier
+  caught directly (`ledger.md`'s own entry).
+- **Timing dependency**: none beyond the ordinary once-per-tick call;
+  every cost fragment (including the two ADDQ/CLR-to-memory quirks named
+  above) is a fixed instruction cost, no duration model needed.
+- **Evidence and scope**: `census-0X00A578-*` over all five recordings,
+  1,283 retained fixtures (400 max-classes per recording overflows by
+  the thousands on the two longest histories, `fb408bc75597…` and
+  `7251bbd0ecf7…`, since a 9(+1)-slot walk's own whole-region exit
+  signature explodes combinatorially with how many slots are active at
+  once -- the census is a representative sample, not exhaustive; the
+  milestone tree's own exhaustive per-frame comparison over all five
+  recordings is the real authority).  `history-verify` on
+  `f0ac19738f19…` (the shortest exercising leaf, 15,148 frames): 6,756
+  hits, 70 fallbacks, all adapter refusals or the already-documented
+  aim-pool-scan cost-cap decline.  Gated: `creature-walk` (this card),
+  composing `creature-family`, `spawn-table-add`, `creature-grid-cell`
+  and `static-emit`/the achievement highlight cycle's own inline
+  `floating_icon_spawn_plan` use -- every other creature-subsystem leaf
+  this session recovered (`creature-attack`, the eight kind handlers,
+  `event-consume`, `creature-pickup-check`, `creature-death-bcd`,
+  `effect-slot-find`/`effect-slot-add`, `bcd-counter-add`,
+  `kind-frame-offset`) is reached exclusively through this one gate now,
+  save `kind-frame-offset` itself (the declined moving-arm exception
+  already named).
+
 ## Recorded histories (`history/gods/`, root `gods-usa-new`)
 
 Eight player recordings, all from power-on, three of them branched from
