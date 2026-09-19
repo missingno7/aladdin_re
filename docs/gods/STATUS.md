@@ -2722,6 +2722,56 @@ small leaf):
   the `FFFFF262` triple-buffer append), and `0030CC` as the 200-entry scan
   with its own semantic-operation card -- none of this started yet.
 
+- **20 September, grinder session opening on `object-kind-dispatch`'s own
+  range arm**: `0036E2`'s table-exhaustion (fallback) arm is recovered --
+  the largest single decline on the last tree (7,197 of 16,267 fallbacks,
+  kinds `0x40`/`0x41`/`0x44`, every one of the thirteen `0x00370E` table
+  entries mismatched).  The standard census tooling still cannot classify
+  this gate at all (the same mid-function-jump-target limitation the
+  original kind-0x51 recovery hit): fixtures this time are captured
+  directly at the gate with a word-wide kind classifier
+  (`recovery_census.capture_entries`, plain mode -- the built-in `kind`
+  classifier reads a byte, `0036E2`'s own kind is a word), 10 fixtures per
+  witnessed kind per recording, no advancing of `003186` fixtures needed.
+  All three kinds fall to `001810` (`FALLBACK_HANDLER`) by a plain `bsr`,
+  not the table match's own indirect `jsr` -- and `001810` is itself
+  already fully recovered (`object_tile_plan`, candidate `'object-tile'`,
+  an earlier session's own seam over its on-screen VDP upload, per the
+  bottom-up order `docs/gods/blockers/2026-09-19-003186.md`'s own Decision
+  named).  The fallback arm cedes the whole call opaque regardless --
+  the same "0047DA is opaque" shape `achievement_slot_dispatch_plan`
+  already proves for a real, separately-recovered callee it does not
+  re-model, so this composition needs nothing from `object_tile_plan`'s
+  own internals beyond its own resume identity.  95 fixtures (the 45
+  pre-existing kind-0x51 ones included) MATCH plain and under
+  `--perturb-upper-halves`, no defects found this time (the scan cost
+  formula, the register residue and the CCR carry-through all reused the
+  dispatch arm's own already-proven helpers exactly).  Reproduces the
+  original on `f40d7bcc9dda…`: PASS, 17,620 frames, 11,807 hits, 35
+  fallbacks (all z80 bank guard); mutant
+  `object-kind-dispatch-mutant-register` DIVERGENCE at frame 2,236
+  (unchanged -- the history's first occurrence of this gate is still a
+  kind-0x51 match).  `camera-sprites` unchanged at sixty gates (the same
+  candidate, no new gate).  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-20c`, 107,519
+  frames, 264.6 s, 9,052 fallbacks -- down from 16,267; every "object kind
+  dispatch: kind ... (fallback) not witnessed" decline is gone from all
+  five leaves).  Kinds `0x42`/`0x43` and any kind beyond the five
+  witnessed (`0x40`, `0x41`, `0x44`, `0x51`, and the no-op `0x71`) stay
+  declined, unwitnessed by any recording.  The next-largest decline on the
+  tree is now the `00354C` record-status-1 sub-dispatch inside
+  `object-activity-gate` (487 on the prior tree; ~487 unchanged here,
+  since `0036E2` and `003480` do not call each other -- confirmed again
+  this session, `docs/gods/blockers/2026-09-19-003480.md`'s own 20
+  September correction stands).  Next, per the original assignment's own
+  order: `00354C` itself (a census at its own entry), then `003BBA`
+  (composes only `003480`/`0018C8`, per
+  `docs/gods/blockers/2026-09-19-003186.md`'s own Progress note), the
+  `0032F6` kind dispatch's default/`0x53`/`0x36` arms, the five still-
+  unread routines (`01191A`, `011D32`, `012010`, `00173C`, `003BEC`), the
+  status chains (`0039EA`/`003AE6`/`003BBA`) as families, `003186`'s head,
+  `003284` composing the chains, and `0030CC` as the scan.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second

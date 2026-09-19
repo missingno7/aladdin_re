@@ -1690,8 +1690,10 @@ def object_tile_suffix(machine, registers):
 OBJECT_KIND_DISPATCH_ENTRY = 0x0036E2
 OBJECT_KIND_JSR_ENTRY = 0x00370A           # the jsr (a0) instruction itself
 OBJECT_KIND_JSR_RESUME = 0x00370C          # the jsr's own return slot
+OBJECT_KIND_FALLBACK_ENTRY = 0x0036FA      # bsr.w $1810 -- the table-exhaustion arm's own call
 OBJECT_KIND_SCAN_LOOP = 0x003158           # 0030CC's own loop-continue point: this candidate's own exit
-OBJECT_KIND_EXIT_TAIL_PC = 0x0036FE        # movem.l (a7)+,d7/a0/a2 -- the suffix's own first instruction
+OBJECT_KIND_EXIT_TAIL_PC = 0x0036FE        # movem.l (a7)+,d7/a0/a2 -- the suffix's own first instruction;
+                                            # also the fallback arm's own bsr return address (0036FA + 4)
 OBJECT_KIND_LAST_PC = 0x003702             # bra.w $3158 -- the last instruction actually executed
 _OKD_LOAD_D2 = (8, 1)                      # 0036E2 move.w (a1),d2
 _OKD_CMP_NOOP = (8, 1)                     # 0036E4 cmpi.w #$71,d2
@@ -1704,10 +1706,18 @@ _OKD_SCAN_ADDQ = (4, 1)                    # 0036F4 addq.w #6,a0
 _OKD_SCAN_DBRA = {True: (10, 1), False: (14, 1)}    # 0036F6 dbra d3,$36f0
 _OKD_MOVEA = (16, 1)                       # 003706 movea.l 2(a0),a0
 _OKD_JSR = (16, 1)                         # 00370A jsr (a0)
+_OKD_BSR = (18, 1)                         # 0036FA bsr.w $1810 -- the fallback arm's own call
 _OKD_BRA_TAIL = (10, 1)                    # 00370C bra.b $36fe
 _OKD_RESTORE = (36, 1)                     # 0036FE movem.l (a7)+,d7/a0/a2
 _OKD_BRA_LOOP = (10, 1)                    # 003702 bra.w $3158
-OBJECT_KIND_WITNESSED = {0x0051}           # the only kind a recording is confirmed to reach this gate with
+OBJECT_KIND_WITNESSED = {0x0051, 0x0040, 0x0041, 0x0044}  # the kinds a recording is confirmed to reach
+                                            # this gate with: 0x51 matches the table (dispatch arm); the
+                                            # other three exhaust all 13 entries (fallback arm, into 001810
+                                            # -- itself a second sprite emitter with a device upload inside,
+                                            # ceded opaque exactly like a matched table handler is); 0x42
+                                            # and 0x43 (the rest of the range the frontier once lumped
+                                            # together) are real ROM, never witnessed by any recording, and
+                                            # stay declined by name like any other kind would
 
 
 def _object_kind_scan_cost(mismatches, matched):
@@ -1727,7 +1737,9 @@ def _object_kind_scan_cost(mismatches, matched):
 
 def object_kind_dispatch_plan(machine, registers):
     """0036E2: the kind==0x71 no-op is a plain leaf; a witnessed table match is a Seam opaque over its
-    own handler, resuming at the jsr's own return slot."""
+    own handler, resuming at the jsr's own return slot; a witnessed table exhaustion (fallback, every
+    entry mismatched) is a Seam opaque over 001810 (the second sprite emitter), resuming at the bsr's
+    own return address."""
     from .game import world
     if registers['pc'] != OBJECT_KIND_DISPATCH_ENTRY:
         raise UnsupportedCandidate('object kind dispatch planner needs the machine parked at 0036E2')
@@ -1751,6 +1763,41 @@ def object_kind_dispatch_plan(machine, registers):
                           'sr': _cmp_sr(sr, kind, world.NOOP_KIND, 2)}
         return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
                           last_pc=OBJECT_KIND_LAST_PC)
+    if arm == 'fallback':
+        # Every one of the 13 table entries mismatched (result['mismatches'] == KIND_TABLE_COUNT); the
+        # scan's own cost is KIND_TABLE_COUNT-1 "continuing" iterations (dbra taken) plus one final
+        # iteration whose own dbra is NOT taken (the loop's own exit) -- _object_kind_scan_cost's
+        # matched=False shape, already proven by the dispatch arm's matched=True call below. The
+        # routine falls straight into FALLBACK_HANDLER (001810) with a plain bsr, not the indirect jsr
+        # the table match uses; 001810 is itself a second sprite emitter with a screen-margin test in
+        # front of an inline VDP upload (a seam of its own, `docs/gods/blockers/2026-09-19-003186.md`'s
+        # own Decision) -- ceded here as one opaque block, the SAME "004790-over-0047DA"/matched-handler
+        # shape this candidate's own dispatch arm already proves, not modelled internally.
+        cycles, instructions = _add(_OKD_LOAD_D2, _OKD_CMP_NOOP, _OKD_BEQ_NOOP[False])
+        c, i = _object_kind_scan_cost(world.KIND_TABLE_COUNT - 1, False)
+        cycles += c
+        instructions += i
+        c, i = _add(_OKD_BSR)
+        cycles += c
+        instructions += i
+        return_slot = (sp - 4) & 0xFFFFFF
+        _ram_span('object kind dispatch return slot', return_slot, 4)
+        writes = _bytes(return_slot, OBJECT_KIND_EXIT_TAIL_PC, 4)
+        # d3 is scratch (the scan's own exhausted countdown, dead to the caller); a0 lands on the last
+        # table entry's own address (the scan's own final addq before the exit); d0/d1/a1 pass through
+        # unchanged -- nothing between this gate's own entry and the bsr touches them.  The exit CCR is
+        # the last flag-setting instruction's own residue: the final cmp.w (a0),d2 against the table's
+        # own last entry (index KIND_TABLE_COUNT-1) -- ADDQ to an address register and DBcc leave CCR
+        # untouched, so nothing after that compare changes it before the bsr.
+        exit_sr = _cmp_sr(sr, kind, read(world.KIND_TABLE + 6 * (world.KIND_TABLE_COUNT - 1), 2), 2)
+        prefix = AtomicPlan(cycles=cycles, instructions=instructions, writes=writes,
+                            registers={'d2': (registers['d2'] & 0xFFFF0000) | kind,
+                                       'd3': 0xFFFF, 'a0': (world.KIND_TABLE + 6 * world.KIND_TABLE_COUNT) & 0xFFFFFFFF,
+                                       'a7': (sp32 - 4) & 0xFFFFFFFF, 'pc': result['handler'] & 0xFFFFFFFF,
+                                       'sr': exit_sr},
+                            last_pc=OBJECT_KIND_FALLBACK_ENTRY)
+        return Seam(prefix=prefix, resume_pc=OBJECT_KIND_EXIT_TAIL_PC, stack_basis=sp32 & 0xFFFFFFFF,
+                   guards=((return_slot, 4),), suffix=object_kind_fallback_suffix)
     if arm != 'dispatch':
         raise UnsupportedCandidate(f'object kind dispatch: kind {kind:#06x} ({arm}) not witnessed by a recording')
     mismatches, handler = result['mismatches'], result['handler']
@@ -1787,6 +1834,23 @@ def object_kind_dispatch_suffix(machine, registers):
     exit_registers = {'d7': (frame >> 64) & 0xFFFFFFFF, 'a0': (frame >> 32) & 0xFFFFFFFF,
                       'a2': frame & 0xFFFFFFFF, 'a7': (base + 12) & 0xFFFFFFFF, 'pc': OBJECT_KIND_SCAN_LOOP}
     cycles, instructions = _add(_OKD_BRA_TAIL, _OKD_RESTORE, _OKD_BRA_LOOP)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
+                      last_pc=OBJECT_KIND_LAST_PC)
+
+
+def object_kind_fallback_suffix(machine, registers):
+    """0036FE after the fallback handler's own return (001810's own rts): the d7/a0/a2 frame back
+    (pushed before this gate, not by it); bra.w $3158, into 0030CC's own loop -- this candidate's own
+    exit.  No bra.b $36fe step here: 001810's own bsr return address IS 0036FE itself (the movem's own
+    address), unlike the dispatch arm's indirect jsr whose own resume slot sits one instruction earlier
+    at 00370C."""
+    if registers['pc'] != OBJECT_KIND_EXIT_TAIL_PC:
+        raise UnsupportedCandidate('object kind dispatch fallback suffix needs the machine parked at 0036FE')
+    base = registers['a7']
+    frame = int.from_bytes(machine.peek_ram(base & 0xFFFF, 12), 'big')
+    exit_registers = {'d7': (frame >> 64) & 0xFFFFFFFF, 'a0': (frame >> 32) & 0xFFFFFFFF,
+                      'a2': frame & 0xFFFFFFFF, 'a7': (base + 12) & 0xFFFFFFFF, 'pc': OBJECT_KIND_SCAN_LOOP}
+    cycles, instructions = _add(_OKD_RESTORE, _OKD_BRA_LOOP)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
                       last_pc=OBJECT_KIND_LAST_PC)
 

@@ -1,4 +1,5 @@
-"""The object-kind dispatch (0036E2): a seam opaque over its own table-matched handler.
+"""The object-kind dispatch (0036E2): a seam opaque over its own table-matched handler, or over the
+table's own exhaustion (fallback) handler.
 
 Reached from inside 003284's own body (the achievements-record status > 4
 arm) by a plain branch, not a bsr, and exits via `bra.w $3158` back into
@@ -6,11 +7,19 @@ arm) by a plain branch, not a bsr, and exits via `bra.w $3158` back into
 (`factcheck facts --park 0x36E2 --stop 0x3158`) since the standard census
 tooling cannot classify this gate (it is not itself a call boundary).  Of
 the thirteen `0x00370E` table entries, only kind 0x51 (-> 0037A0) is
-witnessed reaching this gate; everything else declines by name.  Three
-tiers as for the other leaves; the fixtures here are materialized by
-advancing retained `003186` census fixtures to `0x36E2` (`pathfacts.park`),
-since `recovery_census.py`'s own default classifier cannot itself retain a
-fixture at a mid-function jump target.
+witnessed reaching this gate as a table match; kinds 0x40/0x41/0x44
+exhaust the table (every entry mismatched) and fall back to 001810 (the
+already-recovered `object_tile_plan`, ceded here as one opaque block --
+the same "0047DA is opaque" shape `achievement_slot_dispatch_plan` already
+proves for a real callee it does not re-model); every other kind declines
+by name.  Three tiers as for the other leaves.  The kind-0x51 fixtures
+(`0036E2-entry-pN.state`) are materialized by advancing retained `003186`
+census fixtures to `0x36E2` (`pathfacts.park`); the fallback fixtures
+(`0036E2-kindNNNN-N.state`) are captured directly at the gate with a
+word-wide kind classifier (`recovery_census.capture_entries`, plain mode --
+the built-in `kind` classifier reads a byte, and 0036E2's own kind is a
+word), since `recovery_census.py`'s own default classifier cannot itself
+retain a fixture at a mid-function jump target either way.
 """
 import json
 from pathlib import Path
@@ -25,7 +34,8 @@ from gods_sega.game import world
 from gods_sega.profile import GODS
 
 EVIDENCE = Path('artifacts/gods/evidence/main')
-FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X0036E2-*/0036E2-entry-*.state'))
+FIXTURES = sorted(Path('artifacts/gods/evidence').glob('census-0X0036E2-*/0036E2-entry-*.state')) + \
+    sorted(Path('artifacts/gods/evidence').glob('census-0X0036E2-kind-*/0036E2-kind*.state'))
 needs_census = pytest.mark.skipif(not FIXTURES or not GODS.rom_path.is_file(), reason='no local census of 0036E2')
 needs_reference = pytest.mark.skipif(not (EVIDENCE / 'reference.json').exists() or not (EVIDENCE / 'boundary-6000.state').exists()
                                      or not GODS.history_path().is_dir(), reason='no local Gods reference evidence')
