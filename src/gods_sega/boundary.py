@@ -23736,3 +23736,161 @@ def status_high_dispatch_suffix(machine, registers):
     cycles, instructions = _add(_OKD_RESTORE, _OKD_BRA_LOOP)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
                       last_pc=STATUS_HIGH_LAST_PC)
+
+
+# --- 0032C2: the object post-process low-status dispatch (game.world.status_low_buffer_append /
+# status_low_kind_dispatch) -- reached from 003284's own head by fallthrough (not even a branch) when
+# the matched achievements record's own status is < 3.  The SAME FFFFF260/FFFFF262 buffer 003BBA's own
+# region already proves (mirrored here, appending D0/D1/D3 instead of D0/D1/D2, with a real, witnessed
+# reset when D3 == 0x2D), then a SECOND kind dispatch (0032F6, over the achievements record's own
+# first word) whose 'default'/'0x53'/'0x36' arms fold in the SAME object_activity_gate-real-call/
+# sprite_emit-opaque-seam shape STATUS_HIGH already proves; '0x6D'/'0x6E' (their own further unread
+# callees) and the 0x40-0x43 range (0x3BEC, 003BBA's own sibling routine, deferred) decline by name.
+STATUS_LOW_ENTRY = 0x0032C2
+STATUS_LOW_DEFAULT_BSR_3480 = 0x003320
+STATUS_LOW_DEFAULT_BSR_18C8 = 0x003324
+STATUS_LOW_DEFAULT_RESUME = 0x003328
+STATUS_LOW_DEFAULT_LAST_PC = 0x00332C
+STATUS_LOW_53_BSR_3480 = 0x00333A
+STATUS_LOW_53_BSR_18C8 = 0x00333E
+STATUS_LOW_53_RESUME = 0x003342
+STATUS_LOW_53_LAST_PC = 0x003346
+STATUS_LOW_36_BSR_3480 = 0x0033A2
+STATUS_LOW_36_BSR_18C8 = 0x0033A6
+STATUS_LOW_36_RESUME = 0x0033AA
+STATUS_LOW_36_LAST_PC = 0x0033AE
+_STATUS_LOW_RESUME_LAST_PC = {STATUS_LOW_DEFAULT_RESUME: STATUS_LOW_DEFAULT_LAST_PC,
+                              STATUS_LOW_53_RESUME: STATUS_LOW_53_LAST_PC,
+                              STATUS_LOW_36_RESUME: STATUS_LOW_36_LAST_PC}
+_SL_COUNTER_ADDQ = (16, 1)             # 0032C2 addq.w #1,f260.w
+_SL_COUNTER_CMPI = (16, 1)             # 0032C6 cmpi.w #$14,f260.w
+_SL_COUNTER_BGT_NOT = (8, 1)           # 0032CC bgt.b $32f6 (not taken: the append runs)
+_SL_RESET_CMPI = (8, 1)                # 0032CE cmpi.w #$2d,d3
+_SL_RESET_BNE_TAKEN = (10, 1)          # 0032D2 bne.b $32e8, taken: no reset
+_SL_RESET_BNE_NOT = (8, 1)             # 0032D2 not taken: reset
+_SL_RESET_MOVEL = (24, 1)              # 0032D4 move.l #$ffff0bf8,f262.w
+_SL_RESET_COUNTER = (16, 1)            # 0032DC move.w #$14,f260.w
+_SL_RESET_FLAG = (16, 1)               # 0032E2 move.w #1,f388.w
+_SL_APPEND_MOVEA = (16, 1)             # 0032E8 movea.l f262.w,a3
+_SL_APPEND_STORE = (8, 1)              # move.w dN,(a3)+, once per word (d0, d1, d3)
+_SL_APPEND_WRITEBACK = (16, 1)         # 0032F2 move.l a3,f262.w
+_SL_KIND_LOAD = (8, 1)                 # 0032F6 move.w (a1),d2
+_SL_KIND_CMP53 = (8, 1)                # 0032F8 cmpi.w #$53,d2
+_SL_KIND_BEQ53_TAKEN, _SL_KIND_BEQ53_NOT = (10, 1), (8, 1)     # 0032FC beq.b $3330
+_SL_KIND_CMP36 = (8, 1)                # 0032FE cmpi.w #$36,d2
+_SL_KIND_BEQ36_TAKEN, _SL_KIND_BEQ36_NOT = (10, 1), (12, 1)    # 003302 beq.w $3398
+_SL_KIND_CMP6D = (8, 1)                # 003306 cmpi.w #$6d,d2
+_SL_KIND_BEQ6D_NOT = (8, 1)            # 00330A beq.b $3354, not taken
+_SL_KIND_CMP6E = (8, 1)                # 00330C cmpi.w #$6e,d2
+_SL_KIND_BEQ6E_NOT = (8, 1)            # 003310 beq.b $3374, not taken
+_SL_KIND_CMP40 = (8, 1)                # 003312 cmpi.w #$40,d2
+_SL_KIND_BLT40_TAKEN, _SL_KIND_BLT40_NOT = (10, 1), (8, 1)     # 003316 blt.b $3320
+_SL_KIND_CMP43 = (8, 1)                # 003318 cmpi.w #$43,d2
+_SL_KIND_BLE43_NOT = (12, 1)           # 00331C ble.w $33c0, not taken (falls to 003320)
+_SL_53_LOAD_F206 = (12, 1)             # 003330 move.w f206.w,d2
+_SL_53_DOUBLE = (4, 1)                 # 003334 add.w d2,d2
+_SL_53_TABLE = (14, 1)                 # 003336 move.w 334a(pc,d2.w),d2
+_SL_36_LOAD_F204 = (12, 1)             # 003398 move.w f204.w,d2
+_SL_36_DOUBLE = (4, 1)                 # 00339C add.w d2,d2
+_SL_36_TABLE = (14, 1)                 # 00339E move.w 33b2(pc,d2.w),d2
+_SL_BSR = (18, 1)                      # bsr.w, any of the four calls this region makes
+
+
+def status_low_dispatch_plan(machine, registers):
+    """0032C2: the low-status dispatch, composing object_activity_gate_plan (003480) as a real
+    internal call and ceding 0018C8 opaque as the seam's own block, the SAME shape
+    status_high_dispatch_plan already proves, behind a real second kind dispatch of its own."""
+    from .game import world
+    if registers['pc'] != STATUS_LOW_ENTRY:
+        raise UnsupportedCandidate('status low dispatch planner needs the machine parked at 0032C2')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    d0, d1, d3 = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF, registers['d3'] & 0xFFFF
+    read = _reader(machine)
+    buf = world.status_low_buffer_append(read, d0, d1, d3)
+    if buf['arm'] not in ('append', 'reset-append'):
+        raise UnsupportedCandidate(f"status low dispatch: buffer {buf['arm']} is not witnessed by a recording")
+    cost = _add(_SL_COUNTER_ADDQ, _SL_COUNTER_CMPI, _SL_COUNTER_BGT_NOT, _SL_RESET_CMPI)
+    writes = ()
+    if buf['arm'] == 'reset-append':
+        cost = _add(cost, _SL_RESET_BNE_NOT, _SL_RESET_MOVEL, _SL_RESET_COUNTER, _SL_RESET_FLAG)
+        writes = writes + _bytes(world.STATUS_LOW_RESET_FLAG & 0xFFFFFF, 1, 2)
+    else:
+        cost = _add(cost, _SL_RESET_BNE_TAKEN)
+    cost = _add(cost, _SL_APPEND_MOVEA, _SL_APPEND_STORE, _SL_APPEND_STORE, _SL_APPEND_STORE,
+               _SL_APPEND_WRITEBACK)
+    pointer = buf['pointer'] & 0xFFFFFF
+    _ram_span('status low buffer entry', pointer, 6)
+    writes = (writes + _bytes(pointer, d0, 2) + _bytes((pointer + 2) & 0xFFFFFF, d1, 2)
+             + _bytes((pointer + 4) & 0xFFFFFF, d3, 2))
+    writes = writes + _bytes(world.STATUS_LOW_COUNTER & 0xFFFFFF, buf['counter'], 2)
+    writes = writes + _bytes(world.STATUS_LOW_BUFFER_POINTER & 0xFFFFFF, buf['next_pointer'], 4)
+
+    a1 = registers['a1'] & 0xFFFFFFFF
+    kind = read(a1 & 0xFFFFFF, 2)
+    result = world.status_low_kind_dispatch(read, kind)
+    cost = _add(cost, _SL_KIND_LOAD, _SL_KIND_CMP53)
+    if result['arm'] == '0x53':
+        cost = _add(cost, _SL_KIND_BEQ53_TAKEN, _SL_53_LOAD_F206, _SL_53_DOUBLE, _SL_53_TABLE, _SL_BSR)
+        bsr_3480, bsr_18c8, resume = STATUS_LOW_53_BSR_3480, STATUS_LOW_53_BSR_18C8, STATUS_LOW_53_RESUME
+    else:
+        cost = _add(cost, _SL_KIND_BEQ53_NOT, _SL_KIND_CMP36)
+        if result['arm'] == '0x36':
+            cost = _add(cost, _SL_KIND_BEQ36_TAKEN, _SL_36_LOAD_F204, _SL_36_DOUBLE, _SL_36_TABLE, _SL_BSR)
+            bsr_3480, bsr_18c8, resume = STATUS_LOW_36_BSR_3480, STATUS_LOW_36_BSR_18C8, STATUS_LOW_36_RESUME
+        elif result['arm'] == 'default':
+            cost = _add(cost, _SL_KIND_BEQ36_NOT, _SL_KIND_CMP6D, _SL_KIND_BEQ6D_NOT,
+                       _SL_KIND_CMP6E, _SL_KIND_BEQ6E_NOT, _SL_KIND_CMP40)
+            if kind < 0x40:
+                cost = _add(cost, _SL_KIND_BLT40_TAKEN)
+            else:
+                cost = _add(cost, _SL_KIND_BLT40_NOT, _SL_KIND_CMP43, _SL_KIND_BLE43_NOT)
+            cost = _add(cost, _SL_BSR)
+            bsr_3480, bsr_18c8, resume = STATUS_LOW_DEFAULT_BSR_3480, STATUS_LOW_DEFAULT_BSR_18C8, STATUS_LOW_DEFAULT_RESUME
+        else:
+            raise UnsupportedCandidate(f"status low dispatch: kind {kind:#06x} ({result['arm']}) not witnessed by a recording")
+
+    # bsr.w $3480 pushes its own 4-byte return address; object_activity_gate_plan is entered exactly
+    # as its own real callers enter it (A0/D0/D1 unchanged since 003284's own head loaded them from
+    # the SAME object record); D2 is this arm's own computed value (the raw kind, or a table lookup).
+    gate_sp = (sp32 - 4) & 0xFFFFFFFF
+    gate_write = _bytes(gate_sp & 0xFFFFFF, bsr_18c8, 4)
+    virtual = dict(registers)
+    virtual.update(pc=OBJECT_ACTIVITY_GATE_ENTRY, a7=gate_sp, d2=(registers['d2'] & 0xFFFF0000) | (result['value'] & 0xFFFF))
+    inner = object_activity_gate_plan(machine, virtual)
+    cost = _add(cost, (inner.cycles, inner.instructions))
+    # object_activity_gate's own 'bypass' arm never touches D0/D1/D2 at all, so the baseline must be
+    # the value ACTUALLY fed to it (virtual), not the caller's raw entry D2 -- the SAME real defect
+    # status_high_dispatch_plan's own milestone tree already caught and fixed.
+    live = dict(virtual); live.update(inner.registers)
+    live['a3'] = buf['next_pointer']
+
+    # object_activity_gate's own bsr/rtr pair is self-balancing (A7 is back at sp32 once it returns),
+    # so bsr.w $18c8 pushes its own return address at the SAME relative slot.
+    cost = _add(cost, _SL_BSR)
+    sprite_sp = (sp32 - 4) & 0xFFFFFFFF
+    sprite_write = _bytes(sprite_sp & 0xFFFFFF, resume, 4)
+    live.update(a7=sprite_sp, pc=SPRITE_EMIT_ENTRY)
+    writes = writes + gate_write + inner.writes + sprite_write
+    prefix = AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=live,
+                        last_pc=bsr_18c8)
+    return Seam(prefix=prefix, resume_pc=resume, stack_basis=sp32 & 0xFFFFFFFF,
+               guards=((sprite_sp & 0xFFFFFF, 4),), suffix=status_low_dispatch_suffix)
+
+
+def status_low_dispatch_suffix(machine, registers):
+    """After 0018C8's own return (the resume address varies -- default/0x53/0x36 each have their own):
+    the d7/a0/a2 frame back (pushed by 003186's own head, not by this gate); bra.w $3158, into
+    0030CC's own scan loop -- the SAME tail 0036E2's own suffix uses."""
+    pc = registers['pc']
+    if pc not in _STATUS_LOW_RESUME_LAST_PC:
+        raise UnsupportedCandidate('status low dispatch suffix needs the machine parked at its own resume')
+    base = registers['a7']
+    frame = int.from_bytes(machine.peek_ram(base & 0xFFFF, 12), 'big')
+    exit_registers = {'d7': (frame >> 64) & 0xFFFFFFFF, 'a0': (frame >> 32) & 0xFFFFFFFF,
+                      'a2': frame & 0xFFFFFFFF, 'a7': (base + 12) & 0xFFFFFFFF, 'pc': OBJECT_KIND_SCAN_LOOP}
+    cycles, instructions = _add(_OKD_RESTORE, _OKD_BRA_LOOP)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
+                      last_pc=_STATUS_LOW_RESUME_LAST_PC[pc])

@@ -107,18 +107,25 @@ def queue_append(read, d0, d1, d2):
 # scans nothing), doubled twice into a real 23-entry (not 16: the prior reconnaissance's own read
 # stopped at the first table-shaped run of bytes, but table-shaped code follows -- confirmed by this
 # session's own full-tree trace of every occurrence, and by reading the ROM past entry 15 directly)
-# function-pointer table at KIND_DISPATCH_TABLE.  Fifteen of the twenty-three are witnessed; seven are
-# recovered here as their own leaves (indices 0, 3, 10, 14, 15, 16, 21); the rest (1, 2, 4, 6, 17, 18,
-# 19, 22 -- witnessed but not yet recovered; and every unwitnessed index) decline by name.  Each
-# handler ends in a plain rts (no seam, no tail branch): 003480's own body resumes at 003532 either
-# way, and at least one of them (index 10, ROM 0x5A48) has a second, independent real caller elsewhere
-# (exit 008616 in this session's own census) -- the leaf does not assume which caller it serves.
+# function-pointer table at KIND_DISPATCH_TABLE.  Fifteen of the twenty-three are witnessed; eleven are
+# recovered as their own leaves (indices 0, 1, 2, 3, 10, 14, 15, 16, 19, 21, 22 -- 1/2/19/22 recovered
+# later the same session as 0/3/10/14/15/16/21, `docs/gods/ledger.md`'s own second 20 September entry
+# for this table); the rest (4, 6, 17, 18 -- witnessed but not yet recovered; and every unwitnessed
+# index) decline by name.  Each handler ends in a plain rts (no seam, no tail branch): 003480's own
+# body resumes at 003532 either way, and at least one of them (index 10, ROM 0x5A48) has a second,
+# independent real caller elsewhere (exit 008616 in this session's own census) -- the leaf does not
+# assume which caller it serves.
 SOUND_SCAN_TABLE = 0x00014B42
 SOUND_SCAN_TABLE_SIZE = 192
 KIND_DISPATCH_TABLE = 0x00005958
 KIND_DISPATCH_COUNT = 23
 KIND_DISPATCH_WITNESSED = frozenset({0, 1, 2, 3, 4, 6, 10, 14, 15, 16, 17, 18, 19, 21, 22})
-KIND_DISPATCH_ADMITTED = frozenset({0, 3, 10, 14, 15, 16, 21})
+# 1, 2, 19, 22 belong here too (bump_tally_1/2_plan, accumulator_19_plan, half_frame_counter_plan are
+# all real, tested leaves in _GATE_5958_PLANS below) -- this set was never updated when they were
+# recovered later the same session as 0/3/10/14/15/16/21, so object_activity_gate_plan's own
+# sound-request arm silently declined every one of them until a 0032C2 (status-low-dispatch) fixture
+# reaching index 19 caught it, 20 September.
+KIND_DISPATCH_ADMITTED = frozenset({0, 1, 2, 3, 10, 14, 15, 16, 19, 21, 22})
 
 
 def kind_table_count(read, status):
@@ -406,3 +413,71 @@ def status_high_buffer_append(read, d0, d1, d2):
         return {'arm': 'skip', 'counter': counter}
     pointer = read(STATUS_HIGH_BUFFER_POINTER, 4) & 0xFFFFFFFF
     return {'arm': 'append', 'counter': counter, 'pointer': pointer, 'next_pointer': (pointer + 6) & 0xFFFFFFFF}
+
+
+# --- 0032C2: the object post-process low-status dispatch -------------------------------------------
+#
+# Reached from 003284's own head, by fallthrough, not even a branch, when the matched achievements
+# record's own status field is < 3.  The SAME FFFFF260/FFFFF262 buffer this project already knows
+# (mirroring 003BBA's own shape) -- except the triple appended here is (D0, D1, D3), not (D0, D1, D2),
+# and D3 (the OBJECT's own status, unrelated to the achievements-record status that gated entry) can
+# trigger a real, witnessed RESET of the buffer's own pointer and counter (and a flag, FFFFF388) when
+# it equals STATUS_LOW_RESET_KIND -- confirmed real, not a tracer artifact: 401 of ~30,000 sampled
+# occurrences on one recording alone.  The SAME D3 is also, empirically, always equal to the word
+# 0032F6 itself reads from the achievements record (every populated RECORD_TABLE entry's own first
+# field echoes its own index) -- read fresh here rather than assumed, since the ROM's own instruction
+# genuinely re-reads memory, not the register.
+STATUS_LOW_COUNTER = STATUS_HIGH_COUNTER               # the SAME shared counter, confirmed by the tracer
+STATUS_LOW_BUFFER_POINTER = STATUS_HIGH_BUFFER_POINTER  # the SAME shared pointer variable
+STATUS_LOW_BUFFER_CAP = STATUS_HIGH_BUFFER_CAP
+STATUS_LOW_RESET_KIND = 0x002D
+STATUS_LOW_RESET_BASE = 0xFFFF0BF8
+STATUS_LOW_RESET_FLAG = 0xFFFFF388
+
+
+def status_low_buffer_append(read, d0, d1, d3):
+    """0032C2-0032F2: FFFFF260 incremented unconditionally; the append itself (three words -- D0, D1,
+    D3 -- at the buffer pointer, then the pointer advanced by six) only runs while the NEW count is <=
+    STATUS_LOW_BUFFER_CAP -- every witnessed occurrence does.  When D3 == STATUS_LOW_RESET_KIND, the
+    pointer is reset to STATUS_LOW_RESET_BASE and the counter to the cap itself (real ROM, witnessed)
+    before that SAME append runs from the reset base."""
+    counter = (read(STATUS_LOW_COUNTER, 2) + 1) & 0xFFFF
+    if counter > STATUS_LOW_BUFFER_CAP:
+        return {'arm': 'skip', 'counter': counter}
+    reset = d3 == STATUS_LOW_RESET_KIND
+    pointer = STATUS_LOW_RESET_BASE if reset else (read(STATUS_LOW_BUFFER_POINTER, 4) & 0xFFFFFFFF)
+    return {'arm': 'reset-append' if reset else 'append',
+           'counter': STATUS_LOW_BUFFER_CAP if reset else counter,
+           'pointer': pointer, 'next_pointer': (pointer + 6) & 0xFFFFFFFF}
+
+
+KIND_DISPATCH2_TABLE_53 = 0x0000334A   # FFFFF206 (mod 5), doubled -- the phase-accumulator's own kin
+KIND_DISPATCH2_TABLE_36 = 0x000033B2   # FFFFF204 (mod 7), doubled
+PHASE_COUNTER_53 = 0xFFFFF206
+PHASE_COUNTER_36 = 0xFFFFF204
+KIND_DISPATCH2_TABLE_53_COUNT = 5
+KIND_DISPATCH2_TABLE_36_COUNT = 7
+
+
+def status_low_kind_dispatch(read, kind):
+    """0032F6: the achievements record's own first word (the SAME value D3 already echoes).  '0x53'
+    and '0x36' each read one small per-phase table (FFFFF206 mod 5 / FFFFF204 mod 7 respectively) for
+    the D2 value fed into the SAME object_activity_gate/sprite_emit pair every arm here shares;
+    'default' (every other witnessed kind) feeds the raw kind word itself, unchanged.  '0x6D'/'0x6E'
+    (their own further unread callees) and the 0x40-0x43 range (0x3BEC, deferred with 003BBA's own
+    sibling routine) are real ROM, not modelled here."""
+    if kind == 0x53:
+        index = read(PHASE_COUNTER_53, 2) & 0xFFFF
+        if index >= KIND_DISPATCH2_TABLE_53_COUNT:
+            return {'arm': 'unrecovered', 'kind': kind}
+        value = read((KIND_DISPATCH2_TABLE_53 + 2 * index) & 0xFFFFFF, 2)
+        return {'arm': '0x53', 'value': value}
+    if kind == 0x36:
+        index = read(PHASE_COUNTER_36, 2) & 0xFFFF
+        if index >= KIND_DISPATCH2_TABLE_36_COUNT:
+            return {'arm': 'unrecovered', 'kind': kind}
+        value = read((KIND_DISPATCH2_TABLE_36 + 2 * index) & 0xFFFFFF, 2)
+        return {'arm': '0x36', 'value': value}
+    if kind in (0x6D, 0x6E) or 0x40 <= kind <= 0x43:
+        return {'arm': 'unrecovered', 'kind': kind}
+    return {'arm': 'default', 'value': kind}

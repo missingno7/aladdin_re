@@ -2847,6 +2847,35 @@ small leaf):
   `003BEC`), the status chains (`0039EA`/`003AE6`) as families, `003186`'s
   head, `003284` composing the chains, and `0030CC` as the scan.
 
+- **20 September, grinder session on `0032C2`**: recovered in full except
+  its own three real unread-callee arms (`0x6D`, `0x6E`, the `0x40`-`0x43`
+  range, all confirmed unwitnessed by the same census that closed this
+  region -- 0 of 698 retained occurrences reach any of them).  A fourth
+  `FFFFF260`-gated triple-buffer append (mirroring `003BBA`'s own shape,
+  appending D0/D1/D3 with a real, witnessed pointer/counter/flag reset
+  when D3 == `0x2D`), then a second kind dispatch at `0032F6` whose
+  `'default'`/`'0x53'`/`'0x36'` arms fold in the SAME
+  object-activity-gate-real-call/sprite-emit-opaque-seam pair `003BBA`'s
+  own region already proves (`'0x53'`/`'0x36'` first read one small
+  per-phase ROM table, `FFFFF206` mod 5 / `FFFFF204` mod 7).  This session
+  also surfaced and fixed a real, pre-existing defect in the
+  already-sealed `object-activity-gate`: `KIND_DISPATCH_ADMITTED`
+  (`game/world.py`) was never updated when `005958` indices 1/2/19/22
+  were recovered a session ago, so the sound-request arm silently
+  declined all four as unrecovered even though their own plans were
+  live and independently tested -- a `0032C2` fixture reaching index 19
+  caught it; fixed, re-verified clean, and `object-activity-gate`'s own
+  fallback count dropped correspondingly (52 -> 50 on the same history).
+  `camera-sprites` extended to sixty-two gates.  Milestone tree PASS,
+  clean on the first attempt
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-20g`, 107,519
+  frames, 249.6 s, 8,857 fallbacks -- up only because `0032C2` is a
+  genuinely new gate now separately counted, not a regression).  Next,
+  per the original assignment's own order: the five still-unread routines
+  (`01191A`, `011D32`, `012010`, `00173C`, `003BEC`), the status chains
+  (`0039EA`/`003AE6`) as families, `003186`'s head, `003284` composing the
+  chains, and `0030CC` as the scan.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second
