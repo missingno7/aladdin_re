@@ -2407,6 +2407,75 @@ small leaf):
   body and `003284`, then the 200-slot scan composing it with the phase
   counters and the tail).
 
+- **19 September, later the same session, closing the `NEW_GODS_SUBSYSTEM`
+  escalation on the evaluator's own firing arm**: the trigger evaluator's
+  firing arm (`00468A`-`0046CE`) is recovered as the recipe-6a family
+  `docs/gods/blockers/2026-09-16-00462C-firing.md`'s own Split predicted,
+  now that its three real callees (`004926`, `0048EA`, `004AAA`) all
+  exist.  `_evaluator_resolve` (shared with `player_tail_plan`'s own
+  composed raise) gained an `allow_firing` parameter -- default `False`,
+  so `player_tail_plan` still declines the firing arm exactly as before
+  (146 declines on this tree, all at its own gate, unchanged) -- passed
+  only by `evaluator_plan` itself, which now composes the whole tail
+  through a new `_firing_tail_plan`: a message preamble (`game.triggers.
+  firing_message_address`, a two-step indirection through work RAM at
+  `FFFFAD0E`, NOT the ROM table the original Split assumed -- `$AD0E`
+  sign-extends to a work-RAM address; 54 of 360 freshly-censused
+  occurrences carry a real message, all `'ready'`, never `'blocked'`)
+  composing `message_gate_plan`/`string_copy_plan`; the two unconditional
+  calls composing `record_id_scan_plan`/`slot_scan_plan` (either can
+  itself reach an unmodelled achievement seam -- declined by name); the
+  tail-jump dispatch (`game.triggers.firing_action_target`, the record's
+  own `+0x10` word doubled twice, unmasked, bounded to the table's own 60
+  bytes) admitting the table entries whose own handler is recovered, by
+  ROM address: `0048E4`, `004ACA`, `0048EA`, the three `00475C` bare-`rts`
+  entries, and a NEW leaf, `004A0A` (`'spawn-effect-slot'`, table index 0
+  -- the SAME record position/substitution `0048EA`'s own head performs,
+  then the record's own `+0x12` type word selecting one of three real
+  terminal shapes over a found `004AAA` slot: `'in-range'` (`0x40`-`0x43`,
+  immediate exit), `'bset'` (exactly `0x53`, also sets `player.
+  PROXIMITY_BUSY`'s own bit 2 -- real ROM, never witnessed, declined), or
+  `'tail'` (an x/y/type cache write) -- 32 fixtures across four of five
+  recordings, all MATCH).  Every real action index the table holds that
+  is NOT yet recovered (`2`, `3`, `5`, `7`, `9` -- `004E1C`, `004D04`,
+  `00772E`, `005024`, `004E74`) declines by name.  Real defects the FAST
+  tier caught in turn: the AND tail's own `d0` (the three-condition AND
+  result) is NOT dead on the firing path (unlike non-firing) -- `00468E`'s
+  own `movem` push saves it before the message preamble ever reloads
+  `d0` -- and needed threading from EVERY condition call's own dispatcher
+  residue, not just the AND result; record id scan's own `d5` (the masked
+  action word) persists into the dispatch and any composed handler,
+  needing a running `live` register dict threaded through each internal
+  call rather than a fixed baseline; and the bare-`rts` arm's own exit SR
+  is the dispatch's own three flag-setters (`MOVE`, two `ADD.W`
+  doublings), not whatever flowed in from `slot_scan_plan`.  `factcheck
+  check` (360 fresh fixtures across all five recordings) and
+  `--perturb-upper-halves` both clean: 280/274 MATCH, 0 MISMATCH, the
+  rest honest declines (or `SKIPPED` under perturbation).  `run_tests.py
+  gods` (23,477 passed, 12 skipped) after updating `test_triggers.py`'s
+  own firing-arm test (it used to assert firing always declines; now it
+  asserts every witnessed arm matches and only the genuinely unrecovered
+  ones decline, plus a new test that at least one real firing activation
+  composes).  `camera-sprites` extended to fifty-seven gates.  Reproduces
+  the original on `f0ac19738f19…`: `evaluator` PASS, 1,726 hits, 37
+  fallbacks (2 disabled, 12 unrecovered action index, 3 achievement seam,
+  20 z80 bank guard -- all honest), bit-exact; `evaluator-mutant-outcome`
+  DIVERGENCE at frame 477 (unchanged mutant, still valid against the
+  wider plan); `spawn-effect-slot` PASS, 7 hits, 0 fallbacks, bit-exact;
+  its own mutant DIVERGENCE at frame 2333.  Milestone tree PASS on all
+  five leaves (`artifacts/gods/verify-camera-sprites-leaves-2026-09-19-firingarm`,
+  107,519 frames): the `00462C` gate's own fallbacks fell from several
+  hundred to 105 across the whole tree (19+14+18+11+43 by recording), all
+  of them the honest declines named above.  This closes the
+  `NEW_GODS_SUBSYSTEM` escalation on `00462C`'s firing arm: what remains
+  of the `0030CC` assignment is `003186`'s body (and `003284`, censused
+  as met) for the object table update, then `0030CC` itself as the
+  200-slot scan composing it with the phase counters and the tail (with
+  its own semantic-operation card naming the two sound requests as
+  pending effects); separately, `004926`'s own second real caller at
+  `0139D2` inside the collectible-lists subsystem (`tick-map.md` order
+  14) is a fresh bite in its own right.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second

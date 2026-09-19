@@ -1960,25 +1960,33 @@ _TE_HEAD = (12 + 8 + 4 + 12 + 8 + 44 + 6 + 24 + 16 + 8 + 12 + 8, 12)
 # adda.l d0,a1; move.l #-1,SLOT_BASE; move.w #-1,SLOT_BASE+4; move.w (a1),d5; move.w 2(a1),d6; lea.l SLOT_BASE,a3
 _TE_BSR = (18, 1)                       # bsr.w $470c
 _TE_SETUP = (12 + 12 + 4, 3)            # move.w n(a1),d5; move.w n+2(a1),d6; addq.w #2,a3 -- between calls only
-_TE_TAIL = (12 + 12 + 12 + 8, 4)        # move.w SLOT_BASE,d0; and.w +2,d0; and.w +4,d0; bmi.b (not taken)
+_TE_TAIL_HEAD = (12 + 12 + 12, 3)       # move.w SLOT_BASE,d0; and.w +2,d0; and.w +4,d0
+_TE_BMI_NOTTAKEN = (8, 1)               # bmi.b 004688 (not taken): non-firing, falls to the plain rts
+_TE_BMI_TAKEN = (10, 1)                 # bmi.b 004688 (taken): firing, jumps to 00468A instead
+_TE_TAIL = (_TE_TAIL_HEAD[0] + _TE_BMI_NOTTAKEN[0], _TE_TAIL_HEAD[1] + _TE_BMI_NOTTAKEN[1])
 _TE_OUTER_RTS = (16, 1)
 _TE_RETURN_PC = (0x00465E, 0x00466C, 0x00467A)   # the internal bsr's own return address, one per pair
 
 
-def _evaluator_resolve(read, sr, a0, entry_d1, entry_d5, entry_d6, entry_a4, entry_a5):
+def _evaluator_resolve(read, sr, a0, entry_d1, entry_d5, entry_d6, entry_a4, entry_a5, *, allow_firing=False):
     """00462C's own non-firing arm, from the disabled-flag test through the AND tail, shared by
     ``evaluator_plan`` (parked directly at 00462C, ``a0`` its own caller-supplied status-table address)
     and ``player_tail_plan``'s own composed raise (0075D6's tile scan, ``a0`` the STATUS_WORDS entry
     ``event_status`` already read the status word from -- the SAME convention: 00462C's own head reads
     ``2(a0)`` as the trigger-record index either way).  Raises ``UnsupportedCandidate`` for the disabled
-    arm (unwitnessed), an unrecovered condition kind, or the firing arm (all three conditions hold --
-    left for the supervisor, docs/gods/blockers/2026-09-16-00462C-firing.md).  Returns the cost, every
-    RAM store (the two preset slot writes, then whichever the three condition calls clear -- NOT the
-    caller-specific return-address residue, added by each caller separately), the register residue
-    (d0/d1/d5/d6/a1/a2/a3/a4/a5) and the exit SR chained from ``sr``.  ``entry_d1``/``entry_d5``/
-    ``entry_d6``/``entry_a4``/``entry_a5`` are the caller's own values at the point 00462C is entered --
-    only their UPPER halves (d1/d5/d6) or their whole value when no condition call ever touches them
-    (a4; a5 is always set, by every pair's own dispatch) survive into the result.
+    arm (unwitnessed) or an unrecovered condition kind.  When all three conditions hold (the firing
+    arm), raises too UNLESS ``allow_firing`` -- only ``evaluator_plan`` itself passes it, to compose
+    the firing tail (`docs/gods/blockers/2026-09-16-00462C-firing.md`'s own Resolution); the SAME
+    firing arm reached through ``player_tail_plan``'s own raise still declines, unchanged.  Returns
+    the cost, every RAM store (the two preset slot writes, then whichever the three condition calls
+    clear -- NOT the caller-specific return-address residue, added by each caller separately), the
+    register residue (d0/d1/d5/d6/a1/a2/a3/a4/a5) and the exit SR chained from ``sr``, plus (when
+    firing) ``'arm': 'firing'`` so the caller knows the AND tail took the OTHER branch (into 00468A,
+    not the plain rts at 004688) and the returned ``registers``/``sr`` are the state AT THAT PC, not
+    at a completed activation.  ``entry_d1``/``entry_d5``/``entry_d6``/``entry_a4``/``entry_a5`` are
+    the caller's own values at the point 00462C is entered -- only their UPPER halves (d1/d5/d6) or
+    their whole value when no condition call ever touches them (a4; a5 is always set, by every pair's
+    own dispatch) survive into the result.
     """
     from .game import triggers
     disable_flag = read(triggers.DISABLE_FLAG & 0xFFFFFF, 2)
@@ -1988,7 +1996,7 @@ def _evaluator_resolve(read, sr, a0, entry_d1, entry_d5, entry_d6, entry_a4, ent
     result = triggers.evaluate_record(read, index, disable_flag)
     if result['arm'] == 'unrecovered':
         raise UnsupportedCandidate('trigger evaluator: a condition kind in this record is not recovered')
-    if result['arm'] == 'firing':
+    if result['arm'] == 'firing' and not allow_firing:
         raise UnsupportedCandidate('trigger evaluator firing arm is not recovered (left for the supervisor)')
     entry = result['entry']
     cycles, instructions = _TE_HEAD
@@ -2017,14 +2025,10 @@ def _evaluator_resolve(read, sr, a0, entry_d1, entry_d5, entry_d6, entry_a4, ent
         if pair_index < len(result['calls']) - 1:
             cycles += _TE_SETUP[0]
             instructions += _TE_SETUP[1]
-    cycles += _TE_TAIL[0] + _TE_OUTER_RTS[0]
-    instructions += _TE_TAIL[1] + _TE_OUTER_RTS[1]
-    final = 0xFFFF if all(slot_values) else 0x0000
-    exit_sr = _logic_sr(call_sr, final, 2)
-    exit_registers = {'d0': (regs['d0'] & 0xFFFF0000) | final, 'a2': a0,
-                      'a1': (triggers.TRIGGER_TABLE + triggers.TRIGGER_STRIDE * index) & 0xFFFFFFFF,
+    firing = all(slot_values)
+    base_registers = {'a2': a0, 'a1': (triggers.TRIGGER_TABLE + triggers.TRIGGER_STRIDE * index) & 0xFFFFFFFF,
                       'a3': (triggers.SLOT_BASE + 4) & 0xFFFFFFFF, 'a4': regs['a4'], 'a5': regs['a5'],
-                      'd1': regs['d1'], 'd5': regs['d5'], 'd6': regs['d6']}
+                      'd0': regs['d0'], 'd1': regs['d1'], 'd5': regs['d5'], 'd6': regs['d6']}
     writes = {}
     for a, b in _bytes(triggers.SLOT_BASE & 0xFFFFFF, 0xFFFFFFFF, 4):
         writes[a] = b
@@ -2034,12 +2038,32 @@ def _evaluator_resolve(read, sr, a0, entry_d1, entry_d5, entry_d6, entry_a4, ent
         for address, (value, size) in call['result']['stores'].items():
             for a, b in _bytes(address, value, size):
                 writes[a] = b
+    if firing:
+        # The AND tail's own bmi is TAKEN instead: jumps straight to 00468A, no rts at 004688.  D0
+        # itself is NOT dead here (unlike the non-firing exit's own AND-result): 00468E's own movem
+        # push saves it before 00468A's message preamble ever reloads it, so the AND tail's own
+        # result (0xFFFF, low word only -- the upper half still whatever the last condition call left)
+        # is real, observable RAM once pushed.
+        cycles += _TE_TAIL_HEAD[0] + _TE_BMI_TAKEN[0]
+        instructions += _TE_TAIL_HEAD[1] + _TE_BMI_TAKEN[1]
+        base_registers['d0'] = (regs['d0'] & 0xFFFF0000) | 0xFFFF
+        return {'cycles': cycles, 'instructions': instructions, 'writes': writes, 'registers': base_registers,
+               'sr': call_sr, 'entry': entry, 'pair_count': len(result['calls']), 'arm': 'firing'}
+    cycles += _TE_TAIL[0] + _TE_OUTER_RTS[0]
+    instructions += _TE_TAIL[1] + _TE_OUTER_RTS[1]
+    exit_sr = _logic_sr(call_sr, 0, 2)
+    exit_registers = dict(base_registers)
+    exit_registers['d0'] = regs['d0'] & 0xFFFF0000
     return {'cycles': cycles, 'instructions': instructions, 'writes': writes, 'registers': exit_registers,
-           'sr': exit_sr, 'entry': entry, 'pair_count': len(result['calls'])}
+           'sr': exit_sr, 'entry': entry, 'pair_count': len(result['calls']), 'arm': 'non-firing'}
 
 
 def evaluator_plan(machine, registers):
-    """00462C: the trigger evaluator's non-firing arm, three composed calls into 00470C."""
+    """00462C: the trigger evaluator, both arms -- non-firing (three composed calls into 00470C) and,
+    since 19 September, firing too (composed by ``_firing_tail_plan``, the recipe-6a family over the
+    record's own `+0x10` action word -- `docs/gods/blockers/2026-09-16-00462C-firing.md`'s own
+    Resolution).  ``player_tail_plan``'s own composed raise still declines firing, unchanged: only
+    this standalone gate passes ``allow_firing``."""
     from .game import triggers
     if registers['pc'] != EVALUATOR_ENTRY:
         raise UnsupportedCandidate('trigger evaluator planner needs the machine parked at 00462C')
@@ -2048,16 +2072,226 @@ def evaluator_plan(machine, registers):
     a0 = registers['a0'] & 0xFFFFFFFF
     read = _reader(machine)
     resolved = _evaluator_resolve(read, sr, a0, registers['d1'], registers['d5'], registers['d6'],
-                                  registers['a4'], registers['a5'])
+                                  registers['a4'], registers['a5'], allow_firing=True)
     _spans_disjoint([('trigger frame', sp, 4),
                      ('trigger record', resolved['entry'] & 0xFFFFFF, triggers.TRIGGER_STRIDE)])
-    exit_registers = dict(resolved['registers'])
-    exit_registers.update(a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=resolved['sr'])
     writes = dict(resolved['writes'])
     for a, b in _bytes((sp - 4) & 0xFFFFFF, _TE_RETURN_PC[resolved['pair_count'] - 1], 4):
         writes[a] = b
+    if resolved['arm'] == 'firing':
+        base_registers = dict(registers)
+        base_registers.update(resolved['registers'])
+        tail = _firing_tail_plan(machine, read, resolved['sr'], resolved['entry'], sp32, base_registers)
+        writes.update(tail['writes'])
+        exit_registers = tail['registers']
+        return AtomicPlan(cycles=resolved['cycles'] + tail['cycles'], instructions=resolved['instructions'] + tail['instructions'],
+                          writes=tuple(writes.items()), registers=exit_registers, last_pc=tail['last_pc'])
+    exit_registers = dict(resolved['registers'])
+    exit_registers.update(a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=resolved['sr'])
     return AtomicPlan(cycles=resolved['cycles'], instructions=resolved['instructions'],
                       writes=tuple(writes.items()), registers=exit_registers, last_pc=EVALUATOR_LAST_PC)
+
+
+# --- 00468A-0046CE: the firing tail (the recipe-6a family; game/triggers.py) -------------------------
+#
+# Composed only from evaluator_plan (above), never from player_tail_plan's own raise.  The message
+# preamble (a RAM-only gate, itself a two-step indirection through FFFFAD0E) composes the
+# already-recovered message_gate_plan/string_copy_plan when a message is real; the two unconditional
+# calls compose record_id_scan_plan/slot_scan_plan; the tail jump admits only the action-table
+# handlers this grinder has recovered by ROM address (0048E4, 004ACA, 0048EA, 004A0A, the three
+# 00475C rts entries) -- everything else real ROM holds at 0046D0 is declined by name.  Every internal
+# call is a real bsr with its own return-address push (never a virtual _ConstMachine overlay: nothing
+# here writes RAM the next call would need to read back).  Cost fragments from the tracer
+# (artifacts/gods/evidence/census-00462C*, census-0X00468A-* -- 54 of ~280 witnessed occurrences carry
+# a real message, all of them 'ready').
+_FT_STATUS_STORE = (12, 1)            # move.w #$ffff,(a0)
+_FT_FRAME_PUSH = (48, 1)              # movem.l d0-d1/d7/a1-a2,-(a7)
+_FT_MSG_INDEX = (12, 1)               # move.w $14(a1),d0
+_FT_MSG_DOUBLE = (4, 1)               # add.w d0,d0
+_FT_MSG_LEA = (8, 1)                  # lea.l $ad0e.w,a2
+_FT_MSG_INDIRECT = (18, 1)            # adda.w (a2,d0.w),a2
+_FT_MSG_OFFSET = (14, 1)              # adda.w #$50,a2
+_FT_MSG_TEST = (8, 1)                 # tst.b (a2)
+_FT_MSG_BEQ_TAKEN = (10, 1)           # no message
+_FT_MSG_BEQ_NOTTAKEN = (8, 1)         # has a message
+_FT_MSG_PRIORITY = (4, 1)             # moveq #$32,d7
+_FT_MSG_BSR_GATE = (18, 1)            # bsr.w $7986
+_FT_MSG_BMI_TAKEN = (10, 1)           # blocked: skip the string copy (unwitnessed, but message_gate_plan's own arm)
+_FT_MSG_BMI_NOTTAKEN = (8, 1)         # ready: string copy runs
+_FT_MSG_BSR_COPY = (18, 1)            # bsr.w $79dc
+_FT_MSG_CLR_TERM = (12, 1)            # clr.b (a1)+
+_FT_FRAME_POP = (52, 1)               # movem.l (a7)+,d0-d1/d7/a1-a2
+_FT_BSR_RECORD_SCAN = (18, 1)         # bsr.w $4800
+_FT_BSR_SLOT_SCAN = (18, 1)           # bsr.w $475e
+_FT_DISPATCH_READ = (12, 1)           # move.w $10(a1),d0
+_FT_DISPATCH_DOUBLE = (4 + 4, 2)      # add.w d0,d0 (x2)
+_FT_DISPATCH_MOVEA = (18, 1)          # movea.l $46d0(pc,d0.w),a5
+_FT_DISPATCH_JMP = (8, 1)             # jmp (a5)
+_FT_BARE_RTS = (16, 1)                # the three 00475C table entries: nothing but the rts itself
+
+_FIRING_MESSAGE_RETURN = 0x0046AE      # bsr $7986's own return address
+_FIRING_COPY_RETURN = 0x0046B4         # bsr $79dc's own return address
+_FIRING_RECORD_SCAN_RETURN = 0x0046BE  # bsr $4800's own return address
+_FIRING_SLOT_SCAN_RETURN = 0x0046C2    # bsr $475e's own return address
+_FIRING_BARE_RTS_ADDRESS = 0x0000475C
+_FIRING_ACTION_HANDLERS = {
+    0x0048E4: lambda m, r: action_reset_elapsed_plan(m, r),
+    0x004ACA: lambda m, r: action_clear_group_plan(m, r),
+    0x0048EA: lambda m, r: spawn_puff_box_plan(m, r),
+    0x004A0A: lambda m, r: spawn_effect_slot_plan(m, r),
+}
+
+
+def _firing_tail_plan(machine, read, sr, a1, sp32, base_registers):
+    """00468A onward, ``a1`` the trigger record's own address, ``sr`` the SR right after the AND
+    tail's own bmi (taken), ``base_registers`` the full register file at that same instant (evaluator_
+    plan's own entry registers with a1/a2/a3/a4/a5/d1/d5/d6 overridden by the three condition calls --
+    the SAME baseline the non-firing exit already used).  Returns cycles/instructions/writes/registers/
+    last_pc for the WHOLE remaining tail, to be added to ``_evaluator_resolve``'s own firing-arm cost."""
+    from .game import triggers
+    cycles, instructions = _add(_FT_STATUS_STORE, _FT_FRAME_PUSH)
+    writes = {}
+    for a, b in _bytes(base_registers['a2'] & 0xFFFFFF, 0xFFFF, 2):
+        writes[a] = b
+    frame_base = (sp32 - 20) & 0xFFFFFF   # movem.l d0-d1/d7/a1-a2,-(a7): 5 longs, in register order
+    for offset, name in enumerate(('d0', 'd1', 'd7', 'a1', 'a2')):
+        for a, b in _bytes((frame_base + 4 * offset) & 0xFFFFFF, base_registers[name] & 0xFFFFFFFF, 4):
+            writes[a] = b
+
+    c, i = _add(_FT_MSG_INDEX, _FT_MSG_DOUBLE, _FT_MSG_LEA, _FT_MSG_INDIRECT, _FT_MSG_OFFSET, _FT_MSG_TEST)
+    cycles += c
+    instructions += i
+    msg = triggers.firing_message_address(read, a1)
+    if msg['has_message']:
+        c, i = _add(_FT_MSG_BEQ_NOTTAKEN, _FT_MSG_PRIORITY, _FT_MSG_BSR_GATE)
+        cycles += c
+        instructions += i
+        virtual = dict(base_registers)
+        virtual.update(pc=MESSAGE_GATE_ENTRY, a7=(sp32 - 24) & 0xFFFFFFFF, a2=msg['address'], d7=0x32, sr=sr)
+        for a, b in _bytes((sp32 - 24) & 0xFFFFFF, _FIRING_MESSAGE_RETURN, 4):
+            writes[a] = b
+        gate = message_gate_plan(machine, virtual)
+        cycles += gate.cycles
+        instructions += gate.instructions
+        for a, b in gate.writes:
+            writes[a] = b
+        sr = gate.registers['sr']
+        if gate.last_pc == MESSAGE_GATE_READY_LAST_PC:
+            c, i = _add(_FT_MSG_BMI_NOTTAKEN, _FT_MSG_BSR_COPY)
+            cycles += c
+            instructions += i
+            virtual2 = dict(virtual)
+            virtual2.update(pc=STRING_COPY_ENTRY, a7=(sp32 - 24) & 0xFFFFFFFF, a1=gate.registers['a1'],
+                            a2=msg['address'], sr=sr)
+            for a, b in _bytes((sp32 - 24) & 0xFFFFFF, _FIRING_COPY_RETURN, 4):
+                writes[a] = b
+            copy = string_copy_plan(machine, virtual2)
+            cycles += copy.cycles
+            instructions += copy.instructions
+            for a, b in copy.writes:
+                writes[a] = b
+            sr = copy.registers['sr']
+            writes[copy.registers['a1'] & 0xFFFFFF] = 0
+            c, i = _FT_MSG_CLR_TERM
+            cycles += c
+            instructions += i
+        else:
+            c, i = _FT_MSG_BMI_TAKEN
+            cycles += c
+            instructions += i
+    else:
+        c, i = _FT_MSG_BEQ_TAKEN
+        cycles += c
+        instructions += i
+
+    c, i = _FT_FRAME_POP
+    cycles += c
+    instructions += i
+    # live: the running register file from here on -- each internal call's OWN exit registers (record_
+    # id_scan sets d5 itself, 0046BA-0046BE; nothing else touches a1/a2/a3/a4/a5/d1/d5/d6 again before
+    # the dispatch) must persist into the next call and into the dispatch's own handler, the same
+    # "unlisted register carries forward" convention as everywhere else in this composition.
+    live = dict(base_registers)
+    live.update(a1=a1, sr=sr)
+
+    c, i = _FT_BSR_RECORD_SCAN
+    cycles += c
+    instructions += i
+    virtual_ids = dict(live)
+    virtual_ids.update(pc=RECORD_ID_SCAN_ENTRY, a7=(sp32 - 4) & 0xFFFFFFFF)
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, _FIRING_RECORD_SCAN_RETURN, 4):
+        writes[a] = b
+    ids = record_id_scan_plan(machine, virtual_ids)
+    if isinstance(ids, Seam):
+        raise UnsupportedCandidate(
+            'trigger evaluator firing arm: record id scan reached an achievement seam, not composed')
+    cycles += ids.cycles
+    instructions += ids.instructions
+    for a, b in ids.writes:
+        writes[a] = b
+    live.update(ids.registers)
+    live['a1'] = a1   # 004800's own rts always returns with A1 unchanged -- reasserted for clarity
+
+    c, i = _FT_BSR_SLOT_SCAN
+    cycles += c
+    instructions += i
+    virtual_slot = dict(live)
+    virtual_slot.update(pc=SLOT_SCAN_ENTRY, a7=(sp32 - 4) & 0xFFFFFFFF)
+    for a, b in _bytes((sp32 - 4) & 0xFFFFFF, _FIRING_SLOT_SCAN_RETURN, 4):
+        writes[a] = b
+    slot = slot_scan_plan(machine, virtual_slot)
+    if isinstance(slot, Seam):
+        raise UnsupportedCandidate(
+            'trigger evaluator firing arm: slot scan reached an achievement seam, not composed')
+    cycles += slot.cycles
+    instructions += slot.instructions
+    for a, b in slot.writes:
+        writes[a] = b
+    live.update(slot.registers)
+    live['a1'] = a1
+    sr = live['sr']
+
+    c, i = _add(_FT_DISPATCH_READ, _FT_DISPATCH_DOUBLE, _FT_DISPATCH_MOVEA, _FT_DISPATCH_JMP)
+    cycles += c
+    instructions += i
+    action = triggers.firing_action_target(read, a1)
+    if not action['in_domain'] or action['target'] not in _FIRING_ACTION_HANDLERS and action['target'] != _FIRING_BARE_RTS_ADDRESS:
+        raise UnsupportedCandidate(f"trigger evaluator firing arm: action index {action['raw']:#06x} is not recovered")
+
+    # The dispatch's own three flag-setters (MOVE, then two ADD.W doublings) are the real last ones
+    # before the jmp: MOVEA/JMP touch nothing, so on the bare-rts arm (00475C is nothing but the rts
+    # itself) this IS the exit SR; a real handler's own instructions simply overwrite it further.
+    raw = action['raw'] & 0xFFFF
+    first_double = (raw + raw) & 0xFFFF
+    dispatch_sr = _add_sr(_add_sr(_logic_sr(sr, raw, 2), raw, raw, 2), first_double, first_double, 2)
+    sr = dispatch_sr
+    # The dispatch's own d0 (the doubled-twice action word) is real, observable residue on the bare-rts
+    # arm (nothing overwrites it before the rts); a real handler's own d0 use, if any, wins instead.
+    handler_registers = dict(live)
+    handler_registers.update(pc=action['target'], d0=(live['d0'] & 0xFFFF0000) | action['offset'],
+                             a1=a1, a5=action['target'] & 0xFFFFFFFF, sr=sr, a7=sp32)
+    if action['target'] == _FIRING_BARE_RTS_ADDRESS:
+        c, i = _FT_BARE_RTS
+        cycles += c
+        instructions += i
+        exit_registers = dict(handler_registers)
+        exit_registers.update(a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp32 & 0xFFFFFF), sr=sr)
+        last_pc = _FIRING_BARE_RTS_ADDRESS
+    else:
+        handler = _FIRING_ACTION_HANDLERS[action['target']]
+        handled = handler(machine, handler_registers)
+        cycles += handled.cycles
+        instructions += handled.instructions
+        for a, b in handled.writes:
+            writes[a] = b
+        # A handler's own exit dict lists only what IT changes (0048E4/004ACA touch neither a1 nor
+        # most data registers): everything else persists from its own entry state, the SAME
+        # "unlisted register carries forward" convention every other composition in this file uses.
+        exit_registers = dict(handler_registers)
+        exit_registers.update(handled.registers)
+        last_pc = handled.last_pc
+    return {'cycles': cycles, 'instructions': instructions, 'writes': writes, 'registers': exit_registers,
+           'last_pc': last_pc}
 
 
 # --- 007986/0079DC: the message display gate and string copy (game/messages.py) ---------------------
@@ -2862,6 +3096,129 @@ def spawn_puff_box_plan(machine, registers):
                       'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=call_frame_writes + inner.writes,
                       registers=exit_registers, last_pc=SPAWN_PUFF_BOX_LAST_PC)
+
+
+# --- 004A0A: allocate a new effect-slot entry near the record's own position (game/actions.py) ------
+#
+# Composes effect_slot_find_free_plan (004AAA) as a real internal bsr, the SAME "no _ConstMachine
+# needed" shape spawn_puff_box_plan already proves (the prefix never touches RAM).  A slot-not-found
+# result is left to effect_slot_find_free_plan's own decline; the type-0x53 arm (a further, unwitnessed
+# bset) is declined here.  Cost fragments from the tracer (artifacts/gods/evidence/census-0X004A0A-*).
+SPAWN_EFFECT_SLOT_ENTRY, SPAWN_EFFECT_SLOT_LAST_PC = 0x004A0A, 0x004A72
+_SES_READ_X = (12, 1)              # move.w $c(a1),d0
+_SES_READ_Y = (12, 1)              # move.w $e(a1),d1
+_SES_CMP_X = (8, 1)                # cmpi.w #$6cc,d0
+_SES_BNE_X_TAKEN = (10, 1)         # x != 0x6cc: straight to the type read
+_SES_BNE_X_NOTTAKEN = (8, 1)       # x == 0x6cc: one more compare
+_SES_CMP_Y = (8, 1)                # cmpi.w #$3c0,d1
+_SES_BNE_Y_TAKEN = (10, 1)         # y != 0x3c0: still no substitution
+_SES_READ_TYPE = (12, 1)           # move.w $12(a1),d2
+_SES_BSR_4AAA = (18, 1)            # bsr.w $4aaa
+_SES_BMI_FOUND = (8, 1)            # bmi.b -- not taken (found) only; 'exhausted' declines
+_SES_STORE_X = (8, 1)              # move.w d0,(a5)+
+_SES_STORE_Y = (8, 1)              # move.w d1,(a5)+
+_SES_STORE_TYPE = (8, 1)           # move.w d2,(a5)+
+_SES_STORE_ONE = (12, 1)           # move.w #$1,(a5)+
+_SES_LEA_FLAGS = (12, 1)           # lea.l $ffff3fea.l,a4
+_SES_STORE_FLAG = (18, 1)          # move.b #$ff,(a4,d5.w)
+_SES_CMP_LOW = (8, 1)              # cmpi.w #$40,d2
+_SES_BLT_TAKEN = (10, 1)           # type < 0x40: straight to the 0x53 compare
+_SES_BLT_NOTTAKEN = (8, 1)         # type >= 0x40: one more compare
+_SES_CMP_HIGH = (8, 1)             # cmpi.w #$43,d2
+_SES_BLE_TAKEN = (10, 1)           # 0x40 <= type <= 0x43: 'in-range', immediate exit
+_SES_BLE_NOTTAKEN = (8, 1)         # type > 0x43: falls to the 0x53 compare
+_SES_CMP_BSET = (8, 1)             # cmpi.w #$53,d2
+_SES_BNE_TAIL_TAKEN = (10, 1)      # type != 0x53: the tail
+_SES_TAIL = (24 + 16 + 4 + 4, 4)   # movem.w d0-d2,$ef30.w; clr.w $ef36.w; addq.w #1,d5; neg.w d5
+_SES_RTS = (16, 1)
+
+
+def spawn_effect_slot_plan(machine, registers):
+    """004A0A: over the found effect slot (004AAA), the type word deciding the terminal shape."""
+    from .game import actions, creatures
+    if registers['pc'] != SPAWN_EFFECT_SLOT_ENTRY:
+        raise UnsupportedCandidate('spawn effect slot planner needs the machine parked at 004A0A')
+    sp32 = registers['a7']
+    sp = sp32 & 0xFFFFFF
+    a1 = registers['a1']
+    result = actions.spawn_effect_slot(_reader(machine), a1)
+    if result['substitute']:
+        raise UnsupportedCandidate('spawn effect slot: the position/flag substitution is not witnessed')
+    if result['arm'] == 'bset':
+        raise UnsupportedCandidate('spawn effect slot: the type-0x53 bset arm is not witnessed')
+
+    x, y, type_word = result['x'], result['y'], result['type']
+    cycles, instructions = _add(_SES_READ_X, _SES_READ_Y, _SES_CMP_X)
+    if x == actions.SPAWN_SUBSTITUTE_X:
+        c, i = _add(_SES_BNE_X_NOTTAKEN, _SES_CMP_Y, _SES_BNE_Y_TAKEN)
+    else:
+        c, i = _SES_BNE_X_TAKEN
+    cycles += c
+    instructions += i
+    c, i = _add(_SES_READ_TYPE, _SES_BSR_4AAA)
+    cycles += c
+    instructions += i
+
+    inner_a7 = (sp32 - 4) & 0xFFFFFFFF   # the bsr's own return-address push
+    virtual = dict(registers)
+    virtual.update(pc=EFFECT_SLOT_FIND_ENTRY, a7=inner_a7)
+    inner = effect_slot_find_free_plan(machine, virtual)
+    cycles += inner.cycles
+    instructions += inner.instructions
+    c, i = _SES_BMI_FOUND
+    cycles += c
+    instructions += i
+
+    call_frame_writes = _bytes(inner_a7 & 0xFFFFFF, 0x00004A34, 4)
+    slot = inner.registers['a5'] & 0xFFFFFFFF
+    slot24 = slot & 0xFFFFFF
+    index = inner.registers['d5'] & 0xFFFF
+    writes = call_frame_writes
+    writes += _bytes(slot24, x, 2) + _bytes((slot24 + 2) & 0xFFFFFF, y, 2)
+    writes += _bytes((slot24 + 4) & 0xFFFFFF, type_word, 2) + _bytes((slot24 + 6) & 0xFFFFFF, 1, 2)
+    writes += _bytes((creatures.EFFECT_SLOT_FLAG_TABLE + index) & 0xFFFFFF, 0xFF, 1)
+    c, i = _add(_SES_STORE_X, _SES_STORE_Y, _SES_STORE_TYPE, _SES_STORE_ONE, _SES_LEA_FLAGS, _SES_STORE_FLAG,
+               _SES_CMP_LOW)
+    cycles += c
+    instructions += i
+
+    exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | x, 'd1': (registers['d1'] & 0xFFFF0000) | y,
+                      'd2': (registers['d2'] & 0xFFFF0000) | type_word, 'a4': creatures.EFFECT_SLOT_FLAG_TABLE,
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp)}
+    if actions.EFFECT_SLOT_IN_RANGE_LOW <= type_word <= actions.EFFECT_SLOT_IN_RANGE_HIGH:
+        c, i = _SES_BLT_NOTTAKEN
+        cycles += c
+        instructions += i
+        c, i = _add(_SES_CMP_HIGH, _SES_BLE_TAKEN)
+        cycles += c
+        instructions += i
+        exit_registers['a5'] = (slot + 8) & 0xFFFFFFFF
+        exit_registers['d5'] = inner.registers['d5']
+        exit_registers['d6'] = inner.registers['d6']
+        exit_registers['sr'] = _cmp_sr(inner.registers['sr'], type_word, actions.EFFECT_SLOT_IN_RANGE_HIGH, 2)
+    else:
+        if type_word < actions.EFFECT_SLOT_IN_RANGE_LOW:
+            c, i = _SES_BLT_TAKEN
+        else:
+            c, i = _add(_SES_BLT_NOTTAKEN, _SES_CMP_HIGH, _SES_BLE_NOTTAKEN)
+        cycles += c
+        instructions += i
+        c, i = _add(_SES_CMP_BSET, _SES_BNE_TAIL_TAKEN, _SES_TAIL)
+        cycles += c
+        instructions += i
+        writes += tuple(pair for reg, off in ((x, 0), (y, 2), (type_word, 4)) for pair in
+                        _bytes((0xFFFFEF30 + off) & 0xFFFFFF, reg, 2))
+        writes += _bytes(0xFFFFEF36 & 0xFFFFFF, 0, 2)
+        neg_value = (-(index + 1)) & 0xFFFF
+        exit_registers['a5'] = (slot + 8) & 0xFFFFFFFF
+        exit_registers['d5'] = (inner.registers['d5'] & 0xFFFF0000) | neg_value
+        exit_registers['d6'] = inner.registers['d6']
+        exit_registers['sr'] = _sub_sr(inner.registers['sr'], 0, index + 1, 2)
+    c, i = _SES_RTS
+    cycles += c
+    instructions += i
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=writes, registers=exit_registers,
+                      last_pc=SPAWN_EFFECT_SLOT_LAST_PC)
 
 
 # --- 004ACA: clear a matched pickup group's own active-id word (ACTION_CLEAR_GROUP) ----------------

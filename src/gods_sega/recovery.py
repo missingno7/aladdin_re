@@ -14,6 +14,7 @@ from genesis_re.seam import AtomicPlan, Seam, UnsupportedCandidate, run_seam
 
 from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY, ACTION_CLEAR_GROUP_ENTRY, ACTION_RESET_ELAPSED_ENTRY,
                        SPAWN_PUFF_BOX_ENTRY, spawn_puff_box_plan,
+                       SPAWN_EFFECT_SLOT_ENTRY, spawn_effect_slot_plan,
                        AIM_CUE_ENTRY, aim_cue_update_plan, AIM_POOL_RESET_ENTRY, aim_pool_reset_plan, AIM_POOL_ADD_ENTRY, aim_pool_add_plan,
                        AIM_WINDOW_ADDRESS_ENTRY, aim_window_address_plan,
                        AIM_PROBE_MARK_ENTRY, aim_probe_mark_plan,
@@ -410,6 +411,7 @@ PLANNERS = {
     'record-id-scan': {RECORD_ID_SCAN_ENTRY: record_id_scan_plan},
     'action-reset-elapsed': {ACTION_RESET_ELAPSED_ENTRY: action_reset_elapsed_plan},
     'spawn-puff-box': {SPAWN_PUFF_BOX_ENTRY: spawn_puff_box_plan},
+    'spawn-effect-slot': {SPAWN_EFFECT_SLOT_ENTRY: spawn_effect_slot_plan},
     'action-clear-group': {ACTION_CLEAR_GROUP_ENTRY: action_clear_group_plan},
     'player-tail': {PLAYER_TAIL_ENTRY: player_tail_plan},
     'player-state': {PLAYER_STATE_ENTRY: player_state_plan},
@@ -490,7 +492,12 @@ PLANNERS = {
                        # SPAWN_SCAN_ENTRY (004926): the box-scan puff spawner, 19 September -- a new
                        # leaf, not a composition (its two real callers, 0048EA and 0139D2, are both
                        # still unrecovered) -- 54 -> 55 gates.
-                       SPAWN_SCAN_ENTRY: spawn_scan_plan, GRID_CELL_ENTRY: grid_cell_plan,
+                       SPAWN_SCAN_ENTRY: spawn_scan_plan,
+                       # SPAWN_EFFECT_SLOT_ENTRY (004A0A): the coordinator's own priority (1), the
+                       # firing arm's own action-table handler that reaches EFFECT_SLOT_FIND_ENTRY
+                       # (004AAA, already recovered as 00A772's own tail) -- 56 -> 57 gates.
+                       SPAWN_EFFECT_SLOT_ENTRY: spawn_effect_slot_plan,
+                       GRID_CELL_ENTRY: grid_cell_plan,
                        FOOTPRINT_STAMP_ENTRY: footprint_stamp_plan, SOLID_DRAW_ENTRY: draw_solid_plan,
                        ANIMATION_STEP_ENTRY: animation_step_plan, COUNTDOWN_CHECK_ENTRY: countdown_check_plan,
                        COLLISION_GATE_ENTRY: collision_gate_plan, ZONE_CHECK_ENTRY: zone_check_plan,
@@ -618,6 +625,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # spawn_scan_plan itself for the same reason); the outer d7-push/return-address bytes
              # this routine's own writes prepend are dead scratch by the time it returns.
              'spawn-puff-box-mutant-result': ('spawn-puff-box', _mutate_result),
+             'spawn-effect-slot-mutant-result': ('spawn-effect-slot', _mutate_result),
              'grid-cell-mutant-result': ('grid-cell', _mutate_address),
              'footprint-mutant-result': ('footprint', _mutate_result),
              # a register, not the stored list: the routine's own last write is the unconditional
