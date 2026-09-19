@@ -1557,6 +1557,117 @@ def particle_emit_suffix(machine, registers):
                       last_pc=PARTICLE_EMIT_LAST_PC)
 
 
+# --- 001810: the object tile painter (game/sprites.py: paint_object_tile) ---
+#
+# Cost from the tracer (artifacts/gods/evidence/census-0X001810-*, five
+# fixtures over two recordings, no overflow): the off-screen exits are one
+# plan each; the on-screen paint is a ``Seam`` -- the prefix ends at the
+# first VDP control write (001862) with the command already built (verified
+# bit-for-bit against three real activations, docs/gods/game/sprites.py's
+# own module note above ``paint_object_tile``); the ceded block's own length
+# (the tile upload's own trip count) is the machine's, never modeled, the
+# same shape as ``0018C8``'s and ``00126A``'s own cache-miss uploads.
+OBJECT_TILE_ENTRY, OBJECT_TILE_UPLOAD = 0x001810, 0x001862
+OBJECT_TILE_RESUME, OBJECT_TILE_LAST_PC = 0x0018AE, 0x0018B2
+OBJECT_TILE_PREFIX_LAST_PC = 0x00185C            # ori.l #$40000000,d0: the last instruction before the VDP control write
+OBJECT_TILE_FRAME = 24                            # movem.l d0-d3/a0-a1,-(a7)
+_OBJECT_TILE_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd3', 'a0', 'a1')
+_OT_HEAD = (56, 1)                     # movem.l d0-d3/a0-a1,-(a7)
+_OT_X_TEST = (28, 4)                   # moveq #$10,d3; add.w d0,d3; sub.w ea38,d3; cmpi.w #$160,d3
+_OT_X_BHI_TAKEN, _OT_X_BHI_NOT_TAKEN = (10, 1), (12, 1)     # bhi.w (word branch)
+_OT_Y_TEST = (28, 4)                   # moveq #$10,d3; add.w d1,d3; sub.w ea3a,d3; cmpi.w #$e0,d3
+_OT_Y_BHI_TAKEN, _OT_Y_BHI_NOT_TAKEN = (10, 1), (8, 1)      # bhi.b (byte branch)
+_OT_TABLE_LOOKUP = (42, 4)             # lea.l 66794,a0; lea.l 19d2(pc),a1; add.w d2,d2; adda.w (a1,d2.w),a0
+_OT_COMMAND_BUILD = (100, 10)          # lsr;andi.l;andi.w;asl.w;addi.w;add.w;asl.l;ror.w;swap;ori.l
+_OT_RESTORE = (76, 2)                  # movem.l (a7)+; rts
+
+
+def _object_tile_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(_OBJECT_TILE_FRAME_REGISTERS)
+                 for pair in _bytes(sp - OBJECT_TILE_FRAME + 4 * index, registers[name], 4))
+
+
+def object_tile_plan(machine, registers):
+    """001810: an off-screen paint as one plan; an on-screen one as a ``Seam`` (no cache, always a miss)."""
+    from .game import sprites
+    if registers['pc'] != OBJECT_TILE_ENTRY:
+        raise UnsupportedCandidate('object tile planner needs the machine parked at 001810')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    frame = ('object tile frame', sp - OBJECT_TILE_FRAME, OBJECT_TILE_FRAME + 4)
+    _ram_span(*frame)
+    read = _reader(machine)
+    result = sprites.paint_object_tile(read, registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                                       registers['d2'] & 0xFFFF)
+    arm = result['arm']
+    writes = _object_tile_frame_writes(sp, registers)
+    if arm == 'offscreen-x':
+        cost = (_OT_HEAD[0] + _OT_X_TEST[0] + _OT_X_BHI_TAKEN[0] + _OT_RESTORE[0],
+                _OT_HEAD[1] + _OT_X_TEST[1] + _OT_X_BHI_TAKEN[1] + _OT_RESTORE[1])
+        # sub.w ea38,d3 (the camera-x subtraction) is the last X-setter; cmpi.w does not touch X.
+        x_low = registers['d0'] & 0xFFFF
+        camera_x = read(sprites.CAMERA_X, 2)
+        test_value = (sprites.OBJECT_TILE_MARGIN + x_low - camera_x) & 0xFFFF
+        x_bit = _sub_sr(sr, (sprites.OBJECT_TILE_MARGIN + x_low) & 0xFFFF, camera_x, 2) & 0x10
+        exit_sr = (_cmp_sr(sr, test_value, sprites.SCREEN_X_LIMIT, 2) & ~0x10) | x_bit
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=OBJECT_TILE_LAST_PC)
+    if arm == 'offscreen-y':
+        cost = (_OT_HEAD[0] + _OT_X_TEST[0] + _OT_X_BHI_NOT_TAKEN[0] + _OT_Y_TEST[0] + _OT_Y_BHI_TAKEN[0] + _OT_RESTORE[0],
+                _OT_HEAD[1] + _OT_X_TEST[1] + _OT_X_BHI_NOT_TAKEN[1] + _OT_Y_TEST[1] + _OT_Y_BHI_TAKEN[1] + _OT_RESTORE[1])
+        # sub.w ea3a,d3 (the camera-y subtraction) is the last X-setter; cmpi.w does not touch X.
+        y_low = registers['d1'] & 0xFFFF
+        camera_y = read(sprites.CAMERA_Y, 2)
+        test_value = (sprites.OBJECT_TILE_MARGIN + y_low - camera_y) & 0xFFFF
+        x_bit = _sub_sr(sr, (sprites.OBJECT_TILE_MARGIN + y_low) & 0xFFFF, camera_y, 2) & 0x10
+        exit_sr = (_cmp_sr(sr, test_value, sprites.SCREEN_Y_LIMIT, 2) & ~0x10) | x_bit
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=OBJECT_TILE_LAST_PC)
+    # 'paint': the prefix ends at the VDP control write with the command already built; the ceded
+    # block (the second command, the nametable writes, the tile upload) is the machine's own.
+    high = lambda name: registers[name] & 0xFFFF0000
+    cycles = (_OT_HEAD[0] + _OT_X_TEST[0] + _OT_X_BHI_NOT_TAKEN[0] + _OT_Y_TEST[0] + _OT_Y_BHI_NOT_TAKEN[0]
+              + _OT_TABLE_LOOKUP[0] + _OT_COMMAND_BUILD[0])
+    instructions = (_OT_HEAD[1] + _OT_X_TEST[1] + _OT_X_BHI_NOT_TAKEN[1] + _OT_Y_TEST[1] + _OT_Y_BHI_NOT_TAKEN[1]
+                    + _OT_TABLE_LOOKUP[1] + _OT_COMMAND_BUILD[1])
+    y_low = registers['d1'] & 0xFFFF
+    camera_y = read(sprites.CAMERA_Y, 2)
+    # 001824-00182C's own Y-margin test (d3 = margin + y - camera_y) is scratch the caller never
+    # reads back, but movem.l (a7)+ at the resume restores the ENTRY d3 regardless -- named here only
+    # because the seam's own strict witness checks every register the prefix hands the ceded block.
+    prefix = AtomicPlan(
+        cycles=cycles, instructions=instructions, writes=writes,
+        registers={'d0': result['command'],
+                   'd1': high('d1') | (((y_low & 0xF8) << 4) & 0xFFFF),
+                   'd2': high('d2') | (((registers['d2'] & 0xFFFF) * 2) & 0xFFFF),
+                   'd3': (sprites.OBJECT_TILE_MARGIN + y_low - camera_y) & 0xFFFF,
+                   'a0': result['descriptor'], 'a1': 0x000019D2,
+                   'a7': (sp32 - OBJECT_TILE_FRAME) & 0xFFFFFFFF,
+                   'pc': OBJECT_TILE_UPLOAD,
+                   'sr': _logic_sr(sr, result['command'], 4)},
+        last_pc=OBJECT_TILE_PREFIX_LAST_PC)
+    return Seam(prefix=prefix, resume_pc=OBJECT_TILE_RESUME,
+                stack_basis=(sp32 - OBJECT_TILE_FRAME) & 0xFFFFFFFF,
+                guards=((sp - OBJECT_TILE_FRAME, OBJECT_TILE_FRAME + 4),), suffix=object_tile_suffix)
+
+
+def object_tile_suffix(machine, registers):
+    """0018AE after the upload: the frame back into the registers, the RTS; the CCR is the machine's."""
+    if registers['pc'] != OBJECT_TILE_RESUME:
+        raise UnsupportedCandidate('object tile suffix needs the machine parked at 0018AE')
+    base = registers['a7']
+    restored = {name: int.from_bytes(machine.peek_ram((base + 4 * index) & 0xFFFF, 4), 'big')
+                for index, name in enumerate(_OBJECT_TILE_FRAME_REGISTERS)}
+    sp = (base + OBJECT_TILE_FRAME) & 0xFFFFFFFF
+    restored.update(a7=(sp + 4) & 0xFFFFFFFF, pc=_return(machine, sp))
+    return AtomicPlan(cycles=_OT_RESTORE[0], instructions=_OT_RESTORE[1], writes=(), registers=restored,
+                      last_pc=OBJECT_TILE_LAST_PC)
+
+
 # --- 014084: the hazard tick (game/hazard.py: hazard_tick) -------------------
 #
 # Cost from the tracer (artifacts/gods/evidence/census-014084-fresh): no
