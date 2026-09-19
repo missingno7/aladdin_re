@@ -58,6 +58,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        RECORD_ONE_ENTRY, record_status_one_plan,
                        STATUS_HIGH_ENTRY, status_high_dispatch_plan,
                        STATUS_LOW_ENTRY, status_low_dispatch_plan,
+                       TILE_PAIR_ENTRY, tile_pair_plan,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
@@ -426,6 +427,7 @@ PLANNERS = {
     'record-status-one': {RECORD_ONE_ENTRY: record_status_one_plan},
     'status-high-dispatch': {STATUS_HIGH_ENTRY: status_high_dispatch_plan},
     'status-low-dispatch': {STATUS_LOW_ENTRY: status_low_dispatch_plan},
+    'tile-pair': {TILE_PAIR_ENTRY: tile_pair_plan},
     'kind-sound-cue-pair': {SOUND_CUE_PAIR_ENTRY: sound_cue_pair_plan},
     'kind-copy-table-14': {COPY_TABLE_14_ENTRY: copy_table_14_plan},
     'kind-copy-table-15': {COPY_TABLE_15_ENTRY: copy_table_15_plan},
@@ -689,7 +691,13 @@ PLANNERS = {
                        # the SAME shape one level deeper (its own second kind dispatch at 0032F6 folds
                        # in the SAME object_activity_gate-real-call/sprite_emit-opaque-seam pair);
                        # another genuinely NEW, independent gate -- 61 -> 62 gates.
-                       STATUS_LOW_ENTRY: status_low_dispatch_plan},
+                       STATUS_LOW_ENTRY: status_low_dispatch_plan,
+                       # TILE_PAIR_ENTRY (003BEC): 20 September -- a real call boundary (a genuine bsr,
+                       # a plain rts), extremely hot (tens of thousands of occurrences per recording)
+                       # from real callers this session did not need to identify; off-screen is a plain
+                       # leaf, on-screen a Seam over two fixed VDP control writes (never a data loop) --
+                       # 62 -> 63 gates.
+                       TILE_PAIR_ENTRY: tile_pair_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -754,6 +762,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'record-status-one-mutant-register': ('record-status-one', _mutate_register),
              'status-high-dispatch-mutant-register': ('status-high-dispatch', _mutate_register),
              'status-low-dispatch-mutant-register': ('status-low-dispatch', _mutate_register),
+             'tile-pair-mutant-register': ('tile-pair', _mutate_register),
              'hazard-tick-mutant-result': ('hazard-tick', _mutate_result),
              'score-convert-mutant-result': ('score-convert', _mutate_result),
              'evaluator-mutant-outcome': ('evaluator', _mutate_outcome),

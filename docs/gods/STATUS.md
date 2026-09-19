@@ -2876,6 +2876,40 @@ small leaf):
   (`0039EA`/`003AE6`) as families, `003186`'s head, `003284` composing the
   chains, and `0030CC` as the scan.
 
+- **20 September, grinder session on `003BEC`**: recovered in full, the
+  first of the five originally-unread routines.  A real call boundary (a
+  genuine `bsr`, a plain `rts`) -- unlike every other region recovered
+  today -- and the FIRST region this session that corrects, rather than
+  confirms, an earlier reconnaissance note: "the map streaming
+  interpreter [...] which does not return within a frame" turns out to
+  describe a stale, unconfirmed guess, not this routine -- a full-tree
+  census (all five recordings, ~83,000 real occurrences from real callers
+  this session did not need to identify) shows a clean, bounded 8-35
+  instruction leaf, zero deadline cuts, ever.  Off-screen in either axis
+  is a plain leaf (the SAME `OBJECT_TILE_MARGIN`/`SCREEN_X_LIMIT`/
+  `SCREEN_Y_LIMIT` shape `001810`'s own paint arm uses); on-screen is a
+  Seam over two FIXED VDP control writes -- never a data loop, unlike
+  every sprite/tile emitter this project has recovered so far -- ending
+  its own prefix at the first control write with the SAME nametable-
+  cell-to-VDP-command arithmetic `001810`'s own paint arm already proves
+  (factored out as `game.world.tile_pair_command`, reusable).  25
+  fixtures MATCH plain and under `--perturb-upper-halves` after two real
+  register-residue defects (D1 going into the ceded block is `001832`'s
+  own "row" value, not the caller's raw Y; D7's own upper half is ALWAYS
+  zero, since `moveq #$10,d7` clears the whole register unlike D0-D2's
+  own word-preserving ops).  `camera-sprites` extended to sixty-three
+  gates -- one short of the adapter's own sixty-four-gate cap.  Milestone
+  tree PASS, clean on the first attempt
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-20h`, 107,519
+  frames, 249.7 s, 8,943 fallbacks).  Next, per the original assignment's
+  own order: the remaining four originally-unread routines (`01191A`,
+  `011D32`, `012010`, `00173C` -- `0039EA`'s own kind `0x75`/`0x32`
+  chain), the status chains (`0039EA`/`003AE6`) as families, `003186`'s
+  head, `003284` composing the chains, and `0030CC` as the scan -- with
+  `camera-sprites` at sixty-three of sixty-four gates, the next NEW,
+  independent gate this candidate arms should be the last one until a
+  family composition frees some back (the `005700`/`00A772` precedent).
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second

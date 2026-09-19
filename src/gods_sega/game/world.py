@@ -481,3 +481,47 @@ def status_low_kind_dispatch(read, kind):
     if kind in (0x6D, 0x6E) or 0x40 <= kind <= 0x43:
         return {'arm': 'unrecovered', 'kind': kind}
     return {'arm': 'default', 'value': kind}
+
+
+# --- 003BEC: the tile-pair VDP writer -- a bounded, non-looping nametable stamp (0032F6's own
+# 0x40-0x43 range arm's own callee) -----------------------------------------------------------------
+#
+# An earlier note (`docs/gods/STATUS.md`'s own "Deferred, not first candidates") read this as part of
+# "the map streaming interpreter [...] which does not return within a frame" -- reconnaissance-stage,
+# not confirmed by any trace.  A full-tree census (all five recordings, ~83,000 real occurrences) shows
+# a clean, bounded 8-35 instruction leaf, a plain rts, never a deadline cut: the off-screen test is
+# IDENTICAL in shape to 001810's own paint arm (the SAME OBJECT_TILE_MARGIN/SCREEN_X_LIMIT/
+# SCREEN_Y_LIMIT), and the on-screen arm is two FIXED VDP control writes, never a data loop -- the
+# first addresses one nametable cell (the SAME world-position-to-VDP-command arithmetic 001810's own
+# paint arm already proves, `tile_pair_command`) and writes a horizontal tile pair (D2, D2+2); the
+# second, offset by 0x800000 (the same plane-B/priority-bit shape), writes the interleaved pair
+# (D2+1, D2+3).
+def tile_pair_command(read, x, y):
+    """The SAME nametable-cell-to-VDP-command arithmetic `sprites.paint_object_tile`'s own paint arm
+    already proves (001832-00185C), applied here to 003BEC's own (x, y)."""
+    wx, wy = x & 0xFFFF, y & 0xFFFF
+    column = (wx >> 2) & 0x7E
+    row = (wy & 0xF8) << 4
+    cell = (column + 0xC000 + row) & 0xFFFF
+    shifted = (cell << 2) & 0xFFFFFFFF
+    low, high = shifted & 0xFFFF, (shifted >> 16) & 0xFFFF
+    rotated_low = ((low >> 2) | ((low & 3) << 14)) & 0xFFFF
+    swapped = ((rotated_low << 16) | high) & 0xFFFFFFFF
+    return (swapped | 0x40000000) & 0xFFFFFFFF
+
+
+def paint_tile_pair(read, x, y, index):
+    """003BEC: off-screen in either axis makes no device write at all (the caller's own D0-D2/D7
+    frame is still pushed and popped -- a real, transient write, not a decline); otherwise two fixed
+    VDP control writes, the first at (x, y)'s own nametable cell writing the pair (index, index+2),
+    the second writing (index+1, index+3)."""
+    from . import sprites
+    screen_x = (x - read(sprites.CAMERA_X, 2)) & 0xFFFF
+    if ((screen_x + sprites.OBJECT_TILE_MARGIN) & 0xFFFF) > sprites.SCREEN_X_LIMIT:
+        return {'arm': 'offscreen-x', 'screen_x': screen_x}
+    screen_y = (y - read(sprites.CAMERA_Y, 2)) & 0xFFFF
+    if ((screen_y + sprites.OBJECT_TILE_MARGIN) & 0xFFFF) > sprites.SCREEN_Y_LIMIT:
+        return {'arm': 'offscreen-y', 'screen_x': screen_x, 'screen_y': screen_y}
+    command = tile_pair_command(read, x, y)
+    return {'arm': 'paint', 'command': command, 'index': index & 0xFFFF,
+           'screen_x': screen_x, 'screen_y': screen_y}

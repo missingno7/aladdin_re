@@ -23894,3 +23894,114 @@ def status_low_dispatch_suffix(machine, registers):
     cycles, instructions = _add(_OKD_RESTORE, _OKD_BRA_LOOP)
     return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=exit_registers,
                       last_pc=_STATUS_LOW_RESUME_LAST_PC[pc])
+
+
+# --- 003BEC: the tile-pair VDP writer (game.world.paint_tile_pair) -- a plain leaf off-screen, a Seam
+# on-screen (the SAME shape sprite_emit_plan/object_tile_plan already prove: a bounded, non-looping
+# device block, not a data loop).  A real call boundary (a genuine bsr from 0032F6's own 0x40-0x43
+# range arm, a plain rts here), unlike every other region recovered today.
+TILE_PAIR_ENTRY = 0x003BEC
+TILE_PAIR_UPLOAD = 0x003C2C            # move.l d0,4(a6) -- the first VDP control write
+TILE_PAIR_PREFIX_LAST_PC = 0x003C26    # ori.l #$40000000,d0 -- the last instruction before it
+TILE_PAIR_RESUME = 0x003C4E            # movem.l (a7)+,d0-d2/d7 -- right after the ceded block
+TILE_PAIR_LAST_PC = 0x003C52           # rts
+TILE_PAIR_FRAME = 16                   # movem.l d0-d2/d7,-(a7)
+_TP_FRAME_REGISTERS = ('d0', 'd1', 'd2', 'd7')
+_TP_FRAME_PUSH = (40, 1)               # 003BEC movem.l d0-d2/d7,-(a7)
+_TP_X_MOVEQ = (4, 1)                   # 003BF0 moveq #$10,d7
+_TP_X_ADD = (4, 1)                     # 003BF2 add.w d0,d7
+_TP_X_SUB = (12, 1)                    # 003BF4 sub.w ea38.w,d7
+_TP_X_CMP = (8, 1)                     # 003BF8 cmpi.w #$160,d7
+_TP_X_BHI_TAKEN, _TP_X_BHI_NOT = (10, 1), (8, 1)    # 003BFC bhi.b $3c4e
+_TP_Y_MOVEQ = (4, 1)                   # 003BFE moveq #$10,d7
+_TP_Y_ADD = (4, 1)                     # 003C00 add.w d1,d7
+_TP_Y_SUB = (12, 1)                    # 003C02 sub.w ea3a.w,d7
+_TP_Y_CMP = (8, 1)                     # 003C06 cmpi.w #$e0,d7
+_TP_Y_BHI_TAKEN, _TP_Y_BHI_NOT = (10, 1), (8, 1)    # 003C0A bhi.b $3c4e
+_TP_COMMAND_BUILD = (100, 10)          # 003C0C-003C26: lsr;andi.l;andi.w;asl.w;addi.w;add.w;asl.l;ror.w;swap;ori.l
+_TP_RESTORE = (44, 1)                  # 003C4E movem.l (a7)+,d0-d2/d7
+_TP_RTS = (16, 1)                      # 003C52 rts
+
+
+def _tile_pair_frame_writes(sp, registers):
+    return tuple(pair for index, name in enumerate(_TP_FRAME_REGISTERS)
+                 for pair in _bytes(sp - TILE_PAIR_FRAME + 4 * index, registers[name], 4))
+
+
+def tile_pair_plan(machine, registers):
+    """003BEC: an off-screen test (IDENTICAL in shape to 001810's own) as one plan; on-screen, a Seam
+    over two fixed VDP control writes (never a data loop, unlike 0018C8/00126A's own cache-miss
+    uploads)."""
+    from .game import world
+    if registers['pc'] != TILE_PAIR_ENTRY:
+        raise UnsupportedCandidate('tile pair planner needs the machine parked at 003BEC')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    frame = ('tile pair frame', sp - TILE_PAIR_FRAME, TILE_PAIR_FRAME + 4)
+    _ram_span(*frame)
+    read = _reader(machine)
+    result = world.paint_tile_pair(read, registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF,
+                                   registers['d2'] & 0xFFFF)
+    arm = result['arm']
+    writes = _tile_pair_frame_writes(sp, registers)
+    if arm == 'offscreen-x':
+        cost = _add(_TP_FRAME_PUSH, _TP_X_MOVEQ, _TP_X_ADD, _TP_X_SUB, _TP_X_CMP, _TP_X_BHI_TAKEN,
+                   _TP_RESTORE, _TP_RTS)
+        # sub.w ea38,d7 is the last X-setter; cmpi.w does not touch X.
+        x_low = registers['d0'] & 0xFFFF
+        camera_x = read(0xFFEA38, 2) & 0xFFFF
+        test_value = (0x10 + x_low - camera_x) & 0xFFFF
+        x_bit = _sub_sr(sr, (0x10 + x_low) & 0xFFFF, camera_x, 2) & 0x10
+        exit_sr = (_cmp_sr(sr, test_value, 0x160, 2) & ~0x10) | x_bit
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=TILE_PAIR_LAST_PC)
+    if arm == 'offscreen-y':
+        cost = _add(_TP_FRAME_PUSH, _TP_X_MOVEQ, _TP_X_ADD, _TP_X_SUB, _TP_X_CMP, _TP_X_BHI_NOT,
+                   _TP_Y_MOVEQ, _TP_Y_ADD, _TP_Y_SUB, _TP_Y_CMP, _TP_Y_BHI_TAKEN, _TP_RESTORE, _TP_RTS)
+        y_low = registers['d1'] & 0xFFFF
+        camera_y = read(0xFFEA3A, 2) & 0xFFFF
+        test_value = (0x10 + y_low - camera_y) & 0xFFFF
+        x_bit = _sub_sr(sr, (0x10 + y_low) & 0xFFFF, camera_y, 2) & 0x10
+        exit_sr = (_cmp_sr(sr, test_value, 0xE0, 2) & ~0x10) | x_bit
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=TILE_PAIR_LAST_PC)
+    # 'paint': the prefix ends at the VDP control write with the command already built; the ceded
+    # block (the second command, the nametable data writes) is the machine's own.
+    high = lambda name: registers[name] & 0xFFFF0000
+    cost = _add(_TP_FRAME_PUSH, _TP_X_MOVEQ, _TP_X_ADD, _TP_X_SUB, _TP_X_CMP, _TP_X_BHI_NOT,
+               _TP_Y_MOVEQ, _TP_Y_ADD, _TP_Y_SUB, _TP_Y_CMP, _TP_Y_BHI_NOT, _TP_COMMAND_BUILD)
+    # D7 going into the ceded block is the Y test's own residue (0x10 + screen_y - camera_y, never
+    # read again by the ceded block itself, but the tracer sees it) -- moveq #$10,d7 (0x3BFE) clears
+    # the WHOLE 32-bit register first, so unlike D0-D2 its own upper half is never the caller's entry
+    # residue, always 0.  D1 going in is 001832's own "row" (andi.w #$f8,d1; asl.w #4,d1) -- the SAME
+    # arithmetic 001810's own paint arm already threads into its own prefix this exact way.
+    y_low = registers['d1'] & 0xFFFF
+    camera_y = read(0xFFEA3A, 2) & 0xFFFF
+    d7_residue = (0x10 + y_low - camera_y) & 0xFFFF
+    prefix = AtomicPlan(
+        cycles=cost[0], instructions=cost[1], writes=writes,
+        registers={'d0': result['command'], 'd1': high('d1') | (((y_low & 0xF8) << 4) & 0xFFFF),
+                  'd7': d7_residue, 'a7': (sp32 - TILE_PAIR_FRAME) & 0xFFFFFFFF, 'pc': TILE_PAIR_UPLOAD,
+                  'sr': _logic_sr(sr, result['command'], 4)},
+        last_pc=TILE_PAIR_PREFIX_LAST_PC)
+    return Seam(prefix=prefix, resume_pc=TILE_PAIR_RESUME,
+               stack_basis=(sp32 - TILE_PAIR_FRAME) & 0xFFFFFFFF,
+               guards=((sp - TILE_PAIR_FRAME, TILE_PAIR_FRAME + 4),), suffix=tile_pair_suffix)
+
+
+def tile_pair_suffix(machine, registers):
+    """0018AE-shape: the frame back into the registers, the RTS; the CCR is the machine's."""
+    if registers['pc'] != TILE_PAIR_RESUME:
+        raise UnsupportedCandidate('tile pair suffix needs the machine parked at 003C4E')
+    base = registers['a7']
+    restored = {name: int.from_bytes(machine.peek_ram((base + 4 * index) & 0xFFFF, 4), 'big')
+                for index, name in enumerate(_TP_FRAME_REGISTERS)}
+    sp = (base + TILE_PAIR_FRAME) & 0xFFFFFFFF
+    restored.update(a7=(sp + 4) & 0xFFFFFFFF, pc=_return(machine, sp))
+    cycles, instructions = _add(_TP_RESTORE, _TP_RTS)
+    return AtomicPlan(cycles=cycles, instructions=instructions, writes=(), registers=restored,
+                      last_pc=TILE_PAIR_LAST_PC)
