@@ -22680,3 +22680,44 @@ def pickup_award_group_plan(machine, registers):
     stack_writes = _bytes((sp - 4) & 0xFFFFFF, 0x00012CAC, 4) + _bytes((sp - 8) & 0xFFFFFF, 0x00012CD2, 4)
     return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=stack_writes + writes,
                       registers=exit_registers, last_pc=PICKUP_AWARD_GROUP_LAST_PC_REGISTER)
+
+
+# --- 002F2E: the effect queue append (game/world.py) -- a RAM-only leaf, D0/D1/D2 in, no register
+# survives but A7/PC (D5/A0 are saved and restored by the routine's own movem frame).  Cost fragments
+# from the tracer (artifacts/gods/evidence/census-0X002F2E-*).
+QUEUE_APPEND_ENTRY, QUEUE_APPEND_LAST_PC = 0x002F2E, 0x002F50
+_QA_PRE_DIRECT = (24 + 12 + 12 + 10, 4)     # movem push; lea; tst f240; beq taken
+_QA_PRE_SCAN = (24 + 12 + 12 + 8 + 4, 5)    # movem push; lea; tst f240; beq not taken; moveq #9,d5
+_QA_SCAN_STEP = (8 + 8 + 8 + 10, 4)         # tst (a0); bmi not taken; lea a(a0),a0; dbra taken
+_QA_SCAN_FOUND = (8 + 10, 2)                # tst (a0); bmi taken
+_QA_TAIL = (8 + 8 + 8 + 12 + 12 + 16 + 10 + 28 + 16, 9)   # the five stores, f240 <- 1, bra, movem pop, rts
+
+
+def queue_append_plan(machine, registers):
+    """002F2E: append (D0, D1, D2) to the effect queue (game.world.queue_append)."""
+    from .game import world
+    if registers['pc'] != QUEUE_APPEND_ENTRY:
+        raise UnsupportedCandidate('queue append planner needs the machine parked at 002F2E')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    d0, d1, d2 = registers['d0'], registers['d1'], registers['d2']
+    result = world.queue_append(read, d0, d1, d2)
+    if result['arm'] == 'full':
+        raise UnsupportedCandidate('queue append: every slot occupied is not witnessed')
+    if result['arm'] == 'found' and result['depth'] not in world.QUEUE_WITNESSED_SCAN_DEPTH:
+        raise UnsupportedCandidate('queue append: scan depth %d is not witnessed' % result['depth'])
+    if result['arm'] == 'direct':
+        cost = _add(_QA_PRE_DIRECT, _QA_TAIL)
+    else:
+        cost = _add(_QA_PRE_SCAN, *([_QA_SCAN_STEP] * result['depth']), _QA_SCAN_FOUND, _QA_TAIL)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # movem.l d5/a0,-(a7): a real, persistent (if dead by the time the routine returns) write of the
+    # caller's own D5 then A0 into the frame it immediately restores from -- the tracer sees it.
+    frame_writes = _bytes((sp - 8) & 0xFFFFFF, registers['d5'] & 0xFFFFFFFF, 4) + _bytes((sp - 4) & 0xFFFFFF, registers['a0'] & 0xFFFFFFFF, 4)
+    exit_sr = _logic_sr(sr, 1, 2)   # the last flag-setter on every path: move.w #$1,f240.w
+    exit_registers = {'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr}
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=frame_writes + writes, registers=exit_registers,
+                      last_pc=QUEUE_APPEND_LAST_PC)

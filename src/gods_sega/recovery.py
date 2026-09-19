@@ -46,6 +46,7 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        OBJECT_TILE_ENTRY, object_tile_plan,
                        OBJECT_KIND_DISPATCH_ENTRY, object_kind_dispatch_plan,
                        PICKUP_AWARD_GROUP_ENTRY, pickup_award_group_plan,
+                       QUEUE_APPEND_ENTRY, queue_append_plan,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
@@ -396,6 +397,7 @@ PLANNERS = {
     'object-tile': {OBJECT_TILE_ENTRY: object_tile_plan},
     'object-kind-dispatch': {OBJECT_KIND_DISPATCH_ENTRY: object_kind_dispatch_plan},
     'pickup-award-group': {PICKUP_AWARD_GROUP_ENTRY: pickup_award_group_plan},
+    'queue-append': {QUEUE_APPEND_ENTRY: queue_append_plan},
     'hazard-tick': {HAZARD_TICK_ENTRY: hazard_tick_plan},
     'conditions': {CONDITION_ENTRY: condition_plan},
     'pickups': {PICKUP_AWARD_ENTRY: pickup_award_plan},
@@ -624,7 +626,10 @@ PLANNERS = {
                        # PICKUP_AWARD_GROUP_ENTRY (012C80): the Decision's own next bite, the pickup-
                        # award group dispatch and its own chain (012D30/012A3E/012A34/011468) -- 59 ->
                        # 60 gates.
-                       PICKUP_AWARD_GROUP_ENTRY: pickup_award_group_plan},
+                       PICKUP_AWARD_GROUP_ENTRY: pickup_award_group_plan,
+                       # QUEUE_APPEND_ENTRY (002F2E): the effect queue append, reached from 003480's
+                       # own body (still unrecovered) -- 60 -> 61 gates.
+                       QUEUE_APPEND_ENTRY: queue_append_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -664,6 +669,7 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              # last), re-read by pickups.collect() as the time-bonus baseline -- a real, externally
              # visible effect.
              'pickup-award-group-mutant-result': ('pickup-award-group', _mutate_result),
+             'queue-append-mutant-result': ('queue-append', _mutate_result),
              'hazard-tick-mutant-result': ('hazard-tick', _mutate_result),
              'score-convert-mutant-result': ('score-convert', _mutate_result),
              'evaluator-mutant-outcome': ('evaluator', _mutate_outcome),
