@@ -2476,6 +2476,34 @@ small leaf):
   `0139D2` inside the collectible-lists subsystem (`tick-map.md` order
   14) is a fresh bite in its own right.
 
+- **19 September, closing this grinder session**: `003186`'s own body is
+  escalated `NEW_GODS_SUBSYSTEM` (`docs/gods/blockers/2026-09-19-003186.md`).
+  Its own head (the phase counters, the `0033D4`/`0033EC` delta/cue
+  tables) matches the `0030CC` assignment's own read and is likely
+  tractable, but its own tail falls unconditionally into `003284`, a
+  second real subsystem of its own: an unmodelled screen-visibility gate
+  (`003480`, its own `rtr` return convention) feeding the already-
+  recovered sprite emitter (`0018C8`) from at least four sites, a genuine
+  indirect-`jsr` function-pointer table (`0x370E`, 13 real handlers), a
+  further native-ish routine (`001810`), two more persistent structures,
+  and a pickup-award integration reading `pickups`' own already-named
+  tables through a further multi-call chain.  `census_all.py --entry
+  0x003186 --max-classes 400` ran to completion (258-471 s a recording,
+  the most expensive census this grinder has run) and confirmed the
+  scale directly: four of five recordings overflowed the 400-class cap
+  by 3,037-5,410 further occurrences each (54-81% of all activations),
+  well over a thousand real distinct path classes across the tree --
+  an order of magnitude past any bounded leaf or family this grinder has
+  closed.  `0030CC` itself stays blocked behind it.  Next bites, in
+  order: `003480`'s own screen-visibility gate (a leaf reused at every
+  `0018C8`-emitting arm), the `0370E` table's own individual handlers
+  (most already point at the recovered `0018C8`), `FFFFF262`'s own
+  triple-buffer, then the pickup-award integration; separately, `003186`'s
+  own head alone (over the 400 retained fixtures per recording, already
+  parked exactly there) may still be worth a leaf recovery on its own
+  merits even before `003284` is closed, and `004926`'s own second real
+  caller at `0139D2` remains untouched.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second
