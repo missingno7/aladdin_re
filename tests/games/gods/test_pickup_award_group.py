@@ -99,7 +99,12 @@ def test_plan_reproduces_every_witnessed_arm(fixture):
 
 def test_candidate_name_is_explicit():
     assert recovery.Candidate('pickup-award-group').gate_pcs == (boundary.PICKUP_AWARD_GROUP_ENTRY,)
-    assert boundary.PICKUP_AWARD_GROUP_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 20 September: its only real caller is OBJECT_ACTIVITY_GATE_ENTRY's
+    # own '>= 0xC0' arm (docs/gods/blockers/2026-09-19-003480.md's own Progress notes) -- now that
+    # object_activity_gate_plan is armed there and composes it internally, the native machine never
+    # independently reaches 012C80 as a gate hit.  This candidate's own PLANNERS entry is unchanged.
+    assert boundary.PICKUP_AWARD_GROUP_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.OBJECT_ACTIVITY_GATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('pickup-award-group-mutant-result').mutation is recovery._mutate_result
 
 

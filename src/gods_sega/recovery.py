@@ -48,10 +48,13 @@ from .boundary import (ACHIEVEMENT_DISPATCH_ENTRY, ACHIEVEMENT_SLOT_RESET_ENTRY,
                        PICKUP_AWARD_GROUP_ENTRY, pickup_award_group_plan,
                        QUEUE_APPEND_ENTRY, queue_append_plan,
                        ACCUMULATOR_0_ENTRY, accumulator_0_plan, ACCUMULATOR_3_ENTRY, accumulator_3_plan,
-                       ACCUMULATOR_21_ENTRY, accumulator_21_plan,
+                       ACCUMULATOR_19_ENTRY, accumulator_19_plan, ACCUMULATOR_21_ENTRY, accumulator_21_plan,
                        SOUND_CUE_PAIR_ENTRY, sound_cue_pair_plan,
                        COPY_TABLE_14_ENTRY, copy_table_14_plan, COPY_TABLE_15_ENTRY, copy_table_15_plan,
                        COPY_TABLE_16_ENTRY, copy_table_16_plan,
+                       BUMP_TALLY_1_ENTRY, bump_tally_1_plan, BUMP_TALLY_2_ENTRY, bump_tally_2_plan,
+                       HALF_FRAME_COUNTER_ENTRY, half_frame_counter_plan,
+                       OBJECT_ACTIVITY_GATE_ENTRY, object_activity_gate_plan,
                        KIND_FRAME_OFFSET_ENTRY, LAUNCH_ENTRY, MESSAGE_GATE_ENTRY, NEXT_RANDOM_ENTRY, PARTICLE_EMIT_ENTRY, PICKUP_AWARD_ENTRY, PICKUP_CHECK_ENTRY,
                        PICKUP_PROBE_ENTRY, PLAYER_STATE_ENTRY, PLAYER_TAIL_ENTRY, PROJECTILE_RESUME_ENTRY, PROXIMITY_ENTRY, RECORD_ID_SCAN_ENTRY, SCORE_CONVERT_ENTRY, SLOT_SCAN_ENTRY, SOLID_DRAW_ENTRY,
                        SPAWN_QUEUE_ENTRY, SPRITE_EMIT_ENTRY, STATE0_ENTRY, STATE1_ENTRY, STATE2_ENTRY, STATE10_ENTRY, STATE3_ENTRY, STATE4_ENTRY, STATE5_ENTRY, STATE6_ENTRY, STATE8_ENTRY, STATE9_ENTRY, STATE11_ENTRY, STATE12_ENTRY, STATE13_ENTRY, STATE14_ENTRY, STATE16_ENTRY, STATE17_ENTRY, STATE18_ENTRY, STATE19_ENTRY, STATE21_ENTRY, STATE22_ENTRY, STATE23_ENTRY, STATE26_ENTRY, STATE_26_ENTRY, STATE27_ENTRY, STATE28_ENTRY, STATE24_ENTRY, STATE25_ENTRY, STATIC_EMIT_ENTRY, STRING_COPY_ENTRY, TABLE_RESET_ENTRY,
@@ -409,7 +412,12 @@ PLANNERS = {
     # composed, which will retire these individual gates the way 00A772 retired the creature leaves'.
     'kind-accumulator-0': {ACCUMULATOR_0_ENTRY: accumulator_0_plan},
     'kind-accumulator-3': {ACCUMULATOR_3_ENTRY: accumulator_3_plan},
+    'kind-accumulator-19': {ACCUMULATOR_19_ENTRY: accumulator_19_plan},
     'kind-accumulator-21': {ACCUMULATOR_21_ENTRY: accumulator_21_plan},
+    'kind-bump-tally-1': {BUMP_TALLY_1_ENTRY: bump_tally_1_plan},
+    'kind-bump-tally-2': {BUMP_TALLY_2_ENTRY: bump_tally_2_plan},
+    'kind-half-frame-counter': {HALF_FRAME_COUNTER_ENTRY: half_frame_counter_plan},
+    'object-activity-gate': {OBJECT_ACTIVITY_GATE_ENTRY: object_activity_gate_plan},
     'kind-sound-cue-pair': {SOUND_CUE_PAIR_ENTRY: sound_cue_pair_plan},
     'kind-copy-table-14': {COPY_TABLE_14_ENTRY: copy_table_14_plan},
     'kind-copy-table-15': {COPY_TABLE_15_ENTRY: copy_table_15_plan},
@@ -639,13 +647,29 @@ PLANNERS = {
                        # opaque over its own table-matched handler (kind 0x51 -> 0037A0 the only
                        # witnessed pair) -- 58 -> 59 gates.
                        OBJECT_KIND_DISPATCH_ENTRY: object_kind_dispatch_plan,
-                       # PICKUP_AWARD_GROUP_ENTRY (012C80): the Decision's own next bite, the pickup-
-                       # award group dispatch and its own chain (012D30/012A3E/012A34/011468) -- 59 ->
-                       # 60 gates.
-                       PICKUP_AWARD_GROUP_ENTRY: pickup_award_group_plan,
-                       # QUEUE_APPEND_ENTRY (002F2E): the effect queue append, reached from 003480's
-                       # own body (still unrecovered) -- 60 -> 61 gates.
-                       QUEUE_APPEND_ENTRY: queue_append_plan},
+                       # PICKUP_AWARD_GROUP_ENTRY (012C80) and QUEUE_APPEND_ENTRY (002F2E) are RETIRED
+                       # from this combined candidate's own gate set, 20 September: their only real
+                       # callers (docs/gods/blockers/2026-09-19-003480.md's own Progress notes) are
+                       # OBJECT_ACTIVITY_GATE_ENTRY's own arms 2/3 (below), composed here -- once IT is
+                       # armed, the native machine never independently reaches either PC as a gate hit,
+                       # the same "the composition frees them" retirement 00A772's and 005700's own
+                       # already used.  Their own PLANNERS entries and standalone tests are unchanged.
+                       # The 005958 table's own ten composed handlers (accumulator 0/3/19/21, copy-
+                       # table 14/15/16, bump-tally 1/2, half-frame-counter) were NEVER armed here in
+                       # the first place (kept standalone-only for native gate capacity, the
+                       # state-18/creature-attack precedent) and stay that way: OBJECT_ACTIVITY_GATE_
+                       # ENTRY's own arm 2 already reaches every one of them internally.  SOUND_CUE_
+                       # PAIR_ENTRY (index 10) is the one exception -- it has a second, real,
+                       # independent caller (exit 008616) this composition does not cover, so it stays
+                       # its own standalone-only candidate too, unchanged.
+                       #
+                       # OBJECT_ACTIVITY_GATE_ENTRY (003480): the Decision's own next bite, composing
+                       # the bounds-check head, the achievements.RECORD_TABLE dispatch, and both the
+                       # pickup-award (012C80) and sound-request (0x5958 table + 002F2E) arms -- the
+                       # 0x354C record-status-1 sub-dispatch (a genuine second real sub-mechanism) and
+                       # 005958 indices 4/6/17/18 (each its own real, unrecovered complexity) decline
+                       # by name -- 61 -> 60 gates net (012C80/002F2E retired, 003480 admitted).
+                       OBJECT_ACTIVITY_GATE_ENTRY: object_activity_gate_plan},
 }
 MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'conditions-mutant-outcome': ('conditions', _mutate_outcome),
@@ -688,11 +712,22 @@ MUTATIONS = {'camera-mutant-result': ('camera', _mutate_result),
              'queue-append-mutant-result': ('queue-append', _mutate_result),
              'kind-accumulator-0-mutant-result': ('kind-accumulator-0', _mutate_result),
              'kind-accumulator-3-mutant-result': ('kind-accumulator-3', _mutate_result),
+             'kind-accumulator-19-mutant-result': ('kind-accumulator-19', _mutate_result),
              'kind-accumulator-21-mutant-result': ('kind-accumulator-21', _mutate_result),
+             'kind-bump-tally-1-mutant-result': ('kind-bump-tally-1', _mutate_result),
+             'kind-bump-tally-2-mutant-result': ('kind-bump-tally-2', _mutate_result),
+             'kind-half-frame-counter-mutant-result': ('kind-half-frame-counter', _mutate_result),
              'kind-sound-cue-pair-mutant-result': ('kind-sound-cue-pair', _mutate_result),
              'kind-copy-table-14-mutant-result': ('kind-copy-table-14', _mutate_result),
              'kind-copy-table-15-mutant-result': ('kind-copy-table-15', _mutate_result),
              'kind-copy-table-16-mutant-result': ('kind-copy-table-16', _mutate_result),
+             # a register, not the last write: the box-miss and bypass arms (the great majority of
+             # real occurrences -- most per-frame calls reject a far-off object) store nothing durable
+             # at all, so the generic "flip the last write" mutation would only corrupt the dead
+             # movem/rtr stack scratch every arm ends with (the same class of blind spot zone-check's
+             # own mutant avoids); D0 is always either explicitly restored (sign-extended) or left
+             # provably unchanged, so corrupting it diverges in every arm, including the no-op ones.
+             'object-activity-gate-mutant-result': ('object-activity-gate', _mutate_register),
              'hazard-tick-mutant-result': ('hazard-tick', _mutate_result),
              'score-convert-mutant-result': ('score-convert', _mutate_result),
              'evaluator-mutant-outcome': ('evaluator', _mutate_outcome),

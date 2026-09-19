@@ -136,7 +136,7 @@ SPECIAL_TIMER = 0xFFFFF156   # the SAME SPECIAL_TIMER game.pickups already names
 # (increment, has its own sound cue) per handler index; index 20 (increment 4) is real ROM, witnessed
 # by no recording, and stays undescribed here on purpose -- only the four this session found in the
 # ROM at all are named, and only three of those (0, 3, 21) are witnessed.
-ACCUMULATOR_PARAMS = {0: (0xC, True), 3: (0x18, True), 21: (3, False)}
+ACCUMULATOR_PARAMS = {0: (0xC, True), 3: (0x18, True), 19: (2, False), 21: (3, False)}
 
 
 def accumulator_step(read, index):
@@ -191,3 +191,144 @@ def copy_table(read, index):
     stores = {(COPY_TABLE_DEST + 4 * i) & 0xFFFFFF: (read((source + 4 * i) & 0xFFFFFF, 4), 4)
              for i in range(COPY_TABLE_LONGS)}
     return {'stores': stores}
+
+
+# --- indices 1/2 (ROM 0x5B5E/0x5B5C): bump every active group's own record, then recompute TIME_MARK
+BUMP_CUE = 0x53
+
+
+def _with_stores(read, stores):
+    def wrapped(address, size):
+        entry = stores.get(address & 0xFFFFFF)
+        if entry is not None and entry[1] == size:
+            return entry[0]
+        return read(address, size)
+    return wrapped
+
+
+def bump_active_records(read):
+    """0x5B70: for each of the three GROUP_TABLES whose own active id is non-negative, increment
+    that item's own contact record ITEM_VALUE (+8) by one -- the SAME per-item record
+    ``pickups.contact_search``/``award_group_dispatch`` already use, indexed here through a ROM
+    lookup table (0x5BA6) confirmed byte-identical to ``active_id * CONTACT_ITEM_RECORD_STRIDE``."""
+    from .pickups import GROUP_TABLES, CONTACT_ITEM_RECORDS_BASE, CONTACT_ITEM_RECORD_STRIDE, ITEM_VALUE
+    stores = {}
+    live = read
+    for table in GROUP_TABLES:
+        active = live(table, 2) & 0xFFFF
+        if active & 0x8000:
+            continue
+        record = (CONTACT_ITEM_RECORDS_BASE + active * CONTACT_ITEM_RECORD_STRIDE) & 0xFFFFFFFF
+        value_key = (record + ITEM_VALUE) & 0xFFFFFF
+        value = (live(value_key, 2) + 1) & 0xFFFF
+        stores[value_key] = (value, 2)
+        live = _with_stores(read, stores)
+    return {'stores': stores}
+
+
+def bump_and_tally(read, times):
+    """Indices 1 (times=1) and 2 (times=2): ``bump_active_records`` run ``times`` times (a real,
+    witnessed double application for index 2 -- not special-cased, each run sees the previous run's
+    own increments), then ``time_mark_cascade``, then a fixed sound cue.  The cue is ordered before
+    the bump's own stores in the returned dict (the boundary places it first in ``writes``): the cue
+    is rewritten by many other handlers regardless, but the SAME item record a caller might re-check
+    persists until that item is next collected -- the durable effect belongs last, matching
+    ``award_group_dispatch``'s own TIME_MARK-reordering fix."""
+    from .pickups import time_mark_cascade
+    bump_stores = {}
+    live = read
+    for _ in range(times):
+        step = bump_active_records(live)
+        bump_stores.update(step['stores'])
+        live = _with_stores(read, bump_stores)
+    tally = time_mark_cascade(live)
+    stores = dict(tally['stores'])
+    stores[0xFFFFFDF6 & 0xFFFFFF] = (BUMP_CUE, 2)
+    stores.update(bump_stores)   # the bump's own record increments last: the durable effect
+    return {'stores': stores, 'tally': tally, 'bump_stores': bump_stores, 'live_after_bump': live}
+
+
+# --- index 22 (ROM 0x59C2): halve a shared frame counter into a second field ---------------------
+def half_frame_counter(read):
+    """0x59C2: F210 = EEC0 >> 1 (a plain LSR.w #1, no rounding); D3 = 2 on return."""
+    value = (read(0xFFFFEEC0, 2) & 0xFFFF) >> 1
+    return {'stores': {0xFFFFF210 & 0xFFFFFF: (value, 2)}}
+
+
+# --- 003480: the object activity gate (`docs/gods/blockers/2026-09-19-003480.md`) ----------------
+#
+# Reached from 003284's own body with the entry's own object record in A0 (its own X/Y in D0/D1);
+# EF3C negative bypasses entirely.  Otherwise a camera-relative box test (X: camera_x-4..camera_x+
+# 0x24; Y: camera_y-4..camera_y+0x34, both against D0/D1+8) gates the whole rest of the routine --
+# every exit (bypass, box miss, or the body's own completion) shares the SAME "rtr" tail (0x34B6/
+# 0x34B8: clr.w -(a7); rtr -- SR wholesale 0) except one real, witnessed fail arm (0x34BE/0x34C2:
+# move.w #8,-(a7); rtr -- SR wholesale N=1) reached only from inside the status dispatch below.
+#
+# In bounds, the object's own record status (+4(a0)) selects one of three real arms: >= 0xC0 hands
+# off to the pickup-award group dispatch (012C80, already recovered) plus the queue append (002F2E,
+# already recovered); otherwise the SAME status indexes achievements.RECORD_TABLE (0xFFFFF8C2, the
+# SAME 10-byte-stride arithmetic achievements._record_address already models) for a second status
+# word at +4: > 1 is the real fail exit named above; == 1 reaches a genuine second real sub-dispatch
+# (0x354C, over a further 4-entry FFFFF22E table) this session did not model -- declined by name;
+# <= 1 [sic: <= 0, since == 1 is handled separately] reaches the SAME 005958 handler dispatch this
+# session already recovered eleven of fifteen witnessed entries for (composing whichever handler the
+# SAME SOUND_SCAN_TABLE zero-byte count selects, keyed here by the achievements record's own template
+# status word, not the object's own +4 status), then the queue append again.
+CAMERA_GATE_BYPASS = 0xFFFFEF3C
+CAMERA_GATE_X, CAMERA_GATE_Y = 0xFFFFF18C, 0xFFFFF18E
+CAMERA_GATE_X_LOW, CAMERA_GATE_X_HIGH = -4, 0x24
+CAMERA_GATE_Y_LOW, CAMERA_GATE_Y_HIGH = -4, 0x34
+OBJECT_STATUS_OFFSET = 4
+OBJECT_TEMPLATE_OFFSET = 6
+PICKUP_AWARD_GROUP_THRESHOLD = 0xC0
+GATE_SOUND_CUE = 0x34
+GATE_FIELD_WORD = 0xFFFFF3F2
+
+
+def _signed_word16(value):
+    value &= 0xFFFF
+    return value - 0x10000 if value & 0x8000 else value
+
+
+def object_activity_gate(read, a0, d0, d1):
+    """003480: the object activity gate.  ``a0`` is the object's own record; ``d0``/``d1`` its own
+    X/Y (already the values 003284's own body passes, before this routine's own +8 offset)."""
+    from .achievements import _record_address
+    if _signed_word16(read(CAMERA_GATE_BYPASS, 2)) < 0:
+        return {'arm': 'bypass', 'stores': {}}
+    x, y = (d0 + 8) & 0xFFFF, (d1 + 8) & 0xFFFF
+    camera_x, camera_y = read(CAMERA_GATE_X, 2) & 0xFFFF, read(CAMERA_GATE_Y, 2) & 0xFFFF
+    x_low = (camera_x + CAMERA_GATE_X_LOW) & 0xFFFF
+    x_high = (camera_x + CAMERA_GATE_X_HIGH) & 0xFFFF
+    if _signed_word16(x) < _signed_word16(x_low) or _signed_word16(x) > _signed_word16(x_high):
+        return {'arm': 'box-miss', 'stores': {}}
+    y_low = (camera_y + CAMERA_GATE_Y_LOW) & 0xFFFF
+    y_high = (camera_y + CAMERA_GATE_Y_HIGH) & 0xFFFF
+    if _signed_word16(y) < _signed_word16(y_low) or _signed_word16(y) > _signed_word16(y_high):
+        return {'arm': 'box-miss', 'stores': {}}
+
+    status = read((a0 + OBJECT_STATUS_OFFSET) & 0xFFFFFF, 2) & 0xFFFF
+    if status >= PICKUP_AWARD_GROUP_THRESHOLD:
+        item_id = (status - PICKUP_AWARD_GROUP_THRESHOLD) & 0xFFFF
+        return {'arm': 'pickup-award', 'item_id': item_id, 'x': d0 & 0xFFFF, 'y': d1 & 0xFFFF,
+                'stores': {(a0 + OBJECT_STATUS_OFFSET) & 0xFFFFFF: (0xFFFF, 2),
+                          (a0 + OBJECT_TEMPLATE_OFFSET) & 0xFFFFFF: (0, 2),
+                          GATE_FIELD_WORD & 0xFFFFFF: (item_id, 2),
+                          0xFFFFFDF6 & 0xFFFFFF: (GATE_SOUND_CUE, 2)}}
+
+    record = _record_address(status)
+    record_status = read((record + OBJECT_STATUS_OFFSET) & 0xFFFFFF, 2) & 0xFFFF
+    # F3F2 is stored unconditionally once status < 0xC0 (0x34D0), before the record-status test.
+    status_store = {GATE_FIELD_WORD & 0xFFFFFF: (status, 2)}
+    if record_status > 1:
+        return {'arm': 'record-status-fail', 'stores': status_store}
+    if record_status == 1:
+        return {'arm': 'unrecovered-record-status-one', 'stores': {}}
+
+    # FDF6 is written 0x34 twice here (both before the matched 005958 handler runs) -- left out of
+    # this arm's own stores since the handler itself may write FDF6 again afterward (the accumulator
+    # family's own cue, bump_tally's 0x53): the boundary composes the correct final order.
+    return {'arm': 'sound-request', 'kind_count_status': status, 'x': d0 & 0xFFFF, 'y': d1 & 0xFFFF,
+            'stores': {(a0 + OBJECT_STATUS_OFFSET) & 0xFFFFFF: (0xFFFF, 2),
+                      (a0 + OBJECT_TEMPLATE_OFFSET) & 0xFFFFFF: (0, 2),
+                      GATE_FIELD_WORD & 0xFFFFFF: (status, 2)}}

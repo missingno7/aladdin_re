@@ -22726,14 +22726,14 @@ def queue_append_plan(machine, registers):
 # --- the 005958 table's own witnessed handlers (game/world.py) -- jsr'd from 00352C, inside 003480's
 # own still-unrecovered body.  Each ends in a plain rts; no seam, no frame of its own (movem is never
 # used by any of these seven). --------------------------------------------------------------------
-_ACC_ENTRY = {0: 0x005ABE, 3: 0x005AE8, 21: 0x005B3E}
+_ACC_ENTRY = {0: 0x005ABE, 3: 0x005AE8, 19: 0x005A9E, 21: 0x005B3E}
 _ACC_FAIL_PC = 0x005AE6          # the shared bypass/below-cap exit (the rts itself, not the moveq before it)
 _ACC_TAIL_PC = 0x005B1E          # the shared accumulate(-skip) exit
-_ACC_NEEDS_BRA = {0: True, 3: False, 21: True}
+_ACC_NEEDS_BRA = {0: True, 3: False, 19: True, 21: True}
 # Indices 0/3 use ADDI.w (their own increment, 0xC/0x18, does not fit ADDQ's 3-bit immediate field);
 # 21 (and the unwitnessed 20) use ADDQ.w (increment 3/4) -- a real 4-cycle cost difference this
 # session's own first factcheck run caught.
-_ACC_USES_ADDQ = {0: False, 3: False, 21: True}
+_ACC_USES_ADDQ = {0: False, 3: False, 19: True, 21: True}
 
 _ACC_TST = (12, 1)
 _ACC_BMI_BYPASS_TAKEN, _ACC_BMI_BYPASS_NOT = (10, 1), (8, 1)
@@ -22823,6 +22823,16 @@ def accumulator_21_plan(machine, registers):
     return _accumulator_plan(21, machine, registers)
 
 
+ACCUMULATOR_19_ENTRY = 0x005A9E
+
+
+def accumulator_19_plan(machine, registers):
+    """005A9E: the 005958 table's own index-19 handler (game.world.accumulator_step) -- its own
+    'accumulate' arm reaches the shared tail via bra.w, not bra.b, but BRA's own taken cost is the
+    same 10 cycles regardless of displacement width."""
+    return _accumulator_plan(19, machine, registers)
+
+
 SOUND_CUE_PAIR_ENTRY, SOUND_CUE_PAIR_LAST_PC = 0x005A48, 0x005A5A
 _SCP_COST = (16 + 16 + 16 + 4 + 16, 5)   # move #$4c,fdf4; move #$4d,fdf6; addq #1,f1cc; moveq #1,d3; rts
 
@@ -22903,3 +22913,475 @@ def copy_table_15_plan(machine, registers):
 def copy_table_16_plan(machine, registers):
     """01429C: the 005958 table's own index-16 handler."""
     return _copy_table_plan(16, COPY_TABLE_16_ENTRY, COPY_TABLE_16_LAST_PC, True, machine, registers)
+
+
+# --- indices 1/2 (ROM 0x5B5E/0x5B5C): bump every active group's own record, then the SAME tally
+# cascade 012C80's own chain already composes (012CC2), reached here via a real jsr. ----------------
+BUMP_TALLY_ENTRY = {1: 0x005B5E, 2: 0x005B5C}
+BUMP_TALLY_LAST_PC = 0x005B6E
+_BUMP_LEA = (8, 1)
+_BUMP_MOVE_ID = (12, 1)
+_BUMP_BMI_TAKEN, _BUMP_BMI_NOT = (10, 1), (8, 1)
+_BUMP_ADD = (4, 1)
+_BUMP_LOOKUP = (14, 1)
+_BUMP_INCR = (18, 1)
+_BUMP_RTS = (16, 1)
+_BUMP_BSR = (18, 1)
+_BUMP_JSR_TALLY = (20, 1)
+_BUMP_CUE = (16, 1)
+_BUMP_MOVEQ = (4, 1)
+_BUMP_OUTER_RTS = (16, 1)
+
+
+def _bump_active_records_cost(read):
+    from .game.pickups import GROUP_TABLES
+    cost = _BUMP_LEA
+    for table in GROUP_TABLES:
+        active = read(table, 2) & 0xFFFF
+        if active & 0x8000:
+            cost = _add(cost, _BUMP_MOVE_ID, _BUMP_BMI_TAKEN)
+        else:
+            cost = _add(cost, _BUMP_MOVE_ID, _BUMP_BMI_NOT, _BUMP_ADD, _BUMP_LOOKUP, _BUMP_INCR)
+    return _add(cost, _BUMP_RTS)
+
+
+def _bump_tally_plan(index, machine, registers):
+    from .game import world
+    entry = BUMP_TALLY_ENTRY[index]
+    if registers['pc'] != entry:
+        raise UnsupportedCandidate('bump tally planner needs the machine parked at %06X' % entry)
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    times = 1 if index == 1 else 2
+    result = world.bump_and_tally(read, times)
+    writes = tuple(pair for address, (value, size) in result['stores'].items() for pair in _bytes(address, value, size))
+    # Cost: each bump call is identical (the group active ids never change between calls, only their
+    # own record's own ITEM_VALUE, which the cost formula does not depend on), so it is computed once
+    # and multiplied.  The tally cascade re-reads GROUP_TABLES/ITEM_RECORDS after every bump's own
+    # store has already landed -- result['live_after_bump'] is that overlay.
+    bump_cost = _bump_active_records_cost(read)
+    cost = _add(*([_add(_BUMP_BSR, bump_cost)] * times), _BUMP_JSR_TALLY)
+    tally = _pg_tally_cascade(result['live_after_bump'], sr)
+    cost = _add(cost, tally['cost'], _BUMP_CUE, _BUMP_MOVEQ, _BUMP_OUTER_RTS)
+    exit_registers = {
+        'd0': (registers['d0'] & 0xFFFF0000) | tally['d0'],
+        'd1': (registers['d1'] & 0xFFFF0000) | (tally['d1'] or 0),
+        'a0': 0xFFFFF552, 'a1': tally['a1'] & 0xFFFFFFFF, 'd3': 1,
+        'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': _logic_sr(tally['sr'], 1, 2),
+    }
+    # (sp-4) ends holding the jsr 12cc2's own return address (0x5B66), pushed last regardless of how
+    # many times the bsr 5b70 (index 2: twice) reused the SAME slot beforehand; (sp-8) is the tally
+    # cascade's own inner frame, the SAME fixed residue pickup_award_group_plan's own already-active
+    # arm leaves (0x12CD2, group 1's own bsr into 012CD6).
+    stack_writes = _bytes((sp - 4) & 0xFFFFFF, 0x00005B66, 4) + _bytes((sp - 8) & 0xFFFFFF, 0x00012CD2, 4)
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=stack_writes + writes, registers=exit_registers,
+                      last_pc=BUMP_TALLY_LAST_PC)
+
+
+BUMP_TALLY_1_ENTRY = 0x005B5E
+BUMP_TALLY_2_ENTRY = 0x005B5C
+
+
+def bump_tally_1_plan(machine, registers):
+    """005B5E: the 005958 table's own index-1 handler (game.world.bump_and_tally, times=1)."""
+    return _bump_tally_plan(1, machine, registers)
+
+
+def bump_tally_2_plan(machine, registers):
+    """005B5C: the 005958 table's own index-2 handler (game.world.bump_and_tally, times=2)."""
+    return _bump_tally_plan(2, machine, registers)
+
+
+# --- index 22 (ROM 0x59C2): halve a shared frame counter into a second field ----------------------
+HALF_FRAME_COUNTER_ENTRY, HALF_FRAME_COUNTER_LAST_PC = 0x0059C2, 0x0059CE
+_HFC_COST = (12 + 8 + 12 + 4 + 16, 5)   # move.w eec0,d0; lsr.w#1,d0; move.w d0,f210; moveq#2,d3; rts
+
+
+def half_frame_counter_plan(machine, registers):
+    """0059C2: the 005958 table's own index-22 handler (game.world.half_frame_counter)."""
+    from .game import world
+    if registers['pc'] != HALF_FRAME_COUNTER_ENTRY:
+        raise UnsupportedCandidate('half frame counter planner needs the machine parked at 0059C2')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    read = _reader(machine)
+    value = (read(0xFFFFEEC0, 2) & 0xFFFF) >> 1
+    result = world.half_frame_counter(read)
+    writes = tuple(pair for address, (v, size) in result['stores'].items() for pair in _bytes(address, v, size))
+    exit_registers = {'d0': (registers['d0'] & 0xFFFF0000) | value, 'd3': 2,
+                      'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': _logic_sr(sr, 2, 2)}
+    return AtomicPlan(cycles=_HFC_COST[0], instructions=_HFC_COST[1], writes=writes, registers=exit_registers,
+                      last_pc=HALF_FRAME_COUNTER_LAST_PC)
+
+
+# --- 003480: the object activity gate (game/world.py) -- composes the pickup award group dispatch
+# (012C80), the 005958 table's own admitted handlers, and the effect queue append (002F2E) as real
+# internal jsr/bsr calls, the SAME "virtual park" technique spawn_puff_box_plan already proves.  The
+# 0x354C sub-dispatch (record status == 1) declines by name -- a genuine second real sub-mechanism
+# this session did not model (docs/gods/blockers/2026-09-19-003480.md's own 20 September Progress).
+OBJECT_ACTIVITY_GATE_ENTRY = 0x003480
+OBJECT_GATE_ZERO_PC = 0x0034B8       # clr.w -(a7); rtr -- bypass, box-miss, and every completed body
+OBJECT_GATE_FAIL_PC = 0x0034C2       # move.w #8,-(a7); rtr -- record status > 1
+
+_GATE_TST = (12, 1)
+_GATE_BMI_TAKEN, _GATE_BMI_NOT = (10, 1), (8, 1)
+_GATE_MOVEM_PUSH = (20, 1)
+_GATE_MOVE_CAM = (12, 1)
+_GATE_MOVEQ_24 = (4, 1)
+_GATE_ADD_D4 = (4, 1)
+_GATE_ADDQ_D0D1 = (4, 1)
+_GATE_SUBQ_D2 = (4, 1)
+_GATE_CMP = (4, 1)
+_GATE_B_TAKEN, _GATE_B_NOT = (10, 1), (8, 1)
+_GATE_MOVEQ_34 = (4, 1)
+_GATE_ADD_D5 = (4, 1)
+_GATE_SUBQ_D3 = (4, 1)
+_GATE_MOVEM_POP = (24, 1)
+_GATE_CLR_PUSH = (14, 1)
+_GATE_RTR_ZERO = (20, 1)
+_GATE_MOVE_PUSH8 = (12, 1)
+_GATE_RTR_FAIL = (20, 1)
+_GATE_MOVE_STATUS = (12, 1)
+_GATE_CMPI_C0 = (8, 1)
+_GATE_BGE_TAKEN, _GATE_BGE_NOT = (10, 1), (12, 1)   # bge.w (word displacement): taken=10, not-taken=12
+_GATE_RECORD_LEA = (8, 1)
+_GATE_RECORD_MOVE_D3 = (4, 1)
+_GATE_RECORD_ADD = (4, 1)
+_GATE_RECORD_ADDA = (8, 1)
+_GATE_RECORD_CMPI = (16, 1)
+_GATE_RECORD_BGT_TAKEN, _GATE_RECORD_BGT_NOT = (10, 1), (8, 1)
+_GATE_RECORD_BEQ_TAKEN, _GATE_RECORD_BEQ_NOT = (10, 1), (12, 1)   # beq.w (word displacement): taken=10, not-taken=12
+_GATE_STORE_F3F2 = (12, 1)
+# arm3 (pickup-award)
+_GATE_ARM3_CLR4 = (16, 1)
+_GATE_ARM3_CLR6 = (16, 1)
+_GATE_ARM3_SUBI = (8, 1)
+_GATE_ARM3_JSR = (20, 1)
+_GATE_ARM3_CUE = (16, 1)
+_GATE_ARM3_LOAD_D0 = (8, 1)
+_GATE_ARM3_LOAD_D1 = (12, 1)
+_GATE_ARM3_LOAD_D2 = (12, 1)
+_GATE_ARM3_BSR = (18, 1)
+_GATE_ARM3_BRA = (10, 1)
+# sound-request arm
+_GATE_SR_CUE1 = (16, 1)
+_GATE_SR_CLR4 = (16, 1)
+_GATE_SR_CLR6 = (16, 1)
+_GATE_SR_PUSH_D2 = (12, 1)
+_GATE_SR_MOVE_D0 = (4, 1)
+_GATE_SR_LEA_TABLE = (12, 1)
+_GATE_SR_MOVEQ_D1 = (4, 1)
+_GATE_SR_MOVEQ_D3 = (4, 1)
+_GATE_SR_SUBQ_D0 = (4, 1)
+_GATE_SR_BMI_SKIP, _GATE_SR_BMI_ENTER = (10, 1), (8, 1)
+_GATE_SR_CMP_B = (8, 1)
+_GATE_SR_BNE_TAKEN, _GATE_SR_BNE_NOT = (10, 1), (8, 1)
+_GATE_SR_ADDQ_D3 = (4, 1)
+_GATE_SR_DBRA_TAKEN, _GATE_SR_DBRA_LAST = (10, 1), (14, 1)
+_GATE_SR_ADD_D3 = (4, 1)
+_GATE_SR_CUE2 = (16, 1)
+_GATE_SR_LEA_5958 = (12, 1)
+_GATE_SR_MOVEA = (18, 1)
+_GATE_SR_JSR = (16, 1)
+_GATE_SR_POP_D2 = (12, 1)
+_GATE_SR_TST_D3 = (4, 1)
+_GATE_SR_BEQ_TAKEN, _GATE_SR_BEQ_NOT = (8, 1), (8, 1)
+_GATE_SR_SUBQ_D3B = (4, 1)
+_GATE_SR_LOAD_D0 = (8, 1)
+_GATE_SR_LOAD_D1 = (12, 1)
+_GATE_SR_LOAD_D2 = (12, 1)
+_GATE_SR_BSR = (18, 1)
+_GATE_SR_BRA = (10, 1)
+
+_GATE_5958_PLANS = {}   # populated at module end, once every referenced *_plan is defined
+
+
+def _gate_scan_cost(read, status):
+    """0x3502-3520: the SAME zero-byte count game.world.kind_table_count models, costed here since
+    it runs inside 003480's own body (every witnessed 005958 handler's own plan begins AFTER this
+    scan, at the handler's own entry)."""
+    cost = _add(_GATE_SR_MOVE_D0, _GATE_SR_LEA_TABLE, _GATE_SR_MOVEQ_D1, _GATE_SR_MOVEQ_D3, _GATE_SR_SUBQ_D0)
+    limit = status if status > 0 else 0
+    if limit == 0:
+        return _add(cost, _GATE_SR_BMI_SKIP)
+    cost = _add(cost, _GATE_SR_BMI_ENTER)
+    from .game.world import SOUND_SCAN_TABLE
+    for i in range(limit):
+        matched = read((SOUND_SCAN_TABLE + i) & 0xFFFFFF, 1) == 0
+        cost = _add(cost, _GATE_SR_CMP_B, _GATE_SR_BNE_NOT if matched else _GATE_SR_BNE_TAKEN)
+        if matched:
+            cost = _add(cost, _GATE_SR_ADDQ_D3)
+        last = i == limit - 1
+        cost = _add(cost, _GATE_SR_DBRA_LAST if last else _GATE_SR_DBRA_TAKEN)
+    return cost
+
+
+def object_activity_gate_plan(machine, registers):
+    """003480: the object activity gate (game.world.object_activity_gate)."""
+    from .game import world
+    if registers['pc'] != OBJECT_ACTIVITY_GATE_ENTRY:
+        raise UnsupportedCandidate('object activity gate planner needs the machine parked at 003480')
+    sp32, sr = registers['a7'], registers['sr']
+    sp = sp32 & 0xFFFFFF
+    if sp & 1:
+        raise UnsupportedCandidate('unaligned stack')
+    a0 = registers['a0']
+    read = _reader(machine)
+    result = world.object_activity_gate(read, a0, registers['d0'], registers['d1'])
+    # "clr.w -(a7); rtr" (zero exit) or "move.w #8,-(a7); rtr" (fail exit) always pushes its own two
+    # bytes at (sp32 - 2) -- A7 is back to its own ENTRY value by then, whether or not the movem
+    # frame ran at all, so this OVERWRITES the movem frame's own last two bytes on every arm that
+    # used it (a real defect the first factcheck run caught: the frame's own final residue is NOT
+    # what the initial push left, it is whichever of these two runs last).
+    tail_zero_write = _bytes((sp - 2) & 0xFFFFFF, 0, 2)
+    tail_fail_write = _bytes((sp - 2) & 0xFFFFFF, 8, 2)
+
+    if result['arm'] == 'bypass':
+        cost = _add(_GATE_TST, _GATE_BMI_TAKEN, _GATE_CLR_PUSH, _GATE_RTR_ZERO)
+        exit_sr = sr & ~0x1F
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=tail_zero_write,
+                          registers={'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr},
+                          last_pc=OBJECT_GATE_ZERO_PC)
+
+    # From here the movem.w d0-d2,-(a7) frame is live; the caller's own D0/D1 (pre-+8) survive there.
+    d0_entry, d1_entry, d2_entry = registers['d0'] & 0xFFFF, registers['d1'] & 0xFFFF, registers['d2'] & 0xFFFF
+    # Every exit below reaches its own "movem.w (a7)+,d0-d2": a WORD-size register-direction MOVEM,
+    # which sign-extends each 16-bit memory word back to 32 bits -- it does NOT restore the caller's
+    # own original upper half (a real defect --perturb-upper-halves caught: D0-D2 came back holding
+    # the entry's own 5A5A garbage upper instead of the sign-extended zero/FFFF the real CPU leaves).
+    restored_d0 = _sign_extend_word(d0_entry) & 0xFFFFFFFF
+    restored_d1 = _sign_extend_word(d1_entry) & 0xFFFFFFFF
+    restored_d2 = _sign_extend_word(d2_entry) & 0xFFFFFFFF
+    frame_sp = (sp32 - 6) & 0xFFFFFFFF
+    frame_writes = (_bytes((sp - 6) & 0xFFFFFF, d0_entry, 2) + _bytes((sp - 4) & 0xFFFFFF, d1_entry, 2)
+                   + _bytes((sp - 2) & 0xFFFFFF, d2_entry, 2))
+    head_cost = _add(_GATE_TST, _GATE_BMI_NOT, _GATE_MOVEM_PUSH, _GATE_MOVE_CAM, _GATE_MOVE_CAM,
+                     _GATE_MOVEQ_24, _GATE_ADD_D4, _GATE_ADDQ_D0D1, _GATE_ADDQ_D0D1, _GATE_SUBQ_D2)
+
+    # The box test's own D2/D3/D4/D5 residue is NEVER popped (movem.w (a7)+,d0-d2 restores only
+    # D0-D2): every arm from here on must reproduce exactly how far the four compares got before
+    # failing (or passing), since D3/D4/D5 keep whatever the LAST compare that ran left them holding.
+    camera_x = read(world.CAMERA_GATE_X, 2) & 0xFFFF
+    camera_y = read(world.CAMERA_GATE_Y, 2) & 0xFFFF
+    x = (d0_entry + 8) & 0xFFFF
+    x_low = (camera_x + world.CAMERA_GATE_X_LOW) & 0xFFFF
+    x_high = (camera_x + world.CAMERA_GATE_X_HIGH) & 0xFFFF
+    box_cost = _add(head_cost, _GATE_CMP)
+    d2_box, d3_box, d4_box, d5_box = x_low, camera_y, x_high, None
+    if world._signed_word16(x) < world._signed_word16(x_low):
+        box_cost = _add(box_cost, _GATE_B_TAKEN)
+        box_fail = True
+    else:
+        box_cost = _add(box_cost, _GATE_B_NOT, _GATE_CMP)
+        if world._signed_word16(x) > world._signed_word16(x_high):
+            box_cost = _add(box_cost, _GATE_B_TAKEN)
+            box_fail = True
+        else:
+            y = (d1_entry + 8) & 0xFFFF
+            y_low = (camera_y + world.CAMERA_GATE_Y_LOW) & 0xFFFF
+            y_high = (camera_y + world.CAMERA_GATE_Y_HIGH) & 0xFFFF
+            box_cost = _add(box_cost, _GATE_B_NOT, _GATE_MOVEQ_34, _GATE_ADD_D5, _GATE_SUBQ_D3, _GATE_CMP)
+            d3_box, d5_box = y_low, y_high
+            if world._signed_word16(y) < world._signed_word16(y_low):
+                box_cost = _add(box_cost, _GATE_B_TAKEN)
+                box_fail = True
+            else:
+                box_cost = _add(box_cost, _GATE_B_NOT, _GATE_CMP)
+                if world._signed_word16(y) > world._signed_word16(y_high):
+                    # "ble.b $34c4" NOT taken (falls through to the movem-pop miss path) -- a real
+                    # defect the first factcheck run caught: this is the ONLY one of the four box
+                    # compares whose PASS outcome is the branch's own TAKEN arm (it jumps forward to
+                    # the pass code at 34c4), so the miss here costs the NOT-taken 8, not 10.
+                    box_cost = _add(box_cost, _GATE_B_NOT)
+                    box_fail = True
+                else:
+                    box_cost = _add(box_cost, _GATE_B_TAKEN)
+                    box_fail = False
+
+    def _box_exit_registers(extra=None):
+        # movem.w (a7)+,d0-d2 (0x34B2) restores D0/D1/D2 to their own ENTRY values -- everything the
+        # box test itself computed into D0/D2 is discarded; only D3/D4/D5 (outside the movem set)
+        # keep the box test's own residue.  D3 comes from "move.w f18e,d3; subq.w #4,d3" -- both word
+        # ops, so D3's own upper half survives from ENTRY.  D4/D5 come from "moveq #imm,d4/d5" (which
+        # clears the WHOLE 32-bit register) followed by a word add -- their upper half is ALWAYS zero,
+        # never the entry's own residue (a real defect the first factcheck run caught: register d5
+        # showed FFFF0000-and-up instead of the real zero upper half).
+        out = {'d0': restored_d0, 'd1': restored_d1, 'd2': restored_d2,
+              'd4': d4_box, 'd3': (registers['d3'] & 0xFFFF0000) | d3_box}
+        if d5_box is not None:
+            out['d5'] = d5_box
+        if extra:
+            out.update(extra)
+        return out
+
+    if box_fail:
+        cost = _add(box_cost, _GATE_MOVEM_POP, _GATE_CLR_PUSH, _GATE_RTR_ZERO)
+        exit_sr = sr & ~0x1F
+        exit_registers = _box_exit_registers({'a7': (sp32 + 4) & 0xFFFFFFFF, 'pc': _return(machine, sp), 'sr': exit_sr})
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=frame_writes + tail_zero_write,
+                          registers=exit_registers, last_pc=OBJECT_GATE_ZERO_PC)
+
+    # Bounds pass: both box tests succeeded.  D3/D4/D5 are fixed at y_low/x_high/y_high from here on
+    # UNLESS an arm below overwrites D3 itself (the record-address arithmetic, or a composed leaf's
+    # own exit) -- D4/D5 are never touched again by any witnessed arm.
+    pass_cost = _add(box_cost, _GATE_MOVE_STATUS, _GATE_CMPI_C0)
+    base_registers = dict(registers)
+    base_registers['d3'] = (registers['d3'] & 0xFFFF0000) | d3_box
+    base_registers['d4'] = d4_box
+    base_registers['d5'] = d5_box
+
+    if result['arm'] == 'pickup-award':
+        cost = _add(pass_cost, _GATE_BGE_TAKEN)
+        item_id = result['item_id']
+        virtual = dict(base_registers)
+        inner_sp = (frame_sp - 4) & 0xFFFFFFFF
+        virtual.update(pc=PICKUP_AWARD_GROUP_ENTRY, a7=inner_sp, d2=item_id)
+        inner = pickup_award_group_plan(machine, virtual)
+        cost = _add(cost, _GATE_ARM3_CLR4, _GATE_ARM3_CLR6, _GATE_ARM3_SUBI, _GATE_STORE_F3F2, _GATE_ARM3_JSR)
+        cost = _add(cost, (inner.cycles, inner.instructions))
+        jsr_write = _bytes(inner_sp & 0xFFFFFF, 0x00003638, 4)
+        live = dict(base_registers); live.update(inner.registers)
+        # No "move.w ...,d2" runs between the jsr and the bsr -- queue_append's own D2 argument is
+        # whatever 012C80 itself left there (item_id*4 for 'already-active', item_id for 'register':
+        # a real defect the first factcheck run caught assuming it was always item_id).
+        cost = _add(cost, _GATE_ARM3_CUE, _GATE_ARM3_LOAD_D0, _GATE_ARM3_LOAD_D1, _GATE_ARM3_BSR)
+        queue_sp = (frame_sp - 4) & 0xFFFFFFFF
+        virtual2 = dict(live)
+        virtual2.update(pc=QUEUE_APPEND_ENTRY, a7=queue_sp, d0=d0_entry, d1=d1_entry, d2=live['d2'])
+        inner2 = queue_append_plan(machine, virtual2)
+        cost = _add(cost, (inner2.cycles, inner2.instructions))
+        bsr_write = _bytes(queue_sp & 0xFFFFFF, 0x00003648, 4)
+        cost = _add(cost, _GATE_ARM3_BRA, _GATE_MOVEM_POP, _GATE_CLR_PUSH, _GATE_RTR_ZERO)
+        live.update(inner2.registers)
+        exit_sr = sr & ~0x1F
+        # movem.w (a7)+,d0-d2 (0x34B2) restores D0/D1/D2 to their own ENTRY values regardless of
+        # anything 012C80/002F2E computed into them (sign-extended from the pushed word, not the
+        # entry's own raw 32-bit value -- see restored_d0/d1/d2's own comment above).
+        live.update(d0=restored_d0, d1=restored_d1, d2=restored_d2,
+                   a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=exit_sr)
+        writes = frame_writes + tuple(pair for a, (v, s) in result['stores'].items() for pair in _bytes(a, v, s))
+        writes = writes + jsr_write + inner.writes + bsr_write + inner2.writes + tail_zero_write
+        return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=live,
+                          last_pc=OBJECT_GATE_ZERO_PC)
+
+    # Not >= 0xC0: the achievements.RECORD_TABLE dispatch.  D2 <- status (0x34C4); D3 <- status*8 (the
+    # record-address arithmetic's own final scratch, 0x34D8-34E2) either way from here.
+    from .game.achievements import _record_address
+    status = result.get('kind_count_status')
+    if status is None:
+        status = read((a0 + world.OBJECT_STATUS_OFFSET) & 0xFFFFFF, 2) & 0xFFFF
+    record = _record_address(status)
+    record_status = read((record + world.OBJECT_STATUS_OFFSET) & 0xFFFFFF, 2) & 0xFFFF
+    cost = _add(pass_cost, _GATE_BGE_NOT, _GATE_STORE_F3F2, _GATE_RECORD_LEA, _GATE_RECORD_MOVE_D3,
+               _GATE_RECORD_ADD, _GATE_RECORD_ADDA, _GATE_RECORD_ADD, _GATE_RECORD_ADD, _GATE_RECORD_ADDA,
+               _GATE_RECORD_CMPI)
+    d3_record = (status * 8) & 0xFFFF
+    d2_status = (base_registers['d2'] & 0xFFFF0000) | (status & 0xFFFF)
+
+    if result['arm'] == 'record-status-fail':
+        cost = _add(cost, _GATE_RECORD_BGT_TAKEN, _GATE_MOVEM_POP, _GATE_MOVE_PUSH8, _GATE_RTR_FAIL)
+        exit_sr = (sr & ~0x1F) | 0x08
+        # movem.w (a7)+,d0-d2 (0x34BA) restores D0/D1/D2 to their own ENTRY values (sign-extended from
+        # the pushed word); D3 (outside the movem set) keeps the record-address arithmetic's own
+        # final scratch (status*8).
+        exit_registers = dict(base_registers)
+        exit_registers.update(d0=restored_d0, d1=restored_d1, d2=restored_d2,
+                              d3=(base_registers['d3'] & 0xFFFF0000) | d3_record,
+                              a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=exit_sr)
+        status_stores = tuple(pair for a, (v, s) in result['stores'].items() for pair in _bytes(a, v, s))
+        return AtomicPlan(cycles=cost[0], instructions=cost[1],
+                          writes=frame_writes + status_stores + tail_fail_write,
+                          registers=exit_registers, last_pc=OBJECT_GATE_FAIL_PC)
+
+    if result['arm'] == 'unrecovered-record-status-one':
+        raise UnsupportedCandidate('object activity gate: the 00354C record-status-1 sub-dispatch is not witnessed')
+
+    # 'sound-request': record_status <= 0.
+    from .game.world import kind_table_count, KIND_DISPATCH_ADMITTED
+    count = kind_table_count(read, status)
+    if count not in KIND_DISPATCH_ADMITTED:
+        raise UnsupportedCandidate('object activity gate: 005958 index %d is not recovered' % count)
+    handler_entry, handler_plan = _GATE_5958_PLANS[count]
+    cost = _add(cost, _GATE_RECORD_BGT_NOT, _GATE_RECORD_BEQ_NOT)
+    cost = _add(cost, _GATE_SR_CUE1, _GATE_SR_CLR4, _GATE_SR_CLR6, _GATE_SR_PUSH_D2)
+    cost = _add(cost, _gate_scan_cost(read, status))
+    cost = _add(cost, _GATE_SR_ADD_D3, _GATE_SR_ADD_D3, _GATE_SR_CUE2, _GATE_SR_LEA_5958, _GATE_SR_MOVEA, _GATE_SR_JSR)
+    # "move.l d2,-(a7)" (the STATUS long) pushed BEFORE the jsr, still live on the stack while the
+    # handler runs -- the jsr's own return address lands one further slot down.
+    status_push_sp = (frame_sp - 4) & 0xFFFFFFFF
+    jsr_push_sp = (status_push_sp - 4) & 0xFFFFFFFF
+    # "moveq #0,d3" (0x350c, inside the scan) clears D3's WHOLE 32-bit register, then the scan's own
+    # count is doubled twice ("add.w d3,d3" x2) into the table BYTE offset used by
+    # "movea.l (a0,d3.w),a0" -- D3 going into the jsr is this count*4, NOT the record-address
+    # arithmetic's status*8 (that value died at the scan's own moveq, well before the jsr runs) and
+    # not the box test's own residue either (a real defect the first factcheck run caught: register
+    # d3 disagreed only when the matched handler itself leaves D3 untouched, index 14's own case).
+    table_d3 = (count * 4) & 0xFFFF
+    virtual = dict(base_registers)
+    virtual.update(pc=handler_entry, a7=jsr_push_sp, a0=handler_entry, d2=count & 0xFFFF, d3=table_d3)
+    inner = handler_plan(machine, virtual)
+    cost = _add(cost, (inner.cycles, inner.instructions))
+    jsr_write = _bytes(jsr_push_sp & 0xFFFFFF, 0x00003532, 4)
+    status_write = _bytes(status_push_sp & 0xFFFFFF, status & 0xFFFFFFFF, 4)
+    # "movea.l (a0,d3.w),a0; jsr (a0)" loads the matched handler's OWN entry into A0 before the call --
+    # a real defect the first factcheck run caught: A0 does NOT still hold the caller's own object
+    # pointer once this dispatch runs, and none of the admitted handlers (accumulator/sound-cue-pair/
+    # bump-tally/half-frame-counter) touch A0 themselves, so it survives the jsr/rts as handler_entry
+    # unless the handler's own plan says otherwise (copy_table's own lea does).
+    live = dict(base_registers); live['a0'] = handler_entry; live['d3'] = table_d3; live.update(inner.registers)
+    live['d2'] = d2_status   # move.l (a7)+,d2: the pushed STATUS long restored, not the handler's own D2
+    inner_d3 = live.get('d3', table_d3)
+    inner_d3_low = inner_d3 & 0xFFFF
+    cost = _add(cost, _GATE_SR_POP_D2, _GATE_SR_TST_D3)
+    if inner_d3_low == 0:
+        cost = _add(cost, _GATE_SR_BEQ_TAKEN)
+        final_d3 = inner_d3
+    else:
+        cost = _add(cost, _GATE_SR_BEQ_NOT, _GATE_SR_SUBQ_D3B)
+        final_d3 = (inner_d3 & 0xFFFF0000) | ((inner_d3_low - 1) & 0xFFFF)
+    cost = _add(cost, _GATE_SR_LOAD_D0, _GATE_SR_LOAD_D1, _GATE_SR_LOAD_D2, _GATE_SR_BSR)
+    # "move.l (a7)+,d2" already popped the STATUS long back off, so sp is back UP to frame_sp
+    # (status_push_sp + 4) before this bsr runs; the bsr's own 4-byte push then lands at
+    # frame_sp - 4, which is status_push_sp again (the same slot, reused) -- NOT status_push_sp - 4
+    # (a real defect the first factcheck run caught: that double-counted the already-popped long).
+    bsr_push_sp = status_push_sp
+    virtual2 = dict(live)
+    virtual2.update(pc=QUEUE_APPEND_ENTRY, a7=bsr_push_sp, d0=d0_entry, d1=d1_entry, d2=status)
+    inner2 = queue_append_plan(machine, virtual2)
+    cost = _add(cost, (inner2.cycles, inner2.instructions))
+    bsr_write = _bytes(bsr_push_sp & 0xFFFFFF, 0x00003548, 4)
+    cost = _add(cost, _GATE_SR_BRA, _GATE_MOVEM_POP, _GATE_CLR_PUSH, _GATE_RTR_ZERO)
+    exit_sr = sr & ~0x1F
+
+    gate_stores = dict(result['stores'])
+    gate_stores[0xFFFFFDF6 & 0xFFFFFF] = (world.GATE_SOUND_CUE, 2)
+    writes = frame_writes + tuple(pair for a, (v, s) in gate_stores.items() for pair in _bytes(a, v, s))
+    writes = writes + status_write + jsr_write + inner.writes + bsr_write + inner2.writes + tail_zero_write
+    live.update(inner2.registers)
+    # movem.w (a7)+,d0-d2 (0x34B2) restores D0/D1/D2 to their own ENTRY values (sign-extended from
+    # the pushed word); D3 is NOT in that set and keeps final_d3 (the matched handler's own D3,
+    # decremented once if nonzero).
+    live.update(d0=restored_d0, d1=restored_d1, d2=restored_d2,
+               d3=final_d3, a7=(sp32 + 4) & 0xFFFFFFFF, pc=_return(machine, sp), sr=exit_sr)
+    return AtomicPlan(cycles=cost[0], instructions=cost[1], writes=writes, registers=live,
+                      last_pc=OBJECT_GATE_ZERO_PC)
+
+
+_GATE_5958_PLANS.update({
+    0: (ACCUMULATOR_0_ENTRY, accumulator_0_plan),
+    1: (BUMP_TALLY_1_ENTRY, bump_tally_1_plan),
+    2: (BUMP_TALLY_2_ENTRY, bump_tally_2_plan),
+    3: (ACCUMULATOR_3_ENTRY, accumulator_3_plan),
+    10: (SOUND_CUE_PAIR_ENTRY, sound_cue_pair_plan),
+    14: (COPY_TABLE_14_ENTRY, copy_table_14_plan),
+    15: (COPY_TABLE_15_ENTRY, copy_table_15_plan),
+    16: (COPY_TABLE_16_ENTRY, copy_table_16_plan),
+    19: (ACCUMULATOR_19_ENTRY, accumulator_19_plan),
+    21: (ACCUMULATOR_21_ENTRY, accumulator_21_plan),
+    22: (HALF_FRAME_COUNTER_ENTRY, half_frame_counter_plan),
+})

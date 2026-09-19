@@ -2670,6 +2670,58 @@ small leaf):
   subsystem's own bottom-up order and admits `0036E2`'s own range arm
   (kinds `0x40`-`0x44`, 7,197 declines on the last tree).
 
+- **20 September, closing the session**: the remaining four witnessed
+  `0x5958` handlers recovered -- indices 1/2 (`bump_and_tally`, reusing the
+  same internal tally cascade `pickup_award_group_plan` already composes,
+  exactly the shape anticipated), 19 (a fourth phase-accumulator occurrence,
+  ADDQ not ADDI, its own 'accumulate' arm reaching the shared tail via
+  `bra.w`), and 22 (halve `EEC0` into `F210`).  Indices 4, 6, 17, 18 decline
+  by name, each disassembled far enough to confirm its own real, distinct
+  complexity rather than reimplemented under time pressure.  `003480`
+  itself is then composed in full: the bounds-check head, the
+  `achievements.RECORD_TABLE` dispatch (turned out to be the already-
+  recovered `_record_address`/`RECORD_TABLE` at `FFFFF8C2` -- `FFFFF22E`
+  itself is not read or written by `003480`'s own body, correcting the
+  prior reconnaissance's own guess), and both the pickup-award (`012C80`)
+  and sound-request (the `0x5958` table + `002F2E`) arms as real internal
+  jsr/bsr calls, the `spawn_puff_box_plan` "virtual park" technique.  The
+  `0x354C` record-status-1 sub-dispatch and `0x5958` indices 4/6/17/18
+  decline by name.  **Correction**: `003480` never calls `0036E2` at all --
+  the "admits `0036E2`'s own range arm" expectation above was reconnaissance-
+  stage speculation the actual disassembly did not confirm; `0036E2`'s own
+  range arm remains exactly as it was, a real decline on `object-kind-
+  dispatch` itself.  Seven real defects surfaced while bringing the
+  composition to a clean MATCH (0 -> 72 of 72 non-declined fixtures across
+  all five recordings, plain and under `--perturb-upper-halves`): a missing
+  branch-not-taken cost after the x-high box compare; the y-high compare's
+  own taken/not-taken costs swapped (the one box edge whose MISS is the
+  branch's own taken arm); the sound-request arm's own stack pointer
+  double-counting an already-popped STATUS long; D4/D5 wrongly preserving
+  the caller's own entry upper half after their own `moveq` (which clears
+  the WHOLE register); A0 wrongly assumed to survive the table jsr instead
+  of ending up holding the matched handler's own entry; D3 wrongly seeded
+  from the box test's own residue instead of the scan's own `count*4`; and
+  the record-status-fail arm's own `GATE_FIELD_WORD` store dropped
+  entirely.  `object-activity-gate` is armed in `camera-sprites` (61 -> 60
+  gates net: `012C80`/`002F2E` retired, now reached only through this
+  composition; `003480` admitted).  The eleven `0x5958` handlers stay
+  standalone-only (native gate capacity); `kind-sound-cue-pair` for its own
+  separate reason, a second independent caller at exit `008616`.  Full
+  suite PASS (24,009 passed, 15 skipped).  Reproduces the original on
+  `ca2b703b6fd5…`: PASS, 9,049 hits, 89 fallbacks (47 z80 bank guard, 42
+  named declines), bit-exact; segment_verify at boundary-6000/12000 both
+  PASS; mutant `object-activity-gate-mutant-result` (a register control,
+  D0+1 -- the box-miss/bypass arms store nothing durable, so the generic
+  last-write mutant would only corrupt dead stack scratch) DIVERGENCE at
+  frame 2,251.  Milestone tree PASS on all five leaves
+  (`artifacts/gods/verify-camera-sprites-leaves-2026-09-20b`, 107,519
+  frames, 266.3 s, 16,267 fallbacks).  This closes
+  `docs/gods/blockers/2026-09-19-003480.md` in full.  Next, per the
+  Decision's own order: the status chains (`0039EA`, `003AE6`, `003BBA`) as
+  families, `003186`'s own head, `003284` composing the chains (including
+  the `FFFFF262` triple-buffer append), and `0030CC` as the 200-entry scan
+  with its own semantic-operation card -- none of this started yet.
+
 ## Open questions
 
 - An address error during play on 15 September (PC `012E46`: the second

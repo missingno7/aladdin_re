@@ -96,7 +96,12 @@ def test_a_full_queue_declines_when_synthesized():
 
 def test_candidate_name_is_explicit():
     assert recovery.Candidate('queue-append').gate_pcs == (boundary.QUEUE_APPEND_ENTRY,)
-    assert boundary.QUEUE_APPEND_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
+    # Retired from camera-sprites 20 September: its only real callers are OBJECT_ACTIVITY_GATE_ENTRY's
+    # own arms 2 and 3 (docs/gods/blockers/2026-09-19-003480.md's own Progress notes) -- now that
+    # object_activity_gate_plan is armed there and composes it internally, the native machine never
+    # independently reaches 002F2E as a gate hit.  This candidate's own PLANNERS entry is unchanged.
+    assert boundary.QUEUE_APPEND_ENTRY not in recovery.Candidate('camera-sprites').gate_pcs
+    assert boundary.OBJECT_ACTIVITY_GATE_ENTRY in recovery.Candidate('camera-sprites').gate_pcs
     assert recovery.Candidate('queue-append-mutant-result').mutation is recovery._mutate_result
 
 

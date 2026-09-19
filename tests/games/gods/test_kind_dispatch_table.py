@@ -30,11 +30,15 @@ needs_reference = pytest.mark.skipif(not (EVIDENCE / 'reference.json').exists() 
 HANDLERS = [
     ('005ABE', 'ACCUMULATOR_0_ENTRY', boundary.accumulator_0_plan, 'kind-accumulator-0'),
     ('005AE8', 'ACCUMULATOR_3_ENTRY', boundary.accumulator_3_plan, 'kind-accumulator-3'),
+    ('005A9E', 'ACCUMULATOR_19_ENTRY', boundary.accumulator_19_plan, 'kind-accumulator-19'),
     ('005B3E', 'ACCUMULATOR_21_ENTRY', boundary.accumulator_21_plan, 'kind-accumulator-21'),
     ('005A48', 'SOUND_CUE_PAIR_ENTRY', boundary.sound_cue_pair_plan, 'kind-sound-cue-pair'),
     ('0142A6', 'COPY_TABLE_14_ENTRY', boundary.copy_table_14_plan, 'kind-copy-table-14'),
     ('014292', 'COPY_TABLE_15_ENTRY', boundary.copy_table_15_plan, 'kind-copy-table-15'),
     ('01429C', 'COPY_TABLE_16_ENTRY', boundary.copy_table_16_plan, 'kind-copy-table-16'),
+    ('005B5E', 'BUMP_TALLY_1_ENTRY', boundary.bump_tally_1_plan, 'kind-bump-tally-1'),
+    ('005B5C', 'BUMP_TALLY_2_ENTRY', boundary.bump_tally_2_plan, 'kind-bump-tally-2'),
+    ('0059C2', 'HALF_FRAME_COUNTER_ENTRY', boundary.half_frame_counter_plan, 'kind-half-frame-counter'),
 ]
 
 
@@ -77,7 +81,7 @@ def test_sound_cue_pair_and_copy_table():
 @needs_census
 @pytest.mark.parametrize('stem,entry_name,planner,_candidate', HANDLERS, ids=lambda v: v if isinstance(v, str) else '')
 def test_plan_reproduces_every_witnessed_arm(stem, entry_name, planner, _candidate):
-    fixtures = sorted(Path('artifacts/gods/evidence').glob(f'census-0X5ABE-*/{stem}-entry-p*.state'))
+    fixtures = sorted(Path('artifacts/gods/evidence').glob(f'census-0X*-*/{stem}-entry-p*.state'))
     if not fixtures:
         pytest.skip(f'no retained fixture for {stem}')
     entry = getattr(boundary, entry_name)
@@ -106,7 +110,7 @@ def test_candidate_name_is_explicit_and_standalone(stem, entry_name, planner, ca
 @needs_reference
 @pytest.mark.parametrize('stem,entry_name,planner,candidate', HANDLERS, ids=lambda v: v if isinstance(v, str) else '')
 def test_candidate_matches_the_reference_from_a_retained_fixture_and_its_mutant_diverges(stem, entry_name, planner, candidate):
-    fixtures = sorted(Path('artifacts/gods/evidence').glob(f'census-0X5ABE-*/{stem}-entry-p*.state'))
+    fixtures = sorted(Path('artifacts/gods/evidence').glob(f'census-0X*-*/{stem}-entry-p*.state'))
     if not fixtures:
         pytest.skip(f'no retained fixture for {stem}')
     for fixture in fixtures:
